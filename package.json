@@ -1,7 +1,7 @@
 {
   "name": "serialterminal",
   "version": "0.1.0",
-  "description": "",
+  "description": "A modern, cross-platform serial port terminal application built with Electron.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -50,7 +50,10 @@
     }
   },
   "keywords": [],
-  "author": "Trigger-CN",
+  "author": {
+    "name": "Trigger-CN",
+    "email": "759025229@qq.com"
+  },
   "repository": "https://github.com/Trigger-CN/SerialTerminal",
   "license": "ISC",
   "devDependencies": {
