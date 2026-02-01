@@ -1,6 +1,6 @@
 {
   "name": "serialterminal",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "",
   "main": "main.js",
   "scripts": {
@@ -8,26 +8,45 @@
     "rebuild": "electron-rebuild",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "postinstall": "electron-builder install-app-deps"
   },
   "build": {
     "appId": "com.serialterminal.app",
-    "productName": "Serial Terminal",
+    "productName": "SerialTerminal",
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "!**/.vscode/*",
+      "!**/.idea/*",
+      "!**/*.ts",
+      "!**/*.map",
+      "!**/*.md",
+      "package.json",
+      "**/*"
+    ],
     "win": {
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "icon": "assets/favicon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
-      "category": "Development"
+      "category": "Development",
+      "icon": "assets/icon-512x512.png"
     }
   },
   "keywords": [],
@@ -35,9 +54,9 @@
   "repository": "https://github.com/Trigger-CN/SerialTerminal",
   "license": "ISC",
   "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
     "electron": "^28.3.3",
-    "electron-builder": "^24.13.3",
-    "electron-rebuild": "^3.2.9"
+    "electron-builder": "^26.7.0"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

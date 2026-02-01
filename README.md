@@ -1,79 +1,115 @@
-# Serial Terminal
+# <img src="assets/icon-512x512.png" width="48" height="48" align="center" alt="Icon" /> Serial Terminal
 
-A modern, cross-platform serial port terminal application built with Electron.
+A modern, cross-platform serial port terminal application built with Electron, designed for developers and embedded systems engineers.
 
-## Features
+![Serial Terminal Screenshot](assets/screenshot.png)
 
-*   **🔌 Serial Communication**: robust connection handling with customizable baud rates (standard & custom), data bits, stop bits, parity, and flow control.
-*   **💻 Terminal Emulation**: Full-featured terminal interface powered by **xterm.js**, supporting ANSI escape sequences and proper text rendering.
-*   **🚀 Send Functions**:
-    *   **Auto Send**: Automatically send text at user-defined intervals. Supports multi-line input.
-    *   **Quick Send**: Create a custom list of frequently used commands. Supports multi-line content, editing, and reordering.
-*   **📝 Log Management**:
-    *   Automatic logging of all serial input/output.
-    *   **Smart Buffering**: Logs are buffered in memory and flushed to disk only on disconnect or exit to minimize disk I/O.
-    *   Customizable log file naming formats (e.g., `%Y-%m-%d`) and storage paths.
-*   **🎨 Keyword Highlighting**: Real-time highlighting of specific text patterns using Regular Expressions (Regex) with customizable colors.
-*   **🔍 Filter Window**: Open a separate window to view filtered output (e.g., only show lines containing "ERROR") without affecting the main terminal view.
+## 📖 Introduction
+
+Serial Terminal is a robust and user-friendly tool for communicating with serial devices. Whether you are debugging Arduino projects, configuring network equipment, or working with industrial microcontrollers, this application provides a stable and feature-rich environment.
+
+It combines the power of **xterm.js** for terminal emulation with the flexibility of Electron, offering features like custom baud rates, real-time logging, and powerful text processing capabilities.
+
+## ✨ Features
+
+*   **🔌 robust Serial Communication**:
+    *   Support for standard and custom baud rates.
+    *   Configurable Data bits, Stop bits, Parity, and Flow Control (RTS/CTS, XON/XOFF).
+    *   Automatic port detection and refresh.
+
+*   **💻 Professional Terminal Emulation**:
+    *   Full-featured terminal interface powered by **xterm.js**.
+    *   Supports ANSI escape sequences for colored text and cursor positioning.
+    *   Search functionality within the terminal buffer.
+
+*   **🚀 Advanced Send Functions**:
+    *   **Auto Send**: Periodically send commands with customizable intervals.
+    *   **Quick Send**: Customizable sidebar for frequently used commands. Supports editing, reordering, and multi-line payloads.
+
+*   **📝 Comprehensive Logging**:
+    *   **Smart Buffering**: Logs are buffered in memory and flushed to disk efficiently to protect your drive's lifespan.
+    *   Timestamps and direction indicators (TX/RX) for all data.
+    *   Customizable log file naming and storage location.
+
+*   **🎨 Visualization & Filtering**:
+    *   **Keyword Highlighting**: Highlight important text (like "ERROR", "WARNING") using Regular Expressions (Regex) with custom colors.
+    *   **Filter Window**: A dedicated window to isolate lines matching specific patterns, keeping your main view clean.
+
 *   **⚙️ Customization**:
-    *   Dark theme UI.
-    *   Configurable fonts (Consolas, Fira Code, etc.), font sizes, and colors.
-    *   Settings are persisted automatically.
-*   **🖥️ Cross-Platform**: Ready for Windows and Linux.
+    *   Dark/Light theme support (UI follows system or custom settings).
+    *   Adjustable font family, size, and line height.
+    *   Settings are automatically saved and restored.
 
-## Installation
+*   **🛠️ Cross-Platform**:
+    *   Optimized for Windows and Linux.
+    *   Portable executable options available.
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+*   **Node.js**: v16.x or higher is recommended.
+*   **Build Tools**: Since this project uses native modules (`serialport`, `node-pty`), you need build tools installed on your system.
+    *   **Windows**: Install Visual Studio Build Tools (C++ workload) or run `npm install --global --production windows-build-tools`.
+    *   **Linux**: Install `build-essential` and python (e.g., `sudo apt-get install build-essential python3`).
+
+### Installation
 
 1.  **Clone the repository**
     ```bash
-    git clone https://github.com/yourusername/serial-terminal.git
-    cd serial-terminal
+    git clone https://github.com/Trigger-CN/SerialTerminal.git
+    cd SerialTerminal
     ```
 
 2.  **Install dependencies**
     ```bash
     npm install
     ```
+    *Note: This will also attempt to build the native modules. If it fails, ensure your build tools are set up correctly.*
 
-    *Note: This project uses native modules (`serialport`, `node-pty`). Ensure you have the necessary build tools installed for your OS (e.g., Visual Studio Build Tools for Windows, `build-essential` for Linux).*
+## 🏃 Running in Development Mode
 
-3.  **Rebuild native modules** (if you encounter version mismatch errors)
-    ```bash
-    npm run rebuild
-    ```
-
-## Usage
-
-### Development
-Start the application in development mode with hot-reload support (if configured) or standard Electron launch:
+To start the application with hot-reload (if configured) or in standard debug mode:
 
 ```bash
 npm start
 ```
 
-### Packaging / Build
+This command runs `electron .` to launch the application from the source code.
 
-Use `electron-builder` to create specific installers/executables for your platform.
+## 📦 Packaging & Building
 
-**For Windows (creates installer & portable exe):**
+Use `electron-builder` to create distributable installers or executables for your platform.
+
+### For Windows
+Creates an NSIS installer and a Portable executable in the `dist/` directory.
+
 ```bash
 npm run dist:win
 ```
 
-**For Linux (creates AppImage & deb):**
+### For Linux
+Creates an AppImage and a .deb package in the `dist/` directory.
+
 ```bash
 npm run dist:linux
 ```
 
-> **Note**: Native modules must be compiled for the target platform. It is recommended to build Windows versions on Windows and Linux versions on Linux.
+> **Note**: Native modules (like `serialport`) must be compiled for the target platform. It is highly recommended to build the Windows version on a Windows machine and the Linux version on a Linux machine to avoid complex cross-compilation issues.
 
-## Project Structure
+## ❓ Troubleshooting
 
-*   `main.js` - Electron main process (lifecycle, window management, IPC handling).
-*   `renderer.js` - Main window renderer logic (UI interactions, serial logic).
-*   `index.html` - Main application layout.
-*   `preferences.html/js` - Settings window implementation.
-*   `filter.html/js` - Filter window implementation.
+**"Module not found" or "DLL initialization failed"**
+This usually happens if native modules weren't compiled against the Electron version correctly.
+Run the rebuild script:
+```bash
+npm run rebuild
+```
 
-## License
+**Serial Port not showing up**
+*   Check if you have the necessary drivers installed for your USB-to-Serial converter (CH340, CP210x, FTDI, etc.).
+*   Click the refresh button in the application connection panel.
 
-ISC
+## 📄 License
+
+ISC License
