@@ -112,4 +112,4 @@ npm run rebuild
 
 ## 📄 License
 
-ISC License
+MIT License
