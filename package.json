@@ -26,6 +26,10 @@
       "package.json",
       "**/*"
     ],
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    },
     "win": {
       "target": [
         "nsis",
