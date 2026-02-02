@@ -200,9 +200,16 @@ app.on('window-all-closed', () => {
 
 ipcMain.handle('get-about-info', () => {
   const pkg = require('./package.json');
+  let author = pkg.author || 'Your Name';
+  if (typeof author === 'object' && author.name) {
+      author = author.name;
+      if (author.email) {
+          author += ` <${author.email}>`;
+      }
+  }
   return {
     version: app.getVersion(),
-    author: pkg.author || 'Your Name',
+    author: author,
     github: pkg.homepage || (pkg.repository ? (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository.url) : 'https://github.com/your/repo')
   };
 });

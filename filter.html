@@ -4,13 +4,9 @@
     <meta charset="UTF-8">
     <title>Filter Window</title>
     <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="style.css" />
     <style>
         body {
-            margin: 0;
-            padding: 0;
-            background-color: #000;
-            color: #ccc;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             display: flex;
             flex-direction: column;
             height: 100vh;
@@ -18,9 +14,9 @@
         }
 
         #controls {
-            padding: 10px;
-            background-color: #252526;
-            border-bottom: 1px solid #333;
+            padding: 12px;
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
             display: flex;
             gap: 10px;
             align-items: center;
@@ -28,51 +24,13 @@
 
         #filter-input {
             flex: 1;
-            padding: 5px 10px;
-            border-radius: 4px;
-            border: 1px solid #3c3c3c;
-            background-color: #3c3c3c;
-            color: #fff;
-            outline: none;
-        }
-
-        #filter-input:focus {
-            border-color: #007acc;
-        }
-
-        button {
-            padding: 5px 15px;
-            background-color: #0e639c;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background-color: #1177bb;
         }
 
         #terminal-container {
             flex: 1;
             overflow: hidden;
-            padding: 5px;
-        }
-        
-        /* Scrollbar styling */
-        ::-webkit-scrollbar {
-            width: 10px;
-            height: 10px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1e1e1e; 
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #424242; 
-            border-radius: 5px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #4f4f4f; 
+            padding: 0;
+            background: #000;
         }
     </style>
 </head>

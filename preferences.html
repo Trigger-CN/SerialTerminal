@@ -3,158 +3,146 @@
 <head>
     <meta charset="UTF-8">
     <title>Preferences</title>
+    <link rel="stylesheet" href="style.css" />
     <style>
         body {
-            margin: 0;
-            padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: #252526;
-            color: #ccc;
             height: 100vh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            background: var(--bg-secondary); /* Override style.css body bg if needed, or rely on it */
         }
+
+        /* Override style.css body background if it differs */
+        /* style.css has --bg-primary. preferences uses secondary for body? */
+        /* Let's check. preferences.html body had background: var(--bg-secondary); */
+        /* I will keep it explicit here */
+        body {
+            background: var(--bg-secondary);
+        }
+
         .sidebar {
-            width: 150px;
-            background: #1e1e1e;
+            width: 180px;
+            background: var(--bg-primary);
             padding: 20px 0;
-            border-right: 1px solid #333;
+            border-right: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
-            gap: 2px;
+            gap: 5px;
         }
+
         .tab-btn {
-            padding: 10px 20px;
+            padding: 12px 24px;
             cursor: pointer;
             text-align: left;
             background: transparent;
-            color: #aaa;
+            color: var(--text-secondary);
             border: none;
             border-left: 3px solid transparent;
             font-size: 14px;
-            transition: all 0.2s;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-radius: 0; /* Reset global button radius */
         }
+
         .tab-btn:hover {
-            background: #2a2d2e;
+            background: var(--bg-tertiary);
             color: #fff;
         }
+
         .tab-btn.active {
-            background: #37373d;
+            background: var(--bg-tertiary);
             color: #fff;
-            border-left-color: #007acc;
+            border-left-color: var(--accent-color);
+            font-weight: 500;
         }
+
         .content {
             flex: 1;
-            padding: 20px 30px;
+            padding: 30px 40px;
             overflow-y: auto;
+            background: var(--bg-secondary);
         }
+
         .tab-pane {
             display: none;
-            animation: fadeIn 0.2s;
+            animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            max-width: 600px;
         }
+
         .tab-pane.active {
             display: block;
         }
+
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(5px); }
+            from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        h2 {
-            margin-top: 0;
-            margin-bottom: 20px;
-            font-size: 18px;
-            color: #fff;
-            border-bottom: 1px solid #333;
-            padding-bottom: 10px;
-        }
+
         label {
             display: block;
             margin-bottom: 8px;
             font-size: 13px;
-            color: #ddd;
+            color: var(--text-primary);
+            font-weight: 500;
         }
-        input, select {
-            width: 100%;
-            background: #3c3c3c;
-            color: #fff;
-            border: 1px solid #555;
-            padding: 8px 10px;
-            box-sizing: border-box;
-            border-radius: 4px;
-            font-size: 13px;
+        
+        /* About Tab Styling */
+        .about-info {
+            background: var(--bg-primary);
+            padding: 16px; /* Compact padding */
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
         }
-        input:focus, select:focus {
-            border-color: #007acc;
-            outline: none;
-        }
-        .color-picker {
+        
+        .about-row {
             display: flex;
-            align-items: center;
-            gap: 10px;
-            background: #333;
-            padding: 5px;
-            border-radius: 4px;
-            border: 1px solid #555;
-            width: fit-content;
+            justify-content: space-between;
+            padding: 8px 0; /* Compact padding */
+            border-bottom: 1px solid var(--border-color);
         }
-        input[type="color"] {
-            width: 40px;
-            height: 25px;
-            padding: 0;
-            border: none;
-            cursor: pointer;
-            border-radius: 2px;
+        
+        .about-row:last-child {
+            border-bottom: none;
         }
-        .actions {
-            padding: 15px 20px;
-            background: #1e1e1e;
-            border-top: 1px solid #333;
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
+        
+        .about-label {
+            color: var(--text-secondary);
+            font-weight: 500;
         }
-        button {
-            padding: 8px 16px;
-            cursor: pointer;
-            border: none;
-            background: #007acc;
+        
+        .about-value {
             color: #fff;
-            border-radius: 4px;
-            font-size: 13px;
+            font-family: monospace;
         }
-        button.secondary {
-            background: #3c3c3c;
+        
+        a {
+            color: var(--accent-color);
+            text-decoration: none;
         }
-        button:hover {
-            filter: brightness(1.1);
-        }
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: transparent;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #444;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #555;
+        
+        a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
 <body>
     <div style="display: flex; flex: 1; overflow: hidden;">
         <div class="sidebar">
-            <button class="tab-btn active" onclick="showTab('appearance')">🎨 Appearance</button>
-            <button class="tab-btn" onclick="showTab('highlighting')">🖍️ Highlighting</button>
-            <button class="tab-btn" onclick="showTab('logging')">📝 Logging</button>
-            <button class="tab-btn" onclick="showTab('about')">ℹ️ About</button>
+            <button class="tab-btn active" onclick="showTab('appearance')">
+                <span style="font-size: 18px;">🎨</span> Appearance
+            </button>
+            <button class="tab-btn" onclick="showTab('highlighting')">
+                <span style="font-size: 18px;">🖍️</span> Highlighting
+            </button>
+            <button class="tab-btn" onclick="showTab('logging')">
+                <span style="font-size: 18px;">📝</span> Logging
+            </button>
+            <button class="tab-btn" onclick="showTab('about')">
+                <span style="font-size: 18px;">ℹ️</span> About
+            </button>
         </div>
         <div class="content">
             <!-- Appearance Tab -->
@@ -174,7 +162,7 @@
                     <input type="number" id="fontSize" min="8" max="72" style="width: 100px;">
                 </div>
                 
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div class="grid-2-col">
                     <div class="form-group">
                         <label>Text Color</label>
                         <div class="color-picker">
@@ -221,23 +209,23 @@
             <div id="logging" class="tab-pane">
                 <h2>Logging Settings</h2>
                 <div class="form-group">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
-                        <input type="checkbox" id="logEnabled" style="width: auto;"> Enable Automatic Logging
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="logEnabled"> Enable Automatic Logging
                     </label>
                 </div>
 
-                <div id="log-settings" style="display: none; padding-left: 25px; border-left: 2px solid #333;">
+                <div id="log-settings" style="display: none; padding-left: 15px; border-left: 2px solid var(--border-color); margin-left: 5px;">
                     <div class="form-group">
                         <label>📂 Log Save Path</label>
                         <div style="display: flex; gap: 8px;">
-                            <input type="text" id="logPath" readonly>
+                            <input type="text" id="logPath" readonly style="flex: 1;">
                             <button class="secondary" id="browse-btn" style="white-space: nowrap;">Browse...</button>
                         </div>
                     </div>
                     <div class="form-group">
                         <label>📄 File Name Format</label>
                         <input type="text" id="logFileNameFormat" placeholder="log_%Y-%m-%d_%H-%M-%S.txt">
-                        <small style="color: #888; display: block; margin-top: 5px;">Supported tags: %Y, %m, %d, %H, %M, %S</small>
+                        <small style="color: var(--text-secondary); display: block; margin-top: 5px;">Supported tags: %Y, %m, %d, %H, %M, %S</small>
                     </div>
                     <div class="form-group">
                         <label>🔡 Text Encoding</label>
@@ -252,29 +240,31 @@
 
             <!-- About Tab -->
             <div id="about" class="tab-pane">
-                <h2>About</h2>
-                <div class="form-group">
-                    <label>App Name</label>
-                    <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #fff;">Serial Terminal</div>
+                <h2>About Serial Terminal</h2>
+                <div class="about-info">
+                    <div class="about-row">
+                        <div class="about-label">Version</div>
+                        <div id="app-version" class="about-value">Loading...</div>
+                    </div>
+                    <div class="about-row">
+                        <div class="about-label">Author</div>
+                        <div id="app-author" class="about-value">Loading...</div>
+                    </div>
+                    <div class="about-row">
+                        <div class="about-label">Repository</div>
+                        <div class="about-value"><a id="app-github" href="#">Loading...</a></div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>Version</label>
-                    <div id="app-version" style="font-family: monospace; background: #333; padding: 5px 10px; border-radius: 4px; display: inline-block;">Loading...</div>
-                </div>
-                <div class="form-group">
-                    <label>Author</label>
-                    <div id="app-author" style="margin-bottom: 10px;">Loading...</div>
-                </div>
-                <div class="form-group">
-                    <label>GitHub Repository</label>
-                    <a id="app-github" href="#" style="color: #007acc; text-decoration: none;">Loading...</a>
+                
+                <div style="margin-top: 30px; text-align: center; color: var(--text-secondary); font-size: 12px;">
+                    <p>A modern, cross-platform serial port terminal application.</p>
                 </div>
             </div>
         </div>
     </div>
 
     <div class="actions">
-        <button class="secondary" id="reset-btn" style="margin-right: auto; background: #a31515;">Reset Defaults</button>
+        <button class="secondary danger" id="reset-btn" style="margin-right: auto;">Reset Defaults</button>
         <button class="secondary" id="open-config-btn">Open Config Folder</button>
         <button class="secondary" id="cancel-btn">Cancel</button>
         <button id="save-btn">Save & Apply</button>

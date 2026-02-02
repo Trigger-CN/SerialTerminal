@@ -324,6 +324,7 @@ const baudCustomWrapper = document.getElementById('baud-custom-wrapper');
 const baudCustomInput = document.getElementById('baud-custom-input');
 const baudCustomCancel = document.getElementById('baud-custom-cancel');
 const connectBtn = document.getElementById('connect-btn');
+const clearBtn = document.getElementById('clear-btn');
 
 // Baud Rate Custom Logic
 baudSelect.addEventListener('change', () => {
@@ -368,6 +369,12 @@ async function refreshPorts() {
 }
 
 refreshBtn.addEventListener('click', refreshPorts);
+
+clearBtn.addEventListener('click', () => {
+    serialTerm.clear();
+    serialLineCounter = 1;
+    serialNewLine = true;
+});
 
 connectBtn.addEventListener('click', async () => {
     if (isConnected) {
@@ -541,25 +548,18 @@ function renderQuickSendList() {
     
     quickSendList.forEach((item, index) => {
         const div = document.createElement('div');
-        div.style.display = 'flex';
-        div.style.gap = '5px';
-        div.style.alignItems = 'center';
+        div.className = 'quick-send-item';
         
         // If this item is being edited, highlight it
         if (index === editingIndex) {
-            div.style.border = '1px solid #007acc';
-            div.style.borderRadius = '4px';
-            div.style.padding = '2px';
+            div.classList.add('editing');
         }
 
         const btn = document.createElement('button');
         btn.textContent = item.label || item.content;
         btn.title = `Send: ${item.content}`;
-        btn.style.flex = '1';
-        btn.style.textAlign = 'left';
-        btn.style.overflow = 'hidden';
-        btn.style.textOverflow = 'ellipsis';
-        btn.style.whiteSpace = 'nowrap';
+        btn.className = 'quick-send-main-btn';
+        
         btn.addEventListener('click', () => {
             if (isConnected) {
                 ipcRenderer.send('serial-input', item.content);
@@ -570,18 +570,11 @@ function renderQuickSendList() {
         
         // Action buttons container (vertical stack)
         const actionDiv = document.createElement('div');
-        actionDiv.style.display = 'flex';
-        actionDiv.style.flexDirection = 'column';
-        actionDiv.style.gap = '2px';
+        actionDiv.className = 'quick-send-actions';
 
         const editBtn = document.createElement('button');
         editBtn.textContent = '✎';
-        editBtn.className = 'secondary';
-        editBtn.style.width = '24px';
-        editBtn.style.height = '14px'; // Compact height
-        editBtn.style.padding = '0';
-        editBtn.style.fontSize = '10px';
-        editBtn.style.lineHeight = '12px';
+        editBtn.className = 'quick-send-action-btn';
         editBtn.title = 'Edit';
         editBtn.addEventListener('click', () => {
             editingIndex = index;
@@ -594,12 +587,7 @@ function renderQuickSendList() {
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕';
-        delBtn.className = 'secondary';
-        delBtn.style.width = '24px';
-        delBtn.style.height = '14px'; // Compact height
-        delBtn.style.padding = '0';
-        delBtn.style.fontSize = '10px';
-        delBtn.style.lineHeight = '12px';
+        delBtn.className = 'quick-send-action-btn delete';
         delBtn.title = 'Remove';
         delBtn.addEventListener('click', () => {
             // If deleting the item currently being edited, cancel edit mode
@@ -613,17 +601,18 @@ function renderQuickSendList() {
                 // Adjust index if deleting an item above the edited one
                 editingIndex--;
             }
-
+            
             quickSendList.splice(index, 1);
-            renderQuickSendList();
             saveQuickSendList();
+            renderQuickSendList();
         });
-        
+
         actionDiv.appendChild(editBtn);
         actionDiv.appendChild(delBtn);
-
+        
         div.appendChild(btn);
         div.appendChild(actionDiv);
+        
         quickSendListEl.appendChild(div);
     });
 }
