@@ -1,6 +1,6 @@
 {
   "name": "serialterminal",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "A modern, cross-platform serial port terminal application built with Electron.",
   "main": "main.js",
   "scripts": {
