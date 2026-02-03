@@ -19,6 +19,17 @@ jobs:
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync version from tag
+        shell: bash
+        run: |
+          # 提取 tag 版本号 (去掉 v 前缀)
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "Syncing version to $VERSION"
+          # 更新 package.json 版本号，不产生 git tag
+          npm version $VERSION --no-git-tag-version
 
       - name: Remove .npmrc
         shell: bash
@@ -40,6 +51,7 @@ jobs:
           sudo apt-get install -y libudev-dev
 
       - name: Build Changelog
+        if: matrix.os == 'ubuntu-latest'
         id: build_changelog
         uses: mikepenz/release-changelog-builder-action@v4
         env:
@@ -64,11 +76,19 @@ jobs:
               ]
             }
 
-      - name: Prepare Release Notes
-        shell: bash
-        run: |
-          echo "${{ steps.build_changelog.outputs.changelog }}" > release-notes.md
-          echo -e "\n\n## 📦 Downloads / 产物下载\n请在下方的 **Assets** 区域下载安装包：\n- **Windows**: 使用 \`.exe\` (安装版) 或 \`.exe\` (便携版)\n- **Linux**: 使用 \`.AppImage\` 或 \`.deb\`" >> release-notes.md
+      - name: Update Release Body
+        if: matrix.os == 'ubuntu-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ${{ steps.build_changelog.outputs.changelog }}
+
+            ## 📦 Downloads / 产物下载
+            请在下方的 **Assets** 区域下载安装包：
+            - **Windows**: 使用 `.exe` (安装版) 或 `.exe` (便携版)
+            - **Linux**: 使用 `.AppImage` 或 `.deb`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Publish (Windows)
         if: matrix.os == 'windows-latest'
