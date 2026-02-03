@@ -26,6 +26,9 @@
       "package.json",
       "**/*"
     ],
+    "releaseInfo": {
+      "releaseNotesFile": "release-notes.md"
+    },
     "publish": {
       "provider": "github",
       "releaseType": "release"
@@ -58,7 +61,10 @@
     "name": "Trigger-CN",
     "email": "759025229@qq.com"
   },
-  "repository": "https://github.com/Trigger-CN/SerialTerminal",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Trigger-CN/SerialTerminal.git"
+  },
   "license": "ISC",
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
