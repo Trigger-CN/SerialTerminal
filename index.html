@@ -18,11 +18,11 @@
     <div class="sidebar">
         <!-- Persistent Header -->
         <div class="sidebar-header">
-            <div style="display: flex; gap: 5px;">
+            <div style="display: flex; gap: 4px;">
                 <select id="port-select" title="Select Serial Port" style="flex: 1; width: 0;">
                     <option value="">Select Port</option>
                 </select>
-                <button class="secondary" id="refresh-btn" style="flex: 0 0 auto; padding: 0 10px;" title="Refresh Ports">🔄</button>
+                <button class="secondary" id="refresh-btn" style="flex: 0 0 auto; padding: 0 8px;" title="Refresh Ports">🔄</button>
             </div>
 
             <div id="baud-container" style="position: relative;">
@@ -49,9 +49,9 @@
                     <option value="2000000">2000000</option>
                     <option value="custom">✎ Custom...</option>
                 </select>
-                <div id="baud-custom-wrapper" style="display: none; display: flex; gap: 5px;">
+                <div id="baud-custom-wrapper" style="display: none; display: flex; gap: 4px;">
                     <input type="number" id="baud-custom-input" placeholder="Baud Rate" style="flex: 1; width: 0;">
-                    <button id="baud-custom-cancel" class="secondary" style="width: auto; padding: 0 8px;" title="Back to list">✕</button>
+                    <button id="baud-custom-cancel" class="secondary" style="width: auto; padding: 0 6px;" title="Back to list">✕</button>
                 </div>
             </div>
 
@@ -121,12 +121,12 @@
 
             <!-- Search Tab -->
             <div id="tab-search" class="sidebar-tab-pane">
-                <input type="text" id="search-input" placeholder="Search..." style="margin-bottom: 5px;">
-                <div style="display: flex; gap: 5px;">
+                <input type="text" id="search-input" placeholder="Search..." style="margin-bottom: 4px;">
+                <div style="display: flex; gap: 4px;">
                     <button id="find-prev-btn" style="flex: 1;">Prev</button>
                     <button id="find-next-btn" style="flex: 1;">Next</button>
                 </div>
-                <label style="margin-top: 5px;">
+                <label style="margin-top: 4px;">
                     <input type="checkbox" id="search-regex"> .* Regex
                 </label>
                 <label>
@@ -140,24 +140,24 @@
             <!-- Send Tab -->
             <div id="tab-send" class="sidebar-tab-pane">
                 <!-- Auto Send -->
-                <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 8px;">
-                    <div style="display: flex; align-items: center; gap: 5px; margin-bottom: 5px;">
+                <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 6px; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 4px;">
                         <input type="checkbox" id="auto-send-enable">
                         <label for="auto-send-enable" style="font-size: 13px; color: var(--text-primary); cursor: pointer; display: inline;">Auto Send</label>
                         <input type="number" id="auto-send-interval" placeholder="ms" value="1000" style="width: 60px; padding: 4px; margin-left: auto;">
                     </div>
-                    <textarea id="auto-send-text" placeholder="Text to auto send..." style="margin-bottom: 5px; height: 60px;"></textarea>
+                    <textarea id="auto-send-text" placeholder="Text to auto send..." style="margin-bottom: 4px; height: 60px;"></textarea>
                 </div>
         
                 <!-- Quick Send -->
-                <div style="font-size: 13px; margin-bottom: 5px; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-size: 13px; margin-bottom: 4px; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center;">
                     <span>Quick Send List</span>
                 </div>
                 <div id="quick-send-list" class="quick-send-list-container">
                     <!-- Items will be added here -->
                 </div>
                 
-                <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 5px;">
+                <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px;">
                     <input type="text" id="quick-send-label" placeholder="Label">
                     <textarea id="quick-send-content" placeholder="Content (multi-line)" style="height: 60px;"></textarea>
                 </div>

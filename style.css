@@ -42,7 +42,7 @@ select, button, input, textarea {
     background: var(--bg-input);
     color: #fff;
     border: 1px solid var(--border-color);
-    padding: 6px 10px; /* Compact padding */
+    padding: 5px 8px; /* Compact padding */
     font-size: 13px;
     border-radius: 4px;
     outline: none;
@@ -179,9 +179,9 @@ label:hover {
 /* Quick Send List Styling */
 .quick-send-item {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
-    padding: 4px;
+    padding: 2px;
     border-radius: 4px;
     transition: background 0.2s;
     border: 1px solid transparent;
@@ -205,9 +205,9 @@ label:hover {
     background: var(--bg-input);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
-    padding: 6px 8px;
+    padding: 4px 6px;
     font-size: 12px;
-    height: 32px; /* Fixed height for consistency */
+    height: 28px; /* Fixed height for consistency */
     display: flex;
     align-items: center;
 }
@@ -262,12 +262,12 @@ label:hover {
 }
 
 .sidebar-header {
-    padding: 10px; /* Compact padding */
+    padding: 8px; /* Compact padding */
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    gap: 8px; /* Compact gap */
+    gap: 6px; /* Compact gap */
     flex-shrink: 0;
 }
 
@@ -306,7 +306,7 @@ label:hover {
 .sidebar-content {
     flex: 1;
     overflow-y: auto;
-    padding: 16px;
+    padding: 10px;
     background: var(--bg-secondary);
 }
 
@@ -318,17 +318,17 @@ label:hover {
 .sidebar-tab-pane.active {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
 }
 
 .sidebar-footer {
-    padding: 16px;
+    padding: 10px;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
 }
 
 /* Main Container & Terminal */
@@ -359,9 +359,9 @@ label:hover {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    margin-top: 5px;
-    padding: 8px;
+    gap: 6px;
+    margin-top: 4px;
+    padding: 4px;
     background: var(--bg-input);
     border-radius: 4px;
     border: 1px solid var(--border-color);
@@ -431,10 +431,10 @@ label:hover {
 .quick-send-list-container {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 2px;
     max-height: 200px;
     overflow-y: auto;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
 /* Forms & Layout */
