@@ -189,4 +189,75 @@ elements.openConfigBtn.onclick = () => {
     ipcRenderer.send('open-config-folder');
 };
 
-init();
+// Update Logic
+if (elements.checkUpdateBtn) {
+    elements.checkUpdateBtn.onclick = () => {
+        ipcRenderer.send('check-for-updates');
+        if (elements.updateStatusContainer) {
+            elements.updateStatusContainer.textContent = 'Checking for updates...';
+            elements.updateStatusContainer.style.color = 'var(--text-secondary)';
+        }
+        elements.checkUpdateBtn.disabled = true;
+    };
+}
+
+if (elements.restartInstallBtn) {
+    elements.restartInstallBtn.onclick = () => {
+        ipcRenderer.send('quit-and-install');
+    };
+}
+
+ipcRenderer.on('update-status', (event, { status, data }) => {
+    const statusEl = elements.updateStatusContainer;
+    const progressEl = elements.updateProgressBar;
+    const fillEl = elements.updateProgressFill;
+    const checkBtn = elements.checkUpdateBtn;
+    const restartBtn = elements.restartInstallBtn;
+
+    if (!statusEl || !checkBtn) return;
+
+    switch (status) {
+        case 'checking':
+            statusEl.textContent = 'Checking for updates...';
+            checkBtn.disabled = true;
+            if (progressEl) progressEl.style.display = 'none';
+            if (restartBtn) restartBtn.style.display = 'none';
+            break;
+        case 'available':
+            statusEl.textContent = `Update available: ${data.version}. Downloading...`;
+            statusEl.style.color = 'var(--accent-color)';
+            if (progressEl) progressEl.style.display = 'block';
+            checkBtn.style.display = 'none';
+            break;
+        case 'not-available':
+            statusEl.textContent = 'You are on the latest version.';
+            statusEl.style.color = 'var(--text-secondary)';
+            checkBtn.disabled = false;
+            if (progressEl) progressEl.style.display = 'none';
+            break;
+        case 'error':
+            statusEl.textContent = `Error: ${data}`;
+            statusEl.style.color = '#ff4444';
+            checkBtn.disabled = false;
+            if (progressEl) progressEl.style.display = 'none';
+            break;
+        case 'download-progress':
+            statusEl.textContent = `Downloading... ${Math.round(data.percent)}%`;
+            if (fillEl) fillEl.style.width = `${data.percent}%`;
+            break;
+        case 'downloaded':
+            statusEl.textContent = `Update downloaded (${data.version}). Ready to install.`;
+            statusEl.style.color = '#00ff00';
+            if (progressEl) progressEl.style.display = 'none';
+            checkBtn.style.display = 'none';
+            if (restartBtn) restartBtn.style.display = 'inline-block';
+            break;
+    }
+});
+
+// Wrap init in DOMContentLoaded to be safe, or just call it if document is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}

@@ -240,24 +240,34 @@
 
             <!-- About Tab -->
             <div id="about" class="tab-pane">
-                <h2>About Serial Terminal</h2>
+                <h2>About SerialTerminal</h2>
                 <div class="about-info">
                     <div class="about-row">
-                        <div class="about-label">Version</div>
-                        <div id="app-version" class="about-value">Loading...</div>
+                        <span class="about-label">Version</span>
+                        <span class="about-value" id="app-version">Loading...</span>
                     </div>
                     <div class="about-row">
-                        <div class="about-label">Author</div>
-                        <div id="app-author" class="about-value">Loading...</div>
+                        <span class="about-label">Author</span>
+                        <span class="about-value" id="app-author">Loading...</span>
                     </div>
                     <div class="about-row">
-                        <div class="about-label">Repository</div>
-                        <div class="about-value"><a id="app-github" href="#">Loading...</a></div>
+                        <span class="about-label">GitHub</span>
+                        <span class="about-value"><a href="#" id="app-github">Loading...</a></span>
                     </div>
                 </div>
-                
-                <div style="margin-top: 30px; text-align: center; color: var(--text-secondary); font-size: 12px;">
-                    <p>A modern, cross-platform serial port terminal application.</p>
+
+                <div style="margin-top: 20px; padding: 15px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);">
+                    <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;">Software Update</h3>
+                    <div id="update-status-container" style="margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">
+                        Current version is up to date.
+                    </div>
+                    <div id="update-progress-bar" style="display: none; width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-bottom: 10px;">
+                        <div id="update-progress-fill" style="width: 0%; height: 100%; background: var(--accent-color); transition: width 0.2s;"></div>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="check-update-btn" class="secondary" style="padding: 6px 12px;">Check for Updates</button>
+                        <button id="restart-install-btn" class="primary" style="padding: 6px 12px; display: none;">Restart & Install</button>
+                    </div>
                 </div>
             </div>
         </div>

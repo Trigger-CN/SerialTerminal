@@ -4,6 +4,12 @@ const fs = require('fs');
 const pty = require('node-pty');
 const { SerialPort } = require('serialport');
 const iconv = require('iconv-lite');
+const { autoUpdater } = require('electron-updater');
+const log = require('electron-log');
+
+// Configure logging
+log.transports.file.level = 'info';
+autoUpdater.logger = log;
 
 let mainWindow;
 let prefsWindow;
@@ -300,6 +306,51 @@ ipcMain.on('save-config', (event, config) => {
           win.webContents.send('config-updated', currentConfig);
       }
   }
+});
+
+// Auto Updater Events
+function sendUpdateStatusToPrefs(status, data) {
+    if (prefsWindow && !prefsWindow.isDestroyed()) {
+        prefsWindow.webContents.send('update-status', { status, data });
+    }
+}
+
+autoUpdater.on('checking-for-update', () => {
+    sendUpdateStatusToPrefs('checking');
+});
+
+autoUpdater.on('update-available', (info) => {
+    sendUpdateStatusToPrefs('available', info);
+});
+
+autoUpdater.on('update-not-available', (info) => {
+    sendUpdateStatusToPrefs('not-available', info);
+});
+
+autoUpdater.on('error', (err) => {
+    sendUpdateStatusToPrefs('error', err.message);
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+    sendUpdateStatusToPrefs('download-progress', progressObj);
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateStatusToPrefs('downloaded', info);
+});
+
+ipcMain.on('check-for-updates', () => {
+    if (process.env.NODE_ENV === 'development') {
+        // Skip check in dev, or force dev update config if needed
+        // autoUpdater.forceDevUpdateConfig = true;
+        sendUpdateStatusToPrefs('error', 'Cannot check for updates in development mode');
+        return;
+    }
+    autoUpdater.checkForUpdates();
+});
+
+ipcMain.on('quit-and-install', () => {
+    autoUpdater.quitAndInstall();
 });
 
 // PTY Setup
