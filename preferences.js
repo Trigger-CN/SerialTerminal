@@ -13,6 +13,9 @@ const elements = {
   lineNoColor: document.getElementById('lineNoColor'),
   lineNoColorHex: document.getElementById('lineNoColor-hex'),
 
+  scrollbackLimit: document.getElementById('scrollbackLimit'),
+  historyBufferSize: document.getElementById('historyBufferSize'),
+
   highlightRulesList: document.getElementById('highlight-rules-list'),
   addRuleBtn: document.getElementById('add-rule-btn'),
   
@@ -93,6 +96,9 @@ async function init() {
   elements.lineNoColor.value = config.lineNoColor || '#ffff00';
   elements.lineNoColorHex.textContent = config.lineNoColor || '#ffff00';
   
+  elements.scrollbackLimit.value = config.scrollbackLimit || 100000;
+  elements.historyBufferSize.value = config.historyBufferSize || 5000000;
+
   elements.logEnabled.checked = config.logEnabled;
   elements.logPath.value = config.logPath;
   elements.logFileNameFormat.value = config.logFileNameFormat;
@@ -164,6 +170,8 @@ elements.saveBtn.onclick = () => {
     background: elements.background.value,
     timestampColor: elements.timestampColor.value,
     lineNoColor: elements.lineNoColor.value,
+    scrollbackLimit: parseInt(elements.scrollbackLimit.value) || 100000,
+    historyBufferSize: parseInt(elements.historyBufferSize.value) || 5000000,
     logEnabled: elements.logEnabled.checked,
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,

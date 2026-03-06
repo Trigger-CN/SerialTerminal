@@ -11,7 +11,8 @@ try {
     // Initialize Terminal
     const term = new Terminal({ 
         cursorBlink: true,
-        convertEol: true // Help with newline handling
+        convertEol: true, // Help with newline handling
+        scrollback: 100000 // Increase scrollback limit
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -29,6 +30,7 @@ try {
         const options = {
             fontSize: config.fontSize,
             fontFamily: config.fontFamily,
+            scrollback: config.scrollbackLimit || 100000,
             theme: {
                 background: config.background,
                 foreground: config.foreground,
@@ -189,6 +191,7 @@ try {
         // Update terminal options
         term.options.fontFamily = config.fontFamily;
         term.options.fontSize = config.fontSize;
+        term.options.scrollback = config.scrollbackLimit || 100000;
         term.options.theme = {
             background: config.background,
             foreground: config.foreground,

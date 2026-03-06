@@ -16,7 +16,7 @@ let prefsWindow;
 const filterWindows = new Set();
 // Store recent serial output to populate new filter windows
 let serialHistoryBuffer = '';
-const MAX_HISTORY_LENGTH = 100000; // Keep last 100KB characters
+// MAX_HISTORY_LENGTH is now in config (historyBufferSize)
 
 const configPath = path.join(app.getPath('userData'), 'config.json');
 
@@ -41,6 +41,8 @@ function loadConfig() {
     highlightRules: [],
     showTimestamp: false,
     showLineNumbers: false,
+    scrollbackLimit: 100000,
+    historyBufferSize: 5000000,
     lastSerialOptions: {
         path: '',
         baudRate: '9600',
@@ -412,8 +414,9 @@ function handleSerialData(str) {
 
     // Update history buffer
     serialHistoryBuffer += str;
-    if (serialHistoryBuffer.length > MAX_HISTORY_LENGTH) {
-        serialHistoryBuffer = serialHistoryBuffer.slice(serialHistoryBuffer.length - MAX_HISTORY_LENGTH);
+    const maxLen = currentConfig.historyBufferSize || 5000000;
+    if (serialHistoryBuffer.length > maxLen) {
+        serialHistoryBuffer = serialHistoryBuffer.slice(serialHistoryBuffer.length - maxLen);
     }
 
     writeLog(str);

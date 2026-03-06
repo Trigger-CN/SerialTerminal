@@ -158,7 +158,10 @@ term.loadAddon(fitAddon);
 term.open(document.getElementById('terminal-container'));
 */
 
-const serialTerm = new Terminal({ cursorBlink: true });
+const serialTerm = new Terminal({ 
+    cursorBlink: true,
+    scrollback: 100000 // Increase scrollback limit
+});
 const serialFitAddon = new FitAddon();
 const serialSearchAddon = new SearchAddon();
 serialTerm.loadAddon(serialFitAddon);
@@ -216,6 +219,7 @@ function applyConfig(config) {
     const options = {
         fontSize: config.fontSize,
         fontFamily: config.fontFamily,
+        scrollback: config.scrollbackLimit || 100000,
         theme: {
             background: config.background,
             foreground: config.foreground,
