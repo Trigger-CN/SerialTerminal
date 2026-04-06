@@ -108,55 +108,58 @@ function applyHighlighting(text) {
     return result;
 }
 
-let incomingBuffer = '';
+class SerialDataParser {
+    constructor() {
+        this.incomingBuffer = '';
+        this.isNewLine = true;
+    }
 
-function processSerialOutput(data) {
-    if (!data) return '';
-    
-    incomingBuffer += data;
-    
-    // Split by CRLF, CR, or LF
-    // We want to capture the delimiters to know how to reconstruct/handle newlines
-    // split with capture group `(/(\r\n|\r|\n)/)` will include delimiters in the result array
-    const parts = incomingBuffer.split(/(\r\n|\r|\n)/);
-    
-    let output = '';
-    
-    // Check if we have any delimiters
-    if (parts.length === 1) {
-        // No delimiters found yet.
-        if (incomingBuffer.length > 10000) {
-            // Safety valve: if line is too long, just flush it
-            output = applyHighlighting(incomingBuffer);
-            incomingBuffer = '';
-            return output;
+    parse(data) {
+        if (!data) return [];
+        
+        this.incomingBuffer += data;
+        const parts = this.incomingBuffer.split(/(\r\n|\r|\n)/);
+        
+        if (parts.length === 1) {
+            if (this.incomingBuffer.length > 10000) {
+                const lineContent = this.incomingBuffer;
+                this.incomingBuffer = '';
+                
+                const prefix = this.isNewLine ? getPrefix() : '';
+                this.isNewLine = false; // Next chunk is continuation
+                return [{ text: lineContent, delimiter: '', prefix }];
+            }
+            return [];
         }
-        return ''; // Wait for more data
+        
+        const incompleteLine = parts.pop();
+        this.incomingBuffer = incompleteLine;
+        
+        const lines = [];
+        for (let i = 0; i < parts.length; i += 2) {
+            const prefix = this.isNewLine ? getPrefix() : '';
+            lines.push({
+                text: parts[i],
+                delimiter: parts[i + 1],
+                prefix
+            });
+            this.isNewLine = true; // After delimiter, next line is new
+        }
+        return lines;
+    }
+}
+
+const dataParser = new SerialDataParser();
+
+function formatLineForTerminal(lineObj, filterRegex = null) {
+    if (filterRegex && !filterRegex.test(lineObj.text)) {
+        return '';
     }
     
-    // The last part is the incomplete line (or empty string if ends with delimiter)
-    const incompleteLine = parts.pop();
-    incomingBuffer = incompleteLine;
-    
-    // Now parts contains [line1, delim1, line2, delim2, ...]
-    
-    for (let i = 0; i < parts.length; i += 2) {
-        const lineContent = parts[i];     // The text
-        const delimiter = parts[i + 1];   // The newline sequence (\n, \r, \r\n)
-        
-        if (serialNewLine) {
-            output += getPrefix();
-            serialNewLine = false;
-        }
-        
-        output += applyHighlighting(lineContent);
-        
-        if (delimiter) {
-            output += '\r\n'; // Always normalize to \r\n for xterm
-            serialNewLine = true;
-        }
+    let output = lineObj.prefix + applyHighlighting(lineObj.text);
+    if (lineObj.delimiter) {
+        output += '\r\n'; // Normalize to xterm newline
     }
-    
     return output;
 }
 
@@ -178,39 +181,270 @@ serialTerm.loadAddon(serialFitAddon);
 serialTerm.loadAddon(serialSearchAddon);
 serialTerm.open(document.getElementById('serial-container'));
 
-// Smart Copy/Paste Handling
-serialTerm.attachCustomKeyEventHandler((arg) => {
-    if (arg.type !== 'keydown') return true; // Only handle keydown events
+// Filter Tabs Management
+let filterTabs = [];
+let nextFilterTabId = 1;
 
-    const ctrlKey = arg.ctrlKey;
-    const key = arg.key.toLowerCase();
+function getNextTabId() {
+    return nextFilterTabId++;
+}
 
-    // Ctrl+C: Copy if selection exists, otherwise send ^C
-    if (ctrlKey && key === 'c') {
-        if (serialTerm.hasSelection()) {
-            navigator.clipboard.writeText(serialTerm.getSelection());
-            // Optional: clear selection after copy
-            // serialTerm.clearSelection(); 
-            return false; // Prevent sending ^C to serial
+function updateTabTitles() {
+    filterTabs.forEach((tab, index) => {
+        const displayIndex = index + 1;
+        const closeBtn = tab.btn.querySelector('.main-tab-close');
+        tab.btn.innerHTML = `Filter ${displayIndex} `;
+        tab.btn.appendChild(closeBtn);
+    });
+}
+
+function createFilterTab() {
+    const internalId = getNextTabId();
+    const tabId = `tab-filter-${internalId}`;
+    
+    // 1. Create Tab Button
+    const tabList = document.getElementById('main-tabs-list');
+    const tabBtn = document.createElement('div');
+    tabBtn.className = 'main-tab';
+    tabBtn.dataset.target = tabId;
+    
+    // The initial title will be updated by updateTabTitles() right after
+    tabBtn.innerHTML = `Filter <span class="main-tab-close" title="Close Tab">✕</span>`;
+    
+    tabBtn.onclick = (e) => {
+        if (e.target.classList.contains('main-tab-close')) return;
+        switchMainTab(tabId);
+    };
+    
+    tabBtn.querySelector('.main-tab-close').onclick = () => {
+        closeFilterTab(tabId);
+    };
+    
+    tabList.appendChild(tabBtn);
+    
+    // 2. Create Tab Pane
+    const tabContent = document.getElementById('main-tabs-content');
+    const tabPane = document.createElement('div');
+    tabPane.className = 'main-tab-pane';
+    tabPane.id = tabId;
+    
+    const filterHeader = document.createElement('div');
+    filterHeader.className = 'filter-header';
+    filterHeader.innerHTML = `
+        <input type="text" class="filter-input" list="filter-history-list" placeholder="Regex or text..." style="flex: 1;">
+        <label><input type="checkbox" class="filter-enable" checked> Enable</label>
+        <button class="filter-clear-btn secondary">🗑️ Clear</button>
+    `;
+    
+    const terminalWrapper = document.createElement('div');
+    terminalWrapper.className = 'terminal-wrapper';
+    terminalWrapper.id = `terminal-${tabId}`;
+    
+    tabPane.appendChild(filterHeader);
+    tabPane.appendChild(terminalWrapper);
+    tabContent.appendChild(tabPane);
+    
+    // 3. Initialize Terminal
+    const term = new Terminal({ 
+        cursorBlink: true,
+        scrollback: currentConfig ? (currentConfig.scrollbackLimit || 100000) : 100000
+    });
+    const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
+    term.open(terminalWrapper);
+    
+    if (currentConfig) {
+        term.options = {
+            fontSize: currentConfig.fontSize,
+            fontFamily: currentConfig.fontFamily,
+            theme: {
+                background: currentConfig.background,
+                foreground: currentConfig.foreground,
+                cursor: currentConfig.foreground
+            }
+        };
+    }
+    
+    // 4. Setup State and Events
+    const tabState = {
+        id: tabId,
+        term,
+        fitAddon,
+        searchAddon,
+        filterRegex: null,
+        element: tabPane,
+        btn: tabBtn
+    };
+    
+    const input = filterHeader.querySelector('.filter-input');
+    const enableCb = filterHeader.querySelector('.filter-enable');
+    const clearBtn = filterHeader.querySelector('.filter-clear-btn');
+    
+    function updateRegex() {
+        if (!enableCb.checked || !input.value) {
+            tabState.filterRegex = null;
+            input.style.borderColor = 'var(--border-color)';
+            return;
         }
-        return true; // Send ^C to serial
+        try {
+            tabState.filterRegex = new RegExp(input.value, 'i');
+            input.style.borderColor = 'var(--border-color)';
+        } catch (e) {
+            tabState.filterRegex = null;
+            input.style.borderColor = 'var(--danger-color)';
+        }
+    }
+    
+    function saveFilterHistory(val) {
+        if (!val) return;
+        let history = currentConfig.filterHistory || [];
+        // Remove if exists to move it to the top
+        history = history.filter(item => item !== val);
+        history.unshift(val);
+        // Keep max 20
+        if (history.length > 20) history = history.slice(0, 20);
+        
+        currentConfig.filterHistory = history;
+        ipcRenderer.send('save-config', { filterHistory: history });
+        updateFilterHistoryDatalist();
     }
 
-    // Ctrl+V: Paste if selection exists, otherwise send ^V
-    if (ctrlKey && key === 'v') {
-        if (serialTerm.hasSelection()) {
-            navigator.clipboard.readText().then(text => {
-                if (text) {
-                    ipcRenderer.send('serial-input', text);
-                }
-            });
-            return false; // Prevent sending ^V to serial
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            updateRegex();
+            saveFilterHistory(input.value.trim());
         }
-        return true; // Send ^V to serial
-    }
+    });
 
-    return true; // Allow all other keys
+    input.addEventListener('change', () => {
+        // Change triggers when selecting from datalist or losing focus
+        updateRegex();
+        saveFilterHistory(input.value.trim());
+    });
+    
+    input.addEventListener('input', updateRegex);
+    enableCb.addEventListener('change', updateRegex);
+    clearBtn.addEventListener('click', () => {
+        term.clear();
+    });
+    
+    // Setup copy/paste for filter terminal
+    term.attachCustomKeyEventHandler(createTerminalKeyHandler(term));
+    
+    filterTabs.push(tabState);
+    updateTabTitles();
+    switchMainTab(tabId);
+    
+    // Fit terminal after a short delay to ensure DOM is rendered
+    setTimeout(async () => {
+        fitAddon.fit();
+        
+        // Load history for the new tab
+        try {
+            const history = await ipcRenderer.invoke('get-history');
+            if (history) {
+                // Save current line counter to avoid jumping
+                const savedLineCounter = serialLineCounter;
+                serialLineCounter = 1;
+                
+                const tempParser = new SerialDataParser();
+                const lines = tempParser.parse(history);
+                let tabOutput = '';
+                lines.forEach(lineObj => {
+                    tabOutput += formatLineForTerminal(lineObj, tabState.filterRegex);
+                });
+                if (tabOutput) term.write(tabOutput);
+                
+                // Restore line counter
+                serialLineCounter = savedLineCounter;
+            }
+        } catch (e) {
+            console.error('Failed to load history:', e);
+        }
+    }, 50);
+}
+
+function closeFilterTab(tabId) {
+    const index = filterTabs.findIndex(t => t.id === tabId);
+    if (index > -1) {
+        const tab = filterTabs[index];
+        tab.term.dispose();
+        tab.element.remove();
+        tab.btn.remove();
+        filterTabs.splice(index, 1);
+        
+        updateTabTitles();
+        
+        // Switch to main tab if we closed the active one
+        if (tab.element.classList.contains('active')) {
+            switchMainTab('tab-main');
+        }
+    }
+}
+
+document.getElementById('new-filter-tab-btn').addEventListener('click', createFilterTab);
+
+window.addEventListener('main-tab-changed', (e) => {
+    const tabId = e.detail.tabId;
+    setTimeout(() => {
+        if (tabId === 'tab-main') {
+            serialFitAddon.fit();
+        } else {
+            const tab = filterTabs.find(t => t.id === tabId);
+            if (tab) tab.fitAddon.fit();
+        }
+    }, 0);
 });
+
+function createTerminalKeyHandler(targetTerm) {
+    return (arg) => {
+        if (arg.type !== 'keydown') return true;
+
+        const ctrlKey = arg.ctrlKey;
+        const key = arg.key.toLowerCase();
+
+        if (ctrlKey && key === 'c') {
+            if (targetTerm.hasSelection()) {
+                navigator.clipboard.writeText(targetTerm.getSelection());
+                return false;
+            }
+            return true;
+        }
+
+        if (ctrlKey && key === 'v') {
+            if (targetTerm.hasSelection()) {
+                navigator.clipboard.readText().then(text => {
+                    if (text) {
+                        ipcRenderer.send('serial-input', text);
+                    }
+                });
+                return false;
+            }
+            return true;
+        }
+
+        return true;
+    };
+}
+
+// Smart Copy/Paste Handling
+serialTerm.attachCustomKeyEventHandler(createTerminalKeyHandler(serialTerm));
+
+function updateFilterHistoryDatalist() {
+    const listEl = document.getElementById('filter-history-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    
+    if (currentConfig && currentConfig.filterHistory) {
+        currentConfig.filterHistory.forEach(item => {
+            const option = document.createElement('option');
+            option.value = item;
+            listEl.appendChild(option);
+        });
+    }
+}
 
 function applyConfig(config) {
     currentConfig = config;
@@ -236,8 +470,13 @@ function applyConfig(config) {
             cursor: config.foreground
         }
     };
-    // term.options = options;
     serialTerm.options = options;
+    
+    // Apply options to all filter tabs
+    filterTabs.forEach(tab => {
+        tab.term.options = options;
+        tab.fitAddon.fit();
+    });
     
     document.body.style.background = config.background;
     
@@ -326,10 +565,29 @@ ipcRenderer.send('spawn-terminal');
 // Serial Logic
 serialTerm.onData((data) => ipcRenderer.send('serial-input', data));
 ipcRenderer.on('serial-output', (event, data) => {
-    serialTerm.write(processSerialOutput(data));
+    const lines = dataParser.parse(data);
+    
+    if (lines.length > 0) {
+        let mainOutput = '';
+        lines.forEach(lineObj => {
+            mainOutput += formatLineForTerminal(lineObj, null);
+        });
+        if (mainOutput) serialTerm.write(mainOutput);
+        
+        // Broadcast to filter tabs
+        filterTabs.forEach(tab => {
+            let tabOutput = '';
+            lines.forEach(lineObj => {
+                tabOutput += formatLineForTerminal(lineObj, tab.filterRegex);
+            });
+            if (tabOutput) tab.term.write(tabOutput);
+        });
+    }
 });
 ipcRenderer.on('serial-error', (event, err) => {
-    serialTerm.write('\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n');
+    const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
+    serialTerm.write(errMsg);
+    filterTabs.forEach(tab => tab.term.write(errMsg));
 });
 
 const portSelect = document.getElementById('port-select');
@@ -387,7 +645,8 @@ refreshBtn.addEventListener('click', refreshPorts);
 clearBtn.addEventListener('click', () => {
     serialTerm.clear();
     serialLineCounter = 1;
-    serialNewLine = true;
+    dataParser.isNewLine = true;
+    dataParser.incomingBuffer = '';
 });
 
 connectBtn.addEventListener('click', async () => {
@@ -664,6 +923,9 @@ addQuickSendBtn.addEventListener('click', () => {
 const originalApplyConfig = applyConfig;
 applyConfig = function(config) {
     originalApplyConfig(config);
+    
+    // Update filter history datalist
+    updateFilterHistoryDatalist();
     
     // Auto Send Settings
     if (config.autoSendSettings) {

@@ -13,8 +13,7 @@ autoUpdater.logger = log;
 
 let mainWindow;
 let prefsWindow;
-const filterWindows = new Set();
-// Store recent serial output to populate new filter windows
+// Store recent serial output
 let serialHistoryBuffer = '';
 // MAX_HISTORY_LENGTH is now in config (historyBufferSize)
 
@@ -43,6 +42,7 @@ function loadConfig() {
     showLineNumbers: false,
     scrollbackLimit: 100000,
     historyBufferSize: 5000000,
+    filterHistory: [],
     lastSerialOptions: {
         path: '',
         baudRate: '9600',
@@ -166,34 +166,6 @@ function createPrefsWindow() {
   });
 }
 
-function createFilterWindow() {
-  const win = new BrowserWindow({
-    width: 800,
-    height: 600,
-    backgroundColor: '#000000',
-    autoHideMenuBar: true,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
-    }
-  });
-
-  win.loadFile('filter.html');
-  filterWindows.add(win);
-
-  // Send history to new window once it's ready
-  win.webContents.once('did-finish-load', () => {
-      win.webContents.send('update-display-settings', displaySettings);
-      if (serialHistoryBuffer) {
-          win.webContents.send('serial-output', serialHistoryBuffer);
-      }
-  });
-
-  win.on('closed', () => {
-    filterWindows.delete(win);
-  });
-}
-
 app.whenReady().then(() => {
   createWindow();
 
@@ -241,12 +213,12 @@ ipcMain.handle('get-config', () => {
   return currentConfig;
 });
 
-ipcMain.on('open-prefs', () => {
-  createPrefsWindow();
+ipcMain.handle('get-history', () => {
+  return serialHistoryBuffer;
 });
 
-ipcMain.on('create-filter-window', () => {
-  createFilterWindow();
+ipcMain.on('open-prefs', () => {
+  createPrefsWindow();
 });
 
 ipcMain.on('update-display-settings', (event, settings) => {
@@ -255,13 +227,6 @@ ipcMain.on('update-display-settings', (event, settings) => {
     // Save to config
     currentConfig = { ...currentConfig, ...settings };
     saveConfig(currentConfig);
-
-    // Broadcast to all filter windows
-    for (const win of filterWindows) {
-        if (!win.isDestroyed()) {
-            win.webContents.send('update-display-settings', displaySettings);
-        }
-    }
 });
 
 ipcMain.on('reset-config', (event) => {
@@ -285,13 +250,6 @@ ipcMain.on('reset-config', (event) => {
     mainWindow.webContents.send('config-updated', currentConfig);
     mainWindow.webContents.send('update-display-settings', displaySettings);
   }
-  
-  for (const win of filterWindows) {
-      if (!win.isDestroyed()) {
-          win.webContents.send('config-updated', currentConfig);
-          win.webContents.send('update-display-settings', displaySettings);
-      }
-  }
 });
 
 ipcMain.on('open-config-folder', () => {
@@ -302,11 +260,6 @@ ipcMain.on('save-config', (event, config) => {
   saveConfig(config);
   if (mainWindow) {
     mainWindow.webContents.send('config-updated', currentConfig);
-  }
-  for (const win of filterWindows) {
-      if (!win.isDestroyed()) {
-          win.webContents.send('config-updated', currentConfig);
-      }
   }
 });
 
@@ -402,16 +355,6 @@ function handleSerialData(str) {
         mainWindow.webContents.send('serial-output', str);
     }
     
-    // Broadcast to filter windows
-    let broadcastCount = 0;
-    for (const win of filterWindows) {
-        if (!win.isDestroyed()) {
-            win.webContents.send('serial-output', str);
-            broadcastCount++;
-        }
-    }
-    // if (broadcastCount > 0) console.log(`Broadcasted to ${broadcastCount} filter windows`);
-
     // Update history buffer
     serialHistoryBuffer += str;
     const maxLen = currentConfig.historyBufferSize || 5000000;

@@ -60,6 +60,16 @@ select:focus, input:focus, textarea:focus {
     box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.4);
 }
 
+/* Fix Chrome autofill / datalist background color issue */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 30px var(--bg-input) inset !important;
+    -webkit-text-fill-color: #fff !important;
+    transition: background-color 5000s ease-in-out 0s;
+}
+
 /* Custom Select Arrow */
 select {
     appearance: none;
@@ -346,6 +356,100 @@ label:hover {
     flex: 1;
     background: #000;
     overflow: hidden;
+}
+
+/* Main Tabs Styling */
+.main-tabs-header {
+    display: flex;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    height: 36px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.main-tabs-list {
+    display: flex;
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.main-tabs-list::-webkit-scrollbar {
+    height: 4px;
+}
+
+.main-tab {
+    padding: 0 16px;
+    height: 36px;
+    line-height: 36px;
+    cursor: pointer;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 13px;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+.main-tab:hover {
+    background: var(--bg-input);
+}
+
+.main-tab.active {
+    background: var(--bg-primary);
+    color: #fff;
+    border-top: 2px solid var(--accent-color);
+    height: 34px; /* compensate for border-top */
+    line-height: 34px;
+}
+
+.main-tab-close {
+    font-size: 12px;
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.6;
+}
+
+.main-tab-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+    opacity: 1;
+}
+
+.main-tabs-content {
+    flex: 1;
+    position: relative;
+}
+
+.main-tab-pane {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: none;
+    flex-direction: column;
+}
+
+.main-tab-pane.active {
+    display: flex;
+}
+
+.filter-header {
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    align-items: center;
+    flex-shrink: 0;
 }
 
 @keyframes fadeIn {

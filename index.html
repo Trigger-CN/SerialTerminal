@@ -166,7 +166,6 @@
         </div>
 
         <div class="sidebar-footer">
-            <button id="new-filter-window-btn" class="footer-btn primary">➕ Filter Window</button>
             <div id="open-prefs" class="footer-btn settings" title="Settings">
                 ⚙️ Global Settings
             </div>
@@ -174,9 +173,21 @@
     </div>
 
     <div class="main-container">
-        <!-- Terminal container removed temporarily -->
-        <div class="terminal-wrapper" id="serial-container"></div>
+        <div class="main-tabs-header">
+            <div class="main-tabs-list" id="main-tabs-list">
+                <div class="main-tab active" data-target="tab-main" onclick="switchMainTab('tab-main')">Main Terminal</div>
+            </div>
+            <button id="new-filter-tab-btn" class="secondary" title="New Filter Tab" style="width: 36px; height: 36px; border: none; background: transparent; font-size: 16px;">➕</button>
+        </div>
+        
+        <div class="main-tabs-content" id="main-tabs-content">
+            <div class="main-tab-pane active" id="tab-main">
+                <div class="terminal-wrapper" id="serial-container"></div>
+            </div>
+        </div>
     </div>
+    
+    <datalist id="filter-history-list"></datalist>
 
     <script src="renderer.js"></script>
     <script>
@@ -206,6 +217,20 @@
                     btn.classList.add('active');
                 }
             });
+        }
+
+        function switchMainTab(tabId) {
+            document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.main-tab').forEach(el => el.classList.remove('active'));
+            
+            const targetPane = document.getElementById(tabId);
+            if (targetPane) targetPane.classList.add('active');
+            
+            const targetTab = document.querySelector(`.main-tab[data-target="${tabId}"]`);
+            if (targetTab) targetTab.classList.add('active');
+            
+            // Dispatch a custom event to notify renderer.js to fit the terminal
+            window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId } }));
         }
     </script>
 </body>
