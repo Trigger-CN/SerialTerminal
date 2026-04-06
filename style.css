@@ -450,6 +450,65 @@ label:hover {
     border-bottom: 1px solid var(--border-color);
     align-items: center;
     flex-shrink: 0;
+    position: relative;
+}
+
+/* Custom History Dropdown */
+.filter-input-wrapper {
+    flex: 1;
+    display: flex;
+    position: relative;
+}
+
+.filter-history-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+}
+
+.filter-history-item {
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.filter-history-item:hover, .filter-history-item.active {
+    background: var(--accent-color);
+    color: #fff;
+}
+
+.filter-dropdown-btn {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0 4px;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.filter-dropdown-btn:hover {
+    color: var(--text-primary);
 }
 
 @keyframes fadeIn {

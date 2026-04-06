@@ -67,40 +67,101 @@ function getPrefix() {
     return s;
 }
 
-function applyHighlighting(text) {
-    if (!highlightRules || highlightRules.length === 0) return text;
+function applyHighlighting(text, filterRegex = null) {
     if (!text) return text;
+    
+    let matches = [];
 
-    const matches = [];
-    highlightRules.forEach(rule => {
-        if (!rule.enabled || !rule.regex) return;
+    // Apply global highlight rules
+    if (highlightRules && highlightRules.length > 0) {
+        highlightRules.forEach(rule => {
+            if (!rule.enabled || !rule.regex) return;
+            try {
+                const re = new RegExp(rule.regex, 'g');
+                let match;
+                while ((match = re.exec(text)) !== null) {
+                    matches.push({
+                        start: match.index,
+                        end: match.index + match[0].length,
+                        color: rule.color,
+                        isFilterMatch: false
+                    });
+                }
+            } catch (e) {
+                // Ignore invalid regex
+            }
+        });
+    }
+
+    // Apply filter regex highlight
+    if (filterRegex) {
         try {
-            const re = new RegExp(rule.regex, 'g');
+            // Ensure regex has 'g' flag for multiple matches in a line
+            const flags = filterRegex.flags.includes('g') ? filterRegex.flags : filterRegex.flags + 'g';
+            const re = new RegExp(filterRegex.source, flags);
             let match;
             while ((match = re.exec(text)) !== null) {
+                // Prevent infinite loop for empty matches
+                if (match[0].length === 0) {
+                    re.lastIndex++;
+                    continue;
+                }
                 matches.push({
                     start: match.index,
                     end: match.index + match[0].length,
-                    color: rule.color
+                    isFilterMatch: true
                 });
             }
         } catch (e) {
             // Ignore invalid regex
         }
-    });
+    }
 
     if (matches.length === 0) return text;
 
+    // Sort matches by start index
     matches.sort((a, b) => a.start - b.start);
+
+    // Merge overlapping matches (prioritizing filter match)
+    const mergedMatches = [];
+    let currentMatch = matches[0];
+
+    for (let i = 1; i < matches.length; i++) {
+        const nextMatch = matches[i];
+        if (nextMatch.start < currentMatch.end) {
+            // Overlap detected
+            currentMatch.end = Math.max(currentMatch.end, nextMatch.end);
+            // If any of the overlapping matches is a filter match, mark the merged block as filter match
+            if (nextMatch.isFilterMatch) {
+                currentMatch.isFilterMatch = true;
+            } else if (!currentMatch.isFilterMatch && nextMatch.color) {
+                // Only overwrite color if current match is not a filter match
+                currentMatch.color = nextMatch.color;
+            }
+        } else {
+            mergedMatches.push(currentMatch);
+            currentMatch = nextMatch;
+        }
+    }
+    mergedMatches.push(currentMatch);
 
     let result = '';
     let lastIndex = 0;
 
-    for (const m of matches) {
+    for (const m of mergedMatches) {
         if (m.start < lastIndex) continue; 
         
         result += text.substring(lastIndex, m.start);
-        result += hexToAnsi(m.color) + text.substring(m.start, m.end) + '\x1b[0m';
+        
+        // \x1b[48;5;236m is a dark gray background. \x1b[1m is bold.
+        if (m.isFilterMatch) {
+            // Filter match: Dark gray background + bold text
+            result += '\x1b[48;5;238m\x1b[1m' + text.substring(m.start, m.end) + '\x1b[0m';
+        } else {
+            // Normal highlight rule
+            result += hexToAnsi(m.color) + text.substring(m.start, m.end) + '\x1b[0m';
+        }
+        
         lastIndex = m.end;
     }
     
@@ -156,7 +217,7 @@ function formatLineForTerminal(lineObj, filterRegex = null) {
         return '';
     }
     
-    let output = lineObj.prefix + applyHighlighting(lineObj.text);
+    let output = lineObj.prefix + applyHighlighting(lineObj.text, filterRegex);
     if (lineObj.delimiter) {
         output += '\r\n'; // Normalize to xterm newline
     }
@@ -229,9 +290,13 @@ function createFilterTab() {
     tabPane.id = tabId;
     
     const filterHeader = document.createElement('div');
-    filterHeader.className = 'filter-header';
+    filterHeader.className = "filter-header";
     filterHeader.innerHTML = `
-        <input type="text" class="filter-input" list="filter-history-list" placeholder="Regex or text..." style="flex: 1;">
+        <div class="filter-input-wrapper">
+            <input type="text" class="filter-input" placeholder="Regex or text..." style="width: 100%; padding-right: 20px;">
+            <div class="filter-dropdown-btn">▼</div>
+            <div class="filter-history-dropdown"></div>
+        </div>
         <label><input type="checkbox" class="filter-enable" checked> Enable</label>
         <button class="filter-clear-btn secondary">🗑️ Clear</button>
     `;
@@ -281,7 +346,52 @@ function createFilterTab() {
     const input = filterHeader.querySelector('.filter-input');
     const enableCb = filterHeader.querySelector('.filter-enable');
     const clearBtn = filterHeader.querySelector('.filter-clear-btn');
+    const dropdownBtn = filterHeader.querySelector('.filter-dropdown-btn');
+    const dropdownMenu = filterHeader.querySelector('.filter-history-dropdown');
     
+    // History dropdown logic
+    function renderDropdown() {
+        const history = currentConfig ? (currentConfig.filterHistory || []) : [];
+        dropdownMenu.innerHTML = '';
+        
+        if (history.length === 0) {
+            dropdownMenu.innerHTML = '<div class="filter-history-item" style="color: #666; cursor: default;">No history</div>';
+            return;
+        }
+        
+        history.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'filter-history-item';
+            div.textContent = item;
+            div.onclick = () => {
+                input.value = item;
+                updateRegex();
+                dropdownMenu.style.display = 'none';
+            };
+            dropdownMenu.appendChild(div);
+        });
+    }
+
+    dropdownBtn.onclick = (e) => {
+        e.stopPropagation();
+        const isShowing = dropdownMenu.style.display === 'block';
+        
+        // Hide all other dropdowns
+        document.querySelectorAll('.filter-history-dropdown').forEach(d => d.style.display = 'none');
+        
+        if (!isShowing) {
+            renderDropdown();
+            dropdownMenu.style.display = 'block';
+        }
+    };
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!filterHeader.contains(e.target)) {
+            dropdownMenu.style.display = 'none';
+        }
+    });
+
     function updateRegex() {
         if (!enableCb.checked || !input.value) {
             tabState.filterRegex = null;
@@ -308,20 +418,21 @@ function createFilterTab() {
         
         currentConfig.filterHistory = history;
         ipcRenderer.send('save-config', { filterHistory: history });
-        updateFilterHistoryDatalist();
     }
 
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             updateRegex();
             saveFilterHistory(input.value.trim());
+            dropdownMenu.style.display = 'none';
         }
     });
 
-    input.addEventListener('change', () => {
-        // Change triggers when selecting from datalist or losing focus
-        updateRegex();
-        saveFilterHistory(input.value.trim());
+    input.addEventListener('blur', () => {
+        // Save on blur if there's text
+        if (input.value.trim()) {
+            saveFilterHistory(input.value.trim());
+        }
     });
     
     input.addEventListener('input', updateRegex);
@@ -431,20 +542,6 @@ function createTerminalKeyHandler(targetTerm) {
 
 // Smart Copy/Paste Handling
 serialTerm.attachCustomKeyEventHandler(createTerminalKeyHandler(serialTerm));
-
-function updateFilterHistoryDatalist() {
-    const listEl = document.getElementById('filter-history-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    
-    if (currentConfig && currentConfig.filterHistory) {
-        currentConfig.filterHistory.forEach(item => {
-            const option = document.createElement('option');
-            option.value = item;
-            listEl.appendChild(option);
-        });
-    }
-}
 
 function applyConfig(config) {
     currentConfig = config;
@@ -923,9 +1020,6 @@ addQuickSendBtn.addEventListener('click', () => {
 const originalApplyConfig = applyConfig;
 applyConfig = function(config) {
     originalApplyConfig(config);
-    
-    // Update filter history datalist
-    updateFilterHistoryDatalist();
     
     // Auto Send Settings
     if (config.autoSendSettings) {
