@@ -108,45 +108,55 @@ function applyHighlighting(text) {
     return result;
 }
 
+let incomingBuffer = '';
+
 function processSerialOutput(data) {
-    // Handle split packet boundary (\r followed by \n)
-    if (lastCharWasCR && data.startsWith('\n')) {
-        data = data.substring(1);
-    }
+    if (!data) return '';
     
-    if (data.length === 0) {
-        lastCharWasCR = false; 
-        return '';
-    }
+    incomingBuffer += data;
     
-    lastCharWasCR = data.endsWith('\r');
-
     // Split by CRLF, CR, or LF
-    const parts = data.split(/\r\n|\r|\n/);
+    // We want to capture the delimiters to know how to reconstruct/handle newlines
+    // split with capture group `(/(\r\n|\r|\n)/)` will include delimiters in the result array
+    const parts = incomingBuffer.split(/(\r\n|\r|\n)/);
+    
     let output = '';
-
-    for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        const isLast = (i === parts.length - 1);
-
-        if (isLast && part === '') {
-            // Trailing empty string from split (meaning data ended with newline)
-            serialNewLine = true;
-            continue;
+    
+    // Check if we have any delimiters
+    if (parts.length === 1) {
+        // No delimiters found yet.
+        if (incomingBuffer.length > 10000) {
+            // Safety valve: if line is too long, just flush it
+            output = applyHighlighting(incomingBuffer);
+            incomingBuffer = '';
+            return output;
         }
-
+        return ''; // Wait for more data
+    }
+    
+    // The last part is the incomplete line (or empty string if ends with delimiter)
+    const incompleteLine = parts.pop();
+    incomingBuffer = incompleteLine;
+    
+    // Now parts contains [line1, delim1, line2, delim2, ...]
+    
+    for (let i = 0; i < parts.length; i += 2) {
+        const lineContent = parts[i];     // The text
+        const delimiter = parts[i + 1];   // The newline sequence (\n, \r, \r\n)
+        
         if (serialNewLine) {
             output += getPrefix();
             serialNewLine = false;
         }
-
-        output += applyHighlighting(part);
-
-        if (!isLast) {
-            output += '\r\n'; 
+        
+        output += applyHighlighting(lineContent);
+        
+        if (delimiter) {
+            output += '\r\n'; // Always normalize to \r\n for xterm
             serialNewLine = true;
         }
     }
+    
     return output;
 }
 
