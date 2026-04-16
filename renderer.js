@@ -77,9 +77,31 @@ function applyHighlighting(text, filterRegex = null) {
         highlightRules.forEach(rule => {
             if (!rule.enabled || !rule.regex) return;
             try {
-                const re = new RegExp(rule.regex, 'g');
+                let pattern = rule.regex;
+                
+                // Determine flags
+                // Legacy support for (?i) prefix, overriding caseSensitive if present
+                let isCaseSensitive = rule.caseSensitive;
+                if (pattern.startsWith('(?i)')) {
+                    pattern = pattern.substring(4);
+                    isCaseSensitive = false;
+                }
+                
+                const flags = isCaseSensitive ? 'g' : 'gi';
+                
+                // Handle useRegex flag (if useRegex is false, escape special characters)
+                if (rule.useRegex === false) {
+                    pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                }
+                
+                const re = new RegExp(pattern, flags);
                 let match;
                 while ((match = re.exec(text)) !== null) {
+                    // Prevent infinite loop for empty matches
+                    if (match[0].length === 0) {
+                        re.lastIndex++;
+                        continue;
+                    }
                     matches.push({
                         start: match.index,
                         end: match.index + match[0].length,
@@ -293,11 +315,14 @@ function createFilterTab() {
     filterHeader.className = "filter-header";
     filterHeader.innerHTML = `
         <div class="filter-input-wrapper">
-            <input type="text" class="filter-input" placeholder="Regex or text..." style="width: 100%; padding-right: 20px;">
+            <input type="text" class="filter-input" placeholder="Filter text..." style="width: 100%; padding-right: 24px;">
             <div class="filter-dropdown-btn">▼</div>
             <div class="filter-history-dropdown"></div>
         </div>
-        <label><input type="checkbox" class="filter-enable" checked> Enable</label>
+        <div class="filter-toggles" style="display: flex; gap: 4px; margin-right: 8px;">
+            <button class="filter-toggle-btn filter-case-btn" title="Match Case">Aa</button>
+            <button class="filter-toggle-btn filter-regex-btn" title="Use Regular Expression">.*</button>
+        </div>
         <button class="filter-clear-btn secondary">🗑️ Clear</button>
     `;
     
@@ -339,14 +364,17 @@ function createFilterTab() {
         fitAddon,
         searchAddon,
         filterRegex: null,
+        caseSensitive: false,
+        useRegex: false,
         element: tabPane,
         btn: tabBtn
     };
     
     const input = filterHeader.querySelector('.filter-input');
-    const enableCb = filterHeader.querySelector('.filter-enable');
     const clearBtn = filterHeader.querySelector('.filter-clear-btn');
     const dropdownBtn = filterHeader.querySelector('.filter-dropdown-btn');
+    const caseBtn = filterHeader.querySelector('.filter-case-btn');
+    const regexBtn = filterHeader.querySelector('.filter-regex-btn');
     const dropdownMenu = filterHeader.querySelector('.filter-history-dropdown');
     
     // History dropdown logic
@@ -392,14 +420,44 @@ function createFilterTab() {
         }
     });
 
+    // Case Match Button Logic
+    caseBtn.onclick = (e) => {
+        e.stopPropagation();
+        tabState.caseSensitive = !tabState.caseSensitive;
+        if (tabState.caseSensitive) {
+            caseBtn.classList.add('active');
+        } else {
+            caseBtn.classList.remove('active');
+        }
+        updateRegex();
+    };
+
+    // Regex Button Logic
+    regexBtn.onclick = (e) => {
+        e.stopPropagation();
+        tabState.useRegex = !tabState.useRegex;
+        if (tabState.useRegex) {
+            regexBtn.classList.add('active');
+        } else {
+            regexBtn.classList.remove('active');
+        }
+        updateRegex();
+    };
+
     function updateRegex() {
-        if (!enableCb.checked || !input.value) {
+        if (!input.value) {
             tabState.filterRegex = null;
             input.style.borderColor = 'var(--border-color)';
             return;
         }
         try {
-            tabState.filterRegex = new RegExp(input.value, 'i');
+            const flags = tabState.caseSensitive ? '' : 'i';
+            let pattern = input.value;
+            if (!tabState.useRegex) {
+                // Escape regex characters if regex mode is off
+                pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+            tabState.filterRegex = new RegExp(pattern, flags);
             input.style.borderColor = 'var(--border-color)';
         } catch (e) {
             tabState.filterRegex = null;
@@ -436,7 +494,6 @@ function createFilterTab() {
     });
     
     input.addEventListener('input', updateRegex);
-    enableCb.addEventListener('change', updateRegex);
     clearBtn.addEventListener('click', () => {
         term.clear();
     });

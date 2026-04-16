@@ -37,7 +37,14 @@ function loadConfig() {
     logPath: path.join(app.getPath('documents'), 'SerialTerminalLogs'),
     logFileNameFormat: 'log_%Y-%m-%d_%H-%M-%S.txt',
     logEncoding: 'utf8',
-    highlightRules: [],
+    highlightRules: [
+        { regex: "\\b(error|fail|failed|fatal)\\b", color: "#ff4d4f", enabled: true, caseSensitive: false, useRegex: true },
+        { regex: "\\b(warn|warning)\\b", color: "#faad14", enabled: true, caseSensitive: false, useRegex: true },
+        { regex: "\\b(info|debug|trace)\\b", color: "#1890ff", enabled: true, caseSensitive: false, useRegex: true },
+        { regex: "\\b(success|ok|done)\\b", color: "#52c41a", enabled: true, caseSensitive: false, useRegex: true },
+        { regex: "\\b\\d+(\\.\\d+)?\\b", color: "#13c2c2", enabled: true, caseSensitive: true, useRegex: true },
+        { regex: "[+\\-*/=<>!&|%^~]+", color: "#eb2f96", enabled: true, caseSensitive: true, useRegex: true }
+    ],
     showTimestamp: false,
     showLineNumbers: false,
     scrollbackLimit: 100000,

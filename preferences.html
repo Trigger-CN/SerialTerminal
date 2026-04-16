@@ -104,6 +104,7 @@
             justify-content: space-between;
             padding: 8px 0; /* Compact padding */
             border-bottom: 1px solid var(--border-color);
+            gap: 16px;
         }
         
         .about-row:last-child {
@@ -113,11 +114,14 @@
         .about-label {
             color: var(--text-secondary);
             font-weight: 500;
+            white-space: nowrap;
         }
         
         .about-value {
             color: #fff;
             font-family: monospace;
+            text-align: right;
+            word-break: break-all;
         }
         
         a {
@@ -223,7 +227,7 @@
                 <h2>Keyword Highlighting</h2>
                 <div class="form-group">
                     <button class="secondary" id="add-rule-btn" style="margin-bottom: 10px;">+ Add New Rule</button>
-                    <div id="highlight-rules-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto;">
+                    <div id="highlight-rules-list" style="display: flex; flex-direction: column; gap: 8px;">
                         <!-- Rules will be added here -->
                     </div>
                 </div>

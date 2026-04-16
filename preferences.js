@@ -32,45 +32,107 @@ const elements = {
   openConfigBtn: document.getElementById('open-config-btn')
 };
 
-function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000' }) {
+function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', caseSensitive: false, useRegex: true }) {
     const div = document.createElement('div');
     div.style.display = 'flex';
-    div.style.gap = '8px';
+    div.style.gap = '4px';
     div.style.alignItems = 'center';
     div.style.background = '#333';
-    div.style.padding = '8px';
+    div.style.padding = '6px';
     div.style.borderRadius = '6px';
 
     const enabledCb = document.createElement('input');
     enabledCb.type = 'checkbox';
     enabledCb.checked = rule.enabled;
-    enabledCb.style.width = 'auto';
+    enabledCb.style.width = '16px';
+    enabledCb.style.height = '16px';
+    enabledCb.style.cursor = 'pointer';
+    enabledCb.style.margin = '0 4px';
     enabledCb.title = 'Enable/Disable';
+
+    const inputWrapper = document.createElement('div');
+    inputWrapper.style.flex = '1';
+    inputWrapper.style.display = 'flex';
+    inputWrapper.style.position = 'relative';
 
     const regexInput = document.createElement('input');
     regexInput.type = 'text';
     regexInput.value = rule.regex;
     regexInput.placeholder = 'Regex (e.g. error)';
     regexInput.style.flex = '1';
+    regexInput.style.paddingRight = '60px'; // Make room for buttons
+
+    const togglesWrapper = document.createElement('div');
+    togglesWrapper.style.position = 'absolute';
+    togglesWrapper.style.right = '4px';
+    togglesWrapper.style.top = '50%';
+    togglesWrapper.style.transform = 'translateY(-50%)';
+    togglesWrapper.style.display = 'flex';
+    togglesWrapper.style.gap = '2px';
+
+    // State for this rule
+    let isCaseSensitive = rule.caseSensitive;
+    let isUseRegex = rule.useRegex;
+
+    const caseBtn = document.createElement('button');
+    caseBtn.className = `filter-toggle-btn ${isCaseSensitive ? 'active' : ''}`;
+    caseBtn.title = 'Match Case';
+    caseBtn.textContent = 'Aa';
+    caseBtn.style.height = '22px';
+    caseBtn.style.padding = '0 4px';
+    caseBtn.style.fontSize = '11px';
+    
+    caseBtn.onclick = (e) => {
+        isCaseSensitive = !isCaseSensitive;
+        caseBtn.classList.toggle('active', isCaseSensitive);
+    };
+
+    const regexBtn = document.createElement('button');
+    regexBtn.className = `filter-toggle-btn ${isUseRegex ? 'active' : ''}`;
+    regexBtn.title = 'Use Regular Expression';
+    regexBtn.textContent = '.*';
+    regexBtn.style.height = '22px';
+    regexBtn.style.padding = '0 4px';
+    regexBtn.style.fontSize = '11px';
+    
+    regexBtn.onclick = (e) => {
+        isUseRegex = !isUseRegex;
+        regexBtn.classList.toggle('active', isUseRegex);
+    };
+
+    togglesWrapper.appendChild(caseBtn);
+    togglesWrapper.appendChild(regexBtn);
+    
+    inputWrapper.appendChild(regexInput);
+    inputWrapper.appendChild(togglesWrapper);
 
     const colorInput = document.createElement('input');
     colorInput.type = 'color';
     colorInput.value = rule.color;
-    colorInput.style.width = '40px';
-    colorInput.style.height = '30px';
-    colorInput.style.padding = '2px';
+    colorInput.style.width = '36px';
+    colorInput.style.height = '28px';
+    colorInput.style.padding = '1px';
     colorInput.style.border = 'none';
     colorInput.style.cursor = 'pointer';
 
     const deleteBtn = document.createElement('button');
-    deleteBtn.textContent = '🗑️';
+    deleteBtn.textContent = '✕';
     deleteBtn.className = 'secondary';
-    deleteBtn.style.padding = '6px 10px';
+    deleteBtn.style.padding = '4px 8px';
     deleteBtn.title = 'Remove Rule';
     deleteBtn.onclick = () => div.remove();
 
+    // Attach state getter for save function
+    div.getRuleData = () => ({
+        enabled: enabledCb.checked,
+        regex: regexInput.value,
+        color: colorInput.value,
+        caseSensitive: isCaseSensitive,
+        useRegex: isUseRegex
+    });
+
     div.appendChild(enabledCb);
-    div.appendChild(regexInput);
+    div.appendChild(inputWrapper);
     div.appendChild(colorInput);
     div.appendChild(deleteBtn);
 
@@ -155,12 +217,7 @@ elements.browseBtn.onclick = async () => {
 elements.saveBtn.onclick = () => {
   const rules = [];
   Array.from(elements.highlightRulesList.children).forEach(div => {
-      const inputs = div.querySelectorAll('input');
-      rules.push({
-          enabled: inputs[0].checked,
-          regex: inputs[1].value,
-          color: inputs[2].value
-      });
+      rules.push(div.getRuleData());
   });
 
   const config = {
