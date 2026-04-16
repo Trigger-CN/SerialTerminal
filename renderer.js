@@ -323,7 +323,6 @@ function createFilterTab() {
             <button class="filter-toggle-btn filter-case-btn" title="Match Case">Aa</button>
             <button class="filter-toggle-btn filter-regex-btn" title="Use Regular Expression">.*</button>
         </div>
-        <button class="filter-clear-btn secondary">🗑️ Clear</button>
     `;
     
     const terminalWrapper = document.createElement('div');
@@ -371,7 +370,6 @@ function createFilterTab() {
     };
     
     const input = filterHeader.querySelector('.filter-input');
-    const clearBtn = filterHeader.querySelector('.filter-clear-btn');
     const dropdownBtn = filterHeader.querySelector('.filter-dropdown-btn');
     const caseBtn = filterHeader.querySelector('.filter-case-btn');
     const regexBtn = filterHeader.querySelector('.filter-regex-btn');
@@ -494,9 +492,6 @@ function createFilterTab() {
     });
     
     input.addEventListener('input', updateRegex);
-    clearBtn.addEventListener('click', () => {
-        term.clear();
-    });
     
     // Setup copy/paste for filter terminal
     term.attachCustomKeyEventHandler(createTerminalKeyHandler(term));
@@ -797,10 +792,20 @@ async function refreshPorts() {
 refreshBtn.addEventListener('click', refreshPorts);
 
 clearBtn.addEventListener('click', () => {
-    serialTerm.clear();
-    serialLineCounter = 1;
-    dataParser.isNewLine = true;
-    dataParser.incomingBuffer = '';
+    const activeTabPane = document.querySelector('.main-tab-pane.active');
+    if (!activeTabPane) return;
+
+    if (activeTabPane.id === 'tab-main') {
+        serialTerm.clear();
+        serialLineCounter = 1;
+        dataParser.isNewLine = true;
+        dataParser.incomingBuffer = '';
+    } else {
+        const filterTab = filterTabs.find(t => t.id === activeTabPane.id);
+        if (filterTab) {
+            filterTab.term.clear();
+        }
+    }
 });
 
 connectBtn.addEventListener('click', async () => {
@@ -902,9 +907,8 @@ searchInput.addEventListener('keydown', (e) => {
     }
 });
 
-document.getElementById('new-filter-window-btn').addEventListener('click', () => {
-    ipcRenderer.send('create-filter-window');
-});
+// Remove legacy filter window btn reference
+// document.getElementById('new-filter-window-btn').addEventListener('click', ...);
 
 // --- Auto Send & Quick Send Logic ---
 

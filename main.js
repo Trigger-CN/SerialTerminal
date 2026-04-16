@@ -145,6 +145,13 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
+
+  // Open DevTools automatically for debugging
+  // mainWindow.webContents.openDevTools();
+
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+      console.log(`[RENDERER] ${message} (${sourceId}:${line})`);
+  });
 }
 
 function createPrefsWindow() {
