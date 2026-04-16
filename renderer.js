@@ -411,12 +411,17 @@ function createFilterTab() {
         }
     };
     
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
+    const outsideClickListener = (e) => {
         if (!filterHeader.contains(e.target)) {
             dropdownMenu.style.display = 'none';
         }
-    });
+    };
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', outsideClickListener);
+
+    // Store listener to remove it later
+    tabState.outsideClickListener = outsideClickListener;
 
     // Case Match Button Logic
     caseBtn.onclick = (e) => {
@@ -534,6 +539,9 @@ function closeFilterTab(tabId) {
     if (index > -1) {
         const tab = filterTabs[index];
         tab.term.dispose();
+        if (tab.outsideClickListener) {
+            document.removeEventListener('click', tab.outsideClickListener);
+        }
         tab.element.remove();
         tab.btn.remove();
         filterTabs.splice(index, 1);

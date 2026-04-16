@@ -70,9 +70,9 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     togglesWrapper.style.display = 'flex';
     togglesWrapper.style.gap = '2px';
 
-    // State for this rule
-    let isCaseSensitive = rule.caseSensitive;
-    let isUseRegex = rule.useRegex;
+    // State for this rule (default useRegex to true for backwards compatibility)
+    let isCaseSensitive = rule.caseSensitive === true;
+    let isUseRegex = rule.useRegex !== false;
 
     const caseBtn = document.createElement('button');
     caseBtn.className = `filter-toggle-btn ${isCaseSensitive ? 'active' : ''}`;
