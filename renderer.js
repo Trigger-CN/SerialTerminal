@@ -747,6 +747,22 @@ ipcRenderer.on('serial-error', (event, err) => {
     filterTabs.forEach(tab => tab.term.write(errMsg));
 });
 
+function updateSerialConnectionState(connected) {
+    isConnected = connected;
+    connectBtn.textContent = connected ? '❌ Disconnect' : '⚡ Connect';
+    statusDiv.textContent = connected ? 'Connected' : 'Disconnected';
+    statusDot.classList.toggle('online', connected);
+}
+
+ipcRenderer.on('serial-disconnected', (event, message) => {
+    updateSerialConnectionState(false);
+    if (message) {
+        const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
+        serialTerm.write(notice);
+        filterTabs.forEach(tab => tab.term.write(notice));
+    }
+});
+
 const portSelect = document.getElementById('port-select');
 const baudSelect = document.getElementById('baud-select');
 const baudCustomWrapper = document.getElementById('baud-custom-wrapper');
@@ -819,10 +835,6 @@ clearBtn.addEventListener('click', () => {
 connectBtn.addEventListener('click', async () => {
     if (isConnected) {
         ipcRenderer.send('disconnect-serial');
-        isConnected = false;
-        connectBtn.textContent = '⚡ Connect';
-        statusDiv.textContent = 'Disconnected';
-        statusDot.classList.remove('online');
     } else {
         const path = portSelect.value;
         const baudRate = getBaudRate();
@@ -834,8 +846,8 @@ connectBtn.addEventListener('click', async () => {
 
         if (!path) return;
         try {
-            await ipcRenderer.invoke('connect-serial', { 
-                path, 
+            await ipcRenderer.invoke('connect-serial', {
+                path,
                 baudRate,
                 dataBits,
                 stopBits,
@@ -844,7 +856,6 @@ connectBtn.addEventListener('click', async () => {
                 newlineMode
             });
 
-            // Save Serial Settings
             ipcRenderer.send('save-config', {
                 lastSerialOptions: {
                     path,
@@ -857,12 +868,8 @@ connectBtn.addEventListener('click', async () => {
                 }
             });
 
-            isConnected = true;
-            connectBtn.textContent = '❌ Disconnect';
-            statusDiv.textContent = 'Connected';
-            statusDot.classList.add('online');
+            updateSerialConnectionState(true);
 
-            // Reset display counters
             serialLineCounter = 1;
             serialNewLine = true;
 

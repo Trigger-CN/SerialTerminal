@@ -356,6 +356,26 @@ let serialEncoding = 'utf8';
 let serialNewlineMode = 'crlf'; // 'crlf', 'lf', 'cr' (applies to receive: LF->CRLF if crlf, etc. AND send logic)
 let serialDecoderStream = null;
 
+function notifySerialDisconnected(message = null) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('serial-disconnected', message);
+  }
+}
+
+function cleanupSerialConnection(message = null) {
+  if (serialDecoderStream) {
+    try {
+      serialDecoderStream.end();
+    } catch (e) {
+      console.error('Failed to close decoder stream:', e);
+    }
+    serialDecoderStream = null;
+  }
+
+  currentSerialPort = null;
+  notifySerialDisconnected(message);
+}
+
 function handleSerialData(str) {
     // Newline Mode (Receive):
     // If mode is CRLF or Auto, usually we want to ensure newlines render correctly in xterm.
@@ -386,6 +406,7 @@ ipcMain.handle('list-ports', async () => {
 ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopBits, parity, encoding, newlineMode }) => {
   if (currentSerialPort && currentSerialPort.isOpen) {
     await new Promise(resolve => currentSerialPort.close(resolve));
+    cleanupSerialConnection();
   }
 
   serialEncoding = encoding || 'utf8';
@@ -393,8 +414,8 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
   serialDecoderStream = null;
 
   return new Promise((resolve, reject) => {
-    currentSerialPort = new SerialPort({ 
-        path, 
+    currentSerialPort = new SerialPort({
+        path,
         baudRate: parseInt(baudRate),
         dataBits: parseInt(dataBits || 8),
         stopBits: parseFloat(stopBits || 1),
@@ -403,17 +424,16 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
     });
 
     if (serialEncoding !== 'hex') {
-        // Use streaming decoder to handle split multi-byte characters
         serialDecoderStream = iconv.decodeStream(serialEncoding);
         serialDecoderStream.on('data', handleSerialData);
         serialDecoderStream.on('error', (err) => {
              console.error('Decoder stream error:', err);
-             // Fallback or ignore?
         });
     }
-    
+
     currentSerialPort.open((err) => {
         if (err) {
+            cleanupSerialConnection();
             reject(err.message);
             return;
         }
@@ -428,7 +448,6 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
       } else if (serialDecoderStream) {
           serialDecoderStream.write(data);
       } else {
-          // Fallback if no stream (shouldn't happen if not hex)
           handleSerialData(data.toString());
       }
     });
@@ -436,6 +455,12 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
     currentSerialPort.on('error', (err) => {
       mainWindow.webContents.send('serial-error', err.message);
       writeLog(`\n[SERIAL ERROR] ${err.message}\n`);
+    });
+
+    currentSerialPort.on('close', () => {
+      writeLog('\r\n[SERIAL DISCONNECTED]\r\n');
+      saveLog();
+      cleanupSerialConnection('Serial port disconnected');
     });
   });
 });
@@ -474,10 +499,8 @@ ipcMain.on('serial-input', (event, data) => {
 ipcMain.on('disconnect-serial', () => {
   if (currentSerialPort && currentSerialPort.isOpen) {
     currentSerialPort.close();
-    writeLog('\r\n[SERIAL DISCONNECTED]\r\n');
-    
-    // Save logs on disconnect
-    saveLog();
+  } else {
+    cleanupSerialConnection();
   }
 });
 
