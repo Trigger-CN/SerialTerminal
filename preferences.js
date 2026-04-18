@@ -2,6 +2,7 @@ const { ipcRenderer, shell } = require('electron');
 
 const elements = {
   fontFamily: document.getElementById('fontFamily'),
+  fontFamilyZh: document.getElementById('fontFamilyZh'),
   fontSize: document.getElementById('fontSize'),
   foreground: document.getElementById('foreground'),
   background: document.getElementById('background'),
@@ -153,7 +154,52 @@ elements.addRuleBtn.onclick = () => {
 async function init() {
   const config = await ipcRenderer.invoke('get-config');
   
+  // Load system fonts
+  try {
+      const systemFonts = await ipcRenderer.invoke('get-system-fonts');
+      if (systemFonts && systemFonts.length > 0) {
+          const fontGroupEn = document.createElement('optgroup');
+          fontGroupEn.label = "System Fonts";
+          const fontGroupZh = document.createElement('optgroup');
+          fontGroupZh.label = "System Fonts";
+          
+          systemFonts.forEach(font => {
+              const optEn = document.createElement('option');
+              // Format correctly for CSS font-family
+              optEn.value = `"${font}"`;
+              optEn.textContent = font;
+              fontGroupEn.appendChild(optEn);
+
+              const optZh = document.createElement('option');
+              optZh.value = `"${font}"`;
+              optZh.textContent = font;
+              fontGroupZh.appendChild(optZh);
+          });
+          elements.fontFamily.appendChild(fontGroupEn);
+          elements.fontFamilyZh.appendChild(fontGroupZh);
+      }
+  } catch (err) {
+      console.error('Failed to load system fonts:', err);
+  }
+
   elements.fontFamily.value = config.fontFamily;
+  if (elements.fontFamily.value !== config.fontFamily) {
+      const opt = document.createElement('option');
+      opt.value = config.fontFamily;
+      opt.textContent = config.fontFamily.replace(/"/g, '');
+      elements.fontFamily.insertBefore(opt, elements.fontFamily.firstChild);
+      elements.fontFamily.value = config.fontFamily;
+  }
+
+  elements.fontFamilyZh.value = config.fontFamilyZh;
+  if (elements.fontFamilyZh.value !== config.fontFamilyZh) {
+      const opt = document.createElement('option');
+      opt.value = config.fontFamilyZh;
+      opt.textContent = config.fontFamilyZh ? config.fontFamilyZh.replace(/"/g, '') : 'None';
+      elements.fontFamilyZh.insertBefore(opt, elements.fontFamilyZh.firstChild);
+      elements.fontFamilyZh.value = config.fontFamilyZh;
+  }
+
   elements.fontSize.value = config.fontSize;
   elements.foreground.value = config.foreground;
   elements.background.value = config.background;
@@ -229,6 +275,7 @@ elements.saveBtn.onclick = () => {
 
   const config = {
     fontFamily: elements.fontFamily.value,
+    fontFamilyZh: elements.fontFamilyZh.value,
     fontSize: parseInt(elements.fontSize.value),
     foreground: elements.foreground.value,
     background: elements.background.value,

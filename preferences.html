@@ -159,12 +159,21 @@
             <div id="appearance" class="tab-pane active">
                 <h2>Appearance Settings</h2>
                 <div class="form-group">
-                    <label>🔤 Font Family</label>
+                    <label>🔤 English Font Family</label>
                     <select id="fontFamily">
-                        <option value='Consolas, "Courier New", monospace'>Consolas</option>
-                        <option value='"Fira Code", monospace'>Fira Code</option>
-                        <option value='"Source Code Pro", monospace'>Source Code Pro</option>
-                        <option value='monospace'>System Monospace</option>
+                        <option value='Consolas'>Consolas</option>
+                        <option value='"Fira Code"'>Fira Code</option>
+                        <option value='"Source Code Pro"'>Source Code Pro</option>
+                        <!-- Dynamic fonts will be injected here -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>🔤 Chinese/Fallback Font Family</label>
+                    <select id="fontFamilyZh">
+                        <option value='"Microsoft YaHei"'>Microsoft YaHei</option>
+                        <option value='"SimHei"'>SimHei</option>
+                        <option value='"PingFang SC"'>PingFang SC</option>
+                        <!-- Dynamic fonts will be injected here -->
                     </select>
                 </div>
                 <div class="form-group">

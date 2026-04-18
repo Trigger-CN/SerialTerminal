@@ -347,7 +347,7 @@ function createFilterTab() {
     if (currentConfig) {
         term.options = {
             fontSize: currentConfig.fontSize,
-            fontFamily: currentConfig.fontFamily,
+            fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
             theme: {
                 background: currentConfig.background,
                 foreground: currentConfig.foreground,
@@ -619,7 +619,7 @@ function applyConfig(config) {
 
     const options = {
         fontSize: config.fontSize,
-        fontFamily: config.fontFamily,
+        fontFamily: `${config.fontFamily}, ${config.fontFamilyZh}, "Courier New", monospace`,
         scrollback: config.scrollbackLimit || 100000,
         theme: {
             background: config.background,

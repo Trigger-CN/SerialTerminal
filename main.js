@@ -6,6 +6,7 @@ const { SerialPort } = require('serialport');
 const iconv = require('iconv-lite');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
+const fontList = require('font-list');
 
 // Configure logging
 log.transports.file.level = 'info';
@@ -28,7 +29,8 @@ let displaySettings = {
 function loadConfig() {
   const defaults = {
     fontSize: 14,
-    fontFamily: 'Consolas, "Courier New", monospace',
+    fontFamily: 'Consolas',
+    fontFamilyZh: '"Microsoft YaHei"',
     foreground: '#cccccc',
     background: '#000000',
     timestampColor: '#00ff00',
@@ -275,6 +277,17 @@ ipcMain.on('save-config', (event, config) => {
   if (mainWindow) {
     mainWindow.webContents.send('config-updated', currentConfig);
   }
+});
+
+ipcMain.handle('get-system-fonts', async () => {
+    try {
+        const fonts = await fontList.getFonts();
+        // Remove quotes from font names (font-list often returns them wrapped in quotes)
+        return fonts.map(f => f.replace(/^"|"$/g, ''));
+    } catch (err) {
+        log.error('Failed to get system fonts:', err);
+        return [];
+    }
 });
 
 // Auto Updater Events
