@@ -2,7 +2,7 @@
 
 一个基于 Electron 的串口终端工具，面向嵌入式开发、串口调试和设备联调场景，提供终端显示、发送自动化、日志记录、关键词高亮和多标签过滤等能力。
 
-![Serial Terminal Screenshot](assets/screenshot.png)
+![Serial Terminal Screenshot](assets/Snipaste_2026-04-18_22-22-44.png)
 
 ## 简介
 
