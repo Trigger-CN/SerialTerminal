@@ -355,6 +355,70 @@ let currentSerialPort = null;
 let serialEncoding = 'utf8';
 let serialNewlineMode = 'crlf'; // 'crlf', 'lf', 'cr' (applies to receive: LF->CRLF if crlf, etc. AND send logic)
 let serialDecoderStream = null;
+const THROUGHPUT_SAMPLE_MS = 1000;
+const THROUGHPUT_HISTORY_LENGTH = 16;
+let throughputTimer = null;
+let throughputState = {
+  connected: false,
+  rxCurrentBytes: 0,
+  txCurrentBytes: 0,
+  rxHistory: Array(THROUGHPUT_HISTORY_LENGTH).fill(0),
+  txHistory: Array(THROUGHPUT_HISTORY_LENGTH).fill(0)
+};
+
+function createEmptyThroughputHistory() {
+  return Array(THROUGHPUT_HISTORY_LENGTH).fill(0);
+}
+
+function sendThroughputUpdate() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('serial-throughput-update', {
+      connected: throughputState.connected,
+      rxHistory: [...throughputState.rxHistory],
+      txHistory: [...throughputState.txHistory],
+      rxBytesPerSecond: throughputState.rxCurrentBytes,
+      txBytesPerSecond: throughputState.txCurrentBytes
+    });
+  }
+}
+
+function resetThroughputState(connected = false) {
+  throughputState.connected = connected;
+  throughputState.rxCurrentBytes = 0;
+  throughputState.txCurrentBytes = 0;
+  throughputState.rxHistory = createEmptyThroughputHistory();
+  throughputState.txHistory = createEmptyThroughputHistory();
+}
+
+function stopThroughputSampling() {
+  if (throughputTimer) {
+    clearInterval(throughputTimer);
+    throughputTimer = null;
+  }
+}
+
+function startThroughputSampling() {
+  stopThroughputSampling();
+  throughputTimer = setInterval(() => {
+    throughputState.rxHistory.push(throughputState.rxCurrentBytes);
+    throughputState.txHistory.push(throughputState.txCurrentBytes);
+    if (throughputState.rxHistory.length > THROUGHPUT_HISTORY_LENGTH) {
+      throughputState.rxHistory.shift();
+    }
+    if (throughputState.txHistory.length > THROUGHPUT_HISTORY_LENGTH) {
+      throughputState.txHistory.shift();
+    }
+    sendThroughputUpdate();
+    throughputState.rxCurrentBytes = 0;
+    throughputState.txCurrentBytes = 0;
+  }, THROUGHPUT_SAMPLE_MS);
+}
+
+function initializeThroughputState() {
+  resetThroughputState(true);
+  sendThroughputUpdate();
+  startThroughputSampling();
+}
 
 function notifySerialDisconnected(message = null) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -363,6 +427,10 @@ function notifySerialDisconnected(message = null) {
 }
 
 function cleanupSerialConnection(message = null) {
+  stopThroughputSampling();
+  resetThroughputState(false);
+  sendThroughputUpdate();
+
   if (serialDecoderStream) {
     try {
       serialDecoderStream.end();
@@ -438,10 +506,12 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
             return;
         }
         writeLog(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`);
+        initializeThroughputState();
         resolve(true);
     });
 
     currentSerialPort.on('data', (data) => {
+      throughputState.rxCurrentBytes += data.length;
       if (serialEncoding === 'hex') {
           let str = data.toString('hex').match(/.{1,2}/g).join(' ') + ' ';
           handleSerialData(str);
@@ -480,17 +550,18 @@ ipcMain.on('serial-input', (event, data) => {
     }
 
     if (serialEncoding === 'hex') {
-        // In hex mode, we might expect user to type hex? 
-        // Or we just send ASCII as is? 
-        // Usually Hex view is read-only or specific input. 
-        // For now, let's just send ASCII if they type in terminal, 
+        // In hex mode, we might expect user to type hex?
+        // Or we just send ASCII as is?
+        // Usually Hex view is read-only or specific input.
+        // For now, let's just send ASCII if they type in terminal,
         // or we could try to interpret hex string if we had a separate input box.
         // Assuming terminal input is just chars.
-        buffer = Buffer.from(str, 'utf8'); 
+        buffer = Buffer.from(str, 'utf8');
     } else {
         buffer = iconv.encode(str, serialEncoding);
     }
 
+    throughputState.txCurrentBytes += buffer.length;
     currentSerialPort.write(buffer);
     writeLog(str);
   }

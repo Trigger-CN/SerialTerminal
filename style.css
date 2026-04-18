@@ -573,8 +573,92 @@ label:hover {
     box-shadow: 0 0 5px var(--success-color);
 }
 
-/* Footer Buttons */
-.footer-btn {
+/* Throughput Panel */
+.throughput-panel {
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.throughput-title {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.throughput-row {
+    display: grid;
+    grid-template-columns: 20px 1fr 52px;
+    gap: 6px;
+    align-items: end;
+}
+
+.throughput-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1;
+}
+
+.throughput-rate {
+    font-size: 11px;
+    color: var(--text-primary);
+    line-height: 1;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.throughput-chart {
+    height: 24px;
+    padding: 3px 4px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.throughput-bar {
+    flex: 1;
+    min-width: 0;
+    height: 2px;
+    border-radius: 999px;
+    opacity: 0.9;
+    transition: height 0.2s ease, opacity 0.2s ease;
+}
+
+.throughput-bar.rx {
+    background: #4fc3f7;
+}
+
+.throughput-bar.tx {
+    background: #81c784;
+}
+
+.throughput-panel.inactive .throughput-rate,
+.throughput-panel.inactive .throughput-label,
+.throughput-panel.inactive .throughput-title {
+    color: var(--text-secondary);
+}
+
+.throughput-panel.inactive .throughput-bar {
+    opacity: 0.35;
+}
+
+.sidebar-footer {
+    padding: 10px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
     display: flex;
     align-items: center;
     justify-content: center;

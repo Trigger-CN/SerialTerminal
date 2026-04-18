@@ -747,6 +747,50 @@ ipcRenderer.on('serial-error', (event, err) => {
     filterTabs.forEach(tab => tab.term.write(errMsg));
 });
 
+const THROUGHPUT_BAR_COUNT = 16;
+
+function formatThroughput(bytesPerSecond) {
+    if (bytesPerSecond >= 1024 * 1024) {
+        return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+    }
+    if (bytesPerSecond >= 1024) {
+        return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+    }
+    return `${bytesPerSecond} B/s`;
+}
+
+function ensureThroughputBars(chartEl, type) {
+    while (chartEl.children.length < THROUGHPUT_BAR_COUNT) {
+        const bar = document.createElement('div');
+        bar.className = `throughput-bar ${type}`;
+        chartEl.appendChild(bar);
+    }
+}
+
+function renderThroughputChart(chartEl, history) {
+    const values = history.slice(-THROUGHPUT_BAR_COUNT);
+    const bars = Array.from(chartEl.children);
+    const maxValue = Math.max(1, ...values);
+
+    bars.forEach((bar, index) => {
+        const value = values[index] || 0;
+        const normalized = value === 0 ? 2 : Math.max(4, Math.round((value / maxValue) * 100));
+        bar.style.height = `${Math.min(normalized, 100)}%`;
+    });
+}
+
+function updateThroughputPanel({ connected, rxHistory, txHistory, rxBytesPerSecond, txBytesPerSecond }) {
+    throughputPanel.classList.toggle('inactive', !connected);
+    throughputRxRate.textContent = formatThroughput(rxBytesPerSecond || 0);
+    throughputTxRate.textContent = formatThroughput(txBytesPerSecond || 0);
+    renderThroughputChart(throughputRxChart, rxHistory || []);
+    renderThroughputChart(throughputTxChart, txHistory || []);
+}
+
+ipcRenderer.on('serial-throughput-update', (event, payload) => {
+    updateThroughputPanel(payload);
+});
+
 function updateSerialConnectionState(connected) {
     isConnected = connected;
     connectBtn.textContent = connected ? '❌ Disconnect' : '⚡ Connect';
@@ -770,6 +814,11 @@ const baudCustomInput = document.getElementById('baud-custom-input');
 const baudCustomCancel = document.getElementById('baud-custom-cancel');
 const connectBtn = document.getElementById('connect-btn');
 const clearBtn = document.getElementById('clear-btn');
+const throughputPanel = document.getElementById('throughput-panel');
+const throughputRxChart = document.getElementById('throughput-rx-chart');
+const throughputTxChart = document.getElementById('throughput-tx-chart');
+const throughputRxRate = document.getElementById('throughput-rx-rate');
+const throughputTxRate = document.getElementById('throughput-tx-rate');
 
 // Baud Rate Custom Logic
 baudSelect.addEventListener('change', () => {
@@ -798,6 +847,16 @@ const statusDiv = document.getElementById('serial-status');
 const statusDot = document.getElementById('status-dot');
 
 let isConnected = false;
+
+ensureThroughputBars(throughputRxChart, 'rx');
+ensureThroughputBars(throughputTxChart, 'tx');
+updateThroughputPanel({
+    connected: false,
+    rxHistory: Array(THROUGHPUT_BAR_COUNT).fill(0),
+    txHistory: Array(THROUGHPUT_BAR_COUNT).fill(0),
+    rxBytesPerSecond: 0,
+    txBytesPerSecond: 0
+});
 
 async function refreshPorts() {
     const ports = await ipcRenderer.invoke('list-ports');
