@@ -309,10 +309,12 @@ autoUpdater.on('update-downloaded', (info) => {
 });
 
 ipcMain.on('check-for-updates', () => {
-    if (process.env.NODE_ENV === 'development') {
-        // Skip check in dev, or force dev update config if needed
-        // autoUpdater.forceDevUpdateConfig = true;
-        sendUpdateStatusToPrefs('error', 'Cannot check for updates in development mode');
+    // electron-updater check for development mode is app.isPackaged
+    if (!app.isPackaged || process.env.NODE_ENV === 'development') {
+        // Skip check in dev, simulate up-to-date behavior
+        setTimeout(() => {
+            sendUpdateStatusToPrefs('not-available', { version: 'Development' });
+        }, 500); // Add a small delay so the user sees the "Checking..." state briefly
         return;
     }
     autoUpdater.checkForUpdates();

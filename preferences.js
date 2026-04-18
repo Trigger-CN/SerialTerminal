@@ -29,7 +29,14 @@ const elements = {
   saveBtn: document.getElementById('save-btn'),
   cancelBtn: document.getElementById('cancel-btn'),
   resetBtn: document.getElementById('reset-btn'),
-  openConfigBtn: document.getElementById('open-config-btn')
+  openConfigBtn: document.getElementById('open-config-btn'),
+
+  // Update elements
+  updateStatusContainer: document.getElementById('update-status-container'),
+  updateProgressBar: document.getElementById('update-progress-bar'),
+  updateProgressFill: document.getElementById('update-progress-fill'),
+  checkUpdateBtn: document.getElementById('check-update-btn'),
+  restartInstallBtn: document.getElementById('restart-install-btn')
 };
 
 function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', caseSensitive: false, useRegex: true }) {
