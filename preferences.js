@@ -355,7 +355,15 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
             if (progressEl) progressEl.style.display = 'none';
             break;
         case 'error':
-            statusEl.textContent = `Error: ${data}`;
+            if (data && (data.includes('504') || data.includes('Cannot download') || data.includes('net::ERR_'))) {
+                statusEl.innerHTML = `Update failed (Network Error). <a href="#" id="manual-dl-link" style="color: var(--accent-color); text-decoration: underline; cursor: pointer;">Download manually from GitHub</a>`;
+                document.getElementById('manual-dl-link').onclick = (e) => {
+                    e.preventDefault();
+                    shell.openExternal('https://github.com/Trigger-CN/SerialTerminal/releases/latest');
+                };
+            } else {
+                statusEl.textContent = `Error: ${data}`;
+            }
             statusEl.style.color = '#ff4444';
             checkBtn.disabled = false;
             if (progressEl) progressEl.style.display = 'none';

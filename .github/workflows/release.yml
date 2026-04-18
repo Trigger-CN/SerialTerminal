@@ -31,15 +31,15 @@ jobs:
           # 更新 package.json 版本号，不产生 git tag
           npm version $VERSION --no-git-tag-version
 
-      - name: Remove .npmrc
-        shell: bash
-        run: rm -f .npmrc
-
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
+
+      - name: Remove .npmrc
+        shell: bash
+        run: rm -f .npmrc
 
       - name: Install Dependencies
         run: npm install
