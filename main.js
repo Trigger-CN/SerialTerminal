@@ -356,7 +356,7 @@ let serialEncoding = 'utf8';
 let serialNewlineMode = 'crlf'; // 'crlf', 'lf', 'cr' (applies to receive: LF->CRLF if crlf, etc. AND send logic)
 let serialDecoderStream = null;
 const THROUGHPUT_SAMPLE_MS = 1000;
-const THROUGHPUT_HISTORY_LENGTH = 16;
+const THROUGHPUT_HISTORY_LENGTH = 30;
 let throughputTimer = null;
 let throughputState = {
   connected: false,

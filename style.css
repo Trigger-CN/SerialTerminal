@@ -315,14 +315,19 @@ label:hover {
 
 .sidebar-content {
     flex: 1;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
     padding: 10px;
     background: var(--bg-secondary);
+    overflow: hidden;
 }
 
 .sidebar-tab-pane {
     display: none;
     animation: fadeIn 0.2s;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
 }
 
 .sidebar-tab-pane.active {
@@ -332,13 +337,13 @@ label:hover {
 }
 
 .sidebar-footer {
-    padding: 10px;
-    border-top: 1px solid var(--border-color);
+    padding: 6px 8px 8px 8px;
+    border-top: none;
     background: var(--bg-secondary);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 4px;
 }
 
 /* Main Container & Terminal */
@@ -575,99 +580,65 @@ label:hover {
 
 /* Throughput Panel */
 .throughput-panel {
-    padding: 8px 10px 10px;
+    padding: 8px 8px 4px 8px;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-}
-
-.throughput-title {
-    font-size: 11px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    gap: 4px;
 }
 
 .throughput-row {
-    display: grid;
-    grid-template-columns: 20px 1fr 52px;
+    display: flex;
+    align-items: center;
     gap: 6px;
-    align-items: end;
 }
 
 .throughput-label {
+    width: 20px;
+    flex-shrink: 0;
     font-size: 11px;
     color: var(--text-secondary);
-    line-height: 1;
+    font-weight: 600;
 }
 
 .throughput-rate {
+    width: 60px;
+    flex-shrink: 0;
     font-size: 11px;
     color: var(--text-primary);
-    line-height: 1;
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
 
 .throughput-chart {
-    height: 24px;
-    padding: 3px 4px;
-    background: var(--bg-input);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-}
-
-.throughput-bar {
     flex: 1;
-    min-width: 0;
-    height: 2px;
-    border-radius: 999px;
-    opacity: 0.9;
-    transition: height 0.2s ease, opacity 0.2s ease;
+    height: 24px;
+    background: transparent;
+    display: block;
+    position: relative;
+    border-bottom: 1px solid var(--border-color);
 }
 
-.throughput-bar.rx {
-    background: #4fc3f7;
-}
-
-.throughput-bar.tx {
-    background: #81c784;
-}
-
-.throughput-panel.inactive .throughput-rate,
-.throughput-panel.inactive .throughput-label,
-.throughput-panel.inactive .throughput-title {
-    color: var(--text-secondary);
-}
-
-.throughput-panel.inactive .throughput-bar {
+.throughput-panel.inactive .throughput-line {
     opacity: 0.35;
 }
 
-.sidebar-footer {
-    padding: 10px;
-    border-top: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+.throughput-panel.inactive .throughput-area {
+    opacity: 0.1;
 }
+
+.footer-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    padding: 10px;
+    gap: 6px;
+    padding: 6px;
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
 }
 
@@ -682,14 +653,15 @@ label:hover {
 }
 
 .footer-btn.settings {
-    background: transparent;
+    background: var(--bg-input);
     color: var(--text-primary);
     border: 1px solid var(--border-color);
 }
 
 .footer-btn.settings:hover {
-    background: var(--bg-tertiary);
-    color: white;
+    background: #4a4a4a;
+    color: #fff;
+    border-color: #666;
 }
 
 /* Settings Group (e.g. inside Sidebar) */
@@ -707,9 +679,10 @@ label:hover {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    max-height: 200px;
+    flex: 1;
     overflow-y: auto;
     margin-bottom: 4px;
+    min-height: 0;
 }
 
 /* Forms & Layout */

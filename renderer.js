@@ -747,7 +747,7 @@ ipcRenderer.on('serial-error', (event, err) => {
     filterTabs.forEach(tab => tab.term.write(errMsg));
 });
 
-const THROUGHPUT_BAR_COUNT = 16;
+const THROUGHPUT_BAR_COUNT = 30;
 
 function formatThroughput(bytesPerSecond) {
     if (bytesPerSecond >= 1024 * 1024) {
@@ -759,24 +759,76 @@ function formatThroughput(bytesPerSecond) {
     return `${bytesPerSecond} B/s`;
 }
 
-function ensureThroughputBars(chartEl, type) {
-    while (chartEl.children.length < THROUGHPUT_BAR_COUNT) {
-        const bar = document.createElement('div');
-        bar.className = `throughput-bar ${type}`;
-        chartEl.appendChild(bar);
+function ensureThroughputSvg(chartEl, type) {
+    if (!chartEl.querySelector('svg')) {
+        chartEl.innerHTML = ''; // clear any existing
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("width", "100%");
+        svg.setAttribute("height", "100%");
+        svg.setAttribute("preserveAspectRatio", "none");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.style.overflow = "visible";
+        svg.style.display = "block";
+
+        const area = document.createElementNS(svgNS, "path");
+        area.setAttribute("class", `throughput-area ${type}`);
+        area.setAttribute("fill", type === 'rx' ? 'var(--accent-color)' : 'var(--warning-color)');
+        area.setAttribute("opacity", "0.2");
+        area.setAttribute("stroke", "none");
+
+        const path = document.createElementNS(svgNS, "path");
+        path.setAttribute("class", `throughput-line ${type}`);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", type === 'rx' ? 'var(--accent-color)' : 'var(--warning-color)');
+        path.setAttribute("stroke-width", "2");
+        path.setAttribute("vector-effect", "non-scaling-stroke");
+        path.setAttribute("stroke-linejoin", "round");
+
+        svg.appendChild(area);
+        svg.appendChild(path);
+        chartEl.appendChild(svg);
     }
 }
 
 function renderThroughputChart(chartEl, history) {
     const values = history.slice(-THROUGHPUT_BAR_COUNT);
-    const bars = Array.from(chartEl.children);
+    while (values.length < THROUGHPUT_BAR_COUNT) {
+        values.unshift(0);
+    }
     const maxValue = Math.max(1, ...values);
 
-    bars.forEach((bar, index) => {
-        const value = values[index] || 0;
-        const normalized = value === 0 ? 2 : Math.max(4, Math.round((value / maxValue) * 100));
-        bar.style.height = `${Math.min(normalized, 100)}%`;
+    const svg = chartEl.querySelector('svg');
+    if (!svg) return;
+    const path = svg.querySelector('.throughput-line');
+    const area = svg.querySelector('.throughput-area');
+
+    let d = "";
+    let areaD = "";
+    const step = 100 / (THROUGHPUT_BAR_COUNT - 1);
+
+    values.forEach((value, index) => {
+        const normalized = value === 0 ? 0 : (value / maxValue) * 100;
+        const x = index * step;
+        // Invert Y axis, keep within 2-100 to avoid stroke clipping at top
+        const y = 100 - (normalized * 0.98);
+
+        if (index === 0) {
+            d += `M ${x},${y} `;
+            areaD += `M ${x},100 L ${x},${y} `;
+        } else {
+            d += `L ${x},${y} `;
+            areaD += `L ${x},${y} `;
+        }
     });
+
+    if (areaD) {
+        areaD += `L 100,100 Z`;
+        area.setAttribute("d", areaD);
+    }
+    if (d) {
+        path.setAttribute("d", d);
+    }
 }
 
 function updateThroughputPanel({ connected, rxHistory, txHistory, rxBytesPerSecond, txBytesPerSecond }) {
@@ -848,8 +900,8 @@ const statusDot = document.getElementById('status-dot');
 
 let isConnected = false;
 
-ensureThroughputBars(throughputRxChart, 'rx');
-ensureThroughputBars(throughputTxChart, 'tx');
+ensureThroughputSvg(throughputRxChart, 'rx');
+ensureThroughputSvg(throughputTxChart, 'tx');
 updateThroughputPanel({
     connected: false,
     rxHistory: Array(THROUGHPUT_BAR_COUNT).fill(0),
