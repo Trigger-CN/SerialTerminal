@@ -52,6 +52,10 @@ function loadConfig() {
     scrollbackLimit: 100000,
     historyBufferSize: 5000000,
     filterHistory: [],
+    mainInputSettings: {
+      autoSendEnabled: false,
+      quickSendEnabled: true
+    },
     lastSerialOptions: {
         path: '',
         baudRate: '9600',
@@ -460,6 +464,7 @@ function cleanupSerialConnection(message = null) {
 }
 
 function handleSerialData(str) {
+    console.log('[MAIN] handleSerialData', JSON.stringify({ str }));
     // Newline Mode (Receive):
     // If mode is CRLF or Auto, usually we want to ensure newlines render correctly in xterm.
     // xterm expects \r\n for a new line.
@@ -467,7 +472,7 @@ function handleSerialData(str) {
     if (serialNewlineMode === 'crlf') {
         str = str.replace(/\r?\n/g, '\r\n');
     }
-    
+
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('serial-output', str);
     }
@@ -526,6 +531,10 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
     });
 
     currentSerialPort.on('data', (data) => {
+      console.log('[MAIN] serial-data', JSON.stringify({
+        length: data.length,
+        hex: data.toString('hex')
+      }));
       throughputState.rxCurrentBytes += data.length;
       if (serialEncoding === 'hex') {
           let str = data.toString('hex').match(/.{1,2}/g).join(' ') + ' ';
@@ -553,7 +562,7 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
 ipcMain.on('serial-input', (event, data) => {
   if (currentSerialPort && currentSerialPort.isOpen) {
     let buffer;
-    
+
     // Newline Mode (Send):
     // xterm sends \r when Enter is pressed.
     // We should map \r to the desired sequence.
@@ -576,6 +585,7 @@ ipcMain.on('serial-input', (event, data) => {
         buffer = iconv.encode(str, serialEncoding);
     }
 
+    console.log('[MAIN] serial-input', JSON.stringify({ data, str, hex: buffer.toString('hex') }));
     throughputState.txCurrentBytes += buffer.length;
     currentSerialPort.write(buffer);
     writeLog(str);

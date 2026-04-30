@@ -29,6 +29,11 @@ function hexToAnsi(hex) {
 
 const showTimestampCb = document.getElementById('show-timestamp');
 const showLinenoCb = document.getElementById('show-lineno');
+const mainSendInput = document.getElementById('main-send-input');
+const mainAutoSendEnableCb = document.getElementById('main-auto-send-enable');
+const mainShortcutSendEnableCb = document.getElementById('main-shortcut-send-enable');
+const mainSendBtn = document.getElementById('main-send-btn');
+const mainSendLast = document.getElementById('main-send-last');
 
 showTimestampCb.addEventListener('change', (e) => {
     showTimestamp = e.target.checked;
@@ -199,25 +204,25 @@ class SerialDataParser {
 
     parse(data) {
         if (!data) return [];
-        
+
         this.incomingBuffer += data;
         const parts = this.incomingBuffer.split(/(\r\n|\r|\n)/);
-        
+
         if (parts.length === 1) {
-            if (this.incomingBuffer.length > 10000) {
+            if (this.incomingBuffer.length > 0) {
                 const lineContent = this.incomingBuffer;
                 this.incomingBuffer = '';
-                
+
                 const prefix = this.isNewLine ? getPrefix() : '';
-                this.isNewLine = false; // Next chunk is continuation
+                this.isNewLine = false;
                 return [{ text: lineContent, delimiter: '', prefix }];
             }
             return [];
         }
-        
+
         const incompleteLine = parts.pop();
         this.incomingBuffer = incompleteLine;
-        
+
         const lines = [];
         for (let i = 0; i < parts.length; i += 2) {
             const prefix = this.isNewLine ? getPrefix() : '';
@@ -226,7 +231,7 @@ class SerialDataParser {
                 delimiter: parts[i + 1],
                 prefix
             });
-            this.isNewLine = true; // After delimiter, next line is new
+            this.isNewLine = true;
         }
         return lines;
     }
@@ -603,6 +608,301 @@ function createTerminalKeyHandler(targetTerm) {
 // Smart Copy/Paste Handling
 serialTerm.attachCustomKeyEventHandler(createTerminalKeyHandler(serialTerm));
 
+let mainInputHistory = [];
+let mainInputHistoryIndex = -1;
+let mainInputDraft = '';
+let lastMainInputValue = '';
+let isMainInputComposing = false;
+
+function sendSerialData(data) {
+    if (!isConnected || !data) return false;
+    ipcRenderer.send('renderer-log', `[main-input] sendSerialData: ${JSON.stringify(data)}`);
+    ipcRenderer.send('serial-input', data);
+    return true;
+}
+
+function insertTextAtMainInputCursor(text) {
+    const start = mainSendInput.selectionStart ?? mainSendInput.value.length;
+    const end = mainSendInput.selectionEnd ?? mainSendInput.value.length;
+    const nextValue = `${mainSendInput.value.slice(0, start)}${text}${mainSendInput.value.slice(end)}`;
+    mainSendInput.value = nextValue;
+    const cursor = start + text.length;
+    mainSendInput.setSelectionRange(cursor, cursor);
+    lastMainInputValue = nextValue;
+    updateMainInputHeight();
+}
+
+function syncMainInputValue() {
+    lastMainInputValue = mainSendInput.value;
+    updateMainInputHeight();
+}
+
+function handleUnifiedSerialInput(data, source = 'unknown') {
+    if (!data) {
+        return false;
+    }
+
+    if (!mainAutoSendEnableCb.checked) {
+        return false;
+    }
+
+    if (data === '\r') {
+        sendMainInputEnter();
+        return true;
+    }
+
+    if (data === '') {
+        return false;
+    }
+
+    if (sendSerialData(data)) {
+        insertTextAtMainInputCursor(data);
+        return true;
+    }
+
+    return false;
+}
+
+function handleMainInputAutoSendKeydown(event) {
+    if (!mainAutoSendEnableCb.checked || isMainInputComposing) {
+        return false;
+    }
+
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+        return false;
+    }
+
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        return handleUnifiedSerialInput('\r', 'main-input');
+    }
+
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+        syncMainInputValue();
+        return false;
+    }
+
+    if (event.key.length !== 1) {
+        return false;
+    }
+
+    event.preventDefault();
+    return handleUnifiedSerialInput(event.key, 'main-input');
+}
+
+function updateMainInputHeight() {
+    if (!mainSendInput) return;
+    mainSendInput.style.height = 'auto';
+    mainSendInput.style.height = `${Math.min(mainSendInput.scrollHeight, 180)}px`;
+}
+
+function formatLastSentPreview(text) {
+    if (!text) return '上一条发送：暂无';
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const [firstLine = ''] = normalized.split('\n');
+    const hasMore = normalized.includes('\n');
+    const preview = `${firstLine}${hasMore ? '…' : ''}` || '空内容';
+    return `上一条发送：${preview}`;
+}
+
+function setLastSentPreview(text) {
+    if (mainSendLast) {
+        mainSendLast.textContent = formatLastSentPreview(text);
+    }
+}
+
+function focusMainInput() {
+    if (!mainSendInput) return;
+    mainSendInput.focus();
+    const len = mainSendInput.value.length;
+    mainSendInput.setSelectionRange(len, len);
+}
+
+function pushMainInputHistory(text) {
+    if (!text) return;
+    if (mainInputHistory[mainInputHistory.length - 1] !== text) {
+        mainInputHistory.push(text);
+        if (mainInputHistory.length > 100) {
+            mainInputHistory.shift();
+        }
+    }
+    mainInputHistoryIndex = -1;
+    mainInputDraft = '';
+}
+
+function navigateMainInputHistory(direction) {
+    if (!mainInputHistory.length) return;
+
+    if (mainInputHistoryIndex === -1) {
+        mainInputDraft = mainSendInput.value;
+    }
+
+    const nextIndex = mainInputHistoryIndex + direction;
+    if (nextIndex < -1 || nextIndex >= mainInputHistory.length) {
+        return;
+    }
+
+    mainInputHistoryIndex = nextIndex;
+    mainSendInput.value = mainInputHistoryIndex === -1
+        ? mainInputDraft
+        : mainInputHistory[mainInputHistory.length - 1 - mainInputHistoryIndex];
+    lastMainInputValue = mainSendInput.value;
+    updateMainInputHeight();
+    focusMainInput();
+}
+
+function clearMainInput() {
+    mainSendInput.value = '';
+    lastMainInputValue = '';
+    mainInputHistoryIndex = -1;
+    mainInputDraft = '';
+    updateMainInputHeight();
+    focusMainInput();
+}
+
+function sendMainInputBuffer() {
+    const text = mainSendInput.value;
+    if (!text) {
+        focusMainInput();
+        return;
+    }
+    if (!sendSerialData(text)) {
+        focusMainInput();
+        return;
+    }
+    pushMainInputHistory(text);
+    setLastSentPreview(text);
+    clearMainInput();
+}
+
+function sendMainInputEnter() {
+    if (!sendSerialData('\r')) {
+        focusMainInput();
+        return;
+    }
+    if (mainSendInput.value) {
+        pushMainInputHistory(mainSendInput.value);
+        setLastSentPreview(mainSendInput.value);
+    }
+    clearMainInput();
+}
+
+function saveMainInputSettings() {
+    ipcRenderer.send('save-config', {
+        mainInputSettings: {
+            autoSendEnabled: mainAutoSendEnableCb.checked,
+            quickSendEnabled: mainShortcutSendEnableCb.checked
+        }
+    });
+}
+
+function shouldHandleMainInputLocally(event) {
+    if (mainShortcutSendEnableCb.checked) return false;
+    if (event.ctrlKey || event.metaKey || event.altKey) return true;
+
+    return [
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+        'PageUp',
+        'PageDown',
+        'Home',
+        'End'
+    ].includes(event.key);
+}
+
+function bindMainInputEvents() {
+    if (!mainSendInput) return;
+
+    mainSendInput.addEventListener('compositionstart', () => {
+        isMainInputComposing = true;
+    });
+
+    mainSendInput.addEventListener('compositionend', () => {
+        isMainInputComposing = false;
+        if (mainAutoSendEnableCb.checked && mainSendInput.value.length > lastMainInputValue.length) {
+            const appended = mainSendInput.value.slice(lastMainInputValue.length);
+            if (appended) {
+                handleUnifiedSerialInput(appended, 'compositionend');
+            }
+        }
+        lastMainInputValue = mainSendInput.value;
+    });
+
+    mainSendInput.addEventListener('keydown', (event) => {
+        if (handleMainInputAutoSendKeydown(event)) {
+            return;
+        }
+
+        if (!mainShortcutSendEnableCb.checked && event.key === 'ArrowUp') {
+            event.preventDefault();
+            navigateMainInputHistory(1);
+            return;
+        }
+
+        if (!mainShortcutSendEnableCb.checked && event.key === 'ArrowDown') {
+            event.preventDefault();
+            navigateMainInputHistory(-1);
+            return;
+        }
+
+        if (shouldHandleMainInputLocally(event)) {
+            event.stopPropagation();
+        }
+    });
+
+    mainSendInput.addEventListener('input', () => {
+        syncMainInputValue();
+    });
+
+    mainSendInput.addEventListener('paste', (event) => {
+        if (!mainAutoSendEnableCb.checked) {
+            return;
+        }
+
+        const text = event.clipboardData?.getData('text') || '';
+        if (!text) {
+            return;
+        }
+
+        event.preventDefault();
+        handleUnifiedSerialInput(text, 'paste');
+    });
+
+    mainSendInput.addEventListener('focus', () => {
+        mainSendInput.setSelectionRange(mainSendInput.value.length, mainSendInput.value.length);
+    });
+
+    mainAutoSendEnableCb.addEventListener('change', () => {
+        lastMainInputValue = mainSendInput.value;
+        saveMainInputSettings();
+        focusMainInput();
+    });
+
+    mainShortcutSendEnableCb.addEventListener('change', () => {
+        saveMainInputSettings();
+        focusMainInput();
+    });
+
+    mainSendBtn.addEventListener('click', () => {
+        sendMainInputBuffer();
+    });
+
+    updateMainInputHeight();
+    setLastSentPreview('');
+}
+
+function applyMainInputConfig(config) {
+    const settings = config.mainInputSettings || {};
+    mainAutoSendEnableCb.checked = settings.autoSendEnabled === true;
+    mainShortcutSendEnableCb.checked = settings.quickSendEnabled !== false;
+    lastMainInputValue = mainSendInput.value;
+    updateMainInputHeight();
+}
+
+bindMainInputEvents();
+
 function applyConfig(config) {
     currentConfig = config;
     highlightRules = config.highlightRules || [];
@@ -720,10 +1020,16 @@ ipcRenderer.send('spawn-terminal');
 */
 
 // Serial Logic
-serialTerm.onData((data) => ipcRenderer.send('serial-input', data));
+serialTerm.onData((data) => {
+    if (handleUnifiedSerialInput(data, 'xterm')) {
+        return;
+    }
+    ipcRenderer.send('serial-input', data);
+});
 ipcRenderer.on('serial-output', (event, data) => {
+    ipcRenderer.send('renderer-log', `[serial-output] ${JSON.stringify(data)}`);
     const lines = dataParser.parse(data);
-    
+
     if (lines.length > 0) {
         let mainOutput = '';
         lines.forEach(lineObj => {
@@ -1207,17 +1513,18 @@ addQuickSendBtn.addEventListener('click', () => {
 const originalApplyConfig = applyConfig;
 applyConfig = function(config) {
     originalApplyConfig(config);
-    
+    applyMainInputConfig(config);
+
     // Auto Send Settings
     if (config.autoSendSettings) {
         autoSendEnableCb.checked = config.autoSendSettings.enabled || false;
         autoSendIntervalInput.value = config.autoSendSettings.interval || 1000;
         autoSendTextInput.value = config.autoSendSettings.text || '';
-        
+
         // Only update runtime state, do not save back to config
-        updateAutoSendState(); 
+        updateAutoSendState();
     }
-    
+
     // Quick Send List
     if (config.quickSendList) {
         quickSendList = config.quickSendList;
