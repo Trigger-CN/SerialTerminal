@@ -2,8 +2,10 @@ const { ipcRenderer } = require('electron');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
+const { t, getLanguage } = require('./i18n');
 
 let currentConfig = null;
+let currentLanguage = 'en';
 // let currentMode = 'terminal'; // Removed temporarily
 
 // Display Settings
@@ -17,6 +19,81 @@ let lastCharWasCR = false;
 let timestampColor = '#00ff00';
 let lineNoColor = '#ffff00';
 let highlightRules = [];
+
+function tr(key, params = {}) {
+    return t(currentLanguage, key, params);
+}
+
+function applyI18nToDocument() {
+    document.title = tr('appTitle');
+
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        el.textContent = tr(el.dataset.i18n);
+    });
+
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        el.title = tr(el.dataset.i18nTitle);
+    });
+
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        el.placeholder = tr(el.dataset.i18nPlaceholder);
+    });
+}
+
+function applyMainSelectTranslations() {
+    const dataBits = document.getElementById('data-bits-select');
+    const stopBits = document.getElementById('stop-bits-select');
+    const parity = document.getElementById('parity-select');
+    const encoding = document.getElementById('encoding-select');
+    const newline = document.getElementById('newline-mode-select');
+    const baud = document.getElementById('baud-select');
+
+    if (dataBits) {
+        dataBits.options[0].textContent = tr('main.dataBits8');
+        dataBits.options[1].textContent = tr('main.dataBits7');
+        dataBits.options[2].textContent = tr('main.dataBits6');
+        dataBits.options[3].textContent = tr('main.dataBits5');
+    }
+
+    if (stopBits) {
+        stopBits.options[0].textContent = tr('main.stopBits1');
+        stopBits.options[1].textContent = tr('main.stopBits15');
+        stopBits.options[2].textContent = tr('main.stopBits2');
+    }
+
+    if (parity) {
+        parity.options[0].textContent = tr('main.parityNone');
+        parity.options[1].textContent = tr('main.parityEven');
+        parity.options[2].textContent = tr('main.parityOdd');
+        parity.options[3].textContent = tr('main.parityMark');
+        parity.options[4].textContent = tr('main.paritySpace');
+    }
+
+    if (encoding) {
+        encoding.options[0].textContent = tr('main.encodingUtf8');
+        encoding.options[1].textContent = tr('main.encodingAscii');
+        encoding.options[2].textContent = tr('main.encodingHex');
+        encoding.options[3].textContent = tr('main.encodingGbk');
+    }
+
+    if (newline) {
+        newline.options[0].textContent = tr('main.newlineCrlf');
+        newline.options[1].textContent = tr('main.newlineLf');
+        newline.options[2].textContent = tr('main.newlineCr');
+    }
+
+    if (baud && baud.options.length > 0) {
+        baud.options[baud.options.length - 1].textContent = `✎ ${tr('main.customBaudRate')}...`;
+    }
+}
+
+function applyMainLanguage() {
+    applyI18nToDocument();
+    applyMainSelectTranslations();
+    setLastSentPreview('');
+    updateSerialConnectionState(isConnected);
+    updateTabTitles();
+}
 
 function hexToAnsi(hex) {
     if (!hex) return '';
@@ -283,7 +360,7 @@ function updateTabTitles() {
     filterTabs.forEach((tab, index) => {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
-        tab.btn.innerHTML = `Filter ${displayIndex} `;
+        tab.btn.innerHTML = `${tr('main.filter')} ${displayIndex} `;
         tab.btn.appendChild(closeBtn);
     });
 }
@@ -299,7 +376,7 @@ function createFilterTab() {
     tabBtn.dataset.target = tabId;
     
     // The initial title will be updated by updateTabTitles() right after
-    tabBtn.innerHTML = `Filter <span class="main-tab-close" title="Close Tab">✕</span>`;
+    tabBtn.innerHTML = `${tr('main.filter')} <span class="main-tab-close" title="${tr('main.closeTab')}">✕</span>`;
     
     tabBtn.onclick = (e) => {
         if (e.target.classList.contains('main-tab-close')) return;
@@ -322,13 +399,13 @@ function createFilterTab() {
     filterHeader.className = "filter-header";
     filterHeader.innerHTML = `
         <div class="filter-input-wrapper">
-            <input type="text" class="filter-input" placeholder="Filter text..." style="width: 100%; padding-right: 24px;">
+            <input type="text" class="filter-input" placeholder="${tr('main.filterText')}" style="width: 100%; padding-right: 24px;">
             <div class="filter-dropdown-btn">▼</div>
             <div class="filter-history-dropdown"></div>
         </div>
         <div class="filter-toggles" style="display: flex; gap: 4px; margin-right: 8px;">
-            <button class="filter-toggle-btn filter-case-btn" title="Match Case">Aa</button>
-            <button class="filter-toggle-btn filter-regex-btn" title="Use Regular Expression">.*</button>
+            <button class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}">Aa</button>
+            <button class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}">.*</button>
         </div>
     `;
     
@@ -388,7 +465,7 @@ function createFilterTab() {
         dropdownMenu.innerHTML = '';
         
         if (history.length === 0) {
-            dropdownMenu.innerHTML = '<div class="filter-history-item" style="color: #666; cursor: default;">No history</div>';
+            dropdownMenu.innerHTML = `<div class="filter-history-item" style="color: #666; cursor: default;">${tr('common.noHistory')}</div>`;
             return;
         }
         
@@ -726,12 +803,12 @@ function updateMainInputHeight() {
 }
 
 function formatLastSentPreview(text) {
-    if (!text) return '上一条发送：暂无';
+    if (!text) return tr('main.lastSentNone');
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const [firstLine = ''] = normalized.split('\n');
     const hasMore = normalized.includes('\n');
-    const preview = `${firstLine}${hasMore ? '…' : ''}` || '空内容';
-    return `上一条发送：${preview}`;
+    const preview = `${firstLine}${hasMore ? '…' : ''}` || tr('common.emptyContent');
+    return tr('main.lastSent', { value: preview });
 }
 
 function setLastSentPreview(text) {
@@ -747,7 +824,7 @@ function setMainInputPanelVisible(visible, persist = true) {
     if (toggleMainInputBtn) {
         toggleMainInputBtn.classList.toggle('active', visible);
         toggleMainInputBtn.setAttribute('aria-pressed', visible ? 'true' : 'false');
-        toggleMainInputBtn.title = visible ? '隐藏输入框' : '显示输入框';
+        toggleMainInputBtn.title = visible ? tr('main.toggleInputHide') : tr('main.toggleInputShow');
     }
 
     if (persist) {
@@ -973,6 +1050,7 @@ bindMainInputEvents();
 
 function applyConfig(config) {
     currentConfig = config;
+    currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
     
     // Update local color settings
@@ -1004,6 +1082,7 @@ function applyConfig(config) {
     });
     
     document.body.style.background = config.background;
+    applyMainLanguage();
     
     // fitAddon.fit();
     serialFitAddon.fit();
@@ -1116,7 +1195,7 @@ ipcRenderer.on('serial-output', (event, data) => {
     }
 });
 ipcRenderer.on('serial-error', (event, err) => {
-    const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
+    const errMsg = `\r\n\x1b[31m${tr('main.errorPrefix', { error: err })}\x1b[0m\r\n`;
     serialTerm.write(errMsg);
     filterTabs.forEach(tab => tab.term.write(errMsg));
 });
@@ -1219,15 +1298,17 @@ ipcRenderer.on('serial-throughput-update', (event, payload) => {
 
 function updateSerialConnectionState(connected) {
     isConnected = connected;
-    connectBtn.textContent = connected ? '❌ Disconnect' : '⚡ Connect';
-    statusDiv.textContent = connected ? 'Connected' : 'Disconnected';
+    connectBtn.innerHTML = connected
+        ? `❌ <span>${tr('main.disconnect')}</span>`
+        : `⚡ <span>${tr('main.connect')}</span>`;
+    statusDiv.textContent = connected ? tr('main.connected') : tr('main.disconnected');
     statusDot.classList.toggle('online', connected);
 }
 
 ipcRenderer.on('serial-disconnected', (event, message) => {
     updateSerialConnectionState(false);
     if (message) {
-        const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
+        const notice = `\r\n\x1b[33m[INFO] ${message || tr('main.serialDisconnected')}\x1b[0m\r\n`;
         serialTerm.write(notice);
         filterTabs.forEach(tab => tab.term.write(notice));
     }
@@ -1286,7 +1367,7 @@ updateThroughputPanel({
 
 async function refreshPorts() {
     const ports = await ipcRenderer.invoke('list-ports');
-    portSelect.innerHTML = '<option value="">Select Port</option>';
+    portSelect.innerHTML = `<option value="">${tr('main.selectPort')}</option>`;
     ports.forEach(port => {
         const opt = document.createElement('option');
         opt.value = port.path;
@@ -1358,9 +1439,9 @@ connectBtn.addEventListener('click', async () => {
             serialLineCounter = 1;
             serialNewLine = true;
 
-            serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
+            serialTerm.write(`\r\n\x1b[32m${tr('main.connectedTo', { path, baudRate, dataBits, stopBits })}\x1b[0m\r\n`);
         } catch (err) {
-            alert('Failed to connect: ' + err);
+            alert(tr('main.failedToConnect', { error: err }));
         }
     }
 });

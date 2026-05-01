@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Serial Terminal</title>
+    <title data-i18n="appTitle">Serial Terminal</title>
     <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="style.css" />
     <style>
@@ -19,14 +19,14 @@
         <!-- Persistent Header -->
         <div class="sidebar-header">
             <div style="display: flex; gap: 4px;">
-                <select id="port-select" title="Select Serial Port" style="flex: 1; width: 0;">
-                    <option value="">Select Port</option>
+                <select id='port-select' title='Select Serial Port' data-i18n-title='main.selectSerialPort' style='flex: 1; width: 0;'>
+                    <option value='' data-i18n='main.selectPort'>Select Port</option>
                 </select>
-                <button class="secondary" id="refresh-btn" style="flex: 0 0 auto; padding: 0 8px;" title="Refresh Ports">🔄</button>
+                <button class="secondary" id="refresh-btn" style="flex: 0 0 auto; padding: 0 8px;" title="Refresh Ports" data-i18n-title="main.refreshPorts">🔄</button>
             </div>
 
             <div id="baud-container" style="position: relative;">
-                <select id="baud-select" title="Select Baud Rate" style="width: 100%;">
+                <select id="baud-select" title="Select Baud Rate" data-i18n-title="main.baudRate" style="width: 100%;">
                     <option value="110">110</option>
                     <option value="300">300</option>
                     <option value="600">600</option>
@@ -50,25 +50,25 @@
                     <option value="custom">✎ Custom...</option>
                 </select>
                 <div id="baud-custom-wrapper" style="display: none; display: flex; gap: 4px;">
-                    <input type="number" id="baud-custom-input" placeholder="Baud Rate" style="flex: 1; width: 0;">
-                    <button id="baud-custom-cancel" class="secondary" style="width: auto; padding: 0 6px;" title="Back to list">✕</button>
+                    <input type="number" id="baud-custom-input" placeholder="Baud Rate" data-i18n-placeholder="main.customBaudRate" style="flex: 1; width: 0;">
+                    <button id="baud-custom-cancel" class="secondary" style="width: auto; padding: 0 6px;" title="Back to list" data-i18n-title="main.backToList">✕</button>
                 </div>
             </div>
 
-            <button id="connect-btn" style="width: 100%;">⚡ Connect</button>
-            <button id="clear-btn" class="secondary" title="Clear Terminal Output" style="width: 100%;">🗑️ Clear Log</button>
+            <button id="connect-btn" style="width: 100%;">⚡ <span data-i18n="main.connect">Connect</span></button>
+            <button id="clear-btn" class="secondary" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" style="width: 100%;">🗑️ <span data-i18n="main.clearLog">Clear Log</span></button>
 
             <div class="status">
                 <div id="status-dot" class="status-dot"></div>
-                <span id="serial-status">Disconnected</span>
+                <span id="serial-status" data-i18n="main.disconnected">Disconnected</span>
             </div>
         </div>
 
         <!-- Tabs Header -->
         <div class="sidebar-tabs">
-            <button class="sidebar-tab active" onclick="showSidebarTab('tab-settings')" title="Settings">🛠️</button>
-            <button class="sidebar-tab" onclick="showSidebarTab('tab-search')" title="Search">🔍</button>
-            <button class="sidebar-tab" onclick="showSidebarTab('tab-send')" title="Send">📤</button>
+            <button class="sidebar-tab active" onclick="showSidebarTab('tab-settings')" title="Settings" data-i18n-title="main.settingsTab">🛠️</button>
+            <button class="sidebar-tab" onclick="showSidebarTab('tab-search')" title="Search" data-i18n-title="main.searchTab">🔍</button>
+            <button class="sidebar-tab" onclick="showSidebarTab('tab-send')" title="Send" data-i18n-title="main.sendTab">📤</button>
         </div>
 
         <!-- Tab Content -->
@@ -111,29 +111,29 @@
 
                 <div id="display-controls" class="settings-group">
                     <label>
-                        <input type="checkbox" id="show-timestamp"> 🕒 Show Time
+                        <input type="checkbox" id="show-timestamp"> 🕒 <span data-i18n="main.showTime">Show Time</span>
                     </label>
                     <label>
-                        <input type="checkbox" id="show-lineno"> 🔢 Show Line #
+                        <input type="checkbox" id="show-lineno"> 🔢 <span data-i18n="main.showLineNo">Show Line #</span>
                     </label>
                 </div>
             </div>
 
             <!-- Search Tab -->
             <div id="tab-search" class="sidebar-tab-pane">
-                <input type="text" id="search-input" placeholder="Search..." style="margin-bottom: 4px;">
+                <input type="text" id="search-input" placeholder="Search..." data-i18n-placeholder="main.searchPlaceholder" style="margin-bottom: 4px;">
                 <div style="display: flex; gap: 4px;">
-                    <button id="find-prev-btn" style="flex: 1;">Prev</button>
-                    <button id="find-next-btn" style="flex: 1;">Next</button>
+                    <button id="find-prev-btn" style="flex: 1;" data-i18n="main.prev">Prev</button>
+                    <button id="find-next-btn" style="flex: 1;" data-i18n="main.next">Next</button>
                 </div>
                 <label style="margin-top: 4px;">
-                    <input type="checkbox" id="search-regex"> .* Regex
+                    <input type="checkbox" id="search-regex"> .* <span data-i18n="main.regex">Regex</span>
                 </label>
                 <label>
-                    <input type="checkbox" id="search-case"> Aa Case Sensitive
+                    <input type="checkbox" id="search-case"> Aa <span data-i18n="main.caseSensitive">Case Sensitive</span>
                 </label>
                 <label>
-                    <input type="checkbox" id="search-word"> 🔠 Whole Word
+                    <input type="checkbox" id="search-word"> 🔠 <span data-i18n="main.wholeWord">Whole Word</span>
                 </label>
             </div>
 
@@ -143,25 +143,25 @@
                 <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 6px; margin-bottom: 6px;">
                     <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 4px;">
                         <input type="checkbox" id="auto-send-enable">
-                        <label for="auto-send-enable" style="font-size: 13px; color: var(--text-primary); cursor: pointer; display: inline;">Auto Send</label>
+                        <label for="auto-send-enable" style="font-size: 13px; color: var(--text-primary); cursor: pointer; display: inline;" data-i18n="main.autoSend">Auto Send</label>
                         <input type="number" id="auto-send-interval" placeholder="ms" value="1000" style="width: 60px; padding: 4px; margin-left: auto;">
                     </div>
-                    <textarea id="auto-send-text" placeholder="Text to auto send..." style="margin-bottom: 4px; height: 60px;"></textarea>
+                    <textarea id="auto-send-text" placeholder="Text to auto send..." data-i18n-placeholder="main.autoSendText" style="margin-bottom: 4px; height: 60px;"></textarea>
                 </div>
         
                 <!-- Quick Send -->
                 <div style="font-size: 13px; margin-bottom: 4px; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center;">
-                    <span>Quick Send List</span>
+                    <span data-i18n="main.quickSendList">Quick Send List</span>
                 </div>
                 <div id="quick-send-list" class="quick-send-list-container">
                     <!-- Items will be added here -->
                 </div>
                 
                 <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px;">
-                    <input type="text" id="quick-send-label" placeholder="Label">
-                    <textarea id="quick-send-content" placeholder="Content (multi-line)" style="height: 60px;"></textarea>
+                    <input type="text" id="quick-send-label" placeholder="Label" data-i18n-placeholder="main.label">
+                    <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" style="height: 60px;"></textarea>
                 </div>
-                <button id="add-quick-send-btn" class="secondary" style="width: 100%;">+ Add to List</button>
+                <button id="add-quick-send-btn" class="secondary" style="width: 100%;" data-i18n="main.addToList">+ Add to List</button>
             </div>
         </div>
 
@@ -180,11 +180,11 @@
 
         <div class="sidebar-footer">
             <div class="sidebar-footer-row">
-                <div id="open-prefs" class="footer-btn settings" title="Settings">
+                <div id="open-prefs" class="footer-btn settings" title="Settings" data-i18n-title="main.globalSettings">
                     ⚙️
                 </div>
                 <div id="toggle-main-input" class="footer-btn settings compact" title="显示/隐藏输入框">
-                    ⌨ 输入框
+                    ⌨ <span data-i18n="main.toggleInput">Input</span>
                 </div>
             </div>
         </div>
@@ -193,9 +193,9 @@
     <div class="main-container">
         <div class="main-tabs-header">
             <div class="main-tabs-list" id="main-tabs-list">
-                <div class="main-tab active" data-target="tab-main" onclick="switchMainTab('tab-main')">Main Terminal</div>
+                <div class="main-tab active" data-target="tab-main" onclick="switchMainTab('tab-main')" data-i18n="main.mainTerminal">Main Terminal</div>
             </div>
-            <button id="new-filter-tab-btn" class="secondary" title="New Filter Tab" style="width: 36px; height: 36px; border: none; background: transparent; font-size: 16px;">➕</button>
+            <button id="new-filter-tab-btn" class="secondary" title="New Filter Tab" data-i18n-title="main.newFilterTab" style="width: 36px; height: 36px; border: none; background: transparent; font-size: 16px;">➕</button>
         </div>
         
         <div class="main-tabs-content" id="main-tabs-content">
@@ -205,20 +205,20 @@
         </div>
         <div class="main-input-panel" id="main-input-panel">
             <div class="main-input-row">
-                <textarea id="main-send-input" placeholder="输入要发送的内容..." rows="1"></textarea>
-                <button id="main-send-btn" title="发送">发送</button>
+                <textarea id="main-send-input" placeholder="输入要发送的内容..." data-i18n-placeholder="main.sendInputPlaceholder" rows="1"></textarea>
+                <button id="main-send-btn" title="发送" data-i18n-title="main.send"><span data-i18n="main.send">Send</span></button>
                 <div class="main-input-toggle-group">
-                    <label class="main-input-icon-toggle" for="main-auto-send-enable" title="自动发送">
+                    <label class="main-input-icon-toggle" for="main-auto-send-enable" title="自动发送" data-i18n-title="main.autoSendToggle">
                         <input type="checkbox" id="main-auto-send-enable">
                         <span>⚡</span>
                     </label>
-                    <label class="main-input-icon-toggle" for="main-shortcut-send-enable" title="快捷键发送">
+                    <label class="main-input-icon-toggle" for="main-shortcut-send-enable" title="快捷键发送" data-i18n-title="main.shortcutSendToggle">
                         <input type="checkbox" id="main-shortcut-send-enable">
                         <span>⌨</span>
                     </label>
                 </div>
             </div>
-            <div class="main-input-last" id="main-send-last">上一条发送：暂无</div>
+            <div class="main-input-last" id="main-send-last" data-i18n="main.lastSentNone">上一条发送：暂无</div>
         </div>
     </div>
     

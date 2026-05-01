@@ -51,6 +51,7 @@ function loadConfig() {
     showLineNumbers: false,
     scrollbackLimit: 100000,
     historyBufferSize: 5000000,
+    language: 'en',
     filterHistory: [],
     mainInputSettings: {
       autoSendEnabled: false,

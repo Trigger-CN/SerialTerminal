@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Preferences</title>
+    <title data-i18n="prefsTitle">Preferences</title>
     <link rel="stylesheet" href="style.css" />
     <style>
         body {
@@ -139,25 +139,29 @@
     <div style="display: flex; flex: 1; overflow: hidden;">
         <div class="sidebar">
             <button class="tab-btn active" onclick="showTab('appearance')">
-                <span style="font-size: 18px;">🎨</span> Appearance
+                <span style="font-size: 18px;">🎨</span> <span data-i18n="prefs.appearance">Appearance</span>
             </button>
             <button class="tab-btn" onclick="showTab('terminal')">
-                <span style="font-size: 18px;">💻</span> Terminal
+                <span style="font-size: 18px;">💻</span> <span data-i18n="prefs.terminal">Terminal</span>
             </button>
             <button class="tab-btn" onclick="showTab('highlighting')">
-                <span style="font-size: 18px;">🖍️</span> Highlighting
+                <span style="font-size: 18px;">🖍️</span> <span data-i18n="prefs.highlighting">Highlighting</span>
             </button>
             <button class="tab-btn" onclick="showTab('logging')">
-                <span style="font-size: 18px;">📝</span> Logging
+                <span style="font-size: 18px;">📝</span> <span data-i18n="prefs.logging">Logging</span>
             </button>
             <button class="tab-btn" onclick="showTab('about')">
-                <span style="font-size: 18px;">ℹ️</span> About
+                <span style="font-size: 18px;">ℹ️</span> <span data-i18n="prefs.about">About</span>
             </button>
         </div>
         <div class="content">
             <!-- Appearance Tab -->
             <div id="appearance" class="tab-pane active">
-                <h2>Appearance Settings</h2>
+                <h2 data-i18n="prefs.appearanceSettings">Appearance Settings</h2>
+                <div class="form-group">
+                    <label data-i18n="prefs.language">Language</label>
+                    <select id="language-select"></select>
+                </div>
                 <div class="form-group">
                     <label>🔤 English Font Family</label>
                     <select id="fontFamily">
@@ -215,7 +219,7 @@
 
             <!-- Terminal Tab -->
             <div id="terminal" class="tab-pane">
-                <h2>Terminal Settings</h2>
+                <h2 data-i18n="prefs.terminalSettings">Terminal Settings</h2>
                 <div class="form-group">
                     <label>📜 Scrollback Limit (lines)</label>
                     <input type="number" id="scrollbackLimit" min="1000" max="1000000" step="1000" style="width: 150px; padding: 6px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px;">
@@ -234,7 +238,7 @@
 
             <!-- Highlighting Tab -->
             <div id="highlighting" class="tab-pane">
-                <h2>Keyword Highlighting</h2>
+                <h2 data-i18n="prefs.keywordHighlighting">Keyword Highlighting</h2>
                 <div class="form-group">
                     <button class="secondary" id="add-rule-btn" style="margin-bottom: 10px;">+ Add New Rule</button>
                     <div id="highlight-rules-list" style="display: flex; flex-direction: column; gap: 8px;">
@@ -245,7 +249,7 @@
 
             <!-- Logging Tab -->
             <div id="logging" class="tab-pane">
-                <h2>Logging Settings</h2>
+                <h2 data-i18n="prefs.loggingSettings">Logging Settings</h2>
                 <div class="form-group">
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
                         <input type="checkbox" id="logEnabled"> Enable Automatic Logging
@@ -278,7 +282,7 @@
 
             <!-- About Tab -->
             <div id="about" class="tab-pane">
-                <h2>About SerialTerminal</h2>
+                <h2 data-i18n="prefs.aboutSerialTerminal">About SerialTerminal</h2>
                 <div class="about-info">
                     <div class="about-row">
                         <span class="about-label">Version</span>
@@ -303,7 +307,7 @@
                         <div id="update-progress-fill" style="width: 0%; height: 100%; background: var(--accent-color); transition: width 0.2s;"></div>
                     </div>
                     <div style="display: flex; gap: 10px;">
-                        <button id="check-update-btn" class="secondary" style="padding: 6px 12px;">Check for Updates</button>
+                        <button id="check-update-btn" class="secondary" style="padding: 6px 12px;" data-i18n="prefs.checkForUpdates">Check for Updates</button>
                         <button id="restart-install-btn" class="primary" style="padding: 6px 12px; display: none;">Restart & Install</button>
                     </div>
                 </div>
@@ -312,10 +316,10 @@
     </div>
 
     <div class="actions">
-        <button class="secondary danger" id="reset-btn" style="margin-right: auto;">Reset Defaults</button>
-        <button class="secondary" id="open-config-btn">Open Config Folder</button>
+        <button class="secondary danger" id="reset-btn" style="margin-right: auto;" data-i18n="prefs.resetDefaults">Reset Defaults</button>
+        <button class="secondary" id="open-config-btn" data-i18n="prefs.openConfigFolder">Open Config Folder</button>
         <button class="secondary" id="cancel-btn">Cancel</button>
-        <button id="save-btn">Save & Apply</button>
+        <button id="save-btn" data-i18n="prefs.saveApply">Save & Apply</button>
     </div>
 
     <script>

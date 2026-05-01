@@ -1,8 +1,16 @@
 const { ipcRenderer, shell } = require('electron');
+const { t, getLanguage, translations } = require('./i18n');
+
+let currentLanguage = 'en';
+
+function tr(key, params = {}) {
+    return t(currentLanguage, key, params);
+}
 
 const elements = {
   fontFamily: document.getElementById('fontFamily'),
   fontFamilyZh: document.getElementById('fontFamilyZh'),
+    languageSelect: document.getElementById('language-select'),
   fontSize: document.getElementById('fontSize'),
   foreground: document.getElementById('foreground'),
   background: document.getElementById('background'),
@@ -40,6 +48,38 @@ const elements = {
   restartInstallBtn: document.getElementById('restart-install-btn')
 };
 
+function applyPrefsI18n() {
+    document.title = tr('prefsTitle');
+
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        el.textContent = tr(el.dataset.i18n);
+    });
+
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        el.placeholder = tr(el.dataset.i18nPlaceholder);
+    });
+}
+
+function populateLanguageOptions() {
+    if (!elements.languageSelect) return;
+    const options = [
+        ['en', tr('languages.en')],
+        ['zh-CN', tr('languages.zhCN')],
+        ['zh-TW', tr('languages.zhTW')],
+        ['fr', tr('languages.fr')],
+        ['ru', tr('languages.ru')],
+        ['de', tr('languages.de')]
+    ];
+
+    elements.languageSelect.innerHTML = '';
+    options.forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        elements.languageSelect.appendChild(option);
+    });
+}
+
 function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', caseSensitive: false, useRegex: true }) {
     const div = document.createElement('div');
     div.style.display = 'flex';
@@ -56,7 +96,7 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     enabledCb.style.height = '16px';
     enabledCb.style.cursor = 'pointer';
     enabledCb.style.margin = '0 4px';
-    enabledCb.title = 'Enable/Disable';
+    enabledCb.title = tr('prefs.enableDisable');
 
     const inputWrapper = document.createElement('div');
     inputWrapper.style.flex = '1';
@@ -66,7 +106,7 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     const regexInput = document.createElement('input');
     regexInput.type = 'text';
     regexInput.value = rule.regex;
-    regexInput.placeholder = 'Regex (e.g. error)';
+    regexInput.placeholder = tr('prefs.regexPlaceholder');
     regexInput.style.flex = '1';
     regexInput.style.paddingRight = '60px'; // Make room for buttons
 
@@ -84,7 +124,7 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
 
     const caseBtn = document.createElement('button');
     caseBtn.className = `filter-toggle-btn ${isCaseSensitive ? 'active' : ''}`;
-    caseBtn.title = 'Match Case';
+    caseBtn.title = tr('main.matchCase');
     caseBtn.textContent = 'Aa';
     caseBtn.style.height = '22px';
     caseBtn.style.padding = '0 4px';
@@ -97,7 +137,7 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
 
     const regexBtn = document.createElement('button');
     regexBtn.className = `filter-toggle-btn ${isUseRegex ? 'active' : ''}`;
-    regexBtn.title = 'Use Regular Expression';
+    regexBtn.title = tr('main.useRegex');
     regexBtn.textContent = '.*';
     regexBtn.style.height = '22px';
     regexBtn.style.padding = '0 4px';
@@ -127,7 +167,7 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     deleteBtn.textContent = '✕';
     deleteBtn.className = 'secondary';
     deleteBtn.style.padding = '4px 8px';
-    deleteBtn.title = 'Remove Rule';
+    deleteBtn.title = tr('prefs.removeRule');
     deleteBtn.onclick = () => div.remove();
 
     // Attach state getter for save function
@@ -153,15 +193,19 @@ elements.addRuleBtn.onclick = () => {
 
 async function init() {
   const config = await ipcRenderer.invoke('get-config');
+    currentLanguage = getLanguage(config.language);
+    applyPrefsI18n();
+    populateLanguageOptions();
+    if (elements.languageSelect) elements.languageSelect.value = currentLanguage;
   
   // Load system fonts
   try {
       const systemFonts = await ipcRenderer.invoke('get-system-fonts');
       if (systemFonts && systemFonts.length > 0) {
           const fontGroupEn = document.createElement('optgroup');
-          fontGroupEn.label = "System Fonts";
+          fontGroupEn.label = tr('prefs.systemFonts');
           const fontGroupZh = document.createElement('optgroup');
-          fontGroupZh.label = "System Fonts";
+          fontGroupZh.label = tr('prefs.systemFonts');
           
           systemFonts.forEach(font => {
               const optEn = document.createElement('option');
@@ -274,6 +318,7 @@ elements.saveBtn.onclick = () => {
   });
 
   const config = {
+        language: elements.languageSelect.value,
     fontFamily: elements.fontFamily.value,
     fontFamilyZh: elements.fontFamilyZh.value,
     fontSize: parseInt(elements.fontSize.value),
@@ -298,7 +343,7 @@ elements.cancelBtn.onclick = () => {
 };
 
 elements.resetBtn.onclick = () => {
-    if (confirm('Are you sure you want to reset all settings to defaults? This cannot be undone.')) {
+    if (confirm(tr('prefs.confirmReset'))) {
         ipcRenderer.send('reset-config');
         window.close();
     }
@@ -313,7 +358,7 @@ if (elements.checkUpdateBtn) {
     elements.checkUpdateBtn.onclick = () => {
         ipcRenderer.send('check-for-updates');
         if (elements.updateStatusContainer) {
-            elements.updateStatusContainer.textContent = 'Checking for updates...';
+            elements.updateStatusContainer.textContent = tr('prefs.checkingForUpdates');
             elements.updateStatusContainer.style.color = 'var(--text-secondary)';
         }
         elements.checkUpdateBtn.disabled = true;
@@ -337,49 +382,56 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
 
     switch (status) {
         case 'checking':
-            statusEl.textContent = 'Checking for updates...';
+            statusEl.textContent = tr('prefs.checkingForUpdates');
             checkBtn.disabled = true;
             if (progressEl) progressEl.style.display = 'none';
             if (restartBtn) restartBtn.style.display = 'none';
             break;
         case 'available':
-            statusEl.textContent = `Update available: ${data.version}. Downloading...`;
+            statusEl.textContent = tr('prefs.updateAvailable', { version: data.version });
             statusEl.style.color = 'var(--accent-color)';
             if (progressEl) progressEl.style.display = 'block';
             checkBtn.style.display = 'none';
             break;
         case 'not-available':
-            statusEl.textContent = 'You are on the latest version.';
+            statusEl.textContent = tr('prefs.latestVersion');
             statusEl.style.color = 'var(--text-secondary)';
             checkBtn.disabled = false;
             if (progressEl) progressEl.style.display = 'none';
             break;
         case 'error':
             if (data && (data.includes('504') || data.includes('Cannot download') || data.includes('net::ERR_'))) {
-                statusEl.innerHTML = `Update failed (Network Error). <a href="#" id="manual-dl-link" style="color: var(--accent-color); text-decoration: underline; cursor: pointer;">Download manually from GitHub</a>`;
+                statusEl.innerHTML = `${tr('prefs.updateFailedNetwork')} <a href="#" id="manual-dl-link" style="color: var(--accent-color); text-decoration: underline; cursor: pointer;">${tr('prefs.downloadFromGithub')}</a>`;
                 document.getElementById('manual-dl-link').onclick = (e) => {
                     e.preventDefault();
                     shell.openExternal('https://github.com/Trigger-CN/SerialTerminal/releases/latest');
                 };
             } else {
-                statusEl.textContent = `Error: ${data}`;
+                statusEl.textContent = tr('prefs.error', { message: data });
             }
             statusEl.style.color = '#ff4444';
             checkBtn.disabled = false;
             if (progressEl) progressEl.style.display = 'none';
             break;
         case 'download-progress':
-            statusEl.textContent = `Downloading... ${Math.round(data.percent)}%`;
+            statusEl.textContent = tr('prefs.downloading', { percent: Math.round(data.percent) });
             if (fillEl) fillEl.style.width = `${data.percent}%`;
             break;
         case 'downloaded':
-            statusEl.textContent = `Update downloaded (${data.version}). Ready to install.`;
+                        statusEl.textContent = tr('prefs.updateDownloaded', { version: data.version });
             statusEl.style.color = '#00ff00';
             if (progressEl) progressEl.style.display = 'none';
             checkBtn.style.display = 'none';
             if (restartBtn) restartBtn.style.display = 'inline-block';
             break;
     }
+});
+
+elements.languageSelect?.addEventListener('change', () => {
+    currentLanguage = getLanguage(elements.languageSelect.value);
+    applyPrefsI18n();
+    populateLanguageOptions();
+    elements.languageSelect.value = currentLanguage;
 });
 
 // Wrap init in DOMContentLoaded to be safe, or just call it if document is ready
