@@ -1,5 +1,5 @@
 const { ipcRenderer, shell } = require('electron');
-const { t, getLanguage, translations } = require('./i18n');
+const { t, getLanguage } = require('./i18n');
 
 let currentLanguage = 'en';
 
@@ -58,6 +58,14 @@ function applyPrefsI18n() {
     document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
         el.placeholder = tr(el.dataset.i18nPlaceholder);
     });
+
+    if (elements.addRuleBtn) elements.addRuleBtn.textContent = tr('prefs.addRule');
+    if (elements.checkUpdateBtn) elements.checkUpdateBtn.textContent = tr('prefs.checkForUpdates');
+    if (elements.restartInstallBtn) elements.restartInstallBtn.textContent = tr('prefs.restartInstall');
+    if (elements.saveBtn) elements.saveBtn.textContent = tr('prefs.saveApply');
+    if (elements.cancelBtn) elements.cancelBtn.textContent = tr('prefs.cancel');
+    if (elements.resetBtn) elements.resetBtn.textContent = tr('prefs.resetDefaults');
+    if (elements.openConfigBtn) elements.openConfigBtn.textContent = tr('prefs.openConfigFolder');
 }
 
 function populateLanguageOptions() {

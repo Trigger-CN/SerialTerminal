@@ -138,7 +138,7 @@ function getPrefix() {
     
     if (showTimestamp) {
         const now = new Date();
-        const time = now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
         const color = hexToAnsi(timestampColor);
         s += `${color}[${time}]${reset} `;
     }

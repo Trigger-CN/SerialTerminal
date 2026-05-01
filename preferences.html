@@ -163,7 +163,7 @@
                     <select id="language-select"></select>
                 </div>
                 <div class="form-group">
-                    <label>🔤 English Font Family</label>
+                    <label data-i18n="prefs.englishFontFamily">🔤 English Font Family</label>
                     <select id="fontFamily">
                         <option value='Consolas'>Consolas</option>
                         <option value='"Fira Code"'>Fira Code</option>
@@ -172,7 +172,7 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>🔤 Chinese/Fallback Font Family</label>
+                    <label data-i18n="prefs.chineseFallbackFontFamily">🔤 Chinese/Fallback Font Family</label>
                     <select id="fontFamilyZh">
                         <option value='"Microsoft YaHei"'>Microsoft YaHei</option>
                         <option value='"SimHei"'>SimHei</option>
@@ -181,34 +181,34 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>📏 Font Size (px)</label>
+                    <label data-i18n="prefs.fontSize">📏 Font Size (px)</label>
                     <input type="number" id="fontSize" min="8" max="72" style="width: 100px;">
                 </div>
                 
                 <div class="grid-2-col">
                     <div class="form-group">
-                        <label>Text Color</label>
+                        <label data-i18n="prefs.textColor">Text Color</label>
                         <div class="color-picker">
                             <input type="color" id="foreground">
                             <span id="foreground-hex">#cccccc</span>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>Background Color</label>
+                        <label data-i18n="prefs.backgroundColor">Background Color</label>
                         <div class="color-picker">
                             <input type="color" id="background">
                             <span id="background-hex">#000000</span>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>Timestamp Color</label>
+                        <label data-i18n="prefs.timestampColor">Timestamp Color</label>
                         <div class="color-picker">
                             <input type="color" id="timestampColor">
                             <span id="timestampColor-hex">#00ff00</span>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>Line Number Color</label>
+                        <label data-i18n="prefs.lineNumberColor">Line Number Color</label>
                         <div class="color-picker">
                             <input type="color" id="lineNoColor">
                             <span id="lineNoColor-hex">#ffff00</span>
@@ -221,16 +221,16 @@
             <div id="terminal" class="tab-pane">
                 <h2 data-i18n="prefs.terminalSettings">Terminal Settings</h2>
                 <div class="form-group">
-                    <label>📜 Scrollback Limit (lines)</label>
+                    <label data-i18n="prefs.scrollbackLimit">📜 Scrollback Limit (lines)</label>
                     <input type="number" id="scrollbackLimit" min="1000" max="1000000" step="1000" style="width: 150px; padding: 6px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px;">
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;" data-i18n="prefs.scrollbackHelp">
                         Maximum number of lines to keep in the terminal buffer. Higher values use more memory.
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 20px;">
-                    <label>💾 History Buffer Size (characters)</label>
+                    <label data-i18n="prefs.historyBufferSize">💾 History Buffer Size (characters)</label>
                     <input type="number" id="historyBufferSize" min="10000" max="100000000" step="10000" style="width: 150px; padding: 6px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px;">
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;" data-i18n="prefs.historyBufferHelp">
                         Size of the history buffer for new windows (in characters). Approx 1MB = 1,000,000 chars.
                     </div>
                 </div>
@@ -240,7 +240,7 @@
             <div id="highlighting" class="tab-pane">
                 <h2 data-i18n="prefs.keywordHighlighting">Keyword Highlighting</h2>
                 <div class="form-group">
-                    <button class="secondary" id="add-rule-btn" style="margin-bottom: 10px;">+ Add New Rule</button>
+                    <button class="secondary" id="add-rule-btn" style="margin-bottom: 10px;" data-i18n="prefs.addRule">+ Add New Rule</button>
                     <div id="highlight-rules-list" style="display: flex; flex-direction: column; gap: 8px;">
                         <!-- Rules will be added here -->
                     </div>
@@ -252,25 +252,25 @@
                 <h2 data-i18n="prefs.loggingSettings">Logging Settings</h2>
                 <div class="form-group">
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
-                        <input type="checkbox" id="logEnabled"> Enable Automatic Logging
+                        <input type="checkbox" id="logEnabled"> <span data-i18n="prefs.enableAutomaticLogging">Enable Automatic Logging</span>
                     </label>
                 </div>
 
                 <div id="log-settings" style="display: none; padding-left: 15px; border-left: 2px solid var(--border-color); margin-left: 5px;">
                     <div class="form-group">
-                        <label>📂 Log Save Path</label>
+                        <label data-i18n="prefs.logSavePath">📂 Log Save Path</label>
                         <div style="display: flex; gap: 8px;">
                             <input type="text" id="logPath" readonly style="flex: 1;">
-                            <button class="secondary" id="browse-btn" style="white-space: nowrap;">Browse...</button>
+                            <button class="secondary" id="browse-btn" style="white-space: nowrap;" data-i18n="prefs.browse">Browse...</button>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>📄 File Name Format</label>
-                        <input type="text" id="logFileNameFormat" placeholder="log_%Y-%m-%d_%H-%M-%S.txt">
-                        <small style="color: var(--text-secondary); display: block; margin-top: 5px;">Supported tags: %Y, %m, %d, %H, %M, %S</small>
+                        <label data-i18n="prefs.fileNameFormat">📄 File Name Format</label>
+                        <input type="text" id="logFileNameFormat" placeholder="log_%Y-%m-%d_%H-%M-%S.txt" data-i18n-placeholder="prefs.fileNamePlaceholder">
+                        <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.supportedTags">Supported tags: %Y, %m, %d, %H, %M, %S</small>
                     </div>
                     <div class="form-group">
-                        <label>🔡 Text Encoding</label>
+                        <label data-i18n="prefs.textEncoding">🔡 Text Encoding</label>
                         <select id="logEncoding" style="width: 200px;">
                             <option value="utf8">UTF-8</option>
                             <option value="gbk">GBK (Windows)</option>
@@ -285,22 +285,22 @@
                 <h2 data-i18n="prefs.aboutSerialTerminal">About SerialTerminal</h2>
                 <div class="about-info">
                     <div class="about-row">
-                        <span class="about-label">Version</span>
-                        <span class="about-value" id="app-version">Loading...</span>
+                        <span class="about-label" data-i18n="prefs.version">Version</span>
+                        <span class="about-value" id="app-version" data-i18n="common.loading">Loading...</span>
                     </div>
                     <div class="about-row">
-                        <span class="about-label">Author</span>
-                        <span class="about-value" id="app-author">Loading...</span>
+                        <span class="about-label" data-i18n="prefs.author">Author</span>
+                        <span class="about-value" id="app-author" data-i18n="common.loading">Loading...</span>
                     </div>
                     <div class="about-row">
-                        <span class="about-label">GitHub</span>
-                        <span class="about-value"><a href="#" id="app-github">Loading...</a></span>
+                        <span class="about-label" data-i18n="prefs.github">GitHub</span>
+                        <span class="about-value"><a href="#" id="app-github" data-i18n="common.loading">Loading...</a></span>
                     </div>
                 </div>
 
                 <div style="margin-top: 20px; padding: 15px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);">
-                    <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;">Software Update</h3>
-                    <div id="update-status-container" style="margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">
+                    <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;" data-i18n="prefs.softwareUpdate">Software Update</h3>
+                    <div id="update-status-container" style="margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);" data-i18n="prefs.currentVersionUpToDate">
                         Current version is up to date.
                     </div>
                     <div id="update-progress-bar" style="display: none; width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-bottom: 10px;">
@@ -308,7 +308,7 @@
                     </div>
                     <div style="display: flex; gap: 10px;">
                         <button id="check-update-btn" class="secondary" style="padding: 6px 12px;" data-i18n="prefs.checkForUpdates">Check for Updates</button>
-                        <button id="restart-install-btn" class="primary" style="padding: 6px 12px; display: none;">Restart & Install</button>
+                        <button id="restart-install-btn" class="primary" style="padding: 6px 12px; display: none;" data-i18n="prefs.restartInstall">Restart & Install</button>
                     </div>
                 </div>
             </div>
@@ -318,7 +318,7 @@
     <div class="actions">
         <button class="secondary danger" id="reset-btn" style="margin-right: auto;" data-i18n="prefs.resetDefaults">Reset Defaults</button>
         <button class="secondary" id="open-config-btn" data-i18n="prefs.openConfigFolder">Open Config Folder</button>
-        <button class="secondary" id="cancel-btn">Cancel</button>
+        <button class="secondary" id="cancel-btn" data-i18n="prefs.cancel">Cancel</button>
         <button id="save-btn" data-i18n="prefs.saveApply">Save & Apply</button>
     </div>
 

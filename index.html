@@ -75,20 +75,20 @@
         <div class="sidebar-content">
             <!-- Settings Tab -->
             <div id="tab-settings" class="sidebar-tab-pane active">
-                <select id="data-bits-select" title="Data Bits">
+                <select id="data-bits-select" title="Data Bits" data-i18n-title="main.dataBits8">
                     <option value="8" selected>Data Bits: 8</option>
                     <option value="7">Data Bits: 7</option>
                     <option value="6">Data Bits: 6</option>
                     <option value="5">Data Bits: 5</option>
                 </select>
 
-                <select id="stop-bits-select" title="Stop Bits">
+                <select id="stop-bits-select" title="Stop Bits" data-i18n-title="main.stopBits1">
                     <option value="1" selected>Stop Bits: 1</option>
                     <option value="1.5">Stop Bits: 1.5</option>
                     <option value="2">Stop Bits: 2</option>
                 </select>
 
-                <select id="parity-select" title="Parity">
+                <select id="parity-select" title="Parity" data-i18n-title="main.parityNone">
                     <option value="none" selected>Parity: None</option>
                     <option value="even">Parity: Even</option>
                     <option value="odd">Parity: Odd</option>
@@ -96,14 +96,14 @@
                     <option value="space">Parity: Space</option>
                 </select>
 
-                <select id="encoding-select" title="Encoding">
+                <select id="encoding-select" title="Encoding" data-i18n-title="main.encodingUtf8">
                     <option value="utf8" selected>Enc: UTF-8</option>
                     <option value="ascii">Enc: ASCII</option>
                     <option value="hex">Enc: Hex</option>
                     <option value="gbk">Enc: GBK</option>
                 </select>
 
-                <select id="newline-mode-select" title="Newline Mode (Receive/Send)">
+                <select id="newline-mode-select" title="Newline Mode (Receive/Send)" data-i18n-title="main.newlineCrlf">
                     <option value="crlf" selected>NL: CRLF / CRLF</option>
                     <option value="lf">NL: LF / LF</option>
                     <option value="cr">NL: CR / CR</option>
@@ -167,12 +167,12 @@
 
         <div class="throughput-panel" id="throughput-panel">
             <div class="throughput-row">
-                <div class="throughput-label">RX</div>
+                <div class="throughput-label" data-i18n="main.rx">RX</div>
                 <div class="throughput-chart" id="throughput-rx-chart"></div>
                 <div class="throughput-rate" id="throughput-rx-rate">0 B/s</div>
             </div>
             <div class="throughput-row">
-                <div class="throughput-label">TX</div>
+                <div class="throughput-label" data-i18n="main.tx">TX</div>
                 <div class="throughput-chart" id="throughput-tx-chart"></div>
                 <div class="throughput-rate" id="throughput-tx-rate">0 B/s</div>
             </div>
@@ -183,7 +183,7 @@
                 <div id="open-prefs" class="footer-btn settings" title="Settings" data-i18n-title="main.globalSettings">
                     ⚙️
                 </div>
-                <div id="toggle-main-input" class="footer-btn settings compact" title="显示/隐藏输入框">
+                <div id="toggle-main-input" class="footer-btn settings compact" title="显示/隐藏输入框" data-i18n-title="main.toggleInputHide">
                     ⌨ <span data-i18n="main.toggleInput">Input</span>
                 </div>
             </div>
