@@ -179,8 +179,13 @@
         </div>
 
         <div class="sidebar-footer">
-            <div id="open-prefs" class="footer-btn settings" title="Settings">
-                ⚙️ Global Settings
+            <div class="sidebar-footer-row">
+                <div id="open-prefs" class="footer-btn settings" title="Settings">
+                    ⚙️
+                </div>
+                <div id="toggle-main-input" class="footer-btn settings compact" title="显示/隐藏输入框">
+                    ⌨ 输入框
+                </div>
             </div>
         </div>
     </div>
@@ -196,24 +201,24 @@
         <div class="main-tabs-content" id="main-tabs-content">
             <div class="main-tab-pane active" id="tab-main">
                 <div class="terminal-wrapper" id="serial-container"></div>
-                <div class="main-input-panel" id="main-input-panel">
-                    <div class="main-input-row">
-                        <textarea id="main-send-input" placeholder="输入要发送的内容..." rows="1"></textarea>
-                        <button id="main-send-btn" title="发送">发送</button>
-                        <div class="main-input-toggle-group">
-                            <label class="main-input-icon-toggle" for="main-auto-send-enable" title="自动发送">
-                                <input type="checkbox" id="main-auto-send-enable">
-                                <span>⚡</span>
-                            </label>
-                            <label class="main-input-icon-toggle" for="main-shortcut-send-enable" title="快捷键发送">
-                                <input type="checkbox" id="main-shortcut-send-enable">
-                                <span>⌨</span>
-                            </label>
-                        </div>
-                    </div>
-                    <div class="main-input-last" id="main-send-last">上一条发送：暂无</div>
+            </div>
+        </div>
+        <div class="main-input-panel" id="main-input-panel">
+            <div class="main-input-row">
+                <textarea id="main-send-input" placeholder="输入要发送的内容..." rows="1"></textarea>
+                <button id="main-send-btn" title="发送">发送</button>
+                <div class="main-input-toggle-group">
+                    <label class="main-input-icon-toggle" for="main-auto-send-enable" title="自动发送">
+                        <input type="checkbox" id="main-auto-send-enable">
+                        <span>⚡</span>
+                    </label>
+                    <label class="main-input-icon-toggle" for="main-shortcut-send-enable" title="快捷键发送">
+                        <input type="checkbox" id="main-shortcut-send-enable">
+                        <span>⌨</span>
+                    </label>
                 </div>
             </div>
+            <div class="main-input-last" id="main-send-last">上一条发送：暂无</div>
         </div>
     </div>
     

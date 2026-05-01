@@ -9,7 +9,7 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps || exit 0"
   },
   "build": {
     "appId": "com.serialterminal.app",

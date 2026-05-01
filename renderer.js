@@ -34,6 +34,8 @@ const mainAutoSendEnableCb = document.getElementById('main-auto-send-enable');
 const mainShortcutSendEnableCb = document.getElementById('main-shortcut-send-enable');
 const mainSendBtn = document.getElementById('main-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
+const mainInputPanel = document.getElementById('main-input-panel');
+const toggleMainInputBtn = document.getElementById('toggle-main-input');
 
 showTimestampCb.addEventListener('change', (e) => {
     showTimestamp = e.target.checked;
@@ -571,6 +573,10 @@ window.addEventListener('main-tab-changed', (e) => {
             const tab = filterTabs.find(t => t.id === tabId);
             if (tab) tab.fitAddon.fit();
         }
+
+        if (mainShortcutSendEnableCb.checked || mainAutoSendEnableCb.checked) {
+            focusMainInput();
+        }
     }, 0);
 });
 
@@ -651,8 +657,26 @@ function handleUnifiedSerialInput(data, source = 'unknown') {
         return true;
     }
 
-    if (data === '') {
-        return false;
+    if (data === '\b' || data === '\x08' || data === '\x7f') {
+        const start = mainSendInput.selectionStart ?? mainSendInput.value.length;
+        const end = mainSendInput.selectionEnd ?? mainSendInput.value.length;
+
+        if (start !== end) {
+            const nextValue = `${mainSendInput.value.slice(0, start)}${mainSendInput.value.slice(end)}`;
+            mainSendInput.value = nextValue;
+            mainSendInput.setSelectionRange(start, start);
+            lastMainInputValue = nextValue;
+            updateMainInputHeight();
+        } else if (start > 0) {
+            const nextValue = `${mainSendInput.value.slice(0, start - 1)}${mainSendInput.value.slice(end)}`;
+            mainSendInput.value = nextValue;
+            const cursor = start - 1;
+            mainSendInput.setSelectionRange(cursor, cursor);
+            lastMainInputValue = nextValue;
+            updateMainInputHeight();
+        }
+
+        return sendSerialData('\b');
     }
 
     if (sendSerialData(data)) {
@@ -677,7 +701,12 @@ function handleMainInputAutoSendKeydown(event) {
         return handleUnifiedSerialInput('\r', 'main-input');
     }
 
-    if (event.key === 'Backspace' || event.key === 'Delete') {
+    if (event.key === 'Backspace') {
+        event.preventDefault();
+        return handleUnifiedSerialInput('\b', 'main-input');
+    }
+
+    if (event.key === 'Delete') {
         syncMainInputValue();
         return false;
     }
@@ -708,6 +737,31 @@ function formatLastSentPreview(text) {
 function setLastSentPreview(text) {
     if (mainSendLast) {
         mainSendLast.textContent = formatLastSentPreview(text);
+    }
+}
+
+function setMainInputPanelVisible(visible, persist = true) {
+    if (!mainInputPanel) return;
+
+    mainInputPanel.classList.toggle('hidden', !visible);
+    if (toggleMainInputBtn) {
+        toggleMainInputBtn.classList.toggle('active', visible);
+        toggleMainInputBtn.setAttribute('aria-pressed', visible ? 'true' : 'false');
+        toggleMainInputBtn.title = visible ? '隐藏输入框' : '显示输入框';
+    }
+
+    if (persist) {
+        ipcRenderer.send('save-config', {
+            mainInputSettings: {
+                autoSendEnabled: mainAutoSendEnableCb.checked,
+                quickSendEnabled: mainShortcutSendEnableCb.checked,
+                visible
+            }
+        });
+    }
+
+    if (visible) {
+        focusMainInput();
     }
 }
 
@@ -791,7 +845,8 @@ function saveMainInputSettings() {
     ipcRenderer.send('save-config', {
         mainInputSettings: {
             autoSendEnabled: mainAutoSendEnableCb.checked,
-            quickSendEnabled: mainShortcutSendEnableCb.checked
+            quickSendEnabled: mainShortcutSendEnableCb.checked,
+            visible: !mainInputPanel?.classList.contains('hidden')
         }
     });
 }
@@ -832,6 +887,7 @@ function bindMainInputEvents() {
 
     mainSendInput.addEventListener('keydown', (event) => {
         if (handleMainInputAutoSendKeydown(event)) {
+            event.stopPropagation();
             return;
         }
 
@@ -852,7 +908,13 @@ function bindMainInputEvents() {
         }
     });
 
-    mainSendInput.addEventListener('input', () => {
+    mainSendInput.addEventListener('input', (event) => {
+        if (mainAutoSendEnableCb.checked) {
+            event.preventDefault();
+            mainSendInput.value = lastMainInputValue;
+            updateMainInputHeight();
+            return;
+        }
         syncMainInputValue();
     });
 
@@ -889,6 +951,11 @@ function bindMainInputEvents() {
         sendMainInputBuffer();
     });
 
+    toggleMainInputBtn?.addEventListener('click', () => {
+        const visible = mainInputPanel?.classList.contains('hidden');
+        setMainInputPanelVisible(visible, true);
+    });
+
     updateMainInputHeight();
     setLastSentPreview('');
 }
@@ -897,6 +964,7 @@ function applyMainInputConfig(config) {
     const settings = config.mainInputSettings || {};
     mainAutoSendEnableCb.checked = settings.autoSendEnabled === true;
     mainShortcutSendEnableCb.checked = settings.quickSendEnabled !== false;
+    setMainInputPanelVisible(settings.visible !== false, false);
     lastMainInputValue = mainSendInput.value;
     updateMainInputHeight();
 }
