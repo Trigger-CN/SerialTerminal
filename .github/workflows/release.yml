@@ -36,6 +36,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Set up MSBuild
         if: matrix.os == 'windows-latest'
@@ -45,9 +46,32 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Install Visual Studio C++ Build Tools
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --locale en-US" -y --no-progress
+
       - name: Remove .npmrc
         shell: bash
-        run: rm -f .npmrc
+        run: |
+          rm -f .npmrc
+          npm config set registry https://registry.npmjs.org/
+
+      - name: Show Windows build environment
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          Write-Host "npm registry: $(npm config get registry)"
+          Write-Host "cl path: $((Get-Command cl.exe -ErrorAction SilentlyContinue).Source)"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            & $vswhere -all -products * -format json
+          } else {
+            Write-Host "vswhere not found"
+          }
+          npm --version
+          node --version
 
       - name: Install Dependencies
         run: npm install
@@ -61,28 +85,70 @@ jobs:
       - name: Build Changelog
         if: matrix.os == 'ubuntu-latest'
         id: build_changelog
-        uses: mikepenz/release-changelog-builder-action@v4
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          configurationJson: |
-            {
-              "template": "#{{CHANGELOG}}",
-              "categories": [
-                {
-                    "title": "## 🚀 Features",
-                    "labels": ["feat", "feature"]
-                },
-                {
-                    "title": "## 🐛 Fixes",
-                    "labels": ["fix", "bug"]
-                },
-                {
-                    "title": "## 📦 Other Changes",
-                    "labels": []
-                }
-              ]
-            }
+        shell: bash
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep '^v' | grep -Fxv "$CURRENT_TAG" | head -n 1)
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="${PREVIOUS_TAG}..${CURRENT_TAG}"
+            echo "Using range: $RANGE"
+            COMMITS=$(git log "$RANGE" --pretty=format:'%s|%h' --no-merges)
+          else
+            echo "No previous tag found, using full history"
+            COMMITS=$(git log --pretty=format:'%s|%h' --no-merges)
+          fi
+
+          FEATURES=""
+          FIXES=""
+          DOCS=""
+          REFACTOR=""
+          CHORE=""
+          OTHER=""
+
+          while IFS='|' read -r SUBJECT HASH; do
+            [ -z "$SUBJECT" ] && continue
+            ENTRY="- ${SUBJECT} (${HASH})"
+
+            case "$SUBJECT" in
+              feat:*|feature:*) FEATURES+="$ENTRY"$'\n' ;;
+              fix:*|bugfix:*|hotfix:*) FIXES+="$ENTRY"$'\n' ;;
+              docs:*|doc:*) DOCS+="$ENTRY"$'\n' ;;
+              refactor:*|perf:*|style:*) REFACTOR+="$ENTRY"$'\n' ;;
+              chore:*|build:*|ci:*|test:*) CHORE+="$ENTRY"$'\n' ;;
+              *) OTHER+="$ENTRY"$'\n' ;;
+            esac
+          done <<< "$COMMITS"
+
+          CHANGELOG="## Changes"
+
+          append_section() {
+            local title="$1"
+            local content="$2"
+            if [ -n "$content" ]; then
+              CHANGELOG+=$'\n\n'
+              CHANGELOG+="$title"
+              CHANGELOG+=$'\n'
+              CHANGELOG+="${content%$'\n'}"
+            fi
+          }
+
+          append_section "### 🚀 Features" "$FEATURES"
+          append_section "### 🐛 Fixes" "$FIXES"
+          append_section "### 📝 Documentation" "$DOCS"
+          append_section "### ♻️ Refactor & Improvements" "$REFACTOR"
+          append_section "### 🔧 Chore / CI / Test" "$CHORE"
+          append_section "### 📦 Other Changes" "$OTHER"
+
+          if [ "$CHANGELOG" = "## Changes" ]; then
+            CHANGELOG=$'## Changes\n\n- no changes'
+          fi
+
+          {
+            echo 'changelog<<EOF'
+            echo "$CHANGELOG"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Update Release Body
         if: matrix.os == 'ubuntu-latest'
