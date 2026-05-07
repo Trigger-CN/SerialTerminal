@@ -5,10 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "rebuild": "electron-rebuild",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux",
+    "rebuild": "electron-rebuild -f -w serialport -w node-pty",
+    "dist": "electron-builder -c.npmRebuild=false",
+    "dist:win": "electron-builder --win -c.npmRebuild=false",
+    "dist:linux": "electron-builder --linux -c.npmRebuild=false",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {

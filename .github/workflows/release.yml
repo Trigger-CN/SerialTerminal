@@ -78,7 +78,7 @@ jobs:
 
       - name: Rebuild Native Dependencies for Electron
         if: matrix.os == 'windows-latest'
-        run: npx electron-builder install-app-deps
+        run: npm run rebuild
 
       - name: Install Linux Build Dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -88,7 +88,7 @@ jobs:
 
       - name: Rebuild Native Dependencies for Electron (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: npx electron-builder install-app-deps
+        run: npm run rebuild
 
       - name: Build Changelog
         if: matrix.os == 'ubuntu-latest'
