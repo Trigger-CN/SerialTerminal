@@ -92,7 +92,6 @@ jobs:
 
       - name: Build and Publish (Windows)
         if: matrix.os == 'windows-latest'
-        shell: bash
         run: npm run dist:win -- -p always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
