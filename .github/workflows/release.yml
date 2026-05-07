@@ -37,6 +37,14 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: Set up MSBuild
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Set up Visual Studio Developer Command Prompt
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Remove .npmrc
         shell: bash
         run: rm -f .npmrc
