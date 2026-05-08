@@ -2,8 +2,10 @@ const { ipcRenderer } = require('electron');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
+const { t, getLanguage } = require('./i18n');
 
 let currentConfig = null;
+let currentLanguage = 'en';
 // let currentMode = 'terminal'; // Removed temporarily
 
 // Display Settings
@@ -17,6 +19,10 @@ let lastCharWasCR = false;
 let timestampColor = '#00ff00';
 let lineNoColor = '#ffff00';
 let highlightRules = [];
+
+function tr(key, params = {}) {
+    return t(currentLanguage, key, params);
+}
 
 function hexToAnsi(hex) {
     if (!hex) return '';
@@ -628,13 +634,13 @@ function updateMainInputHeight() {
 function setLastSentPreview(text) {
     if (!mainSendLast) return;
     if (!text) {
-        mainSendLast.textContent = '上一条发送：暂无';
+        mainSendLast.textContent = tr('main.lastSentNone');
         return;
     }
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const [firstLine = ''] = normalized.split('\n');
     const preview = `${firstLine}${normalized.includes('\n') ? '…' : ''}`;
-    mainSendLast.textContent = `上一条发送：${preview || '暂无'}`;
+    mainSendLast.textContent = tr('main.lastSent', { value: preview || tr('common.none') });
 }
 
 function setMainInputPanelVisible(visible, persist = true) {
@@ -770,6 +776,7 @@ bindMainInputEvents();
 
 function applyConfig(config) {
     currentConfig = config;
+    currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
     
     // Update local color settings
@@ -801,6 +808,17 @@ function applyConfig(config) {
     });
     
     document.body.style.background = config.background;
+
+    document.title = tr('appTitle');
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        el.textContent = tr(el.dataset.i18n);
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        el.title = tr(el.dataset.i18nTitle);
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        el.placeholder = tr(el.dataset.i18nPlaceholder);
+    });
     
     // fitAddon.fit();
     serialFitAddon.fit();
