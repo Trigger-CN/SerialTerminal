@@ -2,10 +2,8 @@ const { ipcRenderer } = require('electron');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
-const { t, getLanguage } = require('./i18n');
 
 let currentConfig = null;
-let currentLanguage = 'en';
 // let currentMode = 'terminal'; // Removed temporarily
 
 // Display Settings
@@ -20,81 +18,6 @@ let timestampColor = '#00ff00';
 let lineNoColor = '#ffff00';
 let highlightRules = [];
 
-function tr(key, params = {}) {
-    return t(currentLanguage, key, params);
-}
-
-function applyI18nToDocument() {
-    document.title = tr('appTitle');
-
-    document.querySelectorAll('[data-i18n]').forEach(el => {
-        el.textContent = tr(el.dataset.i18n);
-    });
-
-    document.querySelectorAll('[data-i18n-title]').forEach(el => {
-        el.title = tr(el.dataset.i18nTitle);
-    });
-
-    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-        el.placeholder = tr(el.dataset.i18nPlaceholder);
-    });
-}
-
-function applyMainSelectTranslations() {
-    const dataBits = document.getElementById('data-bits-select');
-    const stopBits = document.getElementById('stop-bits-select');
-    const parity = document.getElementById('parity-select');
-    const encoding = document.getElementById('encoding-select');
-    const newline = document.getElementById('newline-mode-select');
-    const baud = document.getElementById('baud-select');
-
-    if (dataBits) {
-        dataBits.options[0].textContent = tr('main.dataBits8');
-        dataBits.options[1].textContent = tr('main.dataBits7');
-        dataBits.options[2].textContent = tr('main.dataBits6');
-        dataBits.options[3].textContent = tr('main.dataBits5');
-    }
-
-    if (stopBits) {
-        stopBits.options[0].textContent = tr('main.stopBits1');
-        stopBits.options[1].textContent = tr('main.stopBits15');
-        stopBits.options[2].textContent = tr('main.stopBits2');
-    }
-
-    if (parity) {
-        parity.options[0].textContent = tr('main.parityNone');
-        parity.options[1].textContent = tr('main.parityEven');
-        parity.options[2].textContent = tr('main.parityOdd');
-        parity.options[3].textContent = tr('main.parityMark');
-        parity.options[4].textContent = tr('main.paritySpace');
-    }
-
-    if (encoding) {
-        encoding.options[0].textContent = tr('main.encodingUtf8');
-        encoding.options[1].textContent = tr('main.encodingAscii');
-        encoding.options[2].textContent = tr('main.encodingHex');
-        encoding.options[3].textContent = tr('main.encodingGbk');
-    }
-
-    if (newline) {
-        newline.options[0].textContent = tr('main.newlineCrlf');
-        newline.options[1].textContent = tr('main.newlineLf');
-        newline.options[2].textContent = tr('main.newlineCr');
-    }
-
-    if (baud && baud.options.length > 0) {
-        baud.options[baud.options.length - 1].textContent = `✎ ${tr('main.customBaudRate')}...`;
-    }
-}
-
-function applyMainLanguage() {
-    applyI18nToDocument();
-    applyMainSelectTranslations();
-    setLastSentPreview('');
-    updateSerialConnectionState(isConnected);
-    updateTabTitles();
-}
-
 function hexToAnsi(hex) {
     if (!hex) return '';
     hex = hex.replace('#', '');
@@ -107,11 +30,10 @@ function hexToAnsi(hex) {
 const showTimestampCb = document.getElementById('show-timestamp');
 const showLinenoCb = document.getElementById('show-lineno');
 const mainSendInput = document.getElementById('main-send-input');
-const mainAutoSendEnableCb = document.getElementById('main-auto-send-enable');
-const mainShortcutSendEnableCb = document.getElementById('main-shortcut-send-enable');
 const mainSendBtn = document.getElementById('main-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
 const mainInputPanel = document.getElementById('main-input-panel');
+const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const toggleMainInputBtn = document.getElementById('toggle-main-input');
 
 showTimestampCb.addEventListener('change', (e) => {
@@ -138,7 +60,7 @@ function getPrefix() {
     
     if (showTimestamp) {
         const now = new Date();
-        const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+        const time = now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
         const color = hexToAnsi(timestampColor);
         s += `${color}[${time}]${reset} `;
     }
@@ -283,25 +205,25 @@ class SerialDataParser {
 
     parse(data) {
         if (!data) return [];
-
+        
         this.incomingBuffer += data;
         const parts = this.incomingBuffer.split(/(\r\n|\r|\n)/);
-
+        
         if (parts.length === 1) {
-            if (this.incomingBuffer.length > 0) {
+            if (this.incomingBuffer.length > 10000) {
                 const lineContent = this.incomingBuffer;
                 this.incomingBuffer = '';
-
+                
                 const prefix = this.isNewLine ? getPrefix() : '';
-                this.isNewLine = false;
+                this.isNewLine = false; // Next chunk is continuation
                 return [{ text: lineContent, delimiter: '', prefix }];
             }
             return [];
         }
-
+        
         const incompleteLine = parts.pop();
         this.incomingBuffer = incompleteLine;
-
+        
         const lines = [];
         for (let i = 0; i < parts.length; i += 2) {
             const prefix = this.isNewLine ? getPrefix() : '';
@@ -310,7 +232,7 @@ class SerialDataParser {
                 delimiter: parts[i + 1],
                 prefix
             });
-            this.isNewLine = true;
+            this.isNewLine = true; // After delimiter, next line is new
         }
         return lines;
     }
@@ -360,7 +282,7 @@ function updateTabTitles() {
     filterTabs.forEach((tab, index) => {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
-        tab.btn.innerHTML = `${tr('main.filter')} ${displayIndex} `;
+        tab.btn.innerHTML = `Filter ${displayIndex} `;
         tab.btn.appendChild(closeBtn);
     });
 }
@@ -376,7 +298,7 @@ function createFilterTab() {
     tabBtn.dataset.target = tabId;
     
     // The initial title will be updated by updateTabTitles() right after
-    tabBtn.innerHTML = `${tr('main.filter')} <span class="main-tab-close" title="${tr('main.closeTab')}">✕</span>`;
+    tabBtn.innerHTML = `Filter <span class="main-tab-close" title="Close Tab">✕</span>`;
     
     tabBtn.onclick = (e) => {
         if (e.target.classList.contains('main-tab-close')) return;
@@ -399,13 +321,13 @@ function createFilterTab() {
     filterHeader.className = "filter-header";
     filterHeader.innerHTML = `
         <div class="filter-input-wrapper">
-            <input type="text" class="filter-input" placeholder="${tr('main.filterText')}" style="width: 100%; padding-right: 24px;">
+            <input type="text" class="filter-input" placeholder="Filter text..." style="width: 100%; padding-right: 24px;">
             <div class="filter-dropdown-btn">▼</div>
             <div class="filter-history-dropdown"></div>
         </div>
         <div class="filter-toggles" style="display: flex; gap: 4px; margin-right: 8px;">
-            <button class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}">Aa</button>
-            <button class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}">.*</button>
+            <button class="filter-toggle-btn filter-case-btn" title="Match Case">Aa</button>
+            <button class="filter-toggle-btn filter-regex-btn" title="Use Regular Expression">.*</button>
         </div>
     `;
     
@@ -465,7 +387,7 @@ function createFilterTab() {
         dropdownMenu.innerHTML = '';
         
         if (history.length === 0) {
-            dropdownMenu.innerHTML = `<div class="filter-history-item" style="color: #666; cursor: default;">${tr('common.noHistory')}</div>`;
+            dropdownMenu.innerHTML = '<div class="filter-history-item" style="color: #666; cursor: default;">No history</div>';
             return;
         }
         
@@ -650,10 +572,6 @@ window.addEventListener('main-tab-changed', (e) => {
             const tab = filterTabs.find(t => t.id === tabId);
             if (tab) tab.fitAddon.fit();
         }
-
-        if (mainShortcutSendEnableCb.checked || mainAutoSendEnableCb.checked) {
-            focusMainInput();
-        }
     }, 0);
 });
 
@@ -694,106 +612,11 @@ serialTerm.attachCustomKeyEventHandler(createTerminalKeyHandler(serialTerm));
 let mainInputHistory = [];
 let mainInputHistoryIndex = -1;
 let mainInputDraft = '';
-let lastMainInputValue = '';
-let isMainInputComposing = false;
 
 function sendSerialData(data) {
     if (!isConnected || !data) return false;
-    ipcRenderer.send('renderer-log', `[main-input] sendSerialData: ${JSON.stringify(data)}`);
     ipcRenderer.send('serial-input', data);
     return true;
-}
-
-function insertTextAtMainInputCursor(text) {
-    const start = mainSendInput.selectionStart ?? mainSendInput.value.length;
-    const end = mainSendInput.selectionEnd ?? mainSendInput.value.length;
-    const nextValue = `${mainSendInput.value.slice(0, start)}${text}${mainSendInput.value.slice(end)}`;
-    mainSendInput.value = nextValue;
-    const cursor = start + text.length;
-    mainSendInput.setSelectionRange(cursor, cursor);
-    lastMainInputValue = nextValue;
-    updateMainInputHeight();
-}
-
-function syncMainInputValue() {
-    lastMainInputValue = mainSendInput.value;
-    updateMainInputHeight();
-}
-
-function handleUnifiedSerialInput(data, source = 'unknown') {
-    if (!data) {
-        return false;
-    }
-
-    if (!mainAutoSendEnableCb.checked) {
-        return false;
-    }
-
-    if (data === '\r') {
-        sendMainInputEnter();
-        return true;
-    }
-
-    if (data === '\b' || data === '\x08' || data === '\x7f') {
-        const start = mainSendInput.selectionStart ?? mainSendInput.value.length;
-        const end = mainSendInput.selectionEnd ?? mainSendInput.value.length;
-
-        if (start !== end) {
-            const nextValue = `${mainSendInput.value.slice(0, start)}${mainSendInput.value.slice(end)}`;
-            mainSendInput.value = nextValue;
-            mainSendInput.setSelectionRange(start, start);
-            lastMainInputValue = nextValue;
-            updateMainInputHeight();
-        } else if (start > 0) {
-            const nextValue = `${mainSendInput.value.slice(0, start - 1)}${mainSendInput.value.slice(end)}`;
-            mainSendInput.value = nextValue;
-            const cursor = start - 1;
-            mainSendInput.setSelectionRange(cursor, cursor);
-            lastMainInputValue = nextValue;
-            updateMainInputHeight();
-        }
-
-        return sendSerialData('\b');
-    }
-
-    if (sendSerialData(data)) {
-        insertTextAtMainInputCursor(data);
-        return true;
-    }
-
-    return false;
-}
-
-function handleMainInputAutoSendKeydown(event) {
-    if (!mainAutoSendEnableCb.checked || isMainInputComposing) {
-        return false;
-    }
-
-    if (event.ctrlKey || event.metaKey || event.altKey) {
-        return false;
-    }
-
-    if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault();
-        return handleUnifiedSerialInput('\r', 'main-input');
-    }
-
-    if (event.key === 'Backspace') {
-        event.preventDefault();
-        return handleUnifiedSerialInput('\b', 'main-input');
-    }
-
-    if (event.key === 'Delete') {
-        syncMainInputValue();
-        return false;
-    }
-
-    if (event.key.length !== 1) {
-        return false;
-    }
-
-    event.preventDefault();
-    return handleUnifiedSerialInput(event.key, 'main-input');
 }
 
 function updateMainInputHeight() {
@@ -802,39 +625,25 @@ function updateMainInputHeight() {
     mainSendInput.style.height = `${Math.min(mainSendInput.scrollHeight, 180)}px`;
 }
 
-function formatLastSentPreview(text) {
-    if (!text) return tr('main.lastSentNone');
+function setLastSentPreview(text) {
+    if (!mainSendLast) return;
+    if (!text) {
+        mainSendLast.textContent = '上一条发送：暂无';
+        return;
+    }
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const [firstLine = ''] = normalized.split('\n');
-    const hasMore = normalized.includes('\n');
-    const preview = `${firstLine}${hasMore ? '…' : ''}` || tr('common.emptyContent');
-    return tr('main.lastSent', { value: preview });
-}
-
-function setLastSentPreview(text) {
-    if (mainSendLast) {
-        mainSendLast.textContent = formatLastSentPreview(text);
-    }
+    const preview = `${firstLine}${normalized.includes('\n') ? '…' : ''}`;
+    mainSendLast.textContent = `上一条发送：${preview || '暂无'}`;
 }
 
 function setMainInputPanelVisible(visible, persist = true) {
     if (!mainInputPanel) return;
-
     mainInputPanel.classList.toggle('hidden', !visible);
-    if (toggleMainInputBtn) {
-        toggleMainInputBtn.classList.toggle('active', visible);
-        toggleMainInputBtn.setAttribute('aria-pressed', visible ? 'true' : 'false');
-        toggleMainInputBtn.title = visible ? tr('main.toggleInputHide') : tr('main.toggleInputShow');
-    }
+    toggleMainInputBtn?.classList.toggle('active', visible);
 
     if (persist) {
-        ipcRenderer.send('save-config', {
-            mainInputSettings: {
-                autoSendEnabled: mainAutoSendEnableCb.checked,
-                quickSendEnabled: mainShortcutSendEnableCb.checked,
-                visible
-            }
-        });
+        saveMainInputSettings();
     }
 
     if (visible) {
@@ -877,18 +686,15 @@ function navigateMainInputHistory(direction) {
     mainSendInput.value = mainInputHistoryIndex === -1
         ? mainInputDraft
         : mainInputHistory[mainInputHistory.length - 1 - mainInputHistoryIndex];
-    lastMainInputValue = mainSendInput.value;
     updateMainInputHeight();
     focusMainInput();
 }
 
 function clearMainInput() {
     mainSendInput.value = '';
-    lastMainInputValue = '';
     mainInputHistoryIndex = -1;
     mainInputDraft = '';
     updateMainInputHeight();
-    focusMainInput();
 }
 
 function sendMainInputBuffer() {
@@ -904,130 +710,44 @@ function sendMainInputBuffer() {
     pushMainInputHistory(text);
     setLastSentPreview(text);
     clearMainInput();
-}
-
-function sendMainInputEnter() {
-    if (!sendSerialData('\r')) {
-        focusMainInput();
-        return;
-    }
-    if (mainSendInput.value) {
-        pushMainInputHistory(mainSendInput.value);
-        setLastSentPreview(mainSendInput.value);
-    }
-    clearMainInput();
+    focusMainInput();
 }
 
 function saveMainInputSettings() {
     ipcRenderer.send('save-config', {
         mainInputSettings: {
-            autoSendEnabled: mainAutoSendEnableCb.checked,
-            quickSendEnabled: mainShortcutSendEnableCb.checked,
-            visible: !mainInputPanel?.classList.contains('hidden')
+            visible: !mainInputPanel?.classList.contains('hidden'),
+            sendOnEnter: mainSendOnEnterCb?.checked !== false
         }
     });
-}
-
-function shouldHandleMainInputLocally(event) {
-    if (mainShortcutSendEnableCb.checked) return false;
-    if (event.ctrlKey || event.metaKey || event.altKey) return true;
-
-    return [
-        'ArrowUp',
-        'ArrowDown',
-        'ArrowLeft',
-        'ArrowRight',
-        'PageUp',
-        'PageDown',
-        'Home',
-        'End'
-    ].includes(event.key);
 }
 
 function bindMainInputEvents() {
     if (!mainSendInput) return;
 
-    mainSendInput.addEventListener('compositionstart', () => {
-        isMainInputComposing = true;
-    });
-
-    mainSendInput.addEventListener('compositionend', () => {
-        isMainInputComposing = false;
-        if (mainAutoSendEnableCb.checked && mainSendInput.value.length > lastMainInputValue.length) {
-            const appended = mainSendInput.value.slice(lastMainInputValue.length);
-            if (appended) {
-                handleUnifiedSerialInput(appended, 'compositionend');
-            }
-        }
-        lastMainInputValue = mainSendInput.value;
-    });
-
     mainSendInput.addEventListener('keydown', (event) => {
-        if (handleMainInputAutoSendKeydown(event)) {
-            event.stopPropagation();
+        if (event.key === 'Enter' && !event.shiftKey && mainSendOnEnterCb?.checked) {
+            event.preventDefault();
+            sendMainInputBuffer();
             return;
         }
 
-        if (!mainShortcutSendEnableCb.checked && event.key === 'ArrowUp') {
+        if (event.key === 'ArrowUp') {
             event.preventDefault();
             navigateMainInputHistory(1);
             return;
         }
 
-        if (!mainShortcutSendEnableCb.checked && event.key === 'ArrowDown') {
+        if (event.key === 'ArrowDown') {
             event.preventDefault();
             navigateMainInputHistory(-1);
             return;
         }
-
-        if (shouldHandleMainInputLocally(event)) {
-            event.stopPropagation();
-        }
     });
 
-    mainSendInput.addEventListener('input', (event) => {
-        if (mainAutoSendEnableCb.checked) {
-            event.preventDefault();
-            mainSendInput.value = lastMainInputValue;
-            updateMainInputHeight();
-            return;
-        }
-        syncMainInputValue();
-    });
-
-    mainSendInput.addEventListener('paste', (event) => {
-        if (!mainAutoSendEnableCb.checked) {
-            return;
-        }
-
-        const text = event.clipboardData?.getData('text') || '';
-        if (!text) {
-            return;
-        }
-
-        event.preventDefault();
-        handleUnifiedSerialInput(text, 'paste');
-    });
-
-    mainSendInput.addEventListener('focus', () => {
-        mainSendInput.setSelectionRange(mainSendInput.value.length, mainSendInput.value.length);
-    });
-
-    mainAutoSendEnableCb.addEventListener('change', () => {
-        lastMainInputValue = mainSendInput.value;
-        saveMainInputSettings();
-        focusMainInput();
-    });
-
-    mainShortcutSendEnableCb.addEventListener('change', () => {
-        saveMainInputSettings();
-        focusMainInput();
-    });
-
-    mainSendBtn.addEventListener('click', () => {
-        sendMainInputBuffer();
-    });
-
+    mainSendInput.addEventListener('input', updateMainInputHeight);
+    mainSendBtn.addEventListener('click', sendMainInputBuffer);
+    mainSendOnEnterCb?.addEventListener('change', saveMainInputSettings);
     toggleMainInputBtn?.addEventListener('click', () => {
         const visible = mainInputPanel?.classList.contains('hidden');
         setMainInputPanelVisible(visible, true);
@@ -1039,10 +759,10 @@ function bindMainInputEvents() {
 
 function applyMainInputConfig(config) {
     const settings = config.mainInputSettings || {};
-    mainAutoSendEnableCb.checked = settings.autoSendEnabled === true;
-    mainShortcutSendEnableCb.checked = settings.quickSendEnabled !== false;
     setMainInputPanelVisible(settings.visible !== false, false);
-    lastMainInputValue = mainSendInput.value;
+    if (mainSendOnEnterCb) {
+        mainSendOnEnterCb.checked = settings.sendOnEnter !== false;
+    }
     updateMainInputHeight();
 }
 
@@ -1050,7 +770,6 @@ bindMainInputEvents();
 
 function applyConfig(config) {
     currentConfig = config;
-    currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
     
     // Update local color settings
@@ -1082,7 +801,6 @@ function applyConfig(config) {
     });
     
     document.body.style.background = config.background;
-    applyMainLanguage();
     
     // fitAddon.fit();
     serialFitAddon.fit();
@@ -1130,6 +848,8 @@ function applyConfig(config) {
         // Refresh ports to update selection based on config
         refreshPorts();
     }
+
+    applyMainInputConfig(config);
 }
 
 /*
@@ -1167,16 +887,10 @@ ipcRenderer.send('spawn-terminal');
 */
 
 // Serial Logic
-serialTerm.onData((data) => {
-    if (handleUnifiedSerialInput(data, 'xterm')) {
-        return;
-    }
-    ipcRenderer.send('serial-input', data);
-});
+serialTerm.onData((data) => ipcRenderer.send('serial-input', data));
 ipcRenderer.on('serial-output', (event, data) => {
-    ipcRenderer.send('renderer-log', `[serial-output] ${JSON.stringify(data)}`);
     const lines = dataParser.parse(data);
-
+    
     if (lines.length > 0) {
         let mainOutput = '';
         lines.forEach(lineObj => {
@@ -1195,7 +909,7 @@ ipcRenderer.on('serial-output', (event, data) => {
     }
 });
 ipcRenderer.on('serial-error', (event, err) => {
-    const errMsg = `\r\n\x1b[31m${tr('main.errorPrefix', { error: err })}\x1b[0m\r\n`;
+    const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
     serialTerm.write(errMsg);
     filterTabs.forEach(tab => tab.term.write(errMsg));
 });
@@ -1298,17 +1012,15 @@ ipcRenderer.on('serial-throughput-update', (event, payload) => {
 
 function updateSerialConnectionState(connected) {
     isConnected = connected;
-    connectBtn.innerHTML = connected
-        ? `❌ <span>${tr('main.disconnect')}</span>`
-        : `⚡ <span>${tr('main.connect')}</span>`;
-    statusDiv.textContent = connected ? tr('main.connected') : tr('main.disconnected');
+    connectBtn.textContent = connected ? '❌ Disconnect' : '⚡ Connect';
+    statusDiv.textContent = connected ? 'Connected' : 'Disconnected';
     statusDot.classList.toggle('online', connected);
 }
 
 ipcRenderer.on('serial-disconnected', (event, message) => {
     updateSerialConnectionState(false);
     if (message) {
-        const notice = `\r\n\x1b[33m[INFO] ${message || tr('main.serialDisconnected')}\x1b[0m\r\n`;
+        const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
         serialTerm.write(notice);
         filterTabs.forEach(tab => tab.term.write(notice));
     }
@@ -1367,7 +1079,7 @@ updateThroughputPanel({
 
 async function refreshPorts() {
     const ports = await ipcRenderer.invoke('list-ports');
-    portSelect.innerHTML = `<option value="">${tr('main.selectPort')}</option>`;
+    portSelect.innerHTML = '<option value="">Select Port</option>';
     ports.forEach(port => {
         const opt = document.createElement('option');
         opt.value = port.path;
@@ -1439,9 +1151,9 @@ connectBtn.addEventListener('click', async () => {
             serialLineCounter = 1;
             serialNewLine = true;
 
-            serialTerm.write(`\r\n\x1b[32m${tr('main.connectedTo', { path, baudRate, dataBits, stopBits })}\x1b[0m\r\n`);
+            serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
         } catch (err) {
-            alert(tr('main.failedToConnect', { error: err }));
+            alert('Failed to connect: ' + err);
         }
     }
 });
@@ -1662,18 +1374,17 @@ addQuickSendBtn.addEventListener('click', () => {
 const originalApplyConfig = applyConfig;
 applyConfig = function(config) {
     originalApplyConfig(config);
-    applyMainInputConfig(config);
-
+    
     // Auto Send Settings
     if (config.autoSendSettings) {
         autoSendEnableCb.checked = config.autoSendSettings.enabled || false;
         autoSendIntervalInput.value = config.autoSendSettings.interval || 1000;
         autoSendTextInput.value = config.autoSendSettings.text || '';
-
+        
         // Only update runtime state, do not save back to config
-        updateAutoSendState();
+        updateAutoSendState(); 
     }
-
+    
     // Quick Send List
     if (config.quickSendList) {
         quickSendList = config.quickSendList;

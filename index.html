@@ -207,16 +207,10 @@
             <div class="main-input-row">
                 <textarea id="main-send-input" placeholder="输入要发送的内容..." data-i18n-placeholder="main.sendInputPlaceholder" rows="1"></textarea>
                 <button id="main-send-btn" title="发送" data-i18n-title="main.send"><span data-i18n="main.send">Send</span></button>
-                <div class="main-input-toggle-group">
-                    <label class="main-input-icon-toggle" for="main-auto-send-enable" title="自动发送" data-i18n-title="main.autoSendToggle">
-                        <input type="checkbox" id="main-auto-send-enable">
-                        <span>⚡</span>
-                    </label>
-                    <label class="main-input-icon-toggle" for="main-shortcut-send-enable" title="快捷键发送" data-i18n-title="main.shortcutSendToggle">
-                        <input type="checkbox" id="main-shortcut-send-enable">
-                        <span>⌨</span>
-                    </label>
-                </div>
+                <label class="main-input-icon-toggle" for="main-send-on-enter" title="按回车发送">
+                    <input type="checkbox" id="main-send-on-enter" checked>
+                    <span>⏎</span>
+                </label>
             </div>
             <div class="main-input-last" id="main-send-last" data-i18n="main.lastSentNone">上一条发送：暂无</div>
         </div>
