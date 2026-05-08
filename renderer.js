@@ -1,3 +1,10 @@
+let suppressMainInputFocus = false;
+
+function sendSerialData(data) {
+    if (visible) {
+        focusMainInput();
+    }
+}
 const { ipcRenderer } = require('electron');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
@@ -40,6 +47,7 @@ const mainSendBtn = document.getElementById('main-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
 const mainInputPanel = document.getElementById('main-input-panel');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
+const mainAppendCrlfCb = document.getElementById('main-append-crlf');
 const toggleMainInputBtn = document.getElementById('toggle-main-input');
 
 showTimestampCb.addEventListener('change', (e) => {
@@ -387,6 +395,16 @@ function createFilterTab(initialState = {}) {
     const caseBtn = filterHeader.querySelector('.filter-case-btn');
     const regexBtn = filterHeader.querySelector('.filter-regex-btn');
     const dropdownMenu = filterHeader.querySelector('.filter-history-dropdown');
+
+    input.addEventListener('focus', () => {
+        suppressMainInputFocus = true;
+    });
+
+    input.addEventListener('blur', () => {
+        setTimeout(() => {
+            suppressMainInputFocus = document.activeElement?.classList?.contains('filter-input') === true;
+        }, 0);
+    });
     
     // History dropdown logic
     function renderDropdown() {
@@ -681,9 +699,6 @@ function setMainInputPanelVisible(visible, persist = true) {
         saveMainInputSettings();
     }
 
-    if (visible) {
-        focusMainInput();
-    }
 }
 
 function focusMainInput() {
@@ -738,13 +753,13 @@ function sendMainInputBuffer() {
         focusMainInput();
         return;
     }
-    if (!sendSerialData(text)) {
+    const payload = mainAppendCrlfCb?.checked ? `${text}\r\n` : text;
+    if (!sendSerialData(payload)) {
         focusMainInput();
         return;
     }
     pushMainInputHistory(text);
-    setLastSentPreview(text);
-    clearMainInput();
+    setLastSentPreview(payload);
     focusMainInput();
 }
 
@@ -752,7 +767,8 @@ function saveMainInputSettings() {
     ipcRenderer.send('save-config', {
         mainInputSettings: {
             visible: !mainInputPanel?.classList.contains('hidden'),
-            sendOnEnter: mainSendOnEnterCb?.checked !== false
+            sendOnEnter: mainSendOnEnterCb?.checked !== false,
+            appendCrLf: mainAppendCrlfCb?.checked === true
         }
     });
 }
@@ -783,6 +799,7 @@ function bindMainInputEvents() {
     mainSendInput.addEventListener('input', updateMainInputHeight);
     mainSendBtn.addEventListener('click', sendMainInputBuffer);
     mainSendOnEnterCb?.addEventListener('change', saveMainInputSettings);
+    mainAppendCrlfCb?.addEventListener('change', saveMainInputSettings);
     toggleMainInputBtn?.addEventListener('click', () => {
         const visible = mainInputPanel?.classList.contains('hidden');
         setMainInputPanelVisible(visible, true);
@@ -797,6 +814,9 @@ function applyMainInputConfig(config) {
     setMainInputPanelVisible(settings.visible !== false, false);
     if (mainSendOnEnterCb) {
         mainSendOnEnterCb.checked = settings.sendOnEnter !== false;
+    }
+    if (mainAppendCrlfCb) {
+        mainAppendCrlfCb.checked = settings.appendCrLf === true;
     }
     updateMainInputHeight();
 }
@@ -938,7 +958,13 @@ ipcRenderer.send('spawn-terminal');
 */
 
 // Serial Logic
-serialTerm.onData((data) => ipcRenderer.send('serial-input', data));
+serialTerm.onData((data) => {
+    if (!isConnected) {
+        return;
+    }
+    ipcRenderer.send('serial-input', data);
+    serialTerm.write(data === '\r' ? '\r\n' : data);
+});
 ipcRenderer.on('serial-output', (event, data) => {
     const lines = dataParser.parse(data);
     

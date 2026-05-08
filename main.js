@@ -59,7 +59,8 @@ function loadConfig() {
     filterTabs: [],
     mainInputSettings: {
       visible: true,
-      sendOnEnter: true
+      sendOnEnter: true,
+      appendCrLf: false
     },
     lastSerialOptions: {
         path: '',
