@@ -293,7 +293,7 @@ function updateTabTitles() {
     });
 }
 
-function createFilterTab() {
+function createFilterTab(initialState = {}) {
     const internalId = getNextTabId();
     const tabId = `tab-filter-${internalId}`;
     
@@ -377,6 +377,7 @@ function createFilterTab() {
         filterRegex: null,
         caseSensitive: false,
         useRegex: false,
+        filterText: '',
         element: tabPane,
         btn: tabBtn
     };
@@ -460,9 +461,11 @@ function createFilterTab() {
     };
 
     function updateRegex() {
+        tabState.filterText = input.value;
         if (!input.value) {
             tabState.filterRegex = null;
             input.style.borderColor = 'var(--border-color)';
+            persistFilterTabs();
             return;
         }
         try {
@@ -478,6 +481,7 @@ function createFilterTab() {
             tabState.filterRegex = null;
             input.style.borderColor = 'var(--danger-color)';
         }
+        persistFilterTabs();
     }
     
     function saveFilterHistory(val) {
@@ -512,10 +516,24 @@ function createFilterTab() {
     
     // Setup copy/paste for filter terminal
     term.attachCustomKeyEventHandler(createTerminalKeyHandler(term));
+
+    if (typeof initialState.filterText === 'string') {
+        input.value = initialState.filterText;
+    }
+    if (initialState.caseSensitive) {
+        tabState.caseSensitive = true;
+        caseBtn.classList.add('active');
+    }
+    if (initialState.useRegex) {
+        tabState.useRegex = true;
+        regexBtn.classList.add('active');
+    }
+    updateRegex();
     
     filterTabs.push(tabState);
     updateTabTitles();
     switchMainTab(tabId);
+    persistFilterTabs();
     
     // Fit terminal after a short delay to ensure DOM is rendered
     setTimeout(async () => {
@@ -557,6 +575,7 @@ function closeFilterTab(tabId) {
         tab.element.remove();
         tab.btn.remove();
         filterTabs.splice(index, 1);
+        persistFilterTabs();
         
         updateTabTitles();
         
@@ -565,6 +584,16 @@ function closeFilterTab(tabId) {
             switchMainTab('tab-main');
         }
     }
+}
+
+function persistFilterTabs() {
+    ipcRenderer.send('save-config', {
+        filterTabs: filterTabs.map(tab => ({
+            filterText: tab.filterText || '',
+            caseSensitive: tab.caseSensitive,
+            useRegex: tab.useRegex
+        }))
+    });
 }
 
 document.getElementById('new-filter-tab-btn').addEventListener('click', createFilterTab);
@@ -868,6 +897,10 @@ function applyConfig(config) {
     }
 
     applyMainInputConfig(config);
+
+    if (filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
+        config.filterTabs.forEach(tabConfig => createFilterTab(tabConfig));
+    }
 }
 
 /*

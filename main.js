@@ -52,6 +52,11 @@ function loadConfig() {
     scrollbackLimit: 100000,
     historyBufferSize: 5000000,
     filterHistory: [],
+    windowBounds: {
+      width: 1000,
+      height: 700
+    },
+    filterTabs: [],
     mainInputSettings: {
       visible: true,
       sendOnEnter: true
@@ -139,9 +144,10 @@ function saveConfig(config) {
 }
 
 function createWindow() {
+  const windowBounds = currentConfig.windowBounds || {};
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
+    width: windowBounds.width || 1000,
+    height: windowBounds.height || 700,
     backgroundColor: '#1e1e1e',
     autoHideMenuBar: true, // Hide the menu bar
     webPreferences: {
@@ -157,6 +163,17 @@ function createWindow() {
 
   mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
       console.log(`[RENDERER] ${message} (${sourceId}:${line})`);
+  });
+
+  mainWindow.on('resize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const bounds = mainWindow.getBounds();
+    saveConfig({
+      windowBounds: {
+        width: bounds.width,
+        height: bounds.height
+      }
+    });
   });
 }
 
