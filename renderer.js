@@ -1,10 +1,3 @@
-let suppressMainInputFocus = false;
-
-function sendSerialData(data) {
-    if (visible) {
-        focusMainInput();
-    }
-}
 const { ipcRenderer } = require('electron');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');

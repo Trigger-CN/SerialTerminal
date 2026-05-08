@@ -14,6 +14,12 @@ autoUpdater.logger = log;
 
 let mainWindow;
 let prefsWindow;
+let updatePromptState = {
+  startupCheckInProgress: false,
+  manualCheckInProgress: false,
+  downloadInitiatedByPrompt: false,
+  latestInfo: null
+};
 // Store recent serial output
 let serialHistoryBuffer = '';
 // MAX_HISTORY_LENGTH is now in config (historyBufferSize)
@@ -62,6 +68,7 @@ function loadConfig() {
       sendOnEnter: true,
       appendCrLf: false
     },
+    skippedUpdateVersion: '',
     lastSerialOptions: {
         path: '',
         baudRate: '9600',
@@ -204,8 +211,94 @@ function createPrefsWindow() {
   });
 }
 
+function getReleaseUrl() {
+  const pkg = require('./package.json');
+  if (pkg.homepage) return pkg.homepage;
+  const repoUrl = pkg.repository ? (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository.url) : '';
+  if (repoUrl.includes('github.com')) {
+    return repoUrl.replace(/\.git$/i, '').replace(/#.*$/, '') + '/releases/latest';
+  }
+  return 'https://github.com/Trigger-CN/SerialTerminal/releases/latest';
+}
+
+async function promptForAvailableUpdate(info, isStartupPrompt = false) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const version = info?.version || '';
+  const detailLines = [];
+  if (info?.releaseName) detailLines.push(`Release: ${info.releaseName}`);
+  if (info?.releaseDate) detailLines.push(`Date: ${new Date(info.releaseDate).toLocaleString()}`);
+  if (info?.releaseNotes) {
+    const notes = Array.isArray(info.releaseNotes)
+      ? info.releaseNotes.map(item => item.note || '').join('\n')
+      : String(info.releaseNotes);
+    if (notes.trim()) {
+      detailLines.push('', 'Release Notes:', notes.trim().slice(0, 1200));
+    }
+  }
+
+  const buttons = ['Update Now', 'Not Now', 'Skip This Version'];
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    buttons,
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: 'Software Update',
+    message: `Version ${version} is available.`,
+    detail: `${isStartupPrompt ? 'An update was found during startup.' : 'A new update is available.'}${detailLines.length ? `\n\n${detailLines.join('\n')}` : ''}`
+  });
+
+  if (result.response === 0) {
+    updatePromptState.downloadInitiatedByPrompt = true;
+    autoUpdater.downloadUpdate();
+    return;
+  }
+
+  if (result.response === 2 && version) {
+    saveConfig({ skippedUpdateVersion: version });
+  }
+}
+
+async function promptToInstallDownloadedUpdate(info) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const version = info?.version || 'new version';
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Install and Restart', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: 'Update Ready',
+    message: `Version ${version} has been downloaded.`,
+    detail: 'Restart the application now to install the update.'
+  });
+
+  if (result.response === 0) {
+    autoUpdater.quitAndInstall();
+  }
+}
+
+function checkForAppUpdates({ manual = false } = {}) {
+  if (!app.isPackaged || process.env.NODE_ENV === 'development') {
+    if (manual) {
+      setTimeout(() => {
+        sendUpdateStatusToPrefs('not-available', { version: 'Development' });
+      }, 200);
+    }
+    return;
+  }
+
+  updatePromptState.manualCheckInProgress = manual;
+  updatePromptState.startupCheckInProgress = !manual;
+  updatePromptState.downloadInitiatedByPrompt = false;
+  autoUpdater.checkForUpdates();
+}
+
 app.whenReady().then(() => {
   createWindow();
+  checkForAppUpdates();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -324,15 +417,30 @@ autoUpdater.on('checking-for-update', () => {
 });
 
 autoUpdater.on('update-available', (info) => {
+  updatePromptState.latestInfo = info;
     sendUpdateStatusToPrefs('available', info);
+
+  if (currentConfig.skippedUpdateVersion && currentConfig.skippedUpdateVersion === info.version) {
+    updatePromptState.startupCheckInProgress = false;
+    updatePromptState.manualCheckInProgress = false;
+    return;
+  }
+
+  promptForAvailableUpdate(info, updatePromptState.startupCheckInProgress).catch(err => {
+    log.error('Failed to show update prompt:', err);
+  });
 });
 
 autoUpdater.on('update-not-available', (info) => {
     sendUpdateStatusToPrefs('not-available', info);
+  updatePromptState.startupCheckInProgress = false;
+  updatePromptState.manualCheckInProgress = false;
 });
 
 autoUpdater.on('error', (err) => {
     sendUpdateStatusToPrefs('error', err.message);
+  updatePromptState.startupCheckInProgress = false;
+  updatePromptState.manualCheckInProgress = false;
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
@@ -341,18 +449,23 @@ autoUpdater.on('download-progress', (progressObj) => {
 
 autoUpdater.on('update-downloaded', (info) => {
     sendUpdateStatusToPrefs('downloaded', info);
+  saveConfig({ skippedUpdateVersion: '' });
+  updatePromptState.startupCheckInProgress = false;
+  updatePromptState.manualCheckInProgress = false;
+
+  if (updatePromptState.downloadInitiatedByPrompt) {
+    promptToInstallDownloadedUpdate(info).catch(err => {
+      log.error('Failed to show install prompt:', err);
+    });
+  }
 });
 
 ipcMain.on('check-for-updates', () => {
-    // electron-updater check for development mode is app.isPackaged
-    if (!app.isPackaged || process.env.NODE_ENV === 'development') {
-        // Skip check in dev, simulate up-to-date behavior
-        setTimeout(() => {
-            sendUpdateStatusToPrefs('not-available', { version: 'Development' });
-        }, 500); // Add a small delay so the user sees the "Checking..." state briefly
-        return;
-    }
-    autoUpdater.checkForUpdates();
+  checkForAppUpdates({ manual: true });
+});
+
+ipcMain.handle('open-release-page', () => {
+  return shell.openExternal(getReleaseUrl());
 });
 
 ipcMain.on('quit-and-install', () => {

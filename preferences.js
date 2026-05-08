@@ -396,10 +396,10 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
             if (restartBtn) restartBtn.style.display = 'none';
             break;
         case 'available':
-            statusEl.textContent = tr('prefs.updateAvailable', { version: data.version });
+            statusEl.textContent = tr('prefs.updateAvailableManual', { version: data.version });
             statusEl.style.color = 'var(--accent-color)';
-            if (progressEl) progressEl.style.display = 'block';
-            checkBtn.style.display = 'none';
+            if (progressEl) progressEl.style.display = 'none';
+            checkBtn.disabled = false;
             break;
         case 'not-available':
             statusEl.textContent = tr('prefs.latestVersion');
@@ -426,7 +426,7 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
             if (fillEl) fillEl.style.width = `${data.percent}%`;
             break;
         case 'downloaded':
-                        statusEl.textContent = tr('prefs.updateDownloaded', { version: data.version });
+            statusEl.textContent = tr('prefs.updateDownloaded', { version: data.version });
             statusEl.style.color = '#00ff00';
             if (progressEl) progressEl.style.display = 'none';
             checkBtn.style.display = 'none';
