@@ -304,6 +304,7 @@ function getContextMenuLabels() {
         createFilterFromSelection: tr('main.contextCreateFilterFromSelection'),
         useSelectionAsFilter: tr('main.contextUseSelectionAsFilter'),
         appendSelectionToFilter: tr('main.contextAppendSelectionToFilter'),
+        locateInMainTerminal: tr('main.contextLocateInMainTerminal'),
         toggleMatchCase: tr('main.contextToggleMatchCase'),
         toggleRegex: tr('main.contextToggleRegex'),
         closeFilterTab: tr('main.contextCloseFilterTab')
@@ -317,11 +318,27 @@ function requestTerminalContextMenu(payload) {
     });
 }
 
+function getTerminalBufferLineTextByEvent(term, element, event) {
+    if (!term?.buffer?.active || !element) return '';
+
+    const rect = element.getBoundingClientRect();
+    const relativeY = event.clientY - rect.top;
+    const rowHeight = rect.height / Math.max(1, term.rows || 1);
+    const viewportRow = Math.max(0, Math.min((term.rows || 1) - 1, Math.floor(relativeY / Math.max(1, rowHeight))));
+    const bufferBaseY = term.buffer.active.viewportY || 0;
+    const bufferLineIndex = bufferBaseY + viewportRow;
+    const line = term.buffer.active.getLine(bufferLineIndex);
+    return line ? line.translateToString(true) : '';
+}
+
 function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
     if (!element) return;
     element.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         const tabState = typeof getTabState === 'function' ? getTabState() : null;
+        if (tabState && terminalType === 'filter') {
+            tabState.contextLineText = getTerminalBufferLineTextByEvent(term, element, event);
+        }
         requestTerminalContextMenu({
             terminalType,
             tabId: tabState?.id || '',
@@ -329,10 +346,35 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
             selectedText: term.hasSelection() ? term.getSelection() : '',
             isConnected,
             filterText: tabState?.filterText || '',
+            canLocateInMain: Boolean(tabState?.contextLineText),
             caseSensitive: Boolean(tabState?.caseSensitive),
             useRegex: Boolean(tabState?.useRegex)
         });
     });
+}
+
+function extractDisplayedLineNumber(text) {
+    const match = String(text || '').match(/\[(\d{4,})\]/);
+    return match ? Number(match[1]) : null;
+}
+
+function locateInMainTerminalByLineNumber(lineNo) {
+    if (!lineNo) return false;
+    const searchText = `[${String(lineNo).padStart(4, '0')}]`;
+    if (typeof switchMainTab === 'function') {
+        switchMainTab('tab-main');
+    }
+    if (typeof showSidebarTab === 'function') {
+        showSidebarTab('tab-search');
+    }
+    searchInput.value = searchText;
+    searchRegex.checked = false;
+    searchCase.checked = true;
+    searchWord.checked = false;
+    searchResultCurrent = 0;
+    countSearchResults();
+    serialSearchAddon.findNext(searchText, getSearchOptions());
+    return true;
 }
 
 function setSearchFromText(text) {
@@ -425,6 +467,12 @@ async function handleTerminalContextMenuAction(payload = {}) {
                 filterTab.filterText = input.value;
                 filterTab.updateRegex();
             }
+            break;
+        }
+        case 'locate-in-main-terminal': {
+            if (!filterTab) break;
+            const lineNo = extractDisplayedLineNumber(filterTab.contextLineText || '');
+            locateInMainTerminalByLineNumber(lineNo);
             break;
         }
         case 'toggle-case-sensitive': {
@@ -577,6 +625,7 @@ function createFilterTab(initialState = {}) {
         caseSensitive: false,
         useRegex: false,
         filterText: '',
+        contextLineText: '',
         element: tabPane,
         btn: tabBtn
     };
@@ -1398,6 +1447,7 @@ clearBtn.addEventListener('click', () => {
         const filterTab = filterTabs.find(t => t.id === activeTabPane.id);
         if (filterTab) {
             filterTab.term.clear();
+            filterTab.contextLineText = '';
         }
     }
 });

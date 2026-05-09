@@ -457,6 +457,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
 
   const hasSelection = Boolean(payload.hasSelection);
   const isConnected = Boolean(payload.isConnected);
+  const canLocateInMain = Boolean(payload.canLocateInMain);
   const terminalType = payload.terminalType === 'filter' ? 'filter' : 'main';
   const labels = payload.labels || {};
 
@@ -526,6 +527,11 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         label: withIcon('➕', labels.appendSelectionToFilter, 'Append Selection to Filter'),
         enabled: hasSelection,
         click: () => sendAction('append-selection-to-filter')
+      },
+      {
+        label: withIcon('📍', labels.locateInMainTerminal, 'Locate in Main Terminal'),
+        enabled: canLocateInMain,
+        click: () => sendAction('locate-in-main-terminal')
       },
       {
         label: withIcon('Aa', labels.toggleMatchCase, 'Toggle Match Case'),
