@@ -43,6 +43,7 @@ const mainInputPanel = document.getElementById('main-input-panel');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const mainAppendCrlfCb = document.getElementById('main-append-crlf');
 const toggleMainInputBtn = document.getElementById('toggle-main-input');
+let suppressMainInputFocus = false;
 
 showTimestampCb.addEventListener('change', (e) => {
     showTimestamp = e.target.checked;
@@ -260,6 +261,197 @@ function formatLineForTerminal(lineObj, filterRegex = null) {
     return output;
 }
 
+function getTerminalPlainText(targetTerm) {
+    if (!targetTerm?.buffer?.active) return '';
+    const buffer = targetTerm.buffer.active;
+    const lines = [];
+    for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        if (!line) continue;
+        lines.push(line.translateToString(true));
+    }
+    return lines.join('\n').replace(/\s+$/g, '');
+}
+
+async function writeClipboardText(text) {
+    if (!text) return false;
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        ipcRenderer.send('renderer-log', 'Failed to write clipboard text from renderer');
+        return false;
+    }
+}
+
+async function readClipboardText() {
+    try {
+        return await navigator.clipboard.readText();
+    } catch {
+        ipcRenderer.send('renderer-log', 'Failed to read clipboard text from renderer');
+        return '';
+    }
+}
+
+function getContextMenuLabels() {
+    return {
+        copy: tr('main.contextCopy'),
+        copyAll: tr('main.contextCopyAll'),
+        findSelection: tr('main.contextFindSelection'),
+        clearTerminal: tr('main.contextClearTerminal'),
+        pasteAndSend: tr('main.contextPasteAndSend'),
+        sendSelection: tr('main.contextSendSelection'),
+        createFilterFromSelection: tr('main.contextCreateFilterFromSelection'),
+        useSelectionAsFilter: tr('main.contextUseSelectionAsFilter'),
+        appendSelectionToFilter: tr('main.contextAppendSelectionToFilter'),
+        toggleMatchCase: tr('main.contextToggleMatchCase'),
+        toggleRegex: tr('main.contextToggleRegex'),
+        closeFilterTab: tr('main.contextCloseFilterTab')
+    };
+}
+
+function requestTerminalContextMenu(payload) {
+    ipcRenderer.send('show-terminal-context-menu', {
+        ...payload,
+        labels: getContextMenuLabels()
+    });
+}
+
+function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
+    if (!element) return;
+    element.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        const tabState = typeof getTabState === 'function' ? getTabState() : null;
+        requestTerminalContextMenu({
+            terminalType,
+            tabId: tabState?.id || '',
+            hasSelection: term.hasSelection(),
+            selectedText: term.hasSelection() ? term.getSelection() : '',
+            isConnected,
+            filterText: tabState?.filterText || '',
+            caseSensitive: Boolean(tabState?.caseSensitive),
+            useRegex: Boolean(tabState?.useRegex)
+        });
+    });
+}
+
+function setSearchFromText(text) {
+    if (!text) return;
+    if (typeof showSidebarTab === 'function') {
+        showSidebarTab('tab-search');
+    }
+    searchInput.value = text;
+    searchResultCurrent = 0;
+    countSearchResults();
+}
+
+function clearTerminalByTabId(tabId) {
+    if (!tabId || tabId === 'tab-main') {
+        serialTerm.clear();
+        serialLineCounter = 1;
+        dataParser.isNewLine = true;
+        dataParser.incomingBuffer = '';
+        return;
+    }
+    const filterTab = filterTabs.find(t => t.id === tabId);
+    if (filterTab) {
+        filterTab.term.clear();
+    }
+}
+
+async function handleTerminalContextMenuAction(payload = {}) {
+    const { action, tabId, terminalType } = payload;
+    const isFilter = terminalType === 'filter';
+    const filterTab = isFilter ? filterTabs.find(tab => tab.id === tabId) : null;
+    const targetTerm = isFilter ? filterTab?.term : serialTerm;
+    if (!targetTerm && action !== 'paste-send') return;
+
+    switch (action) {
+        case 'copy-all': {
+            const text = getTerminalPlainText(targetTerm);
+            if (text) {
+                await writeClipboardText(text);
+            }
+            break;
+        }
+        case 'find-selection': {
+            const text = targetTerm?.getSelection();
+            if (text) {
+                setSearchFromText(text);
+            }
+            break;
+        }
+        case 'clear-terminal': {
+            clearTerminalByTabId(isFilter ? tabId : 'tab-main');
+            break;
+        }
+        case 'paste-send': {
+            if (!isConnected) break;
+            const text = await readClipboardText();
+            if (text) {
+                ipcRenderer.send('serial-input', text);
+            }
+            break;
+        }
+        case 'send-selection': {
+            const text = targetTerm?.getSelection();
+            if (text && isConnected) {
+                ipcRenderer.send('serial-input', text);
+            }
+            break;
+        }
+        case 'create-filter-from-selection': {
+            const text = targetTerm?.getSelection();
+            if (text) {
+                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false });
+            }
+            break;
+        }
+        case 'use-selection-as-filter': {
+            const text = targetTerm?.getSelection();
+            if (filterTab && text) {
+                const input = filterTab.element.querySelector('.filter-input');
+                input.value = text;
+                filterTab.filterText = text;
+                filterTab.updateRegex();
+            }
+            break;
+        }
+        case 'append-selection-to-filter': {
+            const text = targetTerm?.getSelection();
+            if (filterTab && text) {
+                const input = filterTab.element.querySelector('.filter-input');
+                input.value = `${input.value || ''}${text}`;
+                filterTab.filterText = input.value;
+                filterTab.updateRegex();
+            }
+            break;
+        }
+        case 'toggle-case-sensitive': {
+            if (filterTab) {
+                filterTab.caseSensitive = !filterTab.caseSensitive;
+                filterTab.caseBtn.classList.toggle('active', filterTab.caseSensitive);
+                filterTab.updateRegex();
+            }
+            break;
+        }
+        case 'toggle-regex': {
+            if (filterTab) {
+                filterTab.useRegex = !filterTab.useRegex;
+                filterTab.regexBtn.classList.toggle('active', filterTab.useRegex);
+                filterTab.updateRegex();
+            }
+            break;
+        }
+        case 'close-filter-tab': {
+            if (filterTab) {
+                closeFilterTab(filterTab.id);
+            }
+            break;
+        }
+    }
+}
+
 // Initialize Terminals
 /*
 const term = new Terminal({ cursorBlink: true });
@@ -277,6 +469,11 @@ const serialSearchAddon = new SearchAddon();
 serialTerm.loadAddon(serialFitAddon);
 serialTerm.loadAddon(serialSearchAddon);
 serialTerm.open(document.getElementById('serial-container'));
+bindTerminalContextMenu({
+    terminalType: 'main',
+    term: serialTerm,
+    element: document.getElementById('serial-container')
+});
 
 // Filter Tabs Management
 let filterTabs = [];
@@ -495,6 +692,10 @@ function createFilterTab(initialState = {}) {
         }
         persistFilterTabs();
     }
+
+    tabState.updateRegex = updateRegex;
+    tabState.caseBtn = caseBtn;
+    tabState.regexBtn = regexBtn;
     
     function saveFilterHistory(val) {
         if (!val) return;
@@ -528,6 +729,12 @@ function createFilterTab(initialState = {}) {
     
     // Setup copy/paste for filter terminal
     term.attachCustomKeyEventHandler(createTerminalKeyHandler(term));
+    bindTerminalContextMenu({
+        terminalType: 'filter',
+        term,
+        element: terminalWrapper,
+        getTabState: () => tabState
+    });
 
     if (typeof initialState.filterText === 'string') {
         input.value = initialState.filterText;
@@ -632,6 +839,16 @@ function createTerminalKeyHandler(targetTerm) {
 
 // Smart Copy/Paste Handling
 serialTerm.attachCustomKeyEventHandler(createTerminalKeyHandler(serialTerm));
+ipcRenderer.on('terminal-context-menu-action', (event, payload) => {
+    suppressMainInputFocus = true;
+    handleTerminalContextMenuAction(payload)
+        .catch(console.error)
+        .finally(() => {
+            setTimeout(() => {
+                suppressMainInputFocus = document.activeElement?.classList?.contains('filter-input') === true;
+            }, 0);
+        });
+});
 
 let mainInputHistory = [];
 let mainInputHistoryIndex = -1;
@@ -674,6 +891,7 @@ function setMainInputPanelVisible(visible, persist = true) {
 
 function focusMainInput() {
     if (!mainSendInput) return;
+    if (suppressMainInputFocus) return;
     mainSendInput.focus();
     const len = mainSendInput.value.length;
     mainSendInput.setSelectionRange(len, len);

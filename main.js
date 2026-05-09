@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const pty = require('node-pty');
@@ -93,6 +93,7 @@ function loadConfig() {
 }
 
 let currentConfig = loadConfig();
+let terminalContextMenuState = null;
 
 // Initialize display settings from config
 displaySettings.showTimestamp = currentConfig.showTimestamp;
@@ -443,6 +444,108 @@ ipcMain.on('save-config', (event, config) => {
   if (mainWindow) {
     mainWindow.webContents.send('config-updated', currentConfig);
   }
+});
+
+ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
+  const browserWindow = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  if (!browserWindow || browserWindow.isDestroyed()) return;
+
+  terminalContextMenuState = {
+    tabId: payload.tabId || '',
+    terminalType: payload.terminalType || 'main'
+  };
+
+  const hasSelection = Boolean(payload.hasSelection);
+  const isConnected = Boolean(payload.isConnected);
+  const terminalType = payload.terminalType === 'filter' ? 'filter' : 'main';
+  const labels = payload.labels || {};
+
+  const sendAction = (action) => {
+    event.sender.send('terminal-context-menu-action', {
+      action,
+      tabId: terminalContextMenuState?.tabId || '',
+      terminalType
+    });
+  };
+
+  const template = [
+    {
+      label: labels.copy || 'Copy',
+      enabled: hasSelection,
+      click: () => {
+        if (payload.selectedText) {
+          clipboard.writeText(payload.selectedText);
+        }
+      }
+    },
+    {
+      label: labels.copyAll || 'Copy All',
+      click: () => sendAction('copy-all')
+    },
+    {
+      label: labels.findSelection || 'Find Selection',
+      enabled: hasSelection,
+      click: () => sendAction('find-selection')
+    },
+    {
+      label: labels.clearTerminal || 'Clear Terminal',
+      click: () => sendAction('clear-terminal')
+    }
+  ];
+
+  if (terminalType === 'main') {
+    template.push(
+      { type: 'separator' },
+      {
+        label: labels.pasteAndSend || 'Paste and Send',
+        enabled: isConnected,
+        click: () => sendAction('paste-send')
+      },
+      {
+        label: labels.sendSelection || 'Send Selection',
+        enabled: hasSelection && isConnected,
+        click: () => sendAction('send-selection')
+      },
+      {
+        label: labels.createFilterFromSelection || 'Create Filter Tab from Selection',
+        enabled: hasSelection,
+        click: () => sendAction('create-filter-from-selection')
+      }
+    );
+  } else {
+    template.push(
+      { type: 'separator' },
+      {
+        label: labels.useSelectionAsFilter || 'Use Selection as Filter',
+        enabled: hasSelection,
+        click: () => sendAction('use-selection-as-filter')
+      },
+      {
+        label: labels.appendSelectionToFilter || 'Append Selection to Filter',
+        enabled: hasSelection,
+        click: () => sendAction('append-selection-to-filter')
+      },
+      {
+        label: labels.toggleMatchCase || 'Toggle Match Case',
+        type: 'checkbox',
+        checked: Boolean(payload.caseSensitive),
+        click: () => sendAction('toggle-case-sensitive')
+      },
+      {
+        label: labels.toggleRegex || 'Toggle Regex',
+        type: 'checkbox',
+        checked: Boolean(payload.useRegex),
+        click: () => sendAction('toggle-regex')
+      },
+      {
+        label: labels.closeFilterTab || 'Close Filter Tab',
+        click: () => sendAction('close-filter-tab')
+      }
+    );
+  }
+
+  const menu = Menu.buildFromTemplate(template);
+  menu.popup({ window: browserWindow });
 });
 
 ipcMain.handle('get-system-fonts', async () => {
