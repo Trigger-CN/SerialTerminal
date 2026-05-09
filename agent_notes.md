@@ -322,6 +322,7 @@ npm run dist:linux
 - 正则
 - 区分大小写
 - 整词匹配
+- 左侧搜索面板会跟随当前激活的主终端 / 过滤标签页切换搜索目标
 - 左侧搜索面板显示当前匹配序号 / 总匹配数
 - 结果计数改为本地遍历终端 buffer 统计，不再依赖 xterm decorations / proposed API
 

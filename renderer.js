@@ -1250,6 +1250,29 @@ const searchResultCount = document.getElementById('search-result-count');
 let searchResultTotal = 0;
 let searchResultCurrent = 0;
 
+function getActiveSearchTarget() {
+    const activeTabPane = document.querySelector('.main-tab-pane.active');
+    if (!activeTabPane || activeTabPane.id === 'tab-main') {
+        return {
+            term: serialTerm,
+            addon: serialSearchAddon
+        };
+    }
+
+    const filterTab = filterTabs.find(tab => tab.id === activeTabPane.id);
+    if (filterTab) {
+        return {
+            term: filterTab.term,
+            addon: filterTab.searchAddon
+        };
+    }
+
+    return {
+        term: serialTerm,
+        addon: serialSearchAddon
+    };
+}
+
 function updateSearchResultCount(resultIndex = -1, resultCount = 0) {
     if (!searchResultCount) return;
 
@@ -1294,6 +1317,7 @@ function buildSearchRegex() {
 
 function countSearchResults() {
     const regex = buildSearchRegex();
+    const { term } = getActiveSearchTarget();
     if (!regex) {
         searchResultTotal = 0;
         searchResultCurrent = 0;
@@ -1301,10 +1325,10 @@ function countSearchResults() {
         return;
     }
 
-    const bufferLines = serialTerm.buffer.active.length;
+    const bufferLines = term.buffer.active.length;
     let total = 0;
     for (let i = 0; i < bufferLines; i++) {
-        const line = serialTerm.buffer.active.getLine(i);
+        const line = term.buffer.active.getLine(i);
         const text = line ? line.translateToString(true) : '';
         regex.lastIndex = 0;
         const matches = text.match(regex);
@@ -1336,7 +1360,8 @@ function getSearchOptions() {
 }
 
 findNextBtn.addEventListener('click', () => {
-    const found = serialSearchAddon.findNext(searchInput.value, getSearchOptions());
+    const { addon } = getActiveSearchTarget();
+    const found = addon.findNext(searchInput.value, getSearchOptions());
     countSearchResults();
     if (found && searchResultTotal > 0) {
         searchResultCurrent = searchResultCurrent >= searchResultTotal ? 1 : searchResultCurrent + 1;
@@ -1345,7 +1370,8 @@ findNextBtn.addEventListener('click', () => {
 });
 
 findPrevBtn.addEventListener('click', () => {
-    const found = serialSearchAddon.findPrevious(searchInput.value, getSearchOptions());
+    const { addon } = getActiveSearchTarget();
+    const found = addon.findPrevious(searchInput.value, getSearchOptions());
     countSearchResults();
     if (found && searchResultTotal > 0) {
         searchResultCurrent = searchResultCurrent <= 1 ? searchResultTotal : searchResultCurrent - 1;
@@ -1383,6 +1409,16 @@ searchInput.addEventListener('input', () => {
         }
         countSearchResults();
     });
+});
+
+window.addEventListener('main-tab-changed', () => {
+    searchResultCurrent = 0;
+    if (!searchInput.value) {
+        updateSearchResultCount(-1, 0);
+        searchResultTotal = 0;
+        return;
+    }
+    countSearchResults();
 });
 
 // Remove legacy filter window btn reference
