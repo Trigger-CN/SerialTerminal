@@ -1246,6 +1246,85 @@ const findPrevBtn = document.getElementById('find-prev-btn');
 const searchRegex = document.getElementById('search-regex');
 const searchCase = document.getElementById('search-case');
 const searchWord = document.getElementById('search-word');
+const searchResultCount = document.getElementById('search-result-count');
+let searchResultTotal = 0;
+let searchResultCurrent = 0;
+
+function updateSearchResultCount(resultIndex = -1, resultCount = 0) {
+    if (!searchResultCount) return;
+
+    if (!searchInput.value) {
+        searchResultCount.textContent = tr('main.searchResultEmpty');
+        return;
+    }
+
+    if (!resultCount || resultIndex < 0) {
+        searchResultCount.textContent = tr('main.searchResultZero');
+        return;
+    }
+
+    searchResultCount.textContent = tr('main.searchResultCount', {
+        current: resultIndex + 1,
+        total: resultCount
+    });
+}
+
+function escapeRegex(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildSearchRegex() {
+    const term = searchInput.value;
+    if (!term) return null;
+
+    let pattern = term;
+    if (!searchRegex.checked) {
+        pattern = escapeRegex(pattern);
+    }
+    if (searchWord.checked) {
+        pattern = `\\b(?:${pattern})\\b`;
+    }
+
+    try {
+        return new RegExp(pattern, searchCase.checked ? 'g' : 'gi');
+    } catch {
+        return null;
+    }
+}
+
+function countSearchResults() {
+    const regex = buildSearchRegex();
+    if (!regex) {
+        searchResultTotal = 0;
+        searchResultCurrent = 0;
+        updateSearchResultCount(-1, 0);
+        return;
+    }
+
+    const bufferLines = serialTerm.buffer.active.length;
+    let total = 0;
+    for (let i = 0; i < bufferLines; i++) {
+        const line = serialTerm.buffer.active.getLine(i);
+        const text = line ? line.translateToString(true) : '';
+        regex.lastIndex = 0;
+        const matches = text.match(regex);
+        if (matches) {
+            total += matches.length;
+        }
+    }
+
+    searchResultTotal = total;
+    if (!searchResultTotal) {
+        searchResultCurrent = 0;
+        updateSearchResultCount(-1, 0);
+        return;
+    }
+
+    if (!searchResultCurrent || searchResultCurrent > searchResultTotal) {
+        searchResultCurrent = 1;
+    }
+    updateSearchResultCount(searchResultCurrent - 1, searchResultTotal);
+}
 
 function getSearchOptions() {
     return {
@@ -1257,21 +1336,53 @@ function getSearchOptions() {
 }
 
 findNextBtn.addEventListener('click', () => {
-    serialSearchAddon.findNext(searchInput.value, getSearchOptions());
+    const found = serialSearchAddon.findNext(searchInput.value, getSearchOptions());
+    countSearchResults();
+    if (found && searchResultTotal > 0) {
+        searchResultCurrent = searchResultCurrent >= searchResultTotal ? 1 : searchResultCurrent + 1;
+        updateSearchResultCount(searchResultCurrent - 1, searchResultTotal);
+    }
 });
 
 findPrevBtn.addEventListener('click', () => {
-    serialSearchAddon.findPrevious(searchInput.value, getSearchOptions());
+    const found = serialSearchAddon.findPrevious(searchInput.value, getSearchOptions());
+    countSearchResults();
+    if (found && searchResultTotal > 0) {
+        searchResultCurrent = searchResultCurrent <= 1 ? searchResultTotal : searchResultCurrent - 1;
+        updateSearchResultCount(searchResultCurrent - 1, searchResultTotal);
+    }
 });
 
 searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         if (e.shiftKey) {
-             serialSearchAddon.findPrevious(searchInput.value, getSearchOptions());
+             findPrevBtn.click();
         } else {
-             serialSearchAddon.findNext(searchInput.value, getSearchOptions());
+             findNextBtn.click();
         }
     }
+});
+
+searchInput.addEventListener('input', () => {
+    searchResultCurrent = 0;
+    if (!searchInput.value) {
+        updateSearchResultCount(-1, 0);
+        searchResultTotal = 0;
+        return;
+    }
+    countSearchResults();
+});
+
+[searchRegex, searchCase, searchWord].forEach(control => {
+    control.addEventListener('change', () => {
+        searchResultCurrent = 0;
+        if (!searchInput.value) {
+            updateSearchResultCount(-1, 0);
+            searchResultTotal = 0;
+            return;
+        }
+        countSearchResults();
+    });
 });
 
 // Remove legacy filter window btn reference

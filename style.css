@@ -186,6 +186,15 @@ label:hover {
 .text-danger { color: var(--danger-color); }
 .text-success { color: var(--success-color); }
 
+.search-result-count {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    min-height: 18px;
+    display: flex;
+    align-items: center;
+}
+
 /* Quick Send List Styling */
 .quick-send-item {
     display: flex;
