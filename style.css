@@ -583,7 +583,7 @@ label:hover {
 #main-send-input {
     flex: 1;
     min-width: 0;
-    min-height: 32px;
+    min-height: 40px;
     max-height: 96px;
     resize: none;
     overflow-y: auto;
@@ -601,9 +601,9 @@ label:hover {
 }
 
 .main-input-icon-toggle {
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -635,17 +635,17 @@ label:hover {
 }
 
 .main-input-icon-toggle span {
-    font-size: 13px;
+    font-size: 15px;
     line-height: 1;
 }
 
 .main-input-last {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-secondary);
-    background: var(--bg-input);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 1px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 2px 2px 0;
     min-height: 18px;
     display: flex;
     align-items: center;
@@ -656,10 +656,18 @@ label:hover {
 
 #main-send-btn {
     flex-shrink: 0;
-    min-width: 52px;
-    height: 32px;
-    font-size: 12px;
-    padding: 0 10px;
+    min-width: 72px;
+    height: 40px;
+    font-size: 14px;
+    padding: 0 16px;
+}
+
+#main-add-quick-send-btn {
+    flex-shrink: 0;
+    min-width: 68px;
+    height: 40px;
+    font-size: 13px;
+    padding: 0 12px;
 }
 
 .status {

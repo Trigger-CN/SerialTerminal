@@ -37,6 +37,7 @@ const showTimestampCb = document.getElementById('show-timestamp');
 const showLinenoCb = document.getElementById('show-lineno');
 const mainSendInput = document.getElementById('main-send-input');
 const mainSendBtn = document.getElementById('main-send-btn');
+const mainAddQuickSendBtn = document.getElementById('main-add-quick-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
 const mainInputPanel = document.getElementById('main-input-panel');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
@@ -756,6 +757,31 @@ function sendMainInputBuffer() {
     focusMainInput();
 }
 
+function buildQuickSendLabel(content) {
+    const normalized = String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+    const [firstLine = ''] = normalized.split('\n');
+    if (!firstLine) return tr('main.quickSendDefaultLabel');
+    return firstLine.length > 8 ? `${firstLine.slice(0, 8)}...` : firstLine;
+}
+
+function addMainInputToQuickSend() {
+    const content = mainSendInput?.value;
+    if (!content) {
+        focusMainInput();
+        return;
+    }
+
+    const quickSendContent = mainAppendCrlfCb?.checked ? `${content}\r\n` : content;
+
+    quickSendList.push({
+        label: buildQuickSendLabel(content),
+        content: quickSendContent
+    });
+    renderQuickSendList();
+    saveQuickSendList();
+    focusMainInput();
+}
+
 function saveMainInputSettings() {
     ipcRenderer.send('save-config', {
         mainInputSettings: {
@@ -791,6 +817,7 @@ function bindMainInputEvents() {
 
     mainSendInput.addEventListener('input', updateMainInputHeight);
     mainSendBtn.addEventListener('click', sendMainInputBuffer);
+    mainAddQuickSendBtn?.addEventListener('click', addMainInputToQuickSend);
     mainSendOnEnterCb?.addEventListener('change', saveMainInputSettings);
     mainAppendCrlfCb?.addEventListener('change', saveMainInputSettings);
     toggleMainInputBtn?.addEventListener('click', () => {
