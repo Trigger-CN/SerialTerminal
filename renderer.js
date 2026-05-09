@@ -548,31 +548,8 @@ function createFilterTab(initialState = {}) {
     persistFilterTabs();
     
     // Fit terminal after a short delay to ensure DOM is rendered
-    setTimeout(async () => {
+    setTimeout(() => {
         fitAddon.fit();
-        
-        // Load history for the new tab
-        try {
-            const history = await ipcRenderer.invoke('get-history');
-            if (history) {
-                // Save current line counter to avoid jumping
-                const savedLineCounter = serialLineCounter;
-                serialLineCounter = 1;
-                
-                const tempParser = new SerialDataParser();
-                const lines = tempParser.parse(history);
-                let tabOutput = '';
-                lines.forEach(lineObj => {
-                    tabOutput += formatLineForTerminal(lineObj, tabState.filterRegex);
-                });
-                if (tabOutput) term.write(tabOutput);
-                
-                // Restore line counter
-                serialLineCounter = savedLineCounter;
-            }
-        } catch (e) {
-            console.error('Failed to load history:', e);
-        }
     }, 50);
 }
 
