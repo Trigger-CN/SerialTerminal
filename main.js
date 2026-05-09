@@ -7,6 +7,7 @@ const iconv = require('iconv-lite');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const fontList = require('font-list');
+const { t, getLanguage } = require('./i18n');
 
 // Configure logging
 log.transports.file.level = 'info';
@@ -151,6 +152,10 @@ function saveConfig(config) {
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
 }
 
+function tr(key, params = {}) {
+  return t(getLanguage(currentConfig.language), key, params);
+}
+
 function createWindow() {
   const windowBounds = currentConfig.windowBounds || {};
   mainWindow = new BrowserWindow({
@@ -221,32 +226,78 @@ function getReleaseUrl() {
   return 'https://github.com/Trigger-CN/SerialTerminal/releases/latest';
 }
 
+function getGithubRepoInfo() {
+  const pkg = require('./package.json');
+  const repoUrl = pkg.repository ? (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository.url) : '';
+  const matched = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/i);
+  if (!matched) {
+    return null;
+  }
+  return {
+    owner: matched[1],
+    repo: matched[2]
+  };
+}
+
+async function fetchGithubReleaseNotes(version) {
+  const repoInfo = getGithubRepoInfo();
+  if (!repoInfo || !version) return '';
+
+  const tagsToTry = [`v${version}`, version];
+
+  for (const tag of tagsToTry) {
+    const apiUrl = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/releases/tags/${encodeURIComponent(tag)}`;
+    try {
+      const response = await fetch(apiUrl, {
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'User-Agent': `${app.getName()}/${app.getVersion()}`
+        }
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const data = await response.json();
+      return typeof data.body === 'string' ? data.body.trim() : '';
+    } catch (error) {
+      log.warn(`Failed to fetch release notes for tag ${tag}:`, error);
+    }
+  }
+
+  return '';
+}
+
 async function promptForAvailableUpdate(info, isStartupPrompt = false) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
   const version = info?.version || '';
   const detailLines = [];
-  if (info?.releaseName) detailLines.push(`Release: ${info.releaseName}`);
-  if (info?.releaseDate) detailLines.push(`Date: ${new Date(info.releaseDate).toLocaleString()}`);
-  if (info?.releaseNotes) {
-    const notes = Array.isArray(info.releaseNotes)
-      ? info.releaseNotes.map(item => item.note || '').join('\n')
-      : String(info.releaseNotes);
-    if (notes.trim()) {
-      detailLines.push('', 'Release Notes:', notes.trim().slice(0, 1200));
-    }
+  if (info?.releaseName) detailLines.push(`${tr('updateDialog.releaseLabel')} ${info.releaseName}`);
+  if (info?.releaseDate) detailLines.push(`${tr('updateDialog.dateLabel')} ${new Date(info.releaseDate).toLocaleString()}`);
+  const releaseNotes = await fetchGithubReleaseNotes(version);
+
+  if (!releaseNotes) {
+    detailLines.push('', tr('updateDialog.releaseNotesLabel'), tr('updateDialog.releaseNotesUnavailable'));
+  } else {
+    detailLines.push('', tr('updateDialog.releaseNotesLabel'), releaseNotes.slice(0, 1200));
   }
 
-  const buttons = ['Update Now', 'Not Now', 'Skip This Version'];
+  const buttons = [
+    tr('updateDialog.updateNow'),
+    tr('updateDialog.notNow'),
+    tr('updateDialog.skipThisVersion')
+  ];
   const result = await dialog.showMessageBox(mainWindow, {
     type: 'info',
     buttons,
     defaultId: 0,
     cancelId: 1,
     noLink: true,
-    title: 'Software Update',
-    message: `Version ${version} is available.`,
-    detail: `${isStartupPrompt ? 'An update was found during startup.' : 'A new update is available.'}${detailLines.length ? `\n\n${detailLines.join('\n')}` : ''}`
+    title: tr('updateDialog.softwareUpdateTitle'),
+    message: tr('updateDialog.versionAvailable', { version }),
+    detail: `${isStartupPrompt ? tr('updateDialog.foundOnStartup') : tr('updateDialog.newUpdateAvailable')}${detailLines.length ? `\n\n${detailLines.join('\n')}` : ''}`
   });
 
   if (result.response === 0) {
@@ -263,16 +314,16 @@ async function promptForAvailableUpdate(info, isStartupPrompt = false) {
 async function promptToInstallDownloadedUpdate(info) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
-  const version = info?.version || 'new version';
+  const version = info?.version || tr('updateDialog.newVersionFallback');
   const result = await dialog.showMessageBox(mainWindow, {
     type: 'question',
-    buttons: ['Install and Restart', 'Later'],
+    buttons: [tr('updateDialog.installAndRestart'), tr('updateDialog.later')],
     defaultId: 0,
     cancelId: 1,
     noLink: true,
-    title: 'Update Ready',
-    message: `Version ${version} has been downloaded.`,
-    detail: 'Restart the application now to install the update.'
+    title: tr('updateDialog.updateReadyTitle'),
+    message: tr('updateDialog.versionDownloaded', { version }),
+    detail: tr('updateDialog.restartToInstall')
   });
 
   if (result.response === 0) {

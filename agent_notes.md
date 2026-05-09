@@ -60,7 +60,6 @@ SerialTerminal/
 ├─ style.css                  主界面和公共样式
 ├─ i18n.js                    多语言字典与翻译函数
 ├─ README.md                  对外项目说明
-├─ release-notes.md           发布说明
 ├─ package.json               脚本、依赖、打包配置
 └─ agent_notes.md             本文档，AI 接手记忆文件
 ```
@@ -75,6 +74,8 @@ SerialTerminal/
 - 向渲染进程发送串口输出、错误、吞吐量数据
 - 自动更新逻辑
 - 启动时自动检查更新与用户确认安装逻辑
+- 更新提示通过 GitHub Release API 读取对应 tag 的正文，获取不到时提示网络异常
+- 更新弹窗文案跟随当前界面语言显示
 
 #### `renderer.js`
 负责：
@@ -412,6 +413,7 @@ npm run dist:linux
 - `checkForAppUpdates()`：统一的自动/手动检查更新入口
 - `promptForAvailableUpdate()`：新版提示与用户选择
 - `promptToInstallDownloadedUpdate()`：下载完成后的安装提示
+- `fetchGithubReleaseNotes()`：通过 GitHub Release API 拉取版本正文
 
 ### `renderer.js`
 - `SerialDataParser`

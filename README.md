@@ -65,6 +65,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 
 - 集成 `electron-updater`
 - 支持在设置页检查更新、下载更新并重启安装
+- 更新提示仅显示 GitHub Release 的 `releaseNotes`；获取不到时显示网络异常
 - 使用 `electron-builder` 打包 Windows 与 Linux 发布物
 
 ## 项目结构
@@ -81,7 +82,6 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 ├─ style.css             全局样式
 ├─ serial_tester.py      串口测试工具
 ├─ package.json          依赖、脚本与打包配置
-└─ release-notes.md      发布说明
 ```
 
 ## 技术栈
@@ -147,6 +147,8 @@ npm run dist:win
 ```bash
 npm run dist:linux
 ```
+
+建议正式发版时在 GitHub Release 中填写当前版本更新内容。应用更新提示只读取线上 `releaseNotes`。
 
 ## 配置说明
 
