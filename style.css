@@ -206,6 +206,15 @@ label:hover {
     background: rgba(0, 122, 204, 0.1);
 }
 
+.quick-send-item.dragging {
+    opacity: 0.45;
+}
+
+.quick-send-item.drag-over {
+    border-color: var(--accent-color);
+    background: rgba(0, 122, 204, 0.18);
+}
+
 .quick-send-main-btn {
     flex: 1;
     text-align: left;

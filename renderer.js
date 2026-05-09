@@ -1363,6 +1363,27 @@ autoSendTextInput.addEventListener('blur', saveAutoSendSettings);
 
 
 let editingIndex = -1;
+let draggedQuickSendIndex = -1;
+
+function moveQuickSendItem(fromIndex, toIndex) {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= quickSendList.length || toIndex >= quickSendList.length) {
+        return;
+    }
+
+    const [movedItem] = quickSendList.splice(fromIndex, 1);
+    quickSendList.splice(toIndex, 0, movedItem);
+
+    if (editingIndex === fromIndex) {
+        editingIndex = toIndex;
+    } else if (editingIndex > fromIndex && editingIndex <= toIndex) {
+        editingIndex--;
+    } else if (editingIndex < fromIndex && editingIndex >= toIndex) {
+        editingIndex++;
+    }
+
+    saveQuickSendList();
+    renderQuickSendList();
+}
 
 function renderQuickSendList() {
     quickSendListEl.innerHTML = '';
@@ -1370,11 +1391,48 @@ function renderQuickSendList() {
     quickSendList.forEach((item, index) => {
         const div = document.createElement('div');
         div.className = 'quick-send-item';
+        div.draggable = true;
+        div.dataset.index = String(index);
         
         // If this item is being edited, highlight it
         if (index === editingIndex) {
             div.classList.add('editing');
         }
+
+        div.addEventListener('dragstart', (event) => {
+            draggedQuickSendIndex = index;
+            div.classList.add('dragging');
+            if (event.dataTransfer) {
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', String(index));
+            }
+        });
+
+        div.addEventListener('dragend', () => {
+            draggedQuickSendIndex = -1;
+            quickSendListEl.querySelectorAll('.quick-send-item').forEach(itemEl => {
+                itemEl.classList.remove('dragging', 'drag-over');
+            });
+        });
+
+        div.addEventListener('dragover', (event) => {
+            event.preventDefault();
+            if (draggedQuickSendIndex === -1 || draggedQuickSendIndex === index) {
+                return;
+            }
+            event.dataTransfer.dropEffect = 'move';
+            div.classList.add('drag-over');
+        });
+
+        div.addEventListener('dragleave', () => {
+            div.classList.remove('drag-over');
+        });
+
+        div.addEventListener('drop', (event) => {
+            event.preventDefault();
+            div.classList.remove('drag-over');
+            moveQuickSendItem(draggedQuickSendIndex, index);
+        });
 
         const btn = document.createElement('button');
         btn.textContent = item.label || item.content;
