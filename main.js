@@ -468,9 +468,11 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     });
   };
 
+  const withIcon = (icon, label, fallback) => `${icon} ${label || fallback}`;
+
   const template = [
     {
-      label: labels.copy || 'Copy',
+      label: withIcon('📋', labels.copy, 'Copy'),
       enabled: hasSelection,
       click: () => {
         if (payload.selectedText) {
@@ -479,16 +481,16 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       }
     },
     {
-      label: labels.copyAll || 'Copy All',
+      label: withIcon('📚', labels.copyAll, 'Copy All'),
       click: () => sendAction('copy-all')
     },
     {
-      label: labels.findSelection || 'Find Selection',
+      label: withIcon('🔍', labels.findSelection, 'Find Selection'),
       enabled: hasSelection,
       click: () => sendAction('find-selection')
     },
     {
-      label: labels.clearTerminal || 'Clear Terminal',
+      label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
       click: () => sendAction('clear-terminal')
     }
   ];
@@ -497,17 +499,17 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: labels.pasteAndSend || 'Paste and Send',
+        label: withIcon('📥', labels.pasteAndSend, 'Paste and Send'),
         enabled: isConnected,
         click: () => sendAction('paste-send')
       },
       {
-        label: labels.sendSelection || 'Send Selection',
+        label: withIcon('📤', labels.sendSelection, 'Send Selection'),
         enabled: hasSelection && isConnected,
         click: () => sendAction('send-selection')
       },
       {
-        label: labels.createFilterFromSelection || 'Create Filter Tab from Selection',
+        label: withIcon('➕', labels.createFilterFromSelection, 'Create Filter Tab from Selection'),
         enabled: hasSelection,
         click: () => sendAction('create-filter-from-selection')
       }
@@ -516,29 +518,29 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: labels.useSelectionAsFilter || 'Use Selection as Filter',
+        label: withIcon('🎯', labels.useSelectionAsFilter, 'Use Selection as Filter'),
         enabled: hasSelection,
         click: () => sendAction('use-selection-as-filter')
       },
       {
-        label: labels.appendSelectionToFilter || 'Append Selection to Filter',
+        label: withIcon('➕', labels.appendSelectionToFilter, 'Append Selection to Filter'),
         enabled: hasSelection,
         click: () => sendAction('append-selection-to-filter')
       },
       {
-        label: labels.toggleMatchCase || 'Toggle Match Case',
+        label: withIcon('Aa', labels.toggleMatchCase, 'Toggle Match Case'),
         type: 'checkbox',
         checked: Boolean(payload.caseSensitive),
         click: () => sendAction('toggle-case-sensitive')
       },
       {
-        label: labels.toggleRegex || 'Toggle Regex',
+        label: withIcon('.*', labels.toggleRegex, 'Toggle Regex'),
         type: 'checkbox',
         checked: Boolean(payload.useRegex),
         click: () => sendAction('toggle-regex')
       },
       {
-        label: labels.closeFilterTab || 'Close Filter Tab',
+        label: withIcon('✖', labels.closeFilterTab, 'Close Filter Tab'),
         click: () => sendAction('close-filter-tab')
       }
     );
