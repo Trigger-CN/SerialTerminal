@@ -19,6 +19,7 @@ let lastCharWasCR = false;
 let timestampColor = '#00ff00';
 let lineNoColor = '#ffff00';
 let highlightRules = [];
+let mouseWheelScrollLines = 3;
 
 function tr(key, params = {}) {
     return t(currentLanguage, key, params);
@@ -353,6 +354,19 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
     });
 }
 
+function bindTerminalWheel(term, element) {
+    if (!term || !element) return;
+    // Bind to the xterm viewport element to intercept wheel before xterm's own handler
+    const target = term.element || element;
+    target.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const lines = mouseWheelScrollLines || 3;
+        const delta = event.deltaY > 0 ? lines : -lines;
+        term.scrollLines(delta);
+    }, { passive: false, capture: true });
+}
+
 function extractDisplayedLineNumber(text) {
     const match = String(text || '').match(/\[(\d{4,})\]/);
     return match ? Number(match[1]) : null;
@@ -522,6 +536,7 @@ bindTerminalContextMenu({
     term: serialTerm,
     element: document.getElementById('serial-container')
 });
+bindTerminalWheel(serialTerm, document.getElementById('serial-container'));
 
 // Filter Tabs Management
 let filterTabs = [];
@@ -784,6 +799,7 @@ function createFilterTab(initialState = {}) {
         element: terminalWrapper,
         getTabState: () => tabState
     });
+    bindTerminalWheel(term, terminalWrapper);
 
     if (typeof initialState.filterText === 'string') {
         input.value = initialState.filterText;
@@ -1095,6 +1111,7 @@ function applyConfig(config) {
     // Update local color settings
     timestampColor = config.timestampColor || '#00ff00';
     lineNoColor = config.lineNoColor || '#ffff00';
+    mouseWheelScrollLines = config.mouseWheelScrollLines || 3;
     
     // Update Checkboxes
     showTimestamp = config.showTimestamp || false;

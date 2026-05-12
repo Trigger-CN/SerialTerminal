@@ -58,6 +58,7 @@ function loadConfig() {
     showLineNumbers: false,
     scrollbackLimit: 100000,
     historyBufferSize: 5000000,
+    mouseWheelScrollLines: 3,
     filterHistory: [],
     windowBounds: {
       width: 1000,

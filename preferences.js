@@ -24,6 +24,7 @@ const elements = {
 
   scrollbackLimit: document.getElementById('scrollbackLimit'),
   historyBufferSize: document.getElementById('historyBufferSize'),
+  mouseWheelScrollLines: document.getElementById('mouseWheelScrollLines'),
 
   highlightRulesList: document.getElementById('highlight-rules-list'),
   addRuleBtn: document.getElementById('add-rule-btn'),
@@ -265,6 +266,7 @@ async function init() {
   
   elements.scrollbackLimit.value = config.scrollbackLimit || 100000;
   elements.historyBufferSize.value = config.historyBufferSize || 5000000;
+  elements.mouseWheelScrollLines.value = config.mouseWheelScrollLines || 3;
 
   elements.logEnabled.checked = config.logEnabled;
   elements.logPath.value = config.logPath;
@@ -336,6 +338,7 @@ elements.saveBtn.onclick = () => {
     lineNoColor: elements.lineNoColor.value,
     scrollbackLimit: parseInt(elements.scrollbackLimit.value) || 100000,
     historyBufferSize: parseInt(elements.historyBufferSize.value) || 5000000,
+    mouseWheelScrollLines: parseInt(elements.mouseWheelScrollLines.value) || 3,
     logEnabled: elements.logEnabled.checked,
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,
