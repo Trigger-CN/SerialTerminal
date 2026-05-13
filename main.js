@@ -65,6 +65,23 @@ function loadConfig() {
       height: 700
     },
     filterTabs: [],
+    workspaceLayout: {
+      splitEnabled: false,
+      orientation: 'horizontal',
+      activePaneId: 'pane-1',
+      panes: [
+        {
+          id: 'pane-1',
+          activeTabId: 'tab-main',
+          tabIds: ['tab-main']
+        },
+        {
+          id: 'pane-2',
+          activeTabId: null,
+          tabIds: []
+        }
+      ]
+    },
     mainInputSettings: {
       visible: true,
       sendOnEnter: true,
@@ -453,7 +470,8 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
 
   terminalContextMenuState = {
     tabId: payload.tabId || '',
-    terminalType: payload.terminalType || 'main'
+    terminalType: payload.terminalType || 'main',
+    paneId: payload.paneId || 'pane-1'
   };
 
   const hasSelection = Boolean(payload.hasSelection);
@@ -466,7 +484,8 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     event.sender.send('terminal-context-menu-action', {
       action,
       tabId: terminalContextMenuState?.tabId || '',
-      terminalType
+      terminalType,
+      paneId: terminalContextMenuState?.paneId || 'pane-1'
     });
   };
 
@@ -474,26 +493,21 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
 
   const template = [
     {
-      label: withIcon('📋', labels.copy, 'Copy'),
-      enabled: hasSelection,
-      click: () => {
-        if (payload.selectedText) {
-          clipboard.writeText(payload.selectedText);
-        }
-      }
+      label: withIcon('🧩', labels.newFilterTab, 'New Filter Tab'),
+      click: () => sendAction('new-filter-tab')
     },
     {
-      label: withIcon('📚', labels.copyAll, 'Copy All'),
-      click: () => sendAction('copy-all')
+      label: withIcon('⇆', labels.splitHorizontal, 'Split Right'),
+      click: () => sendAction('split-horizontal')
     },
     {
-      label: withIcon('🔍', labels.findSelection, 'Find Selection'),
-      enabled: hasSelection,
-      click: () => sendAction('find-selection')
+      label: withIcon('⇅', labels.splitVertical, 'Split Down'),
+      click: () => sendAction('split-vertical')
     },
     {
-      label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
-      click: () => sendAction('clear-terminal')
+      label: withIcon('🞬', labels.closeSplit, 'Close Split'),
+      enabled: Boolean(payload.splitEnabled),
+      click: () => sendAction('close-split')
     }
   ];
 
@@ -511,13 +525,46 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         click: () => sendAction('send-selection')
       },
       {
-        label: withIcon('➕', labels.createFilterFromSelection, 'Create Filter Tab from Selection'),
+        label: withIcon('🧪', labels.createFilterFromSelection, 'Create Filter Tab from Selection'),
         enabled: hasSelection,
         click: () => sendAction('create-filter-from-selection')
+      },
+      { type: 'separator' },
+      {
+        label: withIcon('📋', labels.copy, 'Copy'),
+        enabled: hasSelection,
+        click: () => {
+          if (payload.selectedText) {
+            clipboard.writeText(payload.selectedText);
+          }
+        }
+      },
+      {
+        label: withIcon('📚', labels.copyAll, 'Copy All'),
+        click: () => sendAction('copy-all')
+      },
+      {
+        label: withIcon('🔍', labels.findSelection, 'Find Selection'),
+        enabled: hasSelection,
+        click: () => sendAction('find-selection')
+      },
+      {
+        label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
+        click: () => sendAction('clear-terminal')
       }
     );
   } else {
     template.push(
+      { type: 'separator' },
+      {
+        label: withIcon('⇄', labels.moveToOtherPane, 'Move to Other Pane'),
+        enabled: Boolean(payload.tabId),
+        click: () => sendAction('move-to-other-pane')
+      },
+      {
+        label: withIcon('✖', labels.closeFilterTab, 'Close Filter Tab'),
+        click: () => sendAction('close-filter-tab')
+      },
       { type: 'separator' },
       {
         label: withIcon('🎯', labels.useSelectionAsFilter, 'Use Selection as Filter'),
@@ -547,8 +594,26 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         click: () => sendAction('toggle-regex')
       },
       {
-        label: withIcon('✖', labels.closeFilterTab, 'Close Filter Tab'),
-        click: () => sendAction('close-filter-tab')
+        label: withIcon('📋', labels.copy, 'Copy'),
+        enabled: hasSelection,
+        click: () => {
+          if (payload.selectedText) {
+            clipboard.writeText(payload.selectedText);
+          }
+        }
+      },
+      {
+        label: withIcon('📚', labels.copyAll, 'Copy All'),
+        click: () => sendAction('copy-all')
+      },
+      {
+        label: withIcon('🔍', labels.findSelection, 'Find Selection'),
+        enabled: hasSelection,
+        click: () => sendAction('find-selection')
+      },
+      {
+        label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
+        click: () => sendAction('clear-terminal')
       }
     );
   }

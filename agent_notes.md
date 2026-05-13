@@ -53,6 +53,7 @@ SerialTerminal/
 │  ├─ serial_test.py
 │  └─ serial_tester.py
 ├─ index.html                 主窗口 HTML
+├─ workspace-manager.js       主工作区 pane/tab 状态与 DOM 编排管理
 ├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、主输入框、侧边栏）
 ├─ main.js                    主进程逻辑（窗口、配置、串口、日志、更新）
 ├─ preferences.html           设置窗口 HTML
@@ -86,6 +87,19 @@ SerialTerminal/
 - 主输入框发送逻辑
 - 快捷发送、自动发送、吞吐量 UI 等
 - 当前也承担多语言在主窗口中的部分应用逻辑
+
+#### `workspace-manager.js`
+负责：
+- `workspaceLayout` 的 pane/tab 状态管理
+- pane 激活、tab 激活、tab 移动、关闭分屏等工作区操作
+- 过滤 tab 加入/移出工作区时的 pane 归属与激活回退处理
+- 配置恢复阶段的 workspace 布局替换与激活恢复
+- 当前活动 pane / tab 解析，供搜索和其他行为统一复用
+- 右键菜单相关目标 pane 解析与对侧 pane 推导
+- 分屏开关、布局方向、tab 活动态等纯工作区状态读取
+- workspace 布局标准化与快照/默认布局访问
+- 将工作区状态统一映射回主界面 DOM
+- 降低 `renderer.js` 继续演进分屏功能时的耦合风险
 
 #### `preferences.js`
 负责：
@@ -166,6 +180,23 @@ npm run dist:linux
     "height": 700
   },
   "filterTabs": [],
+  "workspaceLayout": {
+    "splitEnabled": false,
+    "orientation": "horizontal",
+    "activePaneId": "pane-1",
+    "panes": [
+      {
+        "id": "pane-1",
+        "activeTabId": "tab-main",
+        "tabIds": ["tab-main"]
+      },
+      {
+        "id": "pane-2",
+        "activeTabId": null,
+        "tabIds": []
+      }
+    ]
+  },
   "mainInputSettings": {
     "visible": true,
     "sendOnEnter": true,
@@ -186,7 +217,8 @@ npm run dist:linux
 
 ### 重要说明
 - `filterHistory`：过滤输入框的历史记录
-- `filterTabs`：过滤标签页恢复所需状态（过滤文本、大小写、正则等）
+- `filterTabs`：过滤标签页恢复所需状态（过滤文本、大小写、正则、所属 pane 等）
+- `workspaceLayout`：主工作区分屏布局、pane 激活状态、各 tab 所属 pane
 - `windowBounds`：主窗口大小恢复
 - `mainInputSettings`：主输入框显示、按回车发送、末尾追加 CRLF
 - `skippedUpdateVersion`：用户选择跳过的更新版本号
@@ -205,9 +237,22 @@ npm run dist:linux
 其中“发送”标签页内的快捷发送列表支持用户拖动排序，调整顺序后会按当前顺序持久化保存。
 
 ### 6.2 主区域
+- 主工作区 `workspace-root`
+- pane-1 / pane-2 双 pane 容器（首版最多 2 个 pane）
 - 主终端标签页 `tab-main`
 - 多个过滤标签页 `tab-filter-*`
 - 下方主输入框面板 `main-input-panel`
+
+### 6.2.1 当前分屏能力（首版）
+- 支持左右分屏
+- 支持上下分屏
+- 支持将当前 tab 移动到另一个 pane
+- 支持关闭分屏并将第二 pane 的 tab 回收至第一 pane
+- 每个 pane 各自维护 active tab
+- 分屏操作入口已从顶部工具栏收敛到终端右键菜单，便于明确当前操作目标 tab / pane
+- 每个 pane 的 tabs header 右侧都带独立“新建过滤标签页”按钮，用于明确在当前 pane 中创建新 tab
+- 搜索目标跟随当前 active pane 的 active tab
+- 分屏布局会写入 `config.workspaceLayout` 并在启动后恢复
 
 ### 6.3 主输入框功能（当前需求版本）
 当前保留并实现的功能：
@@ -378,6 +423,7 @@ npm run dist:linux
 - 主终端支持右键菜单
 - 过滤终端支持右键菜单
 - 主终端当前支持：复制、复制全部、查找选中内容、清空终端、粘贴并发送、发送选中内容、基于选中文本新建过滤标签页
+- 主终端与过滤终端右键菜单当前都已支持分屏相关动作：左右分屏、上下分屏、关闭分屏；过滤标签页额外支持移动到另一个 pane
 - 过滤终端当前支持：复制、复制全部、查找选中内容、清空当前终端、用选中文本作为过滤条件、将选中文本追加到过滤条件、在主终端中定位、切换区分大小写、切换正则、关闭过滤标签页
 - 右键菜单动作执行时不应无条件抢占主输入框焦点
 
@@ -481,6 +527,28 @@ npm run dist:linux
 - `navigateMainInputHistory()`
 - `applyConfig()`
 
+### `workspace-manager.js`
+- `createWorkspaceManager()`
+- `getDefaultLayout()`
+- `getLayoutSnapshot()`
+- `isSplitEnabled()`
+- `getOrientation()`
+- `normalizeWorkspaceLayout()`
+- `getActivePane()`
+- `getActiveTabId()`
+- `getActiveTabInfo()`
+- `resolvePaneId()`
+- `getOtherPaneId()`
+- `getTabPaneId()`
+- `isTabActive()`
+- `switchPaneTab()`
+- `moveTabToPane()`
+- `addTabToPane()`
+- `removeTab()`
+- `restoreLayout()`
+- `collapseSplit()`
+- `applyLayoutToDom()`
+
 ### `preferences.js`
 - `applyPrefsI18n()`
 - `createRuleElement()`
@@ -568,6 +636,304 @@ npm run dist:linux
    - 输入框发送历史
    - 多语言切换
   - 更新跳过版本的持久化与启动检查行为
+
+---
+
+## 15A. 分屏工作区方案 A 实施计划
+
+### 15A.1 目标定义
+
+在主界面中央终端工作区引入类似 VS Code 的 pane 工作区分屏能力，支持：
+
+- 左右分屏
+- 上下分屏
+- 主终端与过滤终端分别放入不同 pane
+- 两个过滤终端分屏显示
+- 单串口连接下多个视图共享同一份串口输入流
+
+本方案**不要求**：
+
+- 同一个 tab 同时复制成两个同步 pane
+- 同时监听多个物理串口
+- 首版即支持任意层级嵌套分屏
+
+### 15A.2 总体设计原则
+
+1. 采用 **pane/workspace 容器** 替代当前“单 tabs 栈”主区域
+2. 保持当前单串口主链路不变，不修改 `main.js` 的串口连接模型
+3. 主终端 `tab-main` 与过滤终端 `tab-filter-*` 继续作为独立终端视图存在
+4. 分屏仅改变这些视图在 UI 中的组织方式，不改变串口数据来源
+5. 首版以“固定最多 2 个 pane”作为最小可用实现，优先保证稳定性
+
+### 15A.3 首版范围（MVP）
+
+首版建议仅实现以下能力：
+
+- 无分屏 / 左右分屏 / 上下分屏 三种布局状态
+- 最多 2 个 pane
+- 每个 pane 内保留 tabs 机制
+- 支持将当前 tab 移动到另一个 pane
+- 支持在当前 pane 或新 pane 中创建过滤 tab
+- 支持分屏布局持久化与启动恢复
+- 支持 pane 间切换时搜索目标、右键菜单目标、fit 目标正确切换
+
+首版暂不实现：
+
+- tab 拖拽到任意停靠位置
+- 多级嵌套 pane 树
+- 任意数量 pane
+- 同一 tab 的复制视图
+
+### 15A.4 UI 结构改造方案
+
+当前主区域结构为：
+
+- 一个 `main-tabs-header`
+- 一个 `main-tabs-content`
+- 一个全局 `main-input-panel`
+
+改造后建议为：
+
+- 一个 `workspace-root`
+- `workspace-root` 内最多 2 个 `pane`
+- 每个 `pane` 各自包含：
+  - `pane-tabs-header`
+  - `pane-tabs-content`
+- `main-input-panel` 继续保留为主区域底部全局输入区
+
+建议新增概念：
+
+- `activePaneId`：当前活动 pane
+- `pane-1`：默认主 pane
+- `pane-2`：分屏后出现的第二 pane
+
+### 15A.5 状态模型建议
+
+建议将当前“全局 tab 激活”改造为“pane 内部激活”。
+
+首版可以采用轻量状态结构：
+
+```js
+workspaceLayout = {
+  splitEnabled: false,
+  orientation: 'horizontal', // horizontal=左右, vertical=上下
+  panes: [
+    {
+      id: 'pane-1',
+      activeTabId: 'tab-main',
+      tabIds: ['tab-main']
+    },
+    {
+      id: 'pane-2',
+      activeTabId: null,
+      tabIds: []
+    }
+  ]
+}
+```
+
+过滤 tab 的运行时状态仍可保留在 `filterTabs` 中，但建议补充：
+
+```js
+{
+  id,
+  paneId,
+  term,
+  fitAddon,
+  searchAddon,
+  filterText,
+  caseSensitive,
+  useRegex
+}
+```
+
+### 15A.6 配置持久化建议
+
+建议在 `config.json` 中新增：
+
+```json
+{
+  "workspaceLayout": {
+    "splitEnabled": false,
+    "orientation": "horizontal",
+    "panes": [
+      {
+        "id": "pane-1",
+        "activeTabId": "tab-main",
+        "tabIds": ["tab-main"]
+      },
+      {
+        "id": "pane-2",
+        "activeTabId": null,
+        "tabIds": []
+      }
+    ]
+  }
+}
+```
+
+说明：
+
+- `filterTabs` 继续保存过滤配置本身
+- `workspaceLayout` 只负责 tab 属于哪个 pane、当前方向和激活状态
+- 启动恢复时先恢复过滤 tab，再按 `workspaceLayout` 组织 pane
+
+### 15A.7 关键代码改造点
+
+#### A. `index.html`
+
+- 将当前单一 `main-tabs-header` / `main-tabs-content` 改造成工作区容器
+- 在每个 `pane` 的 tabs header 右侧加入独立“新建过滤标签页”按钮
+- 将分屏操作入口收敛到终端右键菜单，避免全局工具栏弱化当前操作目标
+
+#### B. `style.css`
+
+- 为 `workspace-root` 增加 flex 布局
+- 支持：
+  - `.split-horizontal`
+  - `.split-vertical`
+- 为 pane 增加独立 header/content 样式
+- 预留 pane active 态高亮样式，便于区分当前搜索目标和右键上下文目标
+
+#### C. `renderer.js`
+
+需要新增或调整的核心能力：
+
+- `switchMainTab(tabId)` -> 改造成 `switchPaneTab(paneId, tabId)`
+- 新增 `setActivePane(paneId)`
+- `createFilterTab(initialState)` -> 改造成支持 `targetPaneId`
+- 新增 `moveTabToPane(tabId, targetPaneId)`
+- 新增 `applyWorkspaceLayout()`
+- 新增 `persistWorkspaceLayout()`
+- 新增 `restoreWorkspaceLayout()`
+- 将搜索目标解析逻辑从“全局 active tab”改为“active pane 的 active tab”
+- 将右键菜单动作目标解析逻辑从“当前 active tab”改为“事件来源 pane/tab”
+
+#### D. `main.js`
+
+首版预计无需增加复杂 IPC；只需继续复用现有 `save-config` 配置持久化链路。
+
+### 15A.8 串口数据与视图关系
+
+本方案保持现有数据链路不变：
+
+- 主进程继续向渲染层广播 `serial-output`
+- 渲染层继续使用 `SerialDataParser.parse(data)` 解析
+- 主终端写入主终端实例
+- 各过滤终端继续根据各自 `filterRegex` 写入对应终端
+
+即：**分屏只改变显示容器，不改变串口处理链。**
+
+### 15A.9 搜索、右键菜单与焦点策略
+
+这是分屏方案中的高风险区域，必须保持以下原则：
+
+1. 搜索面板始终作用于“当前活动 pane 的活动 tab”
+2. 右键菜单动作始终作用于触发菜单的终端实例，不能仅依赖全局 active tab
+3. 切换 pane / tab / 布局恢复时，禁止无条件调用 `focusMainInput()`
+4. 过滤输入框仍应优先保护焦点，不可因 pane 切换被主输入框抢焦点
+5. 分屏切换、关闭、移动 tab 后，要重新确认当前 active pane 与 active tab 的一致性
+
+### 15A.10 fit 与布局刷新策略
+
+分屏后，`xterm fitAddon.fit()` 触发时机需要扩展到：
+
+- pane 创建后
+- 分屏方向切换后
+- tab 移动后
+- tab 切换后
+- 窗口 resize 后
+- 布局恢复完成后
+
+原则：
+
+- 主终端使用 `serialFitAddon.fit()`
+- 过滤终端使用各自 `tab.fitAddon.fit()`
+- 避免在隐藏 pane 上频繁 fit，优先在实际可见后 fit
+
+### 15A.11 分阶段实施步骤
+
+#### 第一阶段：布局容器落地
+
+- 引入 `workspace-root`
+- 实现双 pane DOM 结构
+- 实现左右 / 上下布局切换
+- 暂不迁移全部 tab 逻辑，只先让主终端在 pane-1 正常显示
+
+#### 第二阶段：tab 归属模型改造
+
+- 为 `tab-main` 和 `tab-filter-*` 增加 `paneId`
+- 支持每个 pane 内独立 active tab
+- 支持过滤 tab 创建到指定 pane
+
+#### 第三阶段：pane 操作能力
+
+- 实现“移动当前 tab 到另一 pane”
+- 实现“关闭分屏”并回收第二 pane tab 到第一 pane
+- 完成 workspaceLayout 持久化与恢复
+
+#### 第四阶段：行为联调
+
+- 搜索目标切换
+- 右键菜单动作目标校正
+- 焦点保护回归
+- fitAddon 刷新回归
+
+#### 第五阶段：体验补充
+
+- pane 激活态样式
+- 多语言文案补充
+- 可能的分隔条拖动调节比例（若首版时间允许）
+
+### 15A.12 验证清单
+
+分屏功能开发后，至少需要验证：
+
+1. 主终端单独显示时行为不退化
+2. 主终端 + 过滤终端左右分屏时：
+   - 主串口输出正常
+   - 过滤输出正常
+   - 搜索目标正常
+   - 右键菜单目标正常
+3. 主终端 + 过滤终端上下分屏时行为一致
+4. 两个过滤终端分屏时：
+   - 各自过滤条件独立
+   - 各自搜索独立切换正确
+5. 移动 tab 后：
+   - 不丢日志显示
+   - 不丢过滤条件
+   - 不抢焦点
+6. 关闭应用后再次启动：
+   - 过滤 tab 恢复正常
+   - 分屏方向恢复正常
+   - 各 tab 所属 pane 恢复正常
+
+### 15A.13 主要风险与规避策略
+
+#### 风险 1：fit 时机错误导致终端尺寸异常
+- 规避：pane 可见后再 fit；布局切换后统一延迟一次 fit
+
+#### 风险 2：搜索目标仍引用全局 active pane 旧逻辑
+- 规避：统一封装 `getActivePaneSearchTarget()`，禁止分散判断
+
+#### 风险 3：右键菜单动作误操作到非当前 pane
+- 规避：菜单 payload 中显式携带 `paneId`、`tabId`、`terminalType`
+
+#### 风险 4：过滤输入框再次被主输入框抢焦点
+- 规避：分屏相关 UI 操作中复用当前 `suppressMainInputFocus` 保护策略
+
+#### 风险 5：布局恢复顺序错误导致 tab 找不到容器
+- 规避：先恢复 tab 实例，再恢复 pane 归属，最后统一激活与 fit
+
+### 15A.14 后续增强方向
+
+在 MVP 稳定后，可继续考虑：
+
+- 拖拽 tab 到另一 pane
+- 分隔条拖动调整比例
+- 新建过滤 tab 时选择目标 pane
+- 多 pane 嵌套树结构
+- 将 workspace/pane/tab 状态从 `renderer.js` 进一步模块化拆分
 
 ---
 

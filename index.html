@@ -192,16 +192,26 @@
     </div>
 
     <div class="main-container">
-        <div class="main-tabs-header">
-            <div class="main-tabs-list" id="main-tabs-list">
-                <div class="main-tab active" data-target="tab-main" onclick="switchMainTab('tab-main')" data-i18n="main.mainTerminal">Main Terminal</div>
+        <div class="workspace-root" id="workspace-root">
+            <div class="workspace-pane active" id="pane-1" data-pane-id="pane-1">
+                <div class="main-tabs-header pane-tabs-header">
+                    <div class="main-tabs-list pane-tabs-list" id="pane-1-tabs-list">
+                        <div class="main-tab active" data-target="tab-main" data-pane-id="pane-1" onclick="switchMainTab('tab-main', 'pane-1')" data-i18n="main.mainTerminal">Main Terminal</div>
+                    </div>
+                    <button id="pane-1-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab">➕</button>
+                </div>
+                <div class="main-tabs-content pane-tabs-content" id="pane-1-tabs-content">
+                    <div class="main-tab-pane active" id="tab-main" data-pane-id="pane-1">
+                        <div class="terminal-wrapper" id="serial-container"></div>
+                    </div>
+                </div>
             </div>
-            <button id="new-filter-tab-btn" class="secondary" title="New Filter Tab" data-i18n-title="main.newFilterTab" style="width: 36px; height: 36px; border: none; background: transparent; font-size: 16px;">➕</button>
-        </div>
-        
-        <div class="main-tabs-content" id="main-tabs-content">
-            <div class="main-tab-pane active" id="tab-main">
-                <div class="terminal-wrapper" id="serial-container"></div>
+            <div class="workspace-pane" id="pane-2" data-pane-id="pane-2" hidden>
+                <div class="main-tabs-header pane-tabs-header">
+                    <div class="main-tabs-list pane-tabs-list" id="pane-2-tabs-list"></div>
+                    <button id="pane-2-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab">➕</button>
+                </div>
+                <div class="main-tabs-content pane-tabs-content" id="pane-2-tabs-content"></div>
             </div>
         </div>
         <div class="main-input-panel" id="main-input-panel">
@@ -252,18 +262,22 @@
             });
         }
 
-        function switchMainTab(tabId) {
+        function switchMainTab(tabId, paneId) {
+            if (typeof window.__switchWorkspaceTab === 'function') {
+                window.__switchWorkspaceTab(tabId, paneId);
+                return;
+            }
+
             document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.main-tab').forEach(el => el.classList.remove('active'));
-            
+
             const targetPane = document.getElementById(tabId);
             if (targetPane) targetPane.classList.add('active');
-            
+
             const targetTab = document.querySelector(`.main-tab[data-target="${tabId}"]`);
             if (targetTab) targetTab.classList.add('active');
-            
-            // Dispatch a custom event to notify renderer.js to fit the terminal
-            window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId } }));
+
+            window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId, paneId: paneId || 'pane-1' } }));
         }
     </script>
 </body>

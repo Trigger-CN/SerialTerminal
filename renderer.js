@@ -3,6 +3,7 @@ const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
 const { t, getLanguage } = require('./i18n');
+const { createWorkspaceManager } = require('./workspace-manager');
 
 let currentConfig = null;
 let currentLanguage = 'en';
@@ -21,8 +22,48 @@ let lineNoColor = '#ffff00';
 let highlightRules = [];
 let mouseWheelScrollLines = 3;
 
+const DEFAULT_WORKSPACE_LAYOUT = {
+    splitEnabled: false,
+    orientation: 'horizontal',
+    activePaneId: 'pane-1',
+    panes: [
+        { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main'] },
+        { id: 'pane-2', activeTabId: null, tabIds: [] }
+    ]
+};
+
+let workspaceLayout = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
+let workspaceManager = null;
+
 function tr(key, params = {}) {
     return t(currentLanguage, key, params);
+}
+
+function cloneWorkspaceLayout(layout) {
+    return JSON.parse(JSON.stringify(layout || DEFAULT_WORKSPACE_LAYOUT));
+}
+
+function ensureWorkspaceLayoutShape(layout) {
+    const normalized = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
+    const source = layout && typeof layout === 'object' ? layout : {};
+    normalized.splitEnabled = source.splitEnabled === true;
+    normalized.orientation = source.orientation === 'vertical' ? 'vertical' : 'horizontal';
+    normalized.activePaneId = source.activePaneId === 'pane-2' ? 'pane-2' : 'pane-1';
+
+    if (Array.isArray(source.panes)) {
+        source.panes.forEach(pane => {
+            const target = normalized.panes.find(item => item.id === pane.id);
+            if (!target) return;
+            target.activeTabId = typeof pane.activeTabId === 'string' ? pane.activeTabId : target.activeTabId;
+            target.tabIds = Array.isArray(pane.tabIds) ? pane.tabIds.filter(id => typeof id === 'string') : target.tabIds;
+        });
+    }
+
+    if (!normalized.panes[0].tabIds.includes('tab-main')) {
+        normalized.panes[0].tabIds.unshift('tab-main');
+    }
+
+    return normalized;
 }
 
 function hexToAnsi(hex) {
@@ -308,7 +349,12 @@ function getContextMenuLabels() {
         locateInMainTerminal: tr('main.contextLocateInMainTerminal'),
         toggleMatchCase: tr('main.contextToggleMatchCase'),
         toggleRegex: tr('main.contextToggleRegex'),
-        closeFilterTab: tr('main.contextCloseFilterTab')
+        closeFilterTab: tr('main.contextCloseFilterTab'),
+        splitHorizontal: tr('main.splitHorizontal'),
+        splitVertical: tr('main.splitVertical'),
+        moveToOtherPane: tr('main.moveToOtherPane'),
+        closeSplit: tr('main.closeSplit'),
+        newFilterTab: tr('main.newFilterTab')
     };
 }
 
@@ -342,10 +388,12 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
         }
         requestTerminalContextMenu({
             terminalType,
+            paneId: resolvePaneId(tabState?.paneId, tabState?.id, 'tab-main'),
             tabId: tabState?.id || '',
             hasSelection: term.hasSelection(),
             selectedText: term.hasSelection() ? term.getSelection() : '',
             isConnected,
+            splitEnabled: isSplitEnabled(),
             filterText: tabState?.filterText || '',
             canLocateInMain: Boolean(tabState?.contextLineText),
             caseSensitive: Boolean(tabState?.caseSensitive),
@@ -376,7 +424,7 @@ function locateInMainTerminalByLineNumber(lineNo) {
     if (!lineNo) return false;
     const searchText = `[${String(lineNo).padStart(4, '0')}]`;
     if (typeof switchMainTab === 'function') {
-        switchMainTab('tab-main');
+        switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
     }
     if (typeof showSidebarTab === 'function') {
         showSidebarTab('tab-search');
@@ -416,7 +464,7 @@ function clearTerminalByTabId(tabId) {
 }
 
 async function handleTerminalContextMenuAction(payload = {}) {
-    const { action, tabId, terminalType } = payload;
+    const { action, tabId, terminalType, paneId } = payload;
     const isFilter = terminalType === 'filter';
     const filterTab = isFilter ? filterTabs.find(tab => tab.id === tabId) : null;
     const targetTerm = isFilter ? filterTab?.term : serialTerm;
@@ -459,8 +507,31 @@ async function handleTerminalContextMenuAction(payload = {}) {
         case 'create-filter-from-selection': {
             const text = targetTerm?.getSelection();
             if (text) {
-                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false });
+                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false }, resolvePaneId(paneId, tabId));
             }
+            break;
+        }
+        case 'new-filter-tab': {
+            createFilterTab({}, resolvePaneId(paneId, tabId));
+            break;
+        }
+        case 'split-horizontal': {
+            enableSplit('horizontal');
+            break;
+        }
+        case 'split-vertical': {
+            enableSplit('vertical');
+            break;
+        }
+        case 'move-to-other-pane': {
+            if (!tabId || tabId === 'tab-main') break;
+            const sourcePaneId = resolvePaneId(paneId, tabId);
+            const targetPaneId = getOtherPaneId(sourcePaneId);
+            moveTabToPane(tabId, targetPaneId);
+            break;
+        }
+        case 'close-split': {
+            collapseSplit();
             break;
         }
         case 'use-selection-as-filter': {
@@ -531,6 +602,12 @@ const serialSearchAddon = new SearchAddon();
 serialTerm.loadAddon(serialFitAddon);
 serialTerm.loadAddon(serialSearchAddon);
 serialTerm.open(document.getElementById('serial-container'));
+const mainTabButton = document.querySelector('.main-tab[data-target="tab-main"]');
+if (mainTabButton) {
+    mainTabButton.addEventListener('click', () => {
+        switchPaneTab('pane-1', 'tab-main');
+    });
+}
 bindTerminalContextMenu({
     terminalType: 'main',
     term: serialTerm,
@@ -542,6 +619,154 @@ bindTerminalWheel(serialTerm, document.getElementById('serial-container'));
 let filterTabs = [];
 let nextFilterTabId = 1;
 
+function getPaneDom(paneId) {
+    return document.getElementById(paneId);
+}
+
+function getPaneTabsList(paneId) {
+    return document.getElementById(`${paneId}-tabs-list`);
+}
+
+function getPaneTabsContent(paneId) {
+    return document.getElementById(`${paneId}-tabs-content`);
+}
+
+function persistWorkspaceLayout() {
+    if (!currentConfig) return;
+    currentConfig.workspaceLayout = cloneWorkspaceLayout(workspaceLayout);
+    ipcRenderer.send('save-config', { workspaceLayout: currentConfig.workspaceLayout });
+}
+
+workspaceManager = createWorkspaceManager({
+    getLayout: () => workspaceLayout,
+    setLayout: (nextLayout) => {
+        workspaceLayout = nextLayout;
+    },
+    cloneLayout: cloneWorkspaceLayout,
+    normalizeLayout: ensureWorkspaceLayoutShape,
+    persistLayout: persistWorkspaceLayout,
+    getPaneDom,
+    getPaneTabsList,
+    getPaneTabsContent,
+    onTabActivated: ({ tabId, paneId }) => {
+        window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId, paneId } }));
+    },
+    onTabMoved: ({ tabId, targetPaneId }) => {
+        const filterTab = filterTabs.find(tab => tab.id === tabId);
+        if (filterTab) {
+            filterTab.paneId = targetPaneId;
+        }
+        persistFilterTabs();
+    },
+    fitWorkspace: fitWorkspaceTerminals
+});
+
+function fitWorkspaceTerminals() {
+    setTimeout(() => {
+        serialFitAddon.fit();
+        filterTabs.forEach(tab => {
+            const paneEl = getPaneDom(tab.paneId || getTabPaneId(tab.id));
+            const tabPane = document.getElementById(tab.id);
+            if (!paneEl || paneEl.hidden || !tabPane || !isTabActive(tab.id)) return;
+            tab.fitAddon.fit();
+        });
+    }, 0);
+}
+
+function getPaneById(paneId) {
+    return workspaceManager.getPaneById(paneId);
+}
+
+function isSplitEnabled() {
+    return workspaceManager.isSplitEnabled();
+}
+
+function getOrientation() {
+    return workspaceManager.getOrientation();
+}
+
+function normalizeWorkspaceLayout(layout) {
+    return workspaceManager.normalizeWorkspaceLayout(layout);
+}
+
+function getActivePane() {
+    return workspaceManager.getActivePane();
+}
+
+function getActiveTabId(fallbackTabId = 'tab-main') {
+    return workspaceManager.getActiveTabId(fallbackTabId);
+}
+
+function getActiveTabInfo(fallbackTabId = 'tab-main') {
+    return workspaceManager.getActiveTabInfo(fallbackTabId);
+}
+
+function resolvePaneId(paneId, tabId, fallbackTabId = 'tab-main') {
+    return workspaceManager.resolvePaneId(paneId, tabId, fallbackTabId);
+}
+
+function getOtherPaneId(paneId) {
+    return workspaceManager.getOtherPaneId(paneId);
+}
+
+function getTabPaneId(tabId, fallbackPaneId = 'pane-1') {
+    return workspaceManager.getTabPaneId(tabId, fallbackPaneId);
+}
+
+function isTabActive(tabId) {
+    return workspaceManager.isTabActive(tabId);
+}
+
+function getPaneIdForTabId(tabId) {
+    return workspaceManager.getPaneIdForTabId(tabId);
+}
+
+function ensurePaneActiveTab(paneId) {
+    return workspaceManager.ensurePaneActiveTab(paneId);
+}
+
+function setActivePane(paneId, options = {}) {
+    return workspaceManager.setActivePane(paneId, options);
+}
+
+function switchPaneTab(paneId, tabId, options = {}) {
+    return workspaceManager.switchPaneTab(paneId, tabId, options);
+}
+
+window.__switchWorkspaceTab = switchPaneTab;
+
+function ensurePaneTabMembership(paneId, tabId) {
+    return workspaceManager.ensurePaneTabMembership(paneId, tabId);
+}
+
+function applyWorkspaceLayoutToDom() {
+    return workspaceManager.applyLayoutToDom();
+}
+
+function enableSplit(orientation) {
+    return workspaceManager.enableSplit(orientation);
+}
+
+function moveTabToPane(tabId, targetPaneId, options = {}) {
+    return workspaceManager.moveTabToPane(tabId, targetPaneId, options);
+}
+
+function collapseSplit() {
+    return workspaceManager.collapseSplit();
+}
+
+function addTabToPane(tabId, paneId, options = {}) {
+    return workspaceManager.addTabToPane(tabId, paneId, options);
+}
+
+function removeTabFromWorkspace(tabId, options = {}) {
+    return workspaceManager.removeTab(tabId, options);
+}
+
+function restoreWorkspaceLayout(layout, options = {}) {
+    return workspaceManager.restoreLayout(layout, options);
+}
+
 function getNextTabId() {
     return nextFilterTabId++;
 }
@@ -550,27 +775,29 @@ function updateTabTitles() {
     filterTabs.forEach((tab, index) => {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
-        tab.btn.innerHTML = `Filter ${displayIndex} `;
+        tab.btn.innerHTML = `${tr('main.filter')} ${displayIndex} `;
         tab.btn.appendChild(closeBtn);
     });
 }
 
-function createFilterTab(initialState = {}) {
+function createFilterTab(initialState = {}, targetPaneId = null) {
     const internalId = getNextTabId();
     const tabId = `tab-filter-${internalId}`;
+    const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
     
     // 1. Create Tab Button
-    const tabList = document.getElementById('main-tabs-list');
+    const tabList = getPaneTabsList(resolvedPaneId);
     const tabBtn = document.createElement('div');
     tabBtn.className = 'main-tab';
     tabBtn.dataset.target = tabId;
+    tabBtn.dataset.paneId = resolvedPaneId;
     
     // The initial title will be updated by updateTabTitles() right after
-    tabBtn.innerHTML = `Filter <span class="main-tab-close" title="Close Tab">✕</span>`;
+    tabBtn.innerHTML = `${tr('main.filter')} <span class="main-tab-close" title="${tr('main.closeTab')}">✕</span>`;
     
     tabBtn.onclick = (e) => {
         if (e.target.classList.contains('main-tab-close')) return;
-        switchMainTab(tabId);
+        switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
     };
     
     tabBtn.querySelector('.main-tab-close').onclick = () => {
@@ -580,22 +807,23 @@ function createFilterTab(initialState = {}) {
     tabList.appendChild(tabBtn);
     
     // 2. Create Tab Pane
-    const tabContent = document.getElementById('main-tabs-content');
+    const tabContent = getPaneTabsContent(resolvedPaneId);
     const tabPane = document.createElement('div');
     tabPane.className = 'main-tab-pane';
     tabPane.id = tabId;
+    tabPane.dataset.paneId = resolvedPaneId;
     
     const filterHeader = document.createElement('div');
     filterHeader.className = "filter-header";
     filterHeader.innerHTML = `
         <div class="filter-input-wrapper">
-            <input type="text" class="filter-input" placeholder="Filter text..." style="width: 100%; padding-right: 24px;">
+            <input type="text" class="filter-input" placeholder="${tr('main.filterText')}" style="width: 100%; padding-right: 24px;">
             <div class="filter-dropdown-btn">▼</div>
             <div class="filter-history-dropdown"></div>
         </div>
         <div class="filter-toggles" style="display: flex; gap: 4px; margin-right: 8px;">
-            <button class="filter-toggle-btn filter-case-btn" title="Match Case">Aa</button>
-            <button class="filter-toggle-btn filter-regex-btn" title="Use Regular Expression">.*</button>
+            <button class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}">Aa</button>
+            <button class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}">.*</button>
         </div>
     `;
     
@@ -633,6 +861,7 @@ function createFilterTab(initialState = {}) {
     // 4. Setup State and Events
     const tabState = {
         id: tabId,
+        paneId: resolvedPaneId,
         term,
         fitAddon,
         searchAddon,
@@ -667,7 +896,7 @@ function createFilterTab(initialState = {}) {
         dropdownMenu.innerHTML = '';
         
         if (history.length === 0) {
-            dropdownMenu.innerHTML = '<div class="filter-history-item" style="color: #666; cursor: default;">No history</div>';
+            dropdownMenu.innerHTML = `<div class="filter-history-item" style="color: #666; cursor: default;">${tr('common.noHistory')}</div>`;
             return;
         }
         
@@ -816,8 +1045,10 @@ function createFilterTab(initialState = {}) {
     
     filterTabs.push(tabState);
     updateTabTitles();
-    switchMainTab(tabId);
+    addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
+    switchPaneTab(resolvedPaneId, tabId, { persist: false });
     persistFilterTabs();
+    persistWorkspaceLayout();
     
     // Fit terminal after a short delay to ensure DOM is rendered
     setTimeout(() => {
@@ -836,14 +1067,18 @@ function closeFilterTab(tabId) {
         tab.element.remove();
         tab.btn.remove();
         filterTabs.splice(index, 1);
+        const { paneId, nextActiveTabId } = removeTabFromWorkspace(tabId, { persist: false });
         persistFilterTabs();
         
         updateTabTitles();
-        
-        // Switch to main tab if we closed the active one
-        if (tab.element.classList.contains('active')) {
-            switchMainTab('tab-main');
+
+        if (nextActiveTabId) {
+            switchPaneTab(paneId, nextActiveTabId, { persist: false });
+        } else {
+            switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main', { persist: false });
         }
+
+        persistWorkspaceLayout();
     }
 }
 
@@ -852,15 +1087,24 @@ function persistFilterTabs() {
         filterTabs: filterTabs.map(tab => ({
             filterText: tab.filterText || '',
             caseSensitive: tab.caseSensitive,
-            useRegex: tab.useRegex
+            useRegex: tab.useRegex,
+            paneId: tab.paneId || getTabPaneId(tab.id)
         }))
     });
 }
 
-document.getElementById('new-filter-tab-btn').addEventListener('click', createFilterTab);
+document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-1'));
+document.getElementById('pane-2-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-2'));
+
+document.querySelectorAll('.workspace-pane').forEach(paneEl => {
+    paneEl.addEventListener('mousedown', () => {
+        setActivePane(paneEl.dataset.paneId);
+    });
+});
 
 window.addEventListener('main-tab-changed', (e) => {
     const tabId = e.detail.tabId;
+    const paneId = e.detail.paneId || getPaneIdForTabId(tabId);
     setTimeout(() => {
         if (tabId === 'tab-main') {
             serialFitAddon.fit();
@@ -868,6 +1112,7 @@ window.addEventListener('main-tab-changed', (e) => {
             const tab = filterTabs.find(t => t.id === tabId);
             if (tab) tab.fitAddon.fit();
         }
+        setActivePane(paneId, { persist: false });
     }, 0);
 });
 
@@ -1107,6 +1352,7 @@ function applyConfig(config) {
     currentConfig = config;
     currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
+    const normalizedWorkspaceLayout = normalizeWorkspaceLayout(config.workspaceLayout);
     
     // Update local color settings
     timestampColor = config.timestampColor || '#00ff00';
@@ -1150,7 +1396,7 @@ function applyConfig(config) {
         el.placeholder = tr(el.dataset.i18nPlaceholder);
     });
     
-    // fitAddon.fit();
+    restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: false });
     serialFitAddon.fit();
 
     // Restore Serial Settings
@@ -1200,8 +1446,10 @@ function applyConfig(config) {
     applyMainInputConfig(config);
 
     if (filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
-        config.filterTabs.forEach(tabConfig => createFilterTab(tabConfig));
+        config.filterTabs.forEach(tabConfig => createFilterTab(tabConfig, tabConfig.paneId || 'pane-1'));
     }
+
+    fitWorkspaceTerminals();
 }
 
 /*
@@ -1452,7 +1700,8 @@ async function refreshPorts() {
 refreshBtn.addEventListener('click', refreshPorts);
 
 clearBtn.addEventListener('click', () => {
-    const activeTabPane = document.querySelector('.main-tab-pane.active');
+    const { tabId: activeTabId } = getActiveTabInfo();
+    const activeTabPane = activeTabId ? document.getElementById(activeTabId) : null;
     if (!activeTabPane) return;
 
     if (activeTabPane.id === 'tab-main') {
@@ -1520,8 +1769,7 @@ connectBtn.addEventListener('click', async () => {
 // refreshPorts(); // Moved to config load chain
 
 window.addEventListener('resize', () => {
-    // fitAddon.fit();
-    serialFitAddon.fit();
+    fitWorkspaceTerminals();
 });
 
 // Search Logic
@@ -1536,15 +1784,15 @@ let searchResultTotal = 0;
 let searchResultCurrent = 0;
 
 function getActiveSearchTarget() {
-    const activeTabPane = document.querySelector('.main-tab-pane.active');
-    if (!activeTabPane || activeTabPane.id === 'tab-main') {
+    const activeTabId = getActiveTabId();
+    if (activeTabId === 'tab-main') {
         return {
             term: serialTerm,
             addon: serialSearchAddon
         };
     }
 
-    const filterTab = filterTabs.find(tab => tab.id === activeTabPane.id);
+    const filterTab = filterTabs.find(tab => tab.id === activeTabId);
     if (filterTab) {
         return {
             term: filterTab.term,
