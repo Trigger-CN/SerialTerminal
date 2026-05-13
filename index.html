@@ -168,14 +168,20 @@
 
         <div class="throughput-panel" id="throughput-panel">
             <div class="throughput-row">
-                <div class="throughput-label" data-i18n="main.rx">RX</div>
-                <div class="throughput-chart" id="throughput-rx-chart"></div>
-                <div class="throughput-rate" id="throughput-rx-rate">0 B/s</div>
-            </div>
-            <div class="throughput-row">
-                <div class="throughput-label" data-i18n="main.tx">TX</div>
-                <div class="throughput-chart" id="throughput-tx-chart"></div>
-                <div class="throughput-rate" id="throughput-tx-rate">0 B/s</div>
+                <div class="throughput-charts-stack">
+                    <div class="throughput-chart" id="throughput-rx-chart"></div>
+                    <div class="throughput-chart" id="throughput-tx-chart"></div>
+                </div>
+                <div class="throughput-rates-stack">
+                    <div class="throughput-rate-group">
+                        <div class="throughput-label" data-i18n="main.rx">RX</div>
+                        <div class="throughput-rate" id="throughput-rx-rate">0 B/s</div>
+                    </div>
+                    <div class="throughput-rate-group">
+                        <div class="throughput-label" data-i18n="main.tx">TX</div>
+                        <div class="throughput-rate" id="throughput-tx-rate">0 B/s</div>
+                    </div>
+                </div>
             </div>
         </div>
 
