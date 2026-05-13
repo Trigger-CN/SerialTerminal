@@ -396,8 +396,17 @@ label:hover {
     flex-direction: column;
 }
 
+.workspace-root.resizing {
+    user-select: none;
+    cursor: col-resize;
+}
+
+.workspace-root.split-vertical.resizing {
+    cursor: row-resize;
+}
+
 .workspace-pane {
-    flex: 1;
+    flex: 1 1 0;
     min-width: 0;
     min-height: 0;
     display: flex;
@@ -408,9 +417,60 @@ label:hover {
     background: var(--bg-primary);
 }
 
+#pane-1 {
+    flex-basis: var(--pane-1-size, auto);
+}
+
+#pane-2 {
+    flex-basis: var(--pane-2-size, auto);
+}
+
 .workspace-pane.active {
     border-color: var(--accent-color);
     box-shadow: inset 0 0 0 1px rgba(0, 122, 204, 0.25);
+}
+
+.workspace-splitter {
+    flex: 0 0 10px;
+    background: transparent;
+    cursor: col-resize;
+    position: relative;
+    z-index: 2;
+}
+
+.workspace-splitter::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    transform: translateX(-50%);
+    background: var(--border-color);
+}
+
+.workspace-root.split-vertical .workspace-splitter {
+    flex-basis: 10px;
+    width: 100%;
+    cursor: row-resize;
+}
+
+.workspace-root.split-vertical .workspace-splitter::before {
+    top: 50%;
+    bottom: auto;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 1px;
+    transform: translateY(-50%);
+}
+
+.workspace-splitter:hover {
+    background: rgba(0, 122, 204, 0.08);
+}
+
+.workspace-splitter:hover::before {
+    background: var(--accent-color);
 }
 
 .pane-tabs-header {

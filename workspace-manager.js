@@ -125,14 +125,33 @@ function createWorkspaceManager(options = {}) {
     function updatePaneVisibility() {
         const root = document.getElementById('workspace-root');
         const pane2 = getPaneDom('pane-2');
+        const splitter = document.getElementById('workspace-splitter');
         root.classList.toggle('split-vertical', getOrientation() === 'vertical');
         root.classList.toggle('split-horizontal', getOrientation() !== 'vertical');
         if (pane2) pane2.hidden = !isSplitEnabled();
+        if (splitter) splitter.hidden = !isSplitEnabled();
+    }
+
+    function applyPaneSizes() {
+        const root = document.getElementById('workspace-root');
+        if (!root) return;
+        const layout = getLayoutState();
+        if (!isSplitEnabled()) {
+            root.style.removeProperty('--pane-1-size');
+            root.style.removeProperty('--pane-2-size');
+            return;
+        }
+        const paneSizes = layout.paneSizes || {};
+        const pane1 = Number(paneSizes['pane-1']) || 0.5;
+        const pane2 = Number(paneSizes['pane-2']) || (1 - pane1);
+        root.style.setProperty('--pane-1-size', `${pane1 * 100}%`);
+        root.style.setProperty('--pane-2-size', `${pane2 * 100}%`);
     }
 
     function applyLayoutToDom() {
         const layout = getLayoutState();
         updatePaneVisibility();
+        applyPaneSizes();
         document.querySelectorAll('.main-tab').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
         layout.panes.forEach(pane => {
@@ -177,6 +196,7 @@ function createWorkspaceManager(options = {}) {
         const layout = getLayoutState();
         layout.splitEnabled = true;
         layout.orientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
+        layout.paneSizes = layout.paneSizes || { 'pane-1': 0.5, 'pane-2': 0.5 };
         applyLayoutToDom();
         persistLayout();
         fitWorkspace?.();
@@ -306,6 +326,19 @@ function createWorkspaceManager(options = {}) {
         }
     }
 
+    function setPaneSizes(pane1Ratio, { persist = true } = {}) {
+        const layout = getLayoutState();
+        const clampedPane1Ratio = Math.min(0.85, Math.max(0.15, Number(pane1Ratio) || 0.5));
+        layout.paneSizes = {
+            'pane-1': clampedPane1Ratio,
+            'pane-2': 1 - clampedPane1Ratio
+        };
+        applyPaneSizes();
+        if (persist) {
+            persistLayout();
+        }
+    }
+
     return {
         getPaneById,
         getPaneIdForTabId,
@@ -332,7 +365,8 @@ function createWorkspaceManager(options = {}) {
         removeTab,
         collapseSplit,
         replaceLayout,
-        restoreLayout
+        restoreLayout,
+        setPaneSizes
     };
 }
 

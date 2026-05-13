@@ -69,6 +69,10 @@ function loadConfig() {
       splitEnabled: false,
       orientation: 'horizontal',
       activePaneId: 'pane-1',
+        paneSizes: {
+          'pane-1': 0.5,
+          'pane-2': 0.5
+        },
       panes: [
         {
           id: 'pane-1',

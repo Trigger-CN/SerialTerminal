@@ -26,6 +26,10 @@ const DEFAULT_WORKSPACE_LAYOUT = {
     splitEnabled: false,
     orientation: 'horizontal',
     activePaneId: 'pane-1',
+    paneSizes: {
+        'pane-1': 0.5,
+        'pane-2': 0.5
+    },
     panes: [
         { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main'] },
         { id: 'pane-2', activeTabId: null, tabIds: [] }
@@ -49,6 +53,20 @@ function ensureWorkspaceLayoutShape(layout) {
     normalized.splitEnabled = source.splitEnabled === true;
     normalized.orientation = source.orientation === 'vertical' ? 'vertical' : 'horizontal';
     normalized.activePaneId = source.activePaneId === 'pane-2' ? 'pane-2' : 'pane-1';
+    const sourceSizes = source.paneSizes && typeof source.paneSizes === 'object' ? source.paneSizes : {};
+    const pane1Size = Number(sourceSizes['pane-1']);
+    const pane2Size = Number(sourceSizes['pane-2']);
+    if (Number.isFinite(pane1Size) && pane1Size > 0 && pane1Size < 1) {
+        normalized.paneSizes['pane-1'] = pane1Size;
+    }
+    if (Number.isFinite(pane2Size) && pane2Size > 0 && pane2Size < 1) {
+        normalized.paneSizes['pane-2'] = pane2Size;
+    }
+    const totalSize = normalized.paneSizes['pane-1'] + normalized.paneSizes['pane-2'];
+    if (totalSize > 0) {
+        normalized.paneSizes['pane-1'] /= totalSize;
+        normalized.paneSizes['pane-2'] /= totalSize;
+    }
 
     if (Array.isArray(source.panes)) {
         source.panes.forEach(pane => {
@@ -85,6 +103,8 @@ const mainInputPanel = document.getElementById('main-input-panel');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const mainAppendCrlfCb = document.getElementById('main-append-crlf');
 const toggleMainInputBtn = document.getElementById('toggle-main-input');
+const workspaceRootEl = document.getElementById('workspace-root');
+const workspaceSplitterEl = document.getElementById('workspace-splitter');
 let suppressMainInputFocus = false;
 
 showTimestampCb.addEventListener('change', (e) => {
@@ -759,6 +779,41 @@ function addTabToPane(tabId, paneId, options = {}) {
     return workspaceManager.addTabToPane(tabId, paneId, options);
 }
 
+function setPaneSizes(pane1Ratio, options = {}) {
+    return workspaceManager.setPaneSizes(pane1Ratio, options);
+}
+
+function bindWorkspaceSplitter() {
+    if (!workspaceRootEl || !workspaceSplitterEl) return;
+
+    const handlePointerMove = (event) => {
+        if (!isSplitEnabled()) return;
+        const isVertical = getOrientation() === 'vertical';
+        const rect = workspaceRootEl.getBoundingClientRect();
+        const total = isVertical ? rect.height : rect.width;
+        const offset = isVertical ? (event.clientY - rect.top) : (event.clientX - rect.left);
+        if (total <= 0) return;
+        setPaneSizes(offset / total, { persist: false });
+        fitWorkspaceTerminals();
+    };
+
+    const handlePointerUp = () => {
+        workspaceRootEl.classList.remove('resizing');
+        document.removeEventListener('pointermove', handlePointerMove);
+        document.removeEventListener('pointerup', handlePointerUp);
+        persistWorkspaceLayout();
+        fitWorkspaceTerminals();
+    };
+
+    workspaceSplitterEl.addEventListener('pointerdown', (event) => {
+        if (!isSplitEnabled()) return;
+        event.preventDefault();
+        workspaceRootEl.classList.add('resizing');
+        document.addEventListener('pointermove', handlePointerMove);
+        document.addEventListener('pointerup', handlePointerUp);
+    });
+}
+
 function removeTabFromWorkspace(tabId, options = {}) {
     return workspaceManager.removeTab(tabId, options);
 }
@@ -1347,6 +1402,7 @@ function applyMainInputConfig(config) {
 }
 
 bindMainInputEvents();
+bindWorkspaceSplitter();
 
 function applyConfig(config) {
     currentConfig = config;

@@ -98,6 +98,7 @@ SerialTerminal/
 - 右键菜单相关目标 pane 解析与对侧 pane 推导
 - 分屏开关、布局方向、tab 活动态等纯工作区状态读取
 - workspace 布局标准化与快照/默认布局访问
+- pane 分区比例应用与拖动后的尺寸持久化
 - 将工作区状态统一映射回主界面 DOM
 - 降低 `renderer.js` 继续演进分屏功能时的耦合风险
 
@@ -184,6 +185,10 @@ npm run dist:linux
     "splitEnabled": false,
     "orientation": "horizontal",
     "activePaneId": "pane-1",
+    "paneSizes": {
+      "pane-1": 0.5,
+      "pane-2": 0.5
+    },
     "panes": [
       {
         "id": "pane-1",
@@ -219,6 +224,7 @@ npm run dist:linux
 - `filterHistory`：过滤输入框的历史记录
 - `filterTabs`：过滤标签页恢复所需状态（过滤文本、大小写、正则、所属 pane 等）
 - `workspaceLayout`：主工作区分屏布局、pane 激活状态、各 tab 所属 pane
+- `workspaceLayout.paneSizes`：两个 pane 的分区比例，用于拖动分隔条后恢复尺寸
 - `windowBounds`：主窗口大小恢复
 - `mainInputSettings`：主输入框显示、按回车发送、末尾追加 CRLF
 - `skippedUpdateVersion`：用户选择跳过的更新版本号
@@ -248,6 +254,7 @@ npm run dist:linux
 - 支持上下分屏
 - 支持将当前 tab 移动到另一个 pane
 - 支持关闭分屏并将第二 pane 的 tab 回收至第一 pane
+- 支持拖动两个 pane 中间的分隔条，实时调整两个分区大小
 - 每个 pane 各自维护 active tab
 - 分屏操作入口已从顶部工具栏收敛到终端右键菜单，便于明确当前操作目标 tab / pane
 - 每个 pane 的 tabs header 右侧都带独立“新建过滤标签页”按钮，用于明确在当前 pane 中创建新 tab
@@ -541,6 +548,7 @@ npm run dist:linux
 - `getOtherPaneId()`
 - `getTabPaneId()`
 - `isTabActive()`
+- `setPaneSizes()`
 - `switchPaneTab()`
 - `moveTabToPane()`
 - `addTabToPane()`
@@ -840,6 +848,7 @@ workspaceLayout = {
 
 - pane 创建后
 - 分屏方向切换后
+- 分隔条拖动后
 - tab 移动后
 - tab 切换后
 - 窗口 resize 后
