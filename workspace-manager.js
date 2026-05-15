@@ -251,6 +251,10 @@ function createWorkspaceManager(options = {}) {
         const tabPane = document.getElementById(tabId);
         if (!tabBtn || !tabPane) return;
 
+        if (targetPaneId === 'pane-2') {
+            layout.splitEnabled = true;
+        }
+
         sourcePane.tabIds = sourcePane.tabIds.filter(id => id !== tabId);
         ensurePaneTabMembership(targetPaneId, tabId);
         ensurePaneActiveTab(sourcePaneId);
@@ -261,7 +265,11 @@ function createWorkspaceManager(options = {}) {
         tabBtn.dataset.paneId = targetPaneId;
         tabPane.dataset.paneId = targetPaneId;
 
-        if (!preserveSplit) {
+        if (!sourcePane.tabIds.length && sourcePane.id === 'pane-2') {
+            layout.splitEnabled = false;
+            layout.activePaneId = 'pane-1';
+            targetPaneId = 'pane-1';
+        } else if (!preserveSplit) {
             layout.splitEnabled = true;
         }
 
@@ -299,6 +307,11 @@ function createWorkspaceManager(options = {}) {
         const pane = getPaneById(paneId);
         pane.tabIds = pane.tabIds.filter(id => id !== tabId);
         ensurePaneActiveTab(paneId);
+        if (!pane.tabIds.length && paneId === 'pane-2') {
+            const layout = getLayoutState();
+            layout.splitEnabled = false;
+            layout.activePaneId = 'pane-1';
+        }
         applyLayoutToDom();
         let nextActiveTabId = pane.activeTabId || null;
         if (!nextActiveTabId && fallbackTabId) {

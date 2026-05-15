@@ -501,11 +501,13 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       click: () => sendAction('new-filter-tab')
     },
     {
-      label: withIcon('⇆', labels.splitHorizontal, 'Split Right'),
+      label: withIcon('⇆', labels.splitHorizontal, 'Move Tab to Right Split'),
+      enabled: terminalType === 'filter' && Boolean(payload.tabId),
       click: () => sendAction('split-horizontal')
     },
     {
-      label: withIcon('⇅', labels.splitVertical, 'Split Down'),
+      label: withIcon('⇅', labels.splitVertical, 'Move Tab to Bottom Split'),
+      enabled: terminalType === 'filter' && Boolean(payload.tabId),
       click: () => sendAction('split-vertical')
     },
     {

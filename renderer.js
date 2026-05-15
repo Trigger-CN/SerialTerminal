@@ -39,6 +39,7 @@ const DEFAULT_WORKSPACE_LAYOUT = {
 let workspaceLayout = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
 let workspaceManager = null;
 let lastAppliedWorkspaceLayoutKey = '';
+let isRestoringWorkspaceSession = false;
 
 function tr(key, params = {}) {
     return t(currentLanguage, key, params);
@@ -537,11 +538,29 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'split-horizontal': {
-            enableSplit('horizontal');
+            if (!tabId || tabId === 'tab-main') break;
+            const sourcePaneId = resolvePaneId(paneId, tabId);
+            if (!isSplitEnabled()) {
+                const layout = normalizeWorkspaceLayout(workspaceLayout);
+                layout.orientation = 'horizontal';
+                workspaceLayout.orientation = 'horizontal';
+            } else {
+                workspaceLayout.orientation = 'horizontal';
+            }
+            moveTabToPane(tabId, getOtherPaneId(sourcePaneId));
             break;
         }
         case 'split-vertical': {
-            enableSplit('vertical');
+            if (!tabId || tabId === 'tab-main') break;
+            const sourcePaneId = resolvePaneId(paneId, tabId);
+            if (!isSplitEnabled()) {
+                const layout = normalizeWorkspaceLayout(workspaceLayout);
+                layout.orientation = 'vertical';
+                workspaceLayout.orientation = 'vertical';
+            } else {
+                workspaceLayout.orientation = 'vertical';
+            }
+            moveTabToPane(tabId, getOtherPaneId(sourcePaneId));
             break;
         }
         case 'move-to-other-pane': {
@@ -1118,9 +1137,11 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     filterTabs.push(tabState);
     updateTabTitles();
     addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
-    switchPaneTab(resolvedPaneId, tabId, { persist: false });
-    persistFilterTabs();
-    persistWorkspaceLayout();
+    if (!isRestoringWorkspaceSession) {
+        switchPaneTab(resolvedPaneId, tabId, { persist: false });
+        persistFilterTabs();
+        persistWorkspaceLayout();
+    }
     
     // Fit terminal after a short delay to ensure DOM is rendered
     setTimeout(() => {
@@ -1470,12 +1491,6 @@ function applyConfig(config) {
         el.placeholder = tr(el.dataset.i18nPlaceholder);
     });
     
-    if (normalizedWorkspaceLayoutKey !== lastAppliedWorkspaceLayoutKey) {
-        restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: true });
-        lastAppliedWorkspaceLayoutKey = JSON.stringify(cloneWorkspaceLayout(workspaceLayout));
-    }
-    serialFitAddon.fit();
-
     // Restore Serial Settings
     if (config.lastSerialOptions) {
         // Elements are defined below, but this function runs async or after load
@@ -1523,8 +1538,20 @@ function applyConfig(config) {
     applyMainInputConfig(config);
 
     if (filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
-        config.filterTabs.forEach(tabConfig => createFilterTab(tabConfig, tabConfig.paneId || 'pane-1'));
+        isRestoringWorkspaceSession = true;
+        try {
+            config.filterTabs.forEach(tabConfig => createFilterTab(tabConfig, tabConfig.paneId || 'pane-1'));
+        } finally {
+            isRestoringWorkspaceSession = false;
+        }
     }
+
+    if (normalizedWorkspaceLayoutKey !== lastAppliedWorkspaceLayoutKey) {
+        restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: true });
+        lastAppliedWorkspaceLayoutKey = JSON.stringify(cloneWorkspaceLayout(workspaceLayout));
+    }
+
+    serialFitAddon.fit();
 
     fitWorkspaceTerminals();
 }
