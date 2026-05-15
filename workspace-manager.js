@@ -89,14 +89,37 @@ function createWorkspaceManager(options = {}) {
         return getLayoutState().panes.some(pane => pane.activeTabId === tabId);
     }
 
+    function hasRenderableTab(tabId) {
+        if (!tabId) return false;
+        const tabButton = document.querySelector(`.main-tab[data-target="${tabId}"]`);
+        const tabPane = document.getElementById(tabId);
+        return Boolean(tabButton && tabPane);
+    }
+
+    function findFirstRenderableTabId(paneId) {
+        const pane = getPaneById(paneId);
+        return pane.tabIds.find(tabId => hasRenderableTab(tabId)) || null;
+    }
+
+    function prunePaneTabIds(paneId) {
+        const pane = getPaneById(paneId);
+        pane.tabIds = pane.tabIds.filter(tabId => {
+            if (tabId === 'tab-main') {
+                return hasRenderableTab(tabId);
+            }
+            return hasRenderableTab(tabId);
+        });
+    }
+
     function ensurePaneActiveTab(paneId) {
         const pane = getPaneById(paneId);
+        prunePaneTabIds(paneId);
         if (!pane.tabIds.length) {
             pane.activeTabId = null;
             return;
         }
-        if (!pane.activeTabId || !pane.tabIds.includes(pane.activeTabId)) {
-            pane.activeTabId = pane.tabIds[0];
+        if (!pane.activeTabId || !pane.tabIds.includes(pane.activeTabId) || !hasRenderableTab(pane.activeTabId)) {
+            pane.activeTabId = findFirstRenderableTabId(paneId) || pane.tabIds[0] || null;
         }
     }
 
@@ -155,12 +178,20 @@ function createWorkspaceManager(options = {}) {
         document.querySelectorAll('.main-tab').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
         layout.panes.forEach(pane => {
+            prunePaneTabIds(pane.id);
             ensurePaneActiveTab(pane.id);
             const paneEl = getPaneDom(pane.id);
             if (!paneEl) return;
             if (pane.activeTabId) {
-                paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`)?.classList.add('active');
-                paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`)?.classList.add('active');
+                const tabButton = paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
+                const tabPane = paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`);
+                if (!tabButton || !tabPane) {
+                    pane.activeTabId = findFirstRenderableTabId(pane.id) || null;
+                }
+                if (pane.activeTabId) {
+                    paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`)?.classList.add('active');
+                    paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`)?.classList.add('active');
+                }
             }
         });
         setActivePane(layout.activePaneId, { persist: false });
@@ -316,6 +347,7 @@ function createWorkspaceManager(options = {}) {
     }
 
     function restoreLayout(nextLayout, { persist = false } = {}) {
+        const beforeLayout = JSON.stringify(normalizeWorkspaceLayout(nextLayout));
         replaceLayout(nextLayout, { apply: true, persist });
         const layout = getLayoutState();
         const activePane = getPaneById(layout.activePaneId);
@@ -323,6 +355,9 @@ function createWorkspaceManager(options = {}) {
             switchPaneTab(activePane.id, activePane.activeTabId, { persist: false });
         } else {
             applyLayoutToDom();
+        }
+        if (persist && JSON.stringify(layout) !== beforeLayout) {
+            persistLayout();
         }
     }
 

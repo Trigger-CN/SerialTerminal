@@ -503,6 +503,20 @@ npm run dist:linux
 - 当前修正原则：右键时先读取点击所在 buffer 行文本，再解析显示行号进行主终端定位
 - 该方案比基于 `offsetY -> sourceLogIds[index]` 的估算更稳定，且与当前轻量映射方案耦合更低
 
+### 11.6 pane 有 tab 但未显示内容的问题
+- 根因不是单纯点击失效，而是 `workspaceLayout.activeTabId` 可能指向了当前 pane 中“逻辑上存在但 DOM 尚未就绪或节点已失效”的 tab
+- 旧逻辑只校验 `activeTabId` 是否存在于 `pane.tabIds`，未校验对应 `.main-tab` / `.main-tab-pane` 节点是否真实存在
+- 结果是 pane 内虽然有 tab，但没有任何 tab 被成功加上 `.active`，界面表现为空白
+- 当前修正原则：只要 pane 中存在 tab，就必须回退到当前 pane 中第一个真实可渲染的 tab，并立即显示
+- 当前还会在布局应用与激活兜底前清理 `pane.tabIds` 中已失效的脏 `tabId`，避免恢复后反复命中空白状态
+- 当前在配置恢复后若发生上述自愈，还会自动把清理后的干净 `workspaceLayout` 回写到配置，避免下次启动再次恢复出脏状态
+
+### 11.7 pane 交互抽搐 / 无法拖动 / 右键异常
+- 根因是把“布局自愈后的配置回写”挂到了 `applyLayoutToDom()` 这种高频路径上
+- `switchPaneTab()`、右键菜单动作、splitter 拖动等都会触发 `applyLayoutToDom()`；若这里立即 `save-config`，主进程会回发 `config-updated`，从而再次触发 `applyConfig()` 和 `restoreWorkspaceLayout()`
+- 这会形成“交互 -> 布局应用 -> 保存配置 -> 配置回推 -> 再次恢复布局”的回环，表现为 pane 抽搐、拖动被打断、右键异常
+- 当前修正原则：自愈后的回写只允许发生在布局恢复流程中，不能挂在高频 UI 布局应用路径上
+
 ---
 
 ## 12. 关键函数与关注点清单

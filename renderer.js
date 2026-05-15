@@ -38,6 +38,7 @@ const DEFAULT_WORKSPACE_LAYOUT = {
 
 let workspaceLayout = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
 let workspaceManager = null;
+let lastAppliedWorkspaceLayoutKey = '';
 
 function tr(key, params = {}) {
     return t(currentLanguage, key, params);
@@ -786,6 +787,16 @@ function setPaneSizes(pane1Ratio, options = {}) {
 function bindWorkspaceSplitter() {
     if (!workspaceRootEl || !workspaceSplitterEl) return;
 
+    let rafId = null;
+    let pendingRatio = null;
+
+    const flushPaneResize = () => {
+        rafId = null;
+        if (pendingRatio === null) return;
+        setPaneSizes(pendingRatio, { persist: false });
+        pendingRatio = null;
+    };
+
     const handlePointerMove = (event) => {
         if (!isSplitEnabled()) return;
         const isVertical = getOrientation() === 'vertical';
@@ -793,11 +804,17 @@ function bindWorkspaceSplitter() {
         const total = isVertical ? rect.height : rect.width;
         const offset = isVertical ? (event.clientY - rect.top) : (event.clientX - rect.left);
         if (total <= 0) return;
-        setPaneSizes(offset / total, { persist: false });
-        fitWorkspaceTerminals();
+        pendingRatio = offset / total;
+        if (rafId === null) {
+            rafId = requestAnimationFrame(flushPaneResize);
+        }
     };
 
     const handlePointerUp = () => {
+        if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            flushPaneResize();
+        }
         workspaceRootEl.classList.remove('resizing');
         document.removeEventListener('pointermove', handlePointerMove);
         document.removeEventListener('pointerup', handlePointerUp);
@@ -1409,6 +1426,7 @@ function applyConfig(config) {
     currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
     const normalizedWorkspaceLayout = normalizeWorkspaceLayout(config.workspaceLayout);
+    const normalizedWorkspaceLayoutKey = JSON.stringify(normalizedWorkspaceLayout);
     
     // Update local color settings
     timestampColor = config.timestampColor || '#00ff00';
@@ -1452,7 +1470,10 @@ function applyConfig(config) {
         el.placeholder = tr(el.dataset.i18nPlaceholder);
     });
     
-    restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: false });
+    if (normalizedWorkspaceLayoutKey !== lastAppliedWorkspaceLayoutKey) {
+        restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: true });
+        lastAppliedWorkspaceLayoutKey = JSON.stringify(cloneWorkspaceLayout(workspaceLayout));
+    }
     serialFitAddon.fit();
 
     // Restore Serial Settings
