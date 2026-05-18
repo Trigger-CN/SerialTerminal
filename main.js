@@ -157,6 +157,9 @@ function saveLog() {
       const buffer = iconv.encode(allData, currentConfig.logEncoding);
       fs.writeFileSync(fullPath, buffer);
       console.log('Log saved to:', fullPath);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('log-saved', { path: fullPath });
+      }
   } catch (err) {
       console.error('Failed to save log:', err);
   }

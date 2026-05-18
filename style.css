@@ -786,6 +786,37 @@ label:hover {
     text-overflow: ellipsis;
 }
 
+.main-input-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding-left: 8px;
+}
+
+.main-input-meta-row .main-input-last {
+    flex: 1 1 50%;
+    min-width: 0;
+}
+
+.main-action-status {
+    flex: 1 1 50%;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 2px 2px 0;
+    min-height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 #main-send-btn {
     flex-shrink: 0;
     min-width: 72px;
@@ -832,7 +863,7 @@ label:hover {
 
 /* Throughput Panel */
 .throughput-panel {
-    padding: 4px 3px 2px 6px;
+    padding: 8px 3px 2px 10px;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
     flex-shrink: 0;

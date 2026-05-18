@@ -101,6 +101,7 @@ const mainSendInput = document.getElementById('main-send-input');
 const mainSendBtn = document.getElementById('main-send-btn');
 const mainAddQuickSendBtn = document.getElementById('main-add-quick-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
+const mainActionStatus = document.getElementById('main-action-status');
 const mainInputPanel = document.getElementById('main-input-panel');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const mainAppendCrlfCb = document.getElementById('main-append-crlf');
@@ -108,6 +109,14 @@ const toggleMainInputBtn = document.getElementById('toggle-main-input');
 const workspaceRootEl = document.getElementById('workspace-root');
 const workspaceSplitterEl = document.getElementById('workspace-splitter');
 let suppressMainInputFocus = false;
+
+function setActionStatus(message) {
+    if (mainActionStatus) {
+        mainActionStatus.textContent = message || '就绪';
+    }
+}
+
+setActionStatus('就绪');
 
 showTimestampCb.addEventListener('change', (e) => {
     showTimestamp = e.target.checked;
@@ -509,6 +518,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
         }
         case 'clear-terminal': {
             clearTerminalByTabId(isFilter ? tabId : 'tab-main');
+            setActionStatus(isFilter ? '已清空过滤终端' : '已清空主终端');
             break;
         }
         case 'paste-send': {
@@ -530,37 +540,29 @@ async function handleTerminalContextMenuAction(payload = {}) {
             const text = targetTerm?.getSelection();
             if (text) {
                 createFilterTab({ filterText: text, caseSensitive: false, useRegex: false }, resolvePaneId(paneId, tabId));
+                setActionStatus('已用选中文本新建过滤标签页');
             }
             break;
         }
         case 'new-filter-tab': {
             createFilterTab({}, resolvePaneId(paneId, tabId));
+            setActionStatus('已新建过滤标签页');
             break;
         }
         case 'split-horizontal': {
             if (!tabId || tabId === 'tab-main') break;
             const sourcePaneId = resolvePaneId(paneId, tabId);
-            if (!isSplitEnabled()) {
-                const layout = normalizeWorkspaceLayout(workspaceLayout);
-                layout.orientation = 'horizontal';
-                workspaceLayout.orientation = 'horizontal';
-            } else {
-                workspaceLayout.orientation = 'horizontal';
-            }
+            workspaceLayout.orientation = 'horizontal';
             moveTabToPane(tabId, getOtherPaneId(sourcePaneId));
+            setActionStatus('已将标签页移入左右分屏');
             break;
         }
         case 'split-vertical': {
             if (!tabId || tabId === 'tab-main') break;
             const sourcePaneId = resolvePaneId(paneId, tabId);
-            if (!isSplitEnabled()) {
-                const layout = normalizeWorkspaceLayout(workspaceLayout);
-                layout.orientation = 'vertical';
-                workspaceLayout.orientation = 'vertical';
-            } else {
-                workspaceLayout.orientation = 'vertical';
-            }
+            workspaceLayout.orientation = 'vertical';
             moveTabToPane(tabId, getOtherPaneId(sourcePaneId));
+            setActionStatus('已将标签页移入上下分屏');
             break;
         }
         case 'move-to-other-pane': {
@@ -568,10 +570,12 @@ async function handleTerminalContextMenuAction(payload = {}) {
             const sourcePaneId = resolvePaneId(paneId, tabId);
             const targetPaneId = getOtherPaneId(sourcePaneId);
             moveTabToPane(tabId, targetPaneId);
+            setActionStatus('已移动标签页到另一个分屏');
             break;
         }
         case 'close-split': {
             collapseSplit();
+            setActionStatus('已关闭分屏');
             break;
         }
         case 'use-selection-as-filter': {
@@ -1141,6 +1145,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         switchPaneTab(resolvedPaneId, tabId, { persist: false });
         persistFilterTabs();
         persistWorkspaceLayout();
+        setActionStatus(`已创建过滤标签页：${tabBtn.textContent.trim()}`);
     }
     
     // Fit terminal after a short delay to ensure DOM is rendered
@@ -1165,13 +1170,15 @@ function closeFilterTab(tabId) {
         
         updateTabTitles();
 
+        const nextPaneId = nextActiveTabId ? getPaneIdForTabId(nextActiveTabId) : getPaneIdForTabId('tab-main');
         if (nextActiveTabId) {
-            switchPaneTab(paneId, nextActiveTabId, { persist: false });
+            switchPaneTab(nextPaneId, nextActiveTabId, { persist: false });
         } else {
             switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main', { persist: false });
         }
 
         persistWorkspaceLayout();
+        setActionStatus('已关闭过滤标签页');
     }
 }
 
@@ -1347,11 +1354,13 @@ function sendMainInputBuffer() {
     }
     const payload = mainAppendCrlfCb?.checked ? `${text}\r\n` : text;
     if (!sendSerialData(payload)) {
+        setActionStatus('发送失败：串口未连接');
         focusMainInput();
         return;
     }
     pushMainInputHistory(text);
     setLastSentPreview(payload);
+    setActionStatus(`已发送输入框内容（${payload.length} 字符）`);
     focusMainInput();
 }
 
@@ -1377,6 +1386,7 @@ function addMainInputToQuickSend() {
     });
     renderQuickSendList();
     saveQuickSendList();
+    setActionStatus('已将当前输入加入快捷发送');
     focusMainInput();
 }
 
@@ -1725,6 +1735,7 @@ function updateSerialConnectionState(connected) {
     connectBtn.textContent = connected ? '❌ Disconnect' : '⚡ Connect';
     statusDiv.textContent = connected ? 'Connected' : 'Disconnected';
     statusDot.classList.toggle('online', connected);
+    setActionStatus(connected ? '串口已连接' : '串口已断开');
 }
 
 ipcRenderer.on('serial-disconnected', (event, message) => {
@@ -1733,7 +1744,13 @@ ipcRenderer.on('serial-disconnected', (event, message) => {
         const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
         serialTerm.write(notice);
         filterTabs.forEach(tab => tab.term.write(notice));
+        setActionStatus(message);
     }
+});
+
+ipcRenderer.on('log-saved', (event, payload = {}) => {
+    const filePath = payload.path || '';
+    setActionStatus(filePath ? `日志已保存：${filePath}` : '日志已保存');
 });
 
 const portSelect = document.getElementById('port-select');
@@ -1799,6 +1816,7 @@ async function refreshPorts() {
         }
         portSelect.appendChild(opt);
     });
+    setActionStatus(`已刷新串口列表，共 ${ports.length} 个端口`);
 }
 
 refreshBtn.addEventListener('click', refreshPorts);
@@ -1864,7 +1882,9 @@ connectBtn.addEventListener('click', async () => {
             serialNewLine = true;
 
             serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
+            setActionStatus(`已连接串口 ${path} @ ${baudRate}`);
         } catch (err) {
+            setActionStatus(`串口连接失败：${err}`);
             alert('Failed to connect: ' + err);
         }
     }
@@ -2203,8 +2223,9 @@ function renderQuickSendList() {
         btn.addEventListener('click', () => {
             if (isConnected) {
                 ipcRenderer.send('serial-input', item.content);
+                setActionStatus(`已发送快捷指令：${item.label || item.content}`);
             } else {
-                // Optional: flash error or status?
+                setActionStatus('快捷发送失败：串口未连接');
             }
         });
         
@@ -2223,6 +2244,7 @@ function renderQuickSendList() {
             addQuickSendBtn.textContent = 'Update Item';
             addQuickSendBtn.classList.remove('secondary'); // Make it primary color to indicate action
             renderQuickSendList();
+            setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
         });
 
         const delBtn = document.createElement('button');
@@ -2245,6 +2267,7 @@ function renderQuickSendList() {
             quickSendList.splice(index, 1);
             saveQuickSendList();
             renderQuickSendList();
+            setActionStatus(`已删除快捷指令：${item.label || item.content}`);
         });
 
         actionDiv.appendChild(editBtn);
@@ -2274,9 +2297,11 @@ addQuickSendBtn.addEventListener('click', () => {
             editingIndex = -1;
             addQuickSendBtn.textContent = '+ Add to List';
             addQuickSendBtn.classList.add('secondary');
+            setActionStatus(`已更新快捷指令：${label || content}`);
         } else {
             // Add new item
             quickSendList.push({ label, content });
+            setActionStatus(`已新增快捷指令：${label || content}`);
         }
         
         quickSendLabelInput.value = '';
