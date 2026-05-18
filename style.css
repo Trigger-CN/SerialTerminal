@@ -863,7 +863,7 @@ label:hover {
 
 /* Throughput Panel */
 .throughput-panel {
-    padding: 8px 3px 2px 10px;
+    padding: 12px 3px 2px 10px;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
     flex-shrink: 0;
@@ -875,7 +875,7 @@ label:hover {
 .throughput-row {
     display: flex;
     align-items: stretch;
-    gap: 4px;
+    gap: 6px;
     min-height: 40px;
 }
 
@@ -889,7 +889,7 @@ label:hover {
 }
 
 .throughput-rates-stack {
-    width: 34px;
+    width: 45px;
     flex-shrink: 0;
     display: grid;
     grid-template-rows: 1fr 1fr;
@@ -903,7 +903,7 @@ label:hover {
     flex-direction: column;
     justify-content: center;
     align-items: flex-start;
-    gap: 1px;
+    gap: 2px;
 }
 
 .throughput-label {
