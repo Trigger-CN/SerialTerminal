@@ -40,6 +40,7 @@ let workspaceLayout = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
 let workspaceManager = null;
 let lastAppliedWorkspaceLayoutKey = '';
 let isRestoringWorkspaceSession = false;
+let isDraggingWorkspaceSplitter = false;
 
 function tr(key, params = {}) {
     return t(currentLanguage, key, params);
@@ -385,7 +386,10 @@ function getContextMenuLabels() {
         splitVertical: tr('main.splitVertical'),
         moveToOtherPane: tr('main.moveToOtherPane'),
         closeSplit: tr('main.closeSplit'),
-        newFilterTab: tr('main.newFilterTab')
+        newFilterTab: tr('main.newFilterTab'),
+        newShellTab: tr('main.newShellTab'),
+        closeShellTab: tr('main.contextCloseShellTab'),
+        restartShell: tr('main.contextRestartShell')
     };
 }
 
@@ -491,14 +495,38 @@ function clearTerminalByTabId(tabId) {
     const filterTab = filterTabs.find(t => t.id === tabId);
     if (filterTab) {
         filterTab.term.clear();
+        return;
     }
+    const shellTab = getShellTabState(tabId);
+    if (shellTab) {
+        shellTab.term.clear();
+    }
+}
+
+function restartShellTab(tabId) {
+    const shellTab = getShellTabState(tabId);
+    if (!shellTab) return;
+    ipcRenderer.send('close-shell-tab-session', { tabId });
+    shellTab.term.clear();
+    shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
+    ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows })
+        .then(() => {
+            shellTab.sessionReady = true;
+            ipcRenderer.send('resize-shell-tab', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows });
+            setActionStatus(tr('main.shellStarting'));
+        })
+        .catch((error) => {
+            shellTab.term.writeln(`\r\n[ERROR] ${tr('main.shellStartFailed', { error: error?.message || error })}\r\n`);
+        });
 }
 
 async function handleTerminalContextMenuAction(payload = {}) {
     const { action, tabId, terminalType, paneId } = payload;
     const isFilter = terminalType === 'filter';
+    const isShell = terminalType === 'shell';
     const filterTab = isFilter ? filterTabs.find(tab => tab.id === tabId) : null;
-    const targetTerm = isFilter ? filterTab?.term : serialTerm;
+    const shellTab = isShell ? getShellTabState(tabId) : null;
+    const targetTerm = isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialTerm);
     if (!targetTerm && action !== 'paste-send') return;
 
     switch (action) {
@@ -522,16 +550,21 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'paste-send': {
-            if (!isConnected) break;
             const text = await readClipboardText();
             if (text) {
-                ipcRenderer.send('serial-input', text);
+                if (isShell && shellTab) {
+                    ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
+                } else if (isConnected) {
+                    ipcRenderer.send('serial-input', text);
+                }
             }
             break;
         }
         case 'send-selection': {
             const text = targetTerm?.getSelection();
-            if (text && isConnected) {
+            if (text && isShell && shellTab) {
+                ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
+            } else if (text && isConnected) {
                 ipcRenderer.send('serial-input', text);
             }
             break;
@@ -626,6 +659,23 @@ async function handleTerminalContextMenuAction(payload = {}) {
             }
             break;
         }
+        case 'new-shell-tab': {
+            createShellTab({}, resolvePaneId(paneId, tabId));
+            setActionStatus(tr('main.shellStarting'));
+            break;
+        }
+        case 'close-shell-tab': {
+            if (shellTab) {
+                closeShellTab(shellTab.id);
+            }
+            break;
+        }
+        case 'restart-shell': {
+            if (shellTab) {
+                restartShellTab(shellTab.id);
+            }
+            break;
+        }
     }
 }
 
@@ -662,6 +712,8 @@ bindTerminalWheel(serialTerm, document.getElementById('serial-container'));
 // Filter Tabs Management
 let filterTabs = [];
 let nextFilterTabId = 1;
+let shellTabs = [];
+let nextShellTabId = 1;
 
 function getPaneDom(paneId) {
     return document.getElementById(paneId);
@@ -673,6 +725,10 @@ function getPaneTabsList(paneId) {
 
 function getPaneTabsContent(paneId) {
     return document.getElementById(`${paneId}-tabs-content`);
+}
+
+function getShellTabState(tabId) {
+    return shellTabs.find(tab => tab.id === tabId) || null;
 }
 
 function persistWorkspaceLayout() {
@@ -699,8 +755,14 @@ workspaceManager = createWorkspaceManager({
         const filterTab = filterTabs.find(tab => tab.id === tabId);
         if (filterTab) {
             filterTab.paneId = targetPaneId;
+            persistFilterTabs();
+            return;
         }
-        persistFilterTabs();
+        const shellTab = getShellTabState(tabId);
+        if (shellTab) {
+            shellTab.paneId = targetPaneId;
+            persistShellTabs();
+        }
     },
     fitWorkspace: fitWorkspaceTerminals
 });
@@ -713,6 +775,15 @@ function fitWorkspaceTerminals() {
             const tabPane = document.getElementById(tab.id);
             if (!paneEl || paneEl.hidden || !tabPane || !isTabActive(tab.id)) return;
             tab.fitAddon.fit();
+        });
+        shellTabs.forEach(tab => {
+            const paneEl = getPaneDom(tab.paneId || getTabPaneId(tab.id));
+            const tabPane = document.getElementById(tab.id);
+            if (!paneEl || paneEl.hidden || !tabPane || !isTabActive(tab.id)) return;
+            tab.fitAddon.fit();
+            if (!isDraggingWorkspaceSplitter) {
+                ipcRenderer.send('resize-shell-tab', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows });
+            }
         });
     }, 0);
 }
@@ -817,6 +888,7 @@ function bindWorkspaceSplitter() {
         rafId = null;
         if (pendingRatio === null) return;
         setPaneSizes(pendingRatio, { persist: false });
+        fitWorkspaceTerminals();
         pendingRatio = null;
     };
 
@@ -838,6 +910,7 @@ function bindWorkspaceSplitter() {
             cancelAnimationFrame(rafId);
             flushPaneResize();
         }
+        isDraggingWorkspaceSplitter = false;
         workspaceRootEl.classList.remove('resizing');
         document.removeEventListener('pointermove', handlePointerMove);
         document.removeEventListener('pointerup', handlePointerUp);
@@ -848,6 +921,7 @@ function bindWorkspaceSplitter() {
     workspaceSplitterEl.addEventListener('pointerdown', (event) => {
         if (!isSplitEnabled()) return;
         event.preventDefault();
+        isDraggingWorkspaceSplitter = true;
         workspaceRootEl.classList.add('resizing');
         document.addEventListener('pointermove', handlePointerMove);
         document.addEventListener('pointerup', handlePointerUp);
@@ -866,12 +940,179 @@ function getNextTabId() {
     return nextFilterTabId++;
 }
 
+function getNextShellTabId() {
+    return nextShellTabId++;
+}
+
+function syncNextShellTabId(tabId) {
+    const match = String(tabId || '').match(/^tab-shell-(\d+)$/);
+    if (!match) return;
+    const numericId = Number(match[1]);
+    if (Number.isFinite(numericId) && numericId >= nextShellTabId) {
+        nextShellTabId = numericId + 1;
+    }
+}
+
 function updateTabTitles() {
     filterTabs.forEach((tab, index) => {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
         tab.btn.innerHTML = `${tr('main.filter')} ${displayIndex} `;
         tab.btn.appendChild(closeBtn);
+    });
+    shellTabs.forEach((tab, index) => {
+        const closeBtn = tab.btn.querySelector('.main-tab-close');
+        tab.title = tr('main.shellTitle', { index: index + 1 });
+        tab.btn.innerHTML = `${tab.title} `;
+        tab.btn.appendChild(closeBtn);
+    });
+}
+
+function persistShellTabs() {
+    ipcRenderer.send('save-config', {
+        shellTabs: shellTabs.map(tab => ({
+            id: tab.id,
+            title: tab.title || '',
+            paneId: tab.paneId || getTabPaneId(tab.id)
+        }))
+    });
+}
+
+function createShellTab(initialState = {}, targetPaneId = null) {
+    const tabId = typeof initialState.id === 'string' && initialState.id ? initialState.id : `tab-shell-${getNextShellTabId()}`;
+    syncNextShellTabId(tabId);
+    const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
+
+    const tabList = getPaneTabsList(resolvedPaneId);
+    const tabBtn = document.createElement('div');
+    tabBtn.className = 'main-tab';
+    tabBtn.dataset.target = tabId;
+    tabBtn.dataset.paneId = resolvedPaneId;
+    tabBtn.innerHTML = `${tr('main.shell')} <span class="main-tab-close" title="${tr('main.closeTab')}">✕</span>`;
+    tabBtn.onclick = (e) => {
+        if (e.target.classList.contains('main-tab-close')) return;
+        switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
+    };
+    tabBtn.querySelector('.main-tab-close').onclick = () => {
+        closeShellTab(tabId);
+    };
+    tabList.appendChild(tabBtn);
+
+    const tabContent = getPaneTabsContent(resolvedPaneId);
+    const tabPane = document.createElement('div');
+    tabPane.className = 'main-tab-pane';
+    tabPane.id = tabId;
+    tabPane.dataset.paneId = resolvedPaneId;
+
+    const terminalWrapper = document.createElement('div');
+    terminalWrapper.className = 'terminal-wrapper';
+    terminalWrapper.id = `terminal-${tabId}`;
+    tabPane.appendChild(terminalWrapper);
+    tabContent.appendChild(tabPane);
+
+    const term = new Terminal({
+        cursorBlink: true,
+        scrollback: currentConfig ? (currentConfig.scrollbackLimit || 100000) : 100000
+    });
+    const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
+    term.open(terminalWrapper);
+
+    if (currentConfig) {
+        term.options = {
+            fontSize: currentConfig.fontSize,
+            fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
+            theme: {
+                background: currentConfig.background,
+                foreground: currentConfig.foreground,
+                cursor: currentConfig.foreground
+            }
+        };
+    }
+
+    const tabState = {
+        id: tabId,
+        paneId: resolvedPaneId,
+        title: initialState.title || '',
+        term,
+        fitAddon,
+        searchAddon,
+        element: tabPane,
+        btn: tabBtn,
+        sessionReady: false
+    };
+
+    term.attachCustomKeyEventHandler(createTerminalKeyHandler(term, 'shell', () => tabId));
+    term.onData((data) => {
+        ipcRenderer.send('shell-tab-input', { tabId, data });
+    });
+    bindTerminalContextMenu({
+        terminalType: 'shell',
+        term,
+        element: terminalWrapper,
+        getTabState: () => tabState
+    });
+    bindTerminalWheel(term, terminalWrapper);
+
+    shellTabs.push(tabState);
+    updateTabTitles();
+    addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
+    if (!isRestoringWorkspaceSession) {
+        switchPaneTab(resolvedPaneId, tabId, { persist: false });
+        persistShellTabs();
+        persistWorkspaceLayout();
+        setActionStatus(tr('main.shellStarting'));
+    }
+
+    setTimeout(() => {
+        fitAddon.fit();
+        ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: term.cols, rows: term.rows })
+            .then(() => {
+                tabState.sessionReady = true;
+                ipcRenderer.send('resize-shell-tab', { tabId, cols: term.cols, rows: term.rows });
+            })
+            .catch((error) => {
+                term.writeln(`\r\n[ERROR] ${tr('main.shellStartFailed', { error: error?.message || error })}\r\n`);
+            });
+    }, 50);
+}
+
+function closeShellTab(tabId) {
+    const index = shellTabs.findIndex(t => t.id === tabId);
+    if (index === -1) return;
+    const tab = shellTabs[index];
+    tab.term.dispose();
+    tab.element.remove();
+    tab.btn.remove();
+    shellTabs.splice(index, 1);
+    ipcRenderer.send('close-shell-tab-session', { tabId });
+    const { nextActiveTabId } = removeTabFromWorkspace(tabId, { persist: false });
+    persistShellTabs();
+    updateTabTitles();
+    const nextPaneId = nextActiveTabId ? getPaneIdForTabId(nextActiveTabId) : getPaneIdForTabId('tab-main');
+    if (nextActiveTabId) {
+        switchPaneTab(nextPaneId, nextActiveTabId, { persist: false });
+    } else {
+        switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main', { persist: false });
+    }
+    persistWorkspaceLayout();
+    setActionStatus(tr('main.shellClosed'));
+}
+
+function restoreShellSessions() {
+    shellTabs.forEach(tab => {
+        tab.term.clear();
+        tab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
+        ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows })
+            .then(() => {
+                tab.sessionReady = true;
+                ipcRenderer.send('resize-shell-tab', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows });
+            })
+            .catch((error) => {
+                tab.term.writeln(`\r\n[ERROR] ${tr('main.shellStartFailed', { error: error?.message || error })}\r\n`);
+            });
     });
 }
 
@@ -1116,7 +1357,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     input.addEventListener('input', updateRegex);
     
     // Setup copy/paste for filter terminal
-    term.attachCustomKeyEventHandler(createTerminalKeyHandler(term));
+    term.attachCustomKeyEventHandler(createTerminalKeyHandler(term, 'serial'));
     bindTerminalContextMenu({
         terminalType: 'filter',
         term,
@@ -1195,6 +1436,8 @@ function persistFilterTabs() {
 
 document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-1'));
 document.getElementById('pane-2-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-2'));
+document.getElementById('pane-1-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({}, 'pane-1'));
+document.getElementById('pane-2-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({}, 'pane-2'));
 
 document.querySelectorAll('.workspace-pane').forEach(paneEl => {
     paneEl.addEventListener('mousedown', () => {
@@ -1210,13 +1453,21 @@ window.addEventListener('main-tab-changed', (e) => {
             serialFitAddon.fit();
         } else {
             const tab = filterTabs.find(t => t.id === tabId);
-            if (tab) tab.fitAddon.fit();
+            if (tab) {
+                tab.fitAddon.fit();
+            } else {
+                const shellTab = getShellTabState(tabId);
+                if (shellTab) {
+                    shellTab.fitAddon.fit();
+                    ipcRenderer.send('resize-shell-tab', { tabId: shellTab.id, cols: shellTab.term.cols, rows: shellTab.term.rows });
+                }
+            }
         }
         setActivePane(paneId, { persist: false });
     }, 0);
 });
 
-function createTerminalKeyHandler(targetTerm) {
+function createTerminalKeyHandler(targetTerm, terminalType = 'serial', getTabId = null) {
     return (arg) => {
         if (arg.type !== 'keydown') return true;
 
@@ -1235,7 +1486,11 @@ function createTerminalKeyHandler(targetTerm) {
             if (targetTerm.hasSelection()) {
                 navigator.clipboard.readText().then(text => {
                     if (text) {
-                        ipcRenderer.send('serial-input', text);
+                        if (terminalType === 'shell') {
+                            ipcRenderer.send('shell-tab-input', { tabId: typeof getTabId === 'function' ? getTabId() : '', data: text });
+                        } else {
+                            ipcRenderer.send('serial-input', text);
+                        }
                     }
                 });
                 return false;
@@ -1248,7 +1503,7 @@ function createTerminalKeyHandler(targetTerm) {
 }
 
 // Smart Copy/Paste Handling
-serialTerm.attachCustomKeyEventHandler(createTerminalKeyHandler(serialTerm));
+serialTerm.attachCustomKeyEventHandler(createTerminalKeyHandler(serialTerm, 'serial'));
 ipcRenderer.on('terminal-context-menu-action', (event, payload) => {
     suppressMainInputFocus = true;
     handleTerminalContextMenuAction(payload)
@@ -1487,6 +1742,10 @@ function applyConfig(config) {
         tab.term.options = options;
         tab.fitAddon.fit();
     });
+    shellTabs.forEach(tab => {
+        tab.term.options = options;
+        tab.fitAddon.fit();
+    });
     
     document.body.style.background = config.background;
 
@@ -1556,6 +1815,16 @@ function applyConfig(config) {
         }
     }
 
+    if (shellTabs.length === 0 && Array.isArray(config.shellTabs) && config.shellTabs.length > 0) {
+        isRestoringWorkspaceSession = true;
+        try {
+            config.shellTabs.forEach(tabConfig => createShellTab(tabConfig, tabConfig.paneId || 'pane-1'));
+        } finally {
+            isRestoringWorkspaceSession = false;
+        }
+        restoreShellSessions();
+    }
+
     if (normalizedWorkspaceLayoutKey !== lastAppliedWorkspaceLayoutKey) {
         restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: true });
         lastAppliedWorkspaceLayoutKey = JSON.stringify(cloneWorkspaceLayout(workspaceLayout));
@@ -1593,12 +1862,20 @@ ipcRenderer.invoke('get-config').then(config => {
 });
 ipcRenderer.on('config-updated', (event, config) => applyConfig(config));
 
-// Terminal Logic
-/*
-ipcRenderer.on('terminal-output', (event, data) => term.write(data));
-term.onData((data) => ipcRenderer.send('terminal-input', data));
-ipcRenderer.send('spawn-terminal');
-*/
+ipcRenderer.on('shell-tab-output', (event, payload = {}) => {
+    const tab = getShellTabState(payload.tabId);
+    if (tab && typeof payload.data === 'string') {
+        tab.term.write(payload.data);
+    }
+});
+
+ipcRenderer.on('shell-tab-exit', (event, payload = {}) => {
+    const tab = getShellTabState(payload.tabId);
+    if (tab) {
+        tab.sessionReady = false;
+        tab.term.writeln(`\r\n[${tr('main.shellExited', { code: payload.exitCode ?? 0 })}]\r\n`);
+    }
+});
 
 // Serial Logic
 serialTerm.onData((data) => {

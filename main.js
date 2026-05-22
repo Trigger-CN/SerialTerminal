@@ -65,6 +65,7 @@ function loadConfig() {
       height: 700
     },
     filterTabs: [],
+    shellTabs: [],
     workspaceLayout: {
       splitEnabled: false,
       orientation: 'horizontal',
@@ -116,6 +117,7 @@ function loadConfig() {
 
 let currentConfig = loadConfig();
 let terminalContextMenuState = null;
+const shellSessions = new Map();
 
 // Initialize display settings from config
 displaySettings.showTimestamp = currentConfig.showTimestamp;
@@ -176,6 +178,77 @@ function writeLog(data) {
 function saveConfig(config) {
   currentConfig = { ...currentConfig, ...config };
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
+}
+
+function getDefaultShellPath() {
+  return process.env[process.platform === 'win32' ? 'COMSPEC' : 'SHELL'] || (process.platform === 'win32' ? 'C:\\Windows\\System32\\cmd.exe' : '/bin/sh');
+}
+
+function getShellLaunchArgs(shellPath) {
+  if (process.platform !== 'win32') {
+    return ['-i'];
+  }
+
+  const lowerShellPath = String(shellPath || '').toLowerCase();
+  if (lowerShellPath.includes('powershell')) {
+    return ['-NoLogo'];
+  }
+
+  return [];
+}
+
+function createShellSession(tabId, options = {}) {
+  if (!tabId || shellSessions.has(tabId)) {
+    return shellSessions.get(tabId) || null;
+  }
+
+  const shellPath = getDefaultShellPath();
+  const session = {
+    tabId,
+    shellPath,
+    cols: Math.max(1, Number(options.cols) || 80),
+    rows: Math.max(1, Number(options.rows) || 24),
+    cwd: process.cwd(),
+    ptyProcess: null
+  };
+
+  const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath), {
+    name: 'xterm-color',
+    cols: session.cols,
+    rows: session.rows,
+    cwd: session.cwd,
+    env: process.env
+  });
+
+  session.ptyProcess = ptyProcess;
+  shellSessions.set(tabId, session);
+
+  ptyProcess.onData((data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('shell-tab-output', { tabId, data });
+    }
+  });
+
+  ptyProcess.onExit(({ exitCode, signal }) => {
+    shellSessions.delete(tabId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('shell-tab-exit', { tabId, exitCode, signal });
+    }
+  });
+
+  return session;
+}
+
+function closeShellSession(tabId) {
+  const session = shellSessions.get(tabId);
+  if (!session) return false;
+  shellSessions.delete(tabId);
+  try {
+    session.ptyProcess?.kill();
+  } catch (error) {
+    log.warn(`Failed to close shell session ${tabId}:`, error);
+  }
+  return true;
 }
 
 function tr(key, params = {}) {
@@ -403,6 +476,7 @@ ipcMain.handle('get-about-info', () => {
 });
 
 app.on('before-quit', () => {
+  Array.from(shellSessions.keys()).forEach(tabId => closeShellSession(tabId));
   saveLog();
 });
 
@@ -484,7 +558,9 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   const hasSelection = Boolean(payload.hasSelection);
   const isConnected = Boolean(payload.isConnected);
   const canLocateInMain = Boolean(payload.canLocateInMain);
-  const terminalType = payload.terminalType === 'filter' ? 'filter' : 'main';
+  const terminalType = payload.terminalType === 'filter'
+    ? 'filter'
+    : (payload.terminalType === 'shell' ? 'shell' : 'main');
   const labels = payload.labels || {};
 
   const sendAction = (action) => {
@@ -504,13 +580,17 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       click: () => sendAction('new-filter-tab')
     },
     {
+      label: withIcon('>_', labels.newShellTab, 'New Shell Tab'),
+      click: () => sendAction('new-shell-tab')
+    },
+    {
       label: withIcon('⇆', labels.splitHorizontal, 'Move Tab to Right Split'),
-      enabled: terminalType === 'filter' && Boolean(payload.tabId),
+      enabled: terminalType !== 'main' && Boolean(payload.tabId),
       click: () => sendAction('split-horizontal')
     },
     {
       label: withIcon('⇅', labels.splitVertical, 'Move Tab to Bottom Split'),
-      enabled: terminalType === 'filter' && Boolean(payload.tabId),
+      enabled: terminalType !== 'main' && Boolean(payload.tabId),
       click: () => sendAction('split-vertical')
     },
     {
@@ -562,7 +642,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         click: () => sendAction('clear-terminal')
       }
     );
-  } else {
+  } else if (terminalType === 'filter') {
     template.push(
       { type: 'separator' },
       {
@@ -601,6 +681,57 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         type: 'checkbox',
         checked: Boolean(payload.useRegex),
         click: () => sendAction('toggle-regex')
+      },
+      {
+        label: withIcon('📋', labels.copy, 'Copy'),
+        enabled: hasSelection,
+        click: () => {
+          if (payload.selectedText) {
+            clipboard.writeText(payload.selectedText);
+          }
+        }
+      },
+      {
+        label: withIcon('📚', labels.copyAll, 'Copy All'),
+        click: () => sendAction('copy-all')
+      },
+      {
+        label: withIcon('🔍', labels.findSelection, 'Find Selection'),
+        enabled: hasSelection,
+        click: () => sendAction('find-selection')
+      },
+      {
+        label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
+        click: () => sendAction('clear-terminal')
+      }
+    );
+  } else {
+    template.push(
+      { type: 'separator' },
+      {
+        label: withIcon('⇄', labels.moveToOtherPane, 'Move to Other Pane'),
+        enabled: Boolean(payload.tabId),
+        click: () => sendAction('move-to-other-pane')
+      },
+      {
+        label: withIcon('↻', labels.restartShell, 'Restart Shell'),
+        enabled: Boolean(payload.tabId),
+        click: () => sendAction('restart-shell')
+      },
+      {
+        label: withIcon('✖', labels.closeShellTab, 'Close Shell Tab'),
+        enabled: Boolean(payload.tabId),
+        click: () => sendAction('close-shell-tab')
+      },
+      { type: 'separator' },
+      {
+        label: withIcon('📥', labels.pasteAndSend, 'Paste and Send'),
+        click: () => sendAction('paste-send')
+      },
+      {
+        label: withIcon('📤', labels.sendSelection, 'Send Selection'),
+        enabled: hasSelection,
+        click: () => sendAction('send-selection')
       },
       {
         label: withIcon('📋', labels.copy, 'Copy'),
@@ -709,32 +840,51 @@ ipcMain.on('quit-and-install', () => {
     autoUpdater.quitAndInstall();
 });
 
-// PTY Setup
-const osShell = process.env[process.platform === 'win32' ? 'COMSPEC' : 'SHELL'];
-let ptyProcess = null;
+ipcMain.handle('create-shell-tab-session', async (event, payload = {}) => {
+  const tabId = typeof payload.tabId === 'string' ? payload.tabId : '';
+  if (!tabId) {
+    throw new Error('Missing shell tab id');
+  }
 
-ipcMain.on('terminal-input', (event, data) => {
-  if (ptyProcess) {
-    ptyProcess.write(data);
-    writeLog(data);
+  const session = createShellSession(tabId, payload);
+  if (!session) {
+    throw new Error('Failed to create shell session');
+  }
+
+  return {
+    shellPath: session.shellPath,
+    cols: session.cols,
+    rows: session.rows
+  };
+});
+
+ipcMain.on('shell-tab-input', (event, payload = {}) => {
+  const tabId = typeof payload.tabId === 'string' ? payload.tabId : '';
+  const data = typeof payload.data === 'string' ? payload.data : '';
+  const session = shellSessions.get(tabId);
+  if (!session || !data) return;
+  session.ptyProcess.write(data);
+});
+
+ipcMain.on('resize-shell-tab', (event, payload = {}) => {
+  const tabId = typeof payload.tabId === 'string' ? payload.tabId : '';
+  const cols = Math.max(1, Number(payload.cols) || 0);
+  const rows = Math.max(1, Number(payload.rows) || 0);
+  const session = shellSessions.get(tabId);
+  if (!session || !cols || !rows) return;
+  session.cols = cols;
+  session.rows = rows;
+  try {
+    session.ptyProcess.resize(cols, rows);
+  } catch (error) {
+    log.warn(`Failed to resize shell session ${tabId}:`, error);
   }
 });
 
-ipcMain.on('spawn-terminal', (event) => {
-  if (ptyProcess) return;
-
-  ptyProcess = pty.spawn(osShell, [], {
-    name: 'xterm-color',
-    cols: 80,
-    rows: 24,
-    cwd: process.cwd(),
-    env: process.env
-  });
-
-  ptyProcess.onData((data) => {
-    mainWindow.webContents.send('terminal-output', data);
-    writeLog(data);
-  });
+ipcMain.on('close-shell-tab-session', (event, payload = {}) => {
+  const tabId = typeof payload.tabId === 'string' ? payload.tabId : '';
+  if (!tabId) return;
+  closeShellSession(tabId);
 });
 
 // Serial Port Setup

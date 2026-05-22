@@ -77,10 +77,12 @@ SerialTerminal/
 - 启动时自动检查更新与用户确认安装逻辑
 - 更新提示通过 GitHub Release API 读取对应 tag 的正文，获取不到时提示网络异常
 - 更新弹窗文案跟随当前界面语言显示
+- 系统 shell 会话的创建、输入、resize、关闭与退出事件转发
 
 #### `renderer.js`
 负责：
 - 主终端初始化（xterm）
+- shell tab 初始化与输出渲染
 - 串口数据显示解析与渲染
 - 过滤标签页创建、关闭、过滤历史
 - 搜索逻辑与结果计数显示
@@ -247,6 +249,7 @@ npm run dist:linux
 - pane-1 / pane-2 双 pane 容器（首版最多 2 个 pane）
 - 主终端标签页 `tab-main`
 - 多个过滤标签页 `tab-filter-*`
+- 系统终端标签页 `tab-shell-*`
 - 下方主输入框面板 `main-input-panel`
 
 ### 6.2.1 当前分屏能力（首版）
@@ -258,6 +261,7 @@ npm run dist:linux
 - 每个 pane 各自维护 active tab
 - 分屏操作入口已从顶部工具栏收敛到终端右键菜单，便于明确当前操作目标 tab / pane
 - 每个 pane 的 tabs header 右侧都带独立“新建过滤标签页”按钮，用于明确在当前 pane 中创建新 tab
+- 每个 pane 的 tabs header 右侧当前也带独立“新建 shell 标签页”按钮
 - 搜索目标跟随当前 active pane 的 active tab
 - 分屏布局会写入 `config.workspaceLayout` 并在启动后恢复
 
@@ -516,6 +520,10 @@ npm run dist:linux
 - `switchPaneTab()`、右键菜单动作、splitter 拖动等都会触发 `applyLayoutToDom()`；若这里立即 `save-config`，主进程会回发 `config-updated`，从而再次触发 `applyConfig()` 和 `restoreWorkspaceLayout()`
 - 这会形成“交互 -> 布局应用 -> 保存配置 -> 配置回推 -> 再次恢复布局”的回环，表现为 pane 抽搐、拖动被打断、右键异常
 - 当前修正原则：自愈后的回写只允许发生在布局恢复流程中，不能挂在高频 UI 布局应用路径上
+
+### 11.8 串口 + shell 分屏拖动抽搐问题
+- 当左侧为串口终端、右侧为 shell tab 时，若在 splitter 拖动高频过程中同步向主进程发送 `resize-shell-tab`，容易造成 shell 侧反复 resize，表现为分屏拖动抽搐
+- 当前修正原则：拖动 splitter 期间只做前端 xterm fit，不在每一帧都向主进程发送 shell PTY resize；待拖动结束后再统一同步最终 cols/rows
 
 ---
 
@@ -957,6 +965,155 @@ workspaceLayout = {
 - 新建过滤 tab 时选择目标 pane
 - 多 pane 嵌套树结构
 - 将 workspace/pane/tab 状态从 `renderer.js` 进一步模块化拆分
+
+### 15B. 系统终端 Shell Tab 实施计划（当前开发计划）
+
+#### 15B.1 目标定义
+
+在当前主工作区中新增 `shell tab`，作为与 `tab-main`、`tab-filter-*` 并列的新终端视图类型。
+
+首版目标：
+
+- 支持在 `pane-1` / `pane-2` 中新建 shell tab
+- 每个 shell tab 对应一个独立系统 shell 会话
+- 支持 shell 输入、输出、关闭
+- 支持 shell tab 在两个 pane 之间移动
+- 支持 shell tab 布局持久化
+- 支持 shell tab 纳入当前 pane/tab 激活、fit 和搜索目标切换体系
+
+首版暂不要求：
+
+- 恢复上次关闭前的 shell 进程会话状态
+- 自定义 shell 可执行路径
+- 将主输入框复用于 shell 发送
+- 将 shell 输出接入串口高亮/过滤链路
+- 多级 pane 嵌套
+
+#### 15B.2 实现原则
+
+1. shell 必须作为新的 workspace tab 类型接入，而不是伪装成过滤 tab
+2. shell 进程生命周期由主进程统一管理，渲染层仅负责 xterm 显示与输入转发
+3. 串口主链路 `serial-output -> SerialDataParser -> 主/过滤终端渲染` 不得被 shell 功能污染
+4. shell tab 应复用现有 pane/workspace 架构、分屏、fit 与 active pane 管理
+5. 主输入框职责维持为串口输入，不因 shell tab 激活而切换语义
+
+#### 15B.3 数据模型建议
+
+运行时新增：
+
+- `shellTabs`: 渲染层 shell tab 状态数组
+- `nextShellTabId`: shell tab 自增编号
+- `shellSessions`: 主进程 `tabId -> pty session` 映射
+
+配置新增建议：
+
+```json
+{
+  "shellTabs": [
+    {
+      "title": "Shell 1",
+      "paneId": "pane-2"
+    }
+  ]
+}
+```
+
+说明：
+
+- `workspaceLayout` 仍只保存 tab 在 pane 中的归属与激活状态
+- `shellTabs` 只保存 UI 恢复所需最小状态，不保存进程句柄
+- 启动恢复阶段先恢复 shell tab DOM，再恢复 `workspaceLayout`
+
+#### 15B.4 主进程改造计划（`main.js`）
+
+将当前单实例 PTY 逻辑升级为多 session 模型。
+
+计划新增：
+
+- `create-shell-tab-session`
+- `shell-tab-input`
+- `resize-shell-tab`
+- `close-shell-tab-session`
+- `shell-tab-output`
+- `shell-tab-exit`
+
+实现要求：
+
+- 由主进程维护 `Map<tabId, session>`
+- 每个 shell tab 拥有独立 `node-pty` 进程
+- 输出必须带 `tabId` 返回渲染层
+- tab 关闭、shell 退出、应用退出时必须清理 session
+- 首版 shell 路径仅允许使用系统默认 shell，避免开放任意可执行路径输入
+
+#### 15B.5 渲染层改造计划（`renderer.js`）
+
+计划新增：
+
+- `shellTabs` 运行时状态管理
+- `createShellTab()`
+- `closeShellTab()`
+- `persistShellTabs()`
+- shell 输出/退出事件监听
+
+接入要求：
+
+- shell tab 使用独立 xterm 实例
+- shell 输入通过 `shell-tab-input` 发往主进程
+- shell 输出不经过 `SerialDataParser`
+- `fitWorkspaceTerminals()` 需要纳入 shell tab
+- 搜索目标切换需要兼容 shell tab
+- 主输入框不得因 shell tab 激活而自动获得焦点
+
+#### 15B.6 工作区与 UI 改造计划
+
+首版在两个 pane 的 tabs header 中新增独立“新建 shell tab”入口。
+
+要求：
+
+- shell tab 按现有 `.main-tab` / `.main-tab-pane` 结构接入
+- shell tab 可像过滤 tab 一样加入、切换、移动、关闭
+- `workspace-manager.js` 保持通用 tabId 机制，不为 shell 单独设计新 pane 模型
+
+#### 15B.7 输入与快捷键策略
+
+要求：
+
+- shell tab 焦点在 xterm 时直接输入 shell
+- 复制/粘贴快捷键处理需按终端类型分流，不能继续默认转发到串口
+- 主输入框、快捷发送、自动发送仍仅作用于串口
+
+#### 15B.8 首版开发范围
+
+本轮确定实现以下最小可用能力：
+
+- 新建 shell tab
+- 关闭 shell tab
+- shell 输入输出
+- shell tab 在两个 pane 间移动
+- shell tab 布局与 UI 状态持久化
+- shell 右键菜单基础能力（复制、复制全部、查找、清空、移动、关闭、重启）
+- 启动后按保存的 shell tab 列表自动重建 shell session
+
+本轮暂不实现：
+
+- 重启 shell
+- 自定义 shell 类型选择
+
+#### 15B.9 风险点
+
+1. 旧单实例 PTY 逻辑若未完全移除，容易与新 shell tab 架构冲突
+2. 当前终端快捷键处理默认发送到串口，若未按类型拆分会导致 shell 粘贴误发串口
+3. shell tab 若未纳入 fit 链路，分屏后容易出现尺寸错误
+4. 启动恢复顺序若错误，可能出现 pane 中存在 shell tabId 但 DOM 未就绪的空白 pane
+5. 不允许让 shell 改动影响串口日志链与过滤链
+
+#### 15B.10 当前实施顺序
+
+1. 更新 `agent_notes.md` 记录计划
+2. 主进程改造为多 shell session
+3. 渲染层接入 shell tab 创建/关闭/输入输出
+4. UI 增加 shell tab 入口并接入 workspace 持久化
+5. 回归验证分屏、fit、关闭与配置恢复行为
 
 ---
 
