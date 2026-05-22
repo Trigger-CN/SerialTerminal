@@ -547,6 +547,11 @@ label:hover {
     line-height: 34px;
 }
 
+.main-tab.exited {
+    color: #777;
+    font-style: italic;
+}
+
 .main-tab-close {
     font-size: 12px;
     border-radius: 50%;

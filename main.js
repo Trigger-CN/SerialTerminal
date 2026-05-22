@@ -180,8 +180,20 @@ function saveConfig(config) {
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
 }
 
-function getDefaultShellPath() {
-  return process.env[process.platform === 'win32' ? 'COMSPEC' : 'SHELL'] || (process.platform === 'win32' ? 'C:\\Windows\\System32\\cmd.exe' : '/bin/sh');
+function getDefaultShellPath(shellType = 'auto') {
+  if (process.platform === 'win32') {
+    switch (String(shellType || 'auto').toLowerCase()) {
+      case 'cmd': return process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe';
+      case 'powershell': return 'powershell.exe';
+      case 'pwsh': return 'pwsh.exe';
+      default: return process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe';
+    }
+  }
+  switch (String(shellType || 'auto').toLowerCase()) {
+    case 'bash': return '/bin/bash';
+    case 'zsh': return '/bin/zsh';
+    default: return process.env.SHELL || '/bin/bash';
+  }
 }
 
 function getShellLaunchArgs(shellPath) {
@@ -202,10 +214,12 @@ function createShellSession(tabId, options = {}) {
     return shellSessions.get(tabId) || null;
   }
 
-  const shellPath = getDefaultShellPath();
+  const shellType = typeof options.shellType === 'string' ? options.shellType : 'auto';
+  const shellPath = getDefaultShellPath(shellType);
   const session = {
     tabId,
     shellPath,
+    shellType,
     cols: Math.max(1, Number(options.cols) || 80),
     rows: Math.max(1, Number(options.rows) || 24),
     cwd: process.cwd(),
@@ -572,29 +586,29 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     });
   };
 
-  const withIcon = (icon, label, fallback) => `${icon} ${label || fallback}`;
+  const withIcon = (icon, label, fallback) => `${String(icon || '').padEnd(5, ' ')} ${label || fallback}`;
 
   const template = [
     {
-      label: withIcon('🧩', labels.newFilterTab, 'New Filter Tab'),
+      label: withIcon('[+]', labels.newFilterTab, 'New Filter Tab'),
       click: () => sendAction('new-filter-tab')
     },
     {
-      label: withIcon('>_', labels.newShellTab, 'New Shell Tab'),
+      label: withIcon('[>]', labels.newShellTab, 'New Shell Tab'),
       click: () => sendAction('new-shell-tab')
     },
     {
-      label: withIcon('⇆', labels.splitHorizontal, 'Move Tab to Right Split'),
+      label: withIcon('[H]', labels.splitHorizontal, 'Move Tab to Right Split'),
       enabled: terminalType !== 'main' && Boolean(payload.tabId),
       click: () => sendAction('split-horizontal')
     },
     {
-      label: withIcon('⇅', labels.splitVertical, 'Move Tab to Bottom Split'),
+      label: withIcon('[V]', labels.splitVertical, 'Move Tab to Bottom Split'),
       enabled: terminalType !== 'main' && Boolean(payload.tabId),
       click: () => sendAction('split-vertical')
     },
     {
-      label: withIcon('🞬', labels.closeSplit, 'Close Split'),
+      label: withIcon('[x]', labels.closeSplit, 'Close Split'),
       enabled: Boolean(payload.splitEnabled),
       click: () => sendAction('close-split')
     }
@@ -604,23 +618,23 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: withIcon('📥', labels.pasteAndSend, 'Paste and Send'),
+        label: withIcon('[P]', labels.pasteAndSend, 'Paste and Send'),
         enabled: isConnected,
         click: () => sendAction('paste-send')
       },
       {
-        label: withIcon('📤', labels.sendSelection, 'Send Selection'),
+        label: withIcon('[S]', labels.sendSelection, 'Send Selection'),
         enabled: hasSelection && isConnected,
         click: () => sendAction('send-selection')
       },
       {
-        label: withIcon('🧪', labels.createFilterFromSelection, 'Create Filter Tab from Selection'),
+        label: withIcon('[F]', labels.createFilterFromSelection, 'Create Filter Tab from Selection'),
         enabled: hasSelection,
         click: () => sendAction('create-filter-from-selection')
       },
       { type: 'separator' },
       {
-        label: withIcon('📋', labels.copy, 'Copy'),
+        label: withIcon('[C]', labels.copy, 'Copy'),
         enabled: hasSelection,
         click: () => {
           if (payload.selectedText) {
@@ -629,16 +643,16 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         }
       },
       {
-        label: withIcon('📚', labels.copyAll, 'Copy All'),
+        label: withIcon('[A]', labels.copyAll, 'Copy All'),
         click: () => sendAction('copy-all')
       },
       {
-        label: withIcon('🔍', labels.findSelection, 'Find Selection'),
+        label: withIcon('[?]', labels.findSelection, 'Find Selection'),
         enabled: hasSelection,
         click: () => sendAction('find-selection')
       },
       {
-        label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
+        label: withIcon('[!]', labels.clearTerminal, 'Clear Terminal'),
         click: () => sendAction('clear-terminal')
       }
     );
@@ -646,44 +660,44 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: withIcon('⇄', labels.moveToOtherPane, 'Move to Other Pane'),
+        label: withIcon('[M]', labels.moveToOtherPane, 'Move to Other Pane'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('move-to-other-pane')
       },
       {
-        label: withIcon('✖', labels.closeFilterTab, 'Close Filter Tab'),
+        label: withIcon('[X]', labels.closeFilterTab, 'Close Filter Tab'),
         click: () => sendAction('close-filter-tab')
       },
       { type: 'separator' },
       {
-        label: withIcon('🎯', labels.useSelectionAsFilter, 'Use Selection as Filter'),
+        label: withIcon('[=]', labels.useSelectionAsFilter, 'Use Selection as Filter'),
         enabled: hasSelection,
         click: () => sendAction('use-selection-as-filter')
       },
       {
-        label: withIcon('➕', labels.appendSelectionToFilter, 'Append Selection to Filter'),
+        label: withIcon('[+]', labels.appendSelectionToFilter, 'Append Selection to Filter'),
         enabled: hasSelection,
         click: () => sendAction('append-selection-to-filter')
       },
       {
-        label: withIcon('📍', labels.locateInMainTerminal, 'Locate in Main Terminal'),
+        label: withIcon('[L]', labels.locateInMainTerminal, 'Locate in Main Terminal'),
         enabled: canLocateInMain,
         click: () => sendAction('locate-in-main-terminal')
       },
       {
-        label: withIcon('Aa', labels.toggleMatchCase, 'Toggle Match Case'),
+        label: withIcon('[Aa]', labels.toggleMatchCase, 'Toggle Match Case'),
         type: 'checkbox',
         checked: Boolean(payload.caseSensitive),
         click: () => sendAction('toggle-case-sensitive')
       },
       {
-        label: withIcon('.*', labels.toggleRegex, 'Toggle Regex'),
+        label: withIcon('.* ', labels.toggleRegex, 'Toggle Regex'),
         type: 'checkbox',
         checked: Boolean(payload.useRegex),
         click: () => sendAction('toggle-regex')
       },
       {
-        label: withIcon('📋', labels.copy, 'Copy'),
+        label: withIcon('[C]', labels.copy, 'Copy'),
         enabled: hasSelection,
         click: () => {
           if (payload.selectedText) {
@@ -692,16 +706,16 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         }
       },
       {
-        label: withIcon('📚', labels.copyAll, 'Copy All'),
+        label: withIcon('[A]', labels.copyAll, 'Copy All'),
         click: () => sendAction('copy-all')
       },
       {
-        label: withIcon('🔍', labels.findSelection, 'Find Selection'),
+        label: withIcon('[?]', labels.findSelection, 'Find Selection'),
         enabled: hasSelection,
         click: () => sendAction('find-selection')
       },
       {
-        label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
+        label: withIcon('[!]', labels.clearTerminal, 'Clear Terminal'),
         click: () => sendAction('clear-terminal')
       }
     );
@@ -709,32 +723,32 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: withIcon('⇄', labels.moveToOtherPane, 'Move to Other Pane'),
+        label: withIcon('[M]', labels.moveToOtherPane, 'Move to Other Pane'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('move-to-other-pane')
       },
       {
-        label: withIcon('↻', labels.restartShell, 'Restart Shell'),
+        label: withIcon('[R]', labels.restartShell, 'Restart Shell'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('restart-shell')
       },
       {
-        label: withIcon('✖', labels.closeShellTab, 'Close Shell Tab'),
+        label: withIcon('[X]', labels.closeShellTab, 'Close Shell Tab'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('close-shell-tab')
       },
       { type: 'separator' },
       {
-        label: withIcon('📥', labels.pasteAndSend, 'Paste and Send'),
+        label: withIcon('[P]', labels.pasteAndSend, 'Paste and Send'),
         click: () => sendAction('paste-send')
       },
       {
-        label: withIcon('📤', labels.sendSelection, 'Send Selection'),
+        label: withIcon('[S]', labels.sendSelection, 'Send Selection'),
         enabled: hasSelection,
         click: () => sendAction('send-selection')
       },
       {
-        label: withIcon('📋', labels.copy, 'Copy'),
+        label: withIcon('[C]', labels.copy, 'Copy'),
         enabled: hasSelection,
         click: () => {
           if (payload.selectedText) {
@@ -743,16 +757,16 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         }
       },
       {
-        label: withIcon('📚', labels.copyAll, 'Copy All'),
+        label: withIcon('[A]', labels.copyAll, 'Copy All'),
         click: () => sendAction('copy-all')
       },
       {
-        label: withIcon('🔍', labels.findSelection, 'Find Selection'),
+        label: withIcon('[?]', labels.findSelection, 'Find Selection'),
         enabled: hasSelection,
         click: () => sendAction('find-selection')
       },
       {
-        label: withIcon('🧹', labels.clearTerminal, 'Clear Terminal'),
+        label: withIcon('[!]', labels.clearTerminal, 'Clear Terminal'),
         click: () => sendAction('clear-terminal')
       }
     );

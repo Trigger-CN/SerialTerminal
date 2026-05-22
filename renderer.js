@@ -389,7 +389,10 @@ function getContextMenuLabels() {
         newFilterTab: tr('main.newFilterTab'),
         newShellTab: tr('main.newShellTab'),
         closeShellTab: tr('main.contextCloseShellTab'),
-        restartShell: tr('main.contextRestartShell')
+        restartShell: tr('main.contextRestartShell'),
+        newCmdTab: tr('main.newCmdTab'),
+        newPowerShellTab: tr('main.newPowerShellTab'),
+        newBashTab: tr('main.newBashTab')
     };
 }
 
@@ -508,6 +511,7 @@ function restartShellTab(tabId) {
     if (!shellTab) return;
     ipcRenderer.send('close-shell-tab-session', { tabId });
     shellTab.term.clear();
+    shellTab.btn?.classList.remove('exited');
     shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
     ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows })
         .then(() => {
@@ -973,7 +977,8 @@ function persistShellTabs() {
         shellTabs: shellTabs.map(tab => ({
             id: tab.id,
             title: tab.title || '',
-            paneId: tab.paneId || getTabPaneId(tab.id)
+            paneId: tab.paneId || getTabPaneId(tab.id),
+            shellType: tab.shellType || 'auto'
         }))
     });
 }
@@ -982,6 +987,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     const tabId = typeof initialState.id === 'string' && initialState.id ? initialState.id : `tab-shell-${getNextShellTabId()}`;
     syncNextShellTabId(tabId);
     const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
+    const shellType = typeof initialState.shellType === 'string' ? initialState.shellType : 'auto';
 
     const tabList = getPaneTabsList(resolvedPaneId);
     const tabBtn = document.createElement('div');
@@ -1036,6 +1042,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         id: tabId,
         paneId: resolvedPaneId,
         title: initialState.title || '',
+        shellType,
         term,
         fitAddon,
         searchAddon,
@@ -1874,6 +1881,7 @@ ipcRenderer.on('shell-tab-exit', (event, payload = {}) => {
     if (tab) {
         tab.sessionReady = false;
         tab.term.writeln(`\r\n[${tr('main.shellExited', { code: payload.exitCode ?? 0 })}]\r\n`);
+        tab.btn?.classList.add('exited');
     }
 });
 
@@ -2198,6 +2206,14 @@ function getActiveSearchTarget() {
         return {
             term: filterTab.term,
             addon: filterTab.searchAddon
+        };
+    }
+
+    const shellTab = getShellTabState(activeTabId);
+    if (shellTab) {
+        return {
+            term: shellTab.term,
+            addon: shellTab.searchAddon
         };
     }
 

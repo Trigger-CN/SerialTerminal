@@ -386,8 +386,9 @@ npm run dist:linux
 - 终端右键菜单采用“渲染进程收集上下文 + 主进程构建原生菜单”的方式实现
 - 渲染进程在主终端和过滤终端的 `terminal-wrapper` 上监听 `contextmenu`
 - 渲染进程通过 `show-terminal-context-menu` 向主进程发送右键上下文
-- 主进程根据 `terminalType`、选区状态、串口连接状态、过滤状态动态生成菜单项
+- 主进程根据 `terminalType`（main/filter/shell）、选区状态、串口连接状态、过滤状态动态生成菜单项
 - 菜单动作通过 `terminal-context-menu-action` 发回渲染进程执行
+- 菜单图标使用固定宽度文本前缀，避免 emoji 宽度不一致
 - 当前已加入对 `showSidebarTab`、剪贴板访问和终端缓冲读取的基础保护，降低右键菜单动作直接抛错的概率
 - 过滤终端已接入一版轻量源日志映射，用于从过滤终端回定位主终端日志
 
