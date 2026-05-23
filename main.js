@@ -739,6 +739,19 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       },
       { type: 'separator' },
       {
+        label: withIcon('[>]', labels.newCmdTab, 'New CMD Tab'),
+        click: () => sendAction('new-cmd-tab')
+      },
+      {
+        label: withIcon('[P]', labels.newPowerShellTab, 'New PowerShell Tab'),
+        click: () => sendAction('new-powershell-tab')
+      },
+      {
+        label: withIcon('[B]', labels.newBashTab, 'New Bash Tab'),
+        click: () => sendAction('new-bash-tab')
+      },
+      { type: 'separator' },
+      {
         label: withIcon('[P]', labels.pasteAndSend, 'Paste and Send'),
         click: () => sendAction('paste-send')
       },

@@ -513,7 +513,7 @@ function restartShellTab(tabId) {
     shellTab.term.clear();
     shellTab.btn?.classList.remove('exited');
     shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
-    ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows })
+    ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows, shellType: shellTab.shellType || 'auto' })
         .then(() => {
             shellTab.sessionReady = true;
             ipcRenderer.send('resize-shell-tab', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows });
@@ -678,6 +678,21 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (shellTab) {
                 restartShellTab(shellTab.id);
             }
+            break;
+        }
+        case 'new-cmd-tab': {
+            createShellTab({ shellType: 'cmd' }, resolvePaneId(paneId, tabId));
+            setActionStatus(tr('main.shellStarting'));
+            break;
+        }
+        case 'new-powershell-tab': {
+            createShellTab({ shellType: 'powershell' }, resolvePaneId(paneId, tabId));
+            setActionStatus(tr('main.shellStarting'));
+            break;
+        }
+        case 'new-bash-tab': {
+            createShellTab({ shellType: 'bash' }, resolvePaneId(paneId, tabId));
+            setActionStatus(tr('main.shellStarting'));
             break;
         }
     }
@@ -1075,7 +1090,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
 
     setTimeout(() => {
         fitAddon.fit();
-        ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: term.cols, rows: term.rows })
+        ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: term.cols, rows: term.rows, shellType })
             .then(() => {
                 tabState.sessionReady = true;
                 ipcRenderer.send('resize-shell-tab', { tabId, cols: term.cols, rows: term.rows });
@@ -1112,7 +1127,7 @@ function restoreShellSessions() {
     shellTabs.forEach(tab => {
         tab.term.clear();
         tab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
-        ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows })
+        ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows, shellType: tab.shellType || 'auto' })
             .then(() => {
                 tab.sessionReady = true;
                 ipcRenderer.send('resize-shell-tab', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows });
