@@ -70,6 +70,7 @@ function loadConfig() {
       { name: 'CMD', executable: 'cmd.exe', args: [], shellType: 'cmd' },
       { name: 'PowerShell', executable: 'powershell.exe', args: ['-NoLogo'], shellType: 'powershell' }
     ],
+    defaultShellProfile: '',
     workspaceLayout: {
       splitEnabled: false,
       orientation: 'horizontal',
@@ -783,16 +784,8 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       },
       { type: 'separator' },
       {
-        label: withIcon('[>]', labels.newCmdTab, 'New CMD Tab'),
-        click: () => sendAction('new-cmd-tab')
-      },
-      {
-        label: withIcon('[P]', labels.newPowerShellTab, 'New PowerShell Tab'),
-        click: () => sendAction('new-powershell-tab')
-      },
-      {
-        label: withIcon('[B]', labels.newBashTab, 'New Bash Tab'),
-        click: () => sendAction('new-bash-tab')
+        label: withIcon('[>]', labels.newShellTab, 'New Shell Tab'),
+        click: () => sendAction('new-shell-tab')
       },
       { type: 'separator' },
       {
@@ -931,12 +924,16 @@ ipcMain.handle('create-shell-tab-session', async (event, payload = {}) => {
 
 ipcMain.handle('get-shell-profiles', async () => {
   const profiles = Array.isArray(currentConfig.shellProfiles) ? currentConfig.shellProfiles : [];
-  return profiles.map(p => ({
-    name: p.name || '',
-    executable: p.executable || '',
-    args: Array.isArray(p.args) ? p.args : [],
-    shellType: p.shellType || 'auto'
-  }));
+  const defaultName = currentConfig.defaultShellProfile || '';
+  return {
+    profiles: profiles.map(p => ({
+      name: p.name || '',
+      executable: p.executable || '',
+      args: Array.isArray(p.args) ? p.args : [],
+      shellType: p.shellType || 'auto'
+    })),
+    defaultName
+  };
 });
 
 ipcMain.on('shell-tab-input', (event, payload = {}) => {

@@ -54,6 +54,7 @@ const elements = {
 };
 
 let shellProfiles = [];
+let defaultShellProfileName = '';
 
 function applyPrefsI18n() {
     document.title = tr('prefsTitle');
@@ -290,6 +291,7 @@ async function init() {
 
   // Load shell profiles
   shellProfiles = Array.isArray(config.shellProfiles) ? JSON.parse(JSON.stringify(config.shellProfiles)) : [];
+  defaultShellProfileName = config.defaultShellProfile || '';
   renderShellProfiles();
 
   // Load About Info
@@ -403,6 +405,28 @@ function createShellProfileCard(profile, index) {
     row3.appendChild(typeSelect);
     card.appendChild(row3);
 
+    // Row 4: Set as default
+    const row4 = document.createElement('div');
+    row4.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+    const defaultCb = document.createElement('input');
+    defaultCb.type = 'radio';
+    defaultCb.name = 'default-shell-profile';
+    defaultCb.value = profile.name || '';
+    defaultCb.checked = profile.name === defaultShellProfileName;
+    defaultCb.style.cssText = 'margin: 0 4px;';
+    defaultCb.onchange = () => {
+        if (defaultCb.checked) {
+            defaultShellProfileName = profile.name;
+            renderShellProfiles();
+        }
+    };
+    const defaultLabel = document.createElement('span');
+    defaultLabel.style.cssText = 'font-size: 11px; color: var(--text-secondary);';
+    defaultLabel.textContent = tr('prefs.setAsDefaultShellProfile') || 'Set as default shell';
+    row4.appendChild(defaultCb);
+    row4.appendChild(defaultLabel);
+    card.appendChild(row4);
+
     return card;
 }
 
@@ -454,7 +478,8 @@ elements.saveBtn.onclick = () => {
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,
     highlightRules: rules,
-    shellProfiles
+    shellProfiles,
+    defaultShellProfile: defaultShellProfileName
   };
   ipcRenderer.send('save-config', config);
   window.close();

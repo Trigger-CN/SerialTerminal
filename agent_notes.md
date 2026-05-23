@@ -204,6 +204,7 @@ npm run dist:linux
       "shellType": "powershell"
     }
   ],
+  "defaultShellProfile": "PowerShell",
   "workspaceLayout": {
     "splitEnabled": false,
     "orientation": "horizontal",
@@ -1041,6 +1042,12 @@ workspaceLayout = {
 - `executable`: 可执行文件路径
 - `args`: 启动参数数组
 - `shellType`: shell 类型标识（cmd/powershell/bash/zsh 等）
+
+`defaultShellProfile`: 字符串，设为 profile 的 `name`，用作默认新建 shell tab 时使用的 profile。
+- 面板中的 `>_` 按钮和右键菜单的"新建 Shell 标签页"均使用此默认 profile
+- 若未设置，则使用 `shellProfiles[0]`
+- 渲染层侧边栏中默认 profile 带 ● 标记
+- 设置窗口可选中设为默认 Shell
 
 实现要点：
 - `getDefaultShellPath(shellType)` 优先从 shellProfiles 查找匹配的 profile，再回退到系统默认

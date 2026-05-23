@@ -672,7 +672,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'new-shell-tab': {
-            createShellTab({}, resolvePaneId(paneId, tabId));
+            createShellTab({ shellType: getDefaultShellType() }, resolvePaneId(paneId, tabId));
             setActionStatus(tr('main.shellStarting'));
             break;
         }
@@ -686,21 +686,6 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (shellTab) {
                 restartShellTab(shellTab.id);
             }
-            break;
-        }
-        case 'new-cmd-tab': {
-            createShellTab({ shellType: 'cmd' }, resolvePaneId(paneId, tabId));
-            setActionStatus(tr('main.shellStarting'));
-            break;
-        }
-        case 'new-powershell-tab': {
-            createShellTab({ shellType: 'powershell' }, resolvePaneId(paneId, tabId));
-            setActionStatus(tr('main.shellStarting'));
-            break;
-        }
-        case 'new-bash-tab': {
-            createShellTab({ shellType: 'bash' }, resolvePaneId(paneId, tabId));
-            setActionStatus(tr('main.shellStarting'));
             break;
         }
     }
@@ -993,6 +978,17 @@ function updateTabTitles() {
         tab.btn.innerHTML = `${tab.title} `;
         tab.btn.appendChild(closeBtn);
     });
+}
+
+function getDefaultShellType() {
+    const profiles = Array.isArray(currentConfig?.shellProfiles) ? currentConfig.shellProfiles : [];
+    if (!profiles.length) return 'auto';
+    const defaultName = currentConfig?.defaultShellProfile || '';
+    if (defaultName) {
+        const found = profiles.find(p => p.name === defaultName);
+        if (found) return found.shellType || found.name || 'auto';
+    }
+    return profiles[0].shellType || profiles[0].name || 'auto';
 }
 
 function persistShellTabs() {
@@ -1466,8 +1462,8 @@ function persistFilterTabs() {
 
 document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-1'));
 document.getElementById('pane-2-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-2'));
-document.getElementById('pane-1-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({}, 'pane-1'));
-document.getElementById('pane-2-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({}, 'pane-2'));
+document.getElementById('pane-1-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ shellType: getDefaultShellType() }, 'pane-1'));
+document.getElementById('pane-2-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ shellType: getDefaultShellType() }, 'pane-2'));
 
 document.querySelectorAll('.workspace-pane').forEach(paneEl => {
     paneEl.addEventListener('mousedown', () => {
@@ -1658,7 +1654,9 @@ function setActiveShellSessionItem(tabId) {
 async function loadShellProfiles() {
     if (!shellProfileBtns) return;
     try {
-        const profiles = await ipcRenderer.invoke('get-shell-profiles');
+        const result = await ipcRenderer.invoke('get-shell-profiles');
+        const profiles = result.profiles || result;
+        const defaultName = result.defaultName || '';
         shellProfileBtns.innerHTML = '';
         if (!profiles || !profiles.length) {
             const empty = document.createElement('div');
@@ -1668,10 +1666,11 @@ async function loadShellProfiles() {
             return;
         }
         profiles.forEach(profile => {
+            const isDefault = profile.name === defaultName;
             const btn = document.createElement('button');
             btn.className = 'secondary shell-new-btn';
-            btn.title = `${profile.name} (${profile.executable})`;
-            btn.innerHTML = `<span>${escapeHtml(profile.name)}</span>`;
+            btn.title = `${profile.name} (${profile.executable})${isDefault ? ' — ' + (tr('main.defaultProfile') || 'Default') : ''}`;
+            btn.innerHTML = `<span>${escapeHtml(profile.name)}</span>${isDefault ? ' <span style="font-size:10px;opacity:0.7;">⬤</span>' : ''}`;
             btn.addEventListener('click', () => {
                 const shellType = profile.shellType || profile.name;
                 createShellTab({ shellType }, getActivePane()?.id || 'pane-1');
