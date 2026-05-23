@@ -46,8 +46,14 @@ const elements = {
   updateProgressBar: document.getElementById('update-progress-bar'),
   updateProgressFill: document.getElementById('update-progress-fill'),
   checkUpdateBtn: document.getElementById('check-update-btn'),
-  restartInstallBtn: document.getElementById('restart-install-btn')
+  restartInstallBtn: document.getElementById('restart-install-btn'),
+
+  // Shell profiles
+  shellProfilesList: document.getElementById('shell-profiles-list'),
+  addShellProfileBtn: document.getElementById('add-shell-profile-btn')
 };
+
+let shellProfiles = [];
 
 function applyPrefsI18n() {
     document.title = tr('prefsTitle');
@@ -282,6 +288,10 @@ async function init() {
       });
   }
 
+  // Load shell profiles
+  shellProfiles = Array.isArray(config.shellProfiles) ? JSON.parse(JSON.stringify(config.shellProfiles)) : [];
+  renderShellProfiles();
+
   // Load About Info
   try {
       const aboutInfo = await ipcRenderer.invoke('get-about-info');
@@ -308,6 +318,106 @@ function toggleLogSettings(enabled) {
 }
 
 elements.logEnabled.onchange = (e) => toggleLogSettings(e.target.checked);
+
+// Shell Profiles Management
+function renderShellProfiles() {
+    if (!elements.shellProfilesList) return;
+    elements.shellProfilesList.innerHTML = '';
+    shellProfiles.forEach((profile, index) => {
+        const card = createShellProfileCard(profile, index);
+        elements.shellProfilesList.appendChild(card);
+    });
+}
+
+function createShellProfileCard(profile, index) {
+    const card = document.createElement('div');
+    card.style.cssText = 'background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px;';
+
+    // Row 1: Name + Delete button
+    const row1 = document.createElement('div');
+    row1.style.cssText = 'display: flex; gap: 6px; align-items: center;';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.value = profile.name || '';
+    nameInput.placeholder = tr('prefs.shellProfileNamePlaceholder') || 'Profile name (e.g. Git Bash)';
+    nameInput.style.cssText = 'flex: 1;';
+    nameInput.onchange = () => { shellProfiles[index].name = nameInput.value; };
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'secondary danger';
+    removeBtn.textContent = '✕';
+    removeBtn.style.cssText = 'width: 28px; padding: 0 6px;';
+    removeBtn.title = tr('prefs.removeRule');
+    removeBtn.onclick = () => {
+        shellProfiles.splice(index, 1);
+        renderShellProfiles();
+    };
+    row1.appendChild(nameInput);
+    row1.appendChild(removeBtn);
+    card.appendChild(row1);
+
+    // Row 2: Executable path
+    const row2 = document.createElement('div');
+    row2.style.cssText = 'display: flex; gap: 6px; align-items: center;';
+    const execInput = document.createElement('input');
+    execInput.type = 'text';
+    execInput.value = profile.executable || '';
+    execInput.placeholder = tr('prefs.shellProfileExecPlaceholder') || 'Executable path (e.g. C:\\path\\to\\shell.exe)';
+    execInput.style.cssText = 'flex: 1; font-family: Consolas, monospace; font-size: 12px;';
+    execInput.onchange = () => { shellProfiles[index].executable = execInput.value; };
+    const browseBtn = document.createElement('button');
+    browseBtn.className = 'secondary';
+    browseBtn.textContent = '…';
+    browseBtn.style.cssText = 'width: 28px; padding: 0 6px; font-weight: bold;';
+    browseBtn.title = tr('prefs.browse');
+    browseBtn.onclick = async () => {
+        const result = await ipcRenderer.invoke('select-shell-executable');
+        if (result) {
+            execInput.value = result;
+            shellProfiles[index].executable = result;
+        }
+    };
+    row2.appendChild(execInput);
+    row2.appendChild(browseBtn);
+    card.appendChild(row2);
+
+    // Row 3: Args + Shell Type
+    const row3 = document.createElement('div');
+    row3.style.cssText = 'display: flex; gap: 6px; align-items: center;';
+    const argsInput = document.createElement('input');
+    argsInput.type = 'text';
+    argsInput.value = (profile.args || []).join(' ');
+    argsInput.placeholder = tr('prefs.shellProfileArgsPlaceholder') || 'Arguments (e.g. -i -l)';
+    argsInput.style.cssText = 'flex: 1; font-family: Consolas, monospace; font-size: 12px;';
+    argsInput.onchange = () => { shellProfiles[index].args = argsInput.value.split(/\s+/).filter(Boolean); };
+    const typeSelect = document.createElement('select');
+    typeSelect.style.cssText = 'width: 110px; font-size: 12px;';
+    ['auto', 'cmd', 'powershell', 'bash', 'zsh', 'pwsh'].forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        if (profile.shellType === t || (!profile.shellType && t === 'auto')) opt.selected = true;
+        typeSelect.appendChild(opt);
+    });
+    typeSelect.onchange = () => { shellProfiles[index].shellType = typeSelect.value; };
+    row3.appendChild(argsInput);
+    row3.appendChild(typeSelect);
+    card.appendChild(row3);
+
+    return card;
+}
+
+function addShellProfile() {
+    shellProfiles.push({ name: '', executable: '', args: [], shellType: 'auto' });
+    renderShellProfiles();
+    // Scroll to bottom
+    if (elements.shellProfilesList) {
+        elements.shellProfilesList.lastElementChild?.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+if (elements.addShellProfileBtn) {
+    elements.addShellProfileBtn.onclick = addShellProfile;
+}
 
 elements.foreground.oninput = (e) => elements.foregroundHex.textContent = e.target.value;
 elements.background.oninput = (e) => elements.backgroundHex.textContent = e.target.value;
@@ -343,7 +453,8 @@ elements.saveBtn.onclick = () => {
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,
-    highlightRules: rules
+    highlightRules: rules,
+    shellProfiles
   };
   ipcRenderer.send('save-config', config);
   window.close();

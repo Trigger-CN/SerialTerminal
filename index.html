@@ -193,6 +193,9 @@
                 <div id="toggle-main-input" class="footer-btn settings" title="显示/隐藏输入框" data-i18n-title="main.toggleInputHide">
                     ⌨
                 </div>
+                <div id="toggle-shell-sidebar" class="footer-btn settings" title="Shell Panel" data-i18n-title="main.shellPanel">
+                    >_
+                </div>
             </div>
         </div>
     </div>
@@ -244,6 +247,44 @@
             <div class="main-input-meta-row">
                 <div class="main-input-last" id="main-send-last" data-i18n="main.lastSentNone">上一条发送：暂无</div>
                 <div class="main-action-status" id="main-action-status">就绪</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Shell Sidebar -->
+    <div class="shell-sidebar hidden" id="shell-sidebar">
+        <div class="shell-sidebar-header">
+            <span class="shell-sidebar-title" data-i18n="main.shellPanel">Shell Panel</span>
+            <button class="shell-sidebar-close-btn" id="shell-sidebar-close-btn" title="Close Shell Panel" data-i18n-title="main.closeShellPanel">✕</button>
+        </div>
+        <div class="shell-sidebar-content">
+            <div class="shell-sidebar-section">
+                <div class="shell-sidebar-section-title" data-i18n="main.newShellSession">New Shell Session</div>
+                <div class="shell-sidebar-btn-group" id="shell-profile-btns">
+                    <!-- Dynamically populated from shell profiles -->
+                </div>
+                <button id="shell-manage-profiles-btn" class="secondary" style="width: 100%; margin-top: 4px; font-size: 12px;" title="Manage Shell Profiles" data-i18n-title="main.manageShellProfiles">
+                    <span data-i18n="main.manageShellProfiles">Manage Profiles...</span>
+                </button>
+            </div>
+            <div class="shell-sidebar-section">
+                <div class="shell-sidebar-section-title" data-i18n="main.activeShellSessions">Active Sessions</div>
+                <div class="shell-session-list" id="shell-session-list">
+                    <div class="shell-session-empty" data-i18n="main.noActiveShellSessions">No active shell sessions</div>
+                </div>
+            </div>
+            <div class="shell-sidebar-section">
+                <div class="shell-sidebar-section-title" data-i18n="main.shellOptions">Shell Options</div>
+                <div class="shell-options-group">
+                    <label>
+                        <input type="checkbox" id="shell-auto-crlf" checked>
+                        <span data-i18n="main.shellAutoCRLF">Auto CRLF on Enter</span>
+                    </label>
+                    <label>
+                        <input type="checkbox" id="shell-clear-on-restart">
+                        <span data-i18n="main.shellClearOnRestart">Clear on Restart</span>
+                    </label>
+                </div>
             </div>
         </div>
     </div>

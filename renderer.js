@@ -107,6 +107,14 @@ const mainInputPanel = document.getElementById('main-input-panel');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const mainAppendCrlfCb = document.getElementById('main-append-crlf');
 const toggleMainInputBtn = document.getElementById('toggle-main-input');
+const toggleShellSidebarBtn = document.getElementById('toggle-shell-sidebar');
+const shellSidebar = document.getElementById('shell-sidebar');
+const shellSidebarCloseBtn = document.getElementById('shell-sidebar-close-btn');
+const shellSessionList = document.getElementById('shell-session-list');
+const shellProfileBtns = document.getElementById('shell-profile-btns');
+const shellManageProfilesBtn = document.getElementById('shell-manage-profiles-btn');
+const shellAutoCrlfCb = document.getElementById('shell-auto-crlf');
+const shellClearOnRestartCb = document.getElementById('shell-clear-on-restart');
 const workspaceRootEl = document.getElementById('workspace-root');
 const workspaceSplitterEl = document.getElementById('workspace-splitter');
 let suppressMainInputFocus = false;
@@ -1576,6 +1584,143 @@ function setMainInputPanelVisible(visible, persist = true) {
 
 }
 
+function toggleShellSidebar() {
+    if (!shellSidebar) return;
+    const isHidden = shellSidebar.classList.contains('hidden');
+    shellSidebar.classList.toggle('hidden', !isHidden);
+    toggleShellSidebarBtn?.classList.toggle('active', isHidden);
+}
+
+function updateShellSessionList() {
+    if (!shellSessionList) return;
+    const items = shellSessionList.querySelectorAll('.shell-session-item');
+    const emptyMsg = shellSessionList.querySelector('.shell-session-empty');
+    if (items.length === 0) {
+        if (!emptyMsg) {
+            const msg = document.createElement('div');
+            msg.className = 'shell-session-empty';
+            msg.setAttribute('data-i18n', 'main.noActiveShellSessions');
+            msg.textContent = tr('main.noActiveShellSessions') || 'No active shell sessions';
+            shellSessionList.appendChild(msg);
+        }
+    } else {
+        if (emptyMsg) emptyMsg.remove();
+    }
+}
+
+function addShellSessionItem(tabId, title, paneId) {
+    if (!shellSessionList) return;
+    const emptyMsg = shellSessionList.querySelector('.shell-session-empty');
+    if (emptyMsg) emptyMsg.remove();
+
+    const item = document.createElement('div');
+    item.className = 'shell-session-item';
+    item.dataset.tabId = tabId;
+    item.dataset.paneId = paneId;
+    item.innerHTML = `
+        <span class="shell-session-item-name" title="${title}">${title}</span>
+        <button class="shell-session-item-close" title="Close session">✕</button>
+    `;
+    item.querySelector('.shell-session-item-name').addEventListener('click', () => {
+        if (typeof window.__switchWorkspaceTab === 'function') {
+            window.__switchWorkspaceTab(tabId, paneId);
+        }
+    });
+    item.querySelector('.shell-session-item-close').addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (typeof window.__closeShellTab === 'function') {
+            window.__closeShellTab(tabId, paneId);
+        }
+        item.remove();
+        updateShellSessionList();
+    });
+    shellSessionList.appendChild(item);
+}
+
+function removeShellSessionItem(tabId) {
+    if (!shellSessionList) return;
+    const item = shellSessionList.querySelector(`.shell-session-item[data-tab-id="${tabId}"]`);
+    if (item) {
+        item.remove();
+        updateShellSessionList();
+    }
+}
+
+function setActiveShellSessionItem(tabId) {
+    if (!shellSessionList) return;
+    shellSessionList.querySelectorAll('.shell-session-item').forEach(el => el.classList.remove('active'));
+    if (tabId) {
+        const item = shellSessionList.querySelector(`.shell-session-item[data-tab-id="${tabId}"]`);
+        if (item) item.classList.add('active');
+    }
+}
+
+async function loadShellProfiles() {
+    if (!shellProfileBtns) return;
+    try {
+        const profiles = await ipcRenderer.invoke('get-shell-profiles');
+        shellProfileBtns.innerHTML = '';
+        if (!profiles || !profiles.length) {
+            const empty = document.createElement('div');
+            empty.className = 'shell-session-empty';
+            empty.textContent = tr('main.noShellProfiles') || 'No shell profiles configured';
+            shellProfileBtns.appendChild(empty);
+            return;
+        }
+        profiles.forEach(profile => {
+            const btn = document.createElement('button');
+            btn.className = 'secondary shell-new-btn';
+            btn.title = `${profile.name} (${profile.executable})`;
+            btn.innerHTML = `<span>${escapeHtml(profile.name)}</span>`;
+            btn.addEventListener('click', () => {
+                const shellType = profile.shellType || profile.name;
+                createShellTab({ shellType }, getActivePane()?.id || 'pane-1');
+            });
+            shellProfileBtns.appendChild(btn);
+        });
+    } catch (error) {
+        console.error('Failed to load shell profiles:', error);
+    }
+}
+
+function bindShellSidebarEvents() {
+    toggleShellSidebarBtn?.addEventListener('click', () => {
+        toggleShellSidebar();
+        if (shellSidebar && !shellSidebar.classList.contains('hidden')) {
+            loadShellProfiles();
+        }
+    });
+
+    shellSidebarCloseBtn?.addEventListener('click', () => {
+        if (shellSidebar) {
+            shellSidebar.classList.add('hidden');
+            toggleShellSidebarBtn?.classList.remove('active');
+        }
+    });
+
+    shellManageProfilesBtn?.addEventListener('click', () => {
+        ipcRenderer.send('open-prefs', { focusTab: 'shell-profiles' });
+    });
+
+    shellAutoCrlfCb?.addEventListener('change', () => {
+        ipcRenderer.send('update-shell-options', {
+            autoCRLF: shellAutoCrlfCb?.checked
+        });
+    });
+
+    shellClearOnRestartCb?.addEventListener('change', () => {
+        ipcRenderer.send('update-shell-options', {
+            clearOnRestart: shellClearOnRestartCb?.checked
+        });
+    });
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 function focusMainInput() {
     if (!mainSendInput) return;
     if (suppressMainInputFocus) return;
@@ -1728,6 +1873,7 @@ function applyMainInputConfig(config) {
 
 bindMainInputEvents();
 bindWorkspaceSplitter();
+bindShellSidebarEvents();
 
 function applyConfig(config) {
     currentConfig = config;
@@ -1827,6 +1973,9 @@ function applyConfig(config) {
     }
 
     applyMainInputConfig(config);
+
+    // Preload shell profiles for the sidebar
+    loadShellProfiles();
 
     if (filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
         isRestoringWorkspaceSession = true;

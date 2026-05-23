@@ -66,6 +66,10 @@ function loadConfig() {
     },
     filterTabs: [],
     shellTabs: [],
+    shellProfiles: [
+      { name: 'CMD', executable: 'cmd.exe', args: [], shellType: 'cmd' },
+      { name: 'PowerShell', executable: 'powershell.exe', args: ['-NoLogo'], shellType: 'powershell' }
+    ],
     workspaceLayout: {
       splitEnabled: false,
       orientation: 'horizontal',
@@ -180,7 +184,27 @@ function saveConfig(config) {
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
 }
 
+function findShellProfile(shellTypeOrName) {
+  const profiles = Array.isArray(currentConfig.shellProfiles) ? currentConfig.shellProfiles : [];
+  if (!profiles.length) {
+    return null;
+  }
+  const search = String(shellTypeOrName || 'auto').toLowerCase();
+  // First try exact name match
+  const byName = profiles.find(p => String(p.name || '').toLowerCase() === search);
+  if (byName) return byName;
+  // Then try shellType match
+  const byType = profiles.find(p => String(p.shellType || '').toLowerCase() === search);
+  if (byType) return byType;
+  // Return first profile as fallback
+  return profiles[0] || null;
+}
+
 function getDefaultShellPath(shellType = 'auto') {
+  const profile = findShellProfile(shellType);
+  if (profile && profile.executable) {
+    return profile.executable;
+  }
   if (process.platform === 'win32') {
     switch (String(shellType || 'auto').toLowerCase()) {
       case 'cmd': return process.env.COMSPEC || 'C:\\Windows\\System32\\cmd.exe';
@@ -196,7 +220,11 @@ function getDefaultShellPath(shellType = 'auto') {
   }
 }
 
-function getShellLaunchArgs(shellPath) {
+function getShellLaunchArgs(shellPath, shellTypeOrName) {
+  const profile = findShellProfile(shellTypeOrName);
+  if (profile && Array.isArray(profile.args) && profile.args.length > 0) {
+    return profile.args;
+  }
   if (process.platform !== 'win32') {
     return ['-i'];
   }
@@ -226,7 +254,7 @@ function createShellSession(tabId, options = {}) {
     ptyProcess: null
   };
 
-  const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath), {
+  const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath, shellType), {
     name: 'xterm-color',
     cols: session.cols,
     rows: session.rows,
@@ -497,6 +525,22 @@ app.on('before-quit', () => {
 ipcMain.handle('select-directory', async () => {
   const result = await dialog.showOpenDialog(prefsWindow || mainWindow, {
     properties: ['openDirectory']
+  });
+  if (result.canceled) {
+    return null;
+  } else {
+    return result.filePaths[0];
+  }
+});
+
+ipcMain.handle('select-shell-executable', async () => {
+  const result = await dialog.showOpenDialog(prefsWindow || mainWindow, {
+    title: tr('prefs.selectShellExecutable') || 'Select Shell Executable',
+    filters: [
+      { name: 'Executable Files', extensions: ['exe', 'bat', 'cmd', 'com'] },
+      { name: 'All Files', extensions: ['*'] }
+    ],
+    properties: ['openFile']
   });
   if (result.canceled) {
     return null;
@@ -883,6 +927,16 @@ ipcMain.handle('create-shell-tab-session', async (event, payload = {}) => {
     cols: session.cols,
     rows: session.rows
   };
+});
+
+ipcMain.handle('get-shell-profiles', async () => {
+  const profiles = Array.isArray(currentConfig.shellProfiles) ? currentConfig.shellProfiles : [];
+  return profiles.map(p => ({
+    name: p.name || '',
+    executable: p.executable || '',
+    args: Array.isArray(p.args) ? p.args : [],
+    shellType: p.shellType || 'auto'
+  }));
 });
 
 ipcMain.on('shell-tab-input', (event, payload = {}) => {

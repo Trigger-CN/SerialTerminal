@@ -78,6 +78,10 @@ SerialTerminal/
 - 更新提示通过 GitHub Release API 读取对应 tag 的正文，获取不到时提示网络异常
 - 更新弹窗文案跟随当前界面语言显示
 - 系统 shell 会话的创建、输入、resize、关闭与退出事件转发
+- shellProfiles 配置管理、profile 查找与 shell 路径/参数解析
+- "管理配置文件…"按钮发送 `open-prefs` 消息打开设置窗口
+- shellProfiles 可通过设置窗口的"Shell Profiles"标签页进行 CRUD 管理
+- 每个 profile 支持"浏览"按钮选择可执行文件
 
 #### `renderer.js`
 负责：
@@ -89,6 +93,7 @@ SerialTerminal/
 - 主输入框发送逻辑
 - 快捷发送、自动发送、吞吐量 UI 等
 - 当前也承担多语言在主窗口中的部分应用逻辑
+- 右侧 shell 侧边栏的动态 profile 加载、会话列表管理
 
 #### `workspace-manager.js`
 负责：
@@ -111,6 +116,7 @@ SerialTerminal/
 - 字体加载
 - 配置保存 / 恢复默认
 - 更新状态展示
+- Shell Profiles 标签页的 CRUD 编辑界面
 
 #### `i18n.js`
 负责：
@@ -183,6 +189,21 @@ npm run dist:linux
     "height": 700
   },
   "filterTabs": [],
+  "shellTabs": [],
+  "shellProfiles": [
+    {
+      "name": "CMD",
+      "executable": "cmd.exe",
+      "args": [],
+      "shellType": "cmd"
+    },
+    {
+      "name": "PowerShell",
+      "executable": "powershell.exe",
+      "args": ["-NoLogo"],
+      "shellType": "powershell"
+    }
+  ],
   "workspaceLayout": {
     "splitEnabled": false,
     "orientation": "horizontal",
@@ -985,10 +1006,48 @@ workspaceLayout = {
 首版暂不要求：
 
 - 恢复上次关闭前的 shell 进程会话状态
-- 自定义 shell 可执行路径
+- ~~自定义 shell 可执行路径~~ (已实现，见 shellProfiles)
 - 将主输入框复用于 shell 发送
 - 将 shell 输出接入串口高亮/过滤链路
 - 多级 pane 嵌套
+
+#### 15B.1.1 右侧 Shell 侧边栏
+
+在主界面右侧新增 shell 侧边栏，通过左下角 `>_` 按钮切换显示。
+
+- 侧边栏内按 `shellProfiles` 配置动态渲染"新建 Shell 会话"按钮列表
+- 支持"管理配置文件…"按钮，可打开设置窗口编辑 shellProfiles
+- 显示当前活跃 shell 会话列表，支持点击切换、关闭
+- 提供 Shell 选项：回车时自动添加 CRLF、重启时清空
+
+#### 15B.1.2 shellProfiles 自定义 Shell 配置
+
+类似 Windows Terminal 的配置文件机制，允许用户配置多个 shell 配置文件：
+
+```json
+{
+  "shellProfiles": [
+    {
+      "name": "Git Bash",
+      "executable": "C:\\Program Files\\Git\\bin\\bash.exe",
+      "args": ["-i", "-l"],
+      "shellType": "bash"
+    }
+  ]
+}
+```
+
+- `name`: 显示名称
+- `executable`: 可执行文件路径
+- `args`: 启动参数数组
+- `shellType`: shell 类型标识（cmd/powershell/bash/zsh 等）
+
+实现要点：
+- `getDefaultShellPath(shellType)` 优先从 shellProfiles 查找匹配的 profile，再回退到系统默认
+- `getShellLaunchArgs(shellPath, shellTypeOrName)` 优先使用 profile 内的 args
+- IPC `get-shell-profiles` 返回 profiles 列表给渲染层
+- 渲染层 shell 侧边栏动态加载 profiles 并生成按钮
+- "管理配置文件…"按钮发送 `open-prefs` 消息打开设置窗口
 
 #### 15B.2 实现原则
 

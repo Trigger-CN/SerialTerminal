@@ -150,6 +150,9 @@
             <button class="tab-btn" onclick="showTab('logging')">
                 <span style="font-size: 18px;">📝</span> <span data-i18n="prefs.logging">Logging</span>
             </button>
+            <button class="tab-btn" onclick="showTab('shell-profiles')">
+                <span style="font-size: 18px;">>_</span> <span data-i18n="prefs.shellProfiles">Shell Profiles</span>
+            </button>
             <button class="tab-btn" onclick="showTab('about')">
                 <span style="font-size: 18px;">ℹ️</span> <span data-i18n="prefs.about">About</span>
             </button>
@@ -285,6 +288,18 @@
                         </select>
                     </div>
                 </div>
+            </div>
+
+            <!-- Shell Profiles Tab -->
+            <div id="shell-profiles" class="tab-pane">
+                <h2 data-i18n="prefs.shellProfiles">Shell Profiles</h2>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;" data-i18n="prefs.shellProfilesDesc">
+                    Configure custom shell profiles for the shell sidebar. Similar to Windows Terminal profiles.
+                </div>
+                <div id="shell-profiles-list" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+                    <!-- Profiles loaded dynamically -->
+                </div>
+                <button id="add-shell-profile-btn" class="secondary" style="width: 100%;" data-i18n="prefs.addShellProfile">+ Add Shell Profile</button>
             </div>
 
             <!-- About Tab -->

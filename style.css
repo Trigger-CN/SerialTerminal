@@ -1080,3 +1080,211 @@ input[type="color"] {
     background: none;
     border-radius: 4px;
 }
+
+/* ============================================ */
+/* Right Shell Sidebar                          */
+/* ============================================ */
+
+.shell-sidebar {
+    width: 200px;
+    background: var(--bg-secondary);
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    border-left: 1px solid var(--border-color);
+    flex-shrink: 0;
+    overflow: hidden;
+    box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+    transition: width 0.2s ease, opacity 0.2s ease;
+}
+
+.shell-sidebar.hidden {
+    width: 0;
+    min-width: 0;
+    border-left: none;
+    opacity: 0;
+    pointer-events: none;
+    padding: 0;
+}
+
+.shell-sidebar-header {
+    padding: 8px 10px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+}
+
+.shell-sidebar-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    user-select: none;
+}
+
+.shell-sidebar-close-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    font-size: 12px;
+    line-height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.shell-sidebar-close-btn:hover {
+    background: var(--bg-tertiary);
+    color: #fff;
+    border-color: var(--border-color);
+}
+
+.shell-sidebar-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    background: var(--bg-secondary);
+    overflow-y: auto;
+    overflow-x: hidden;
+    gap: 12px;
+}
+
+.shell-sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.shell-sidebar-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    user-select: none;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.shell-sidebar-btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.shell-new-btn {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 13px;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border-color);
+    transition: all 0.2s;
+}
+
+.shell-new-btn:hover {
+    border-color: var(--accent-color);
+    color: #fff;
+}
+
+.shell-session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 40px;
+}
+
+.shell-session-empty {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 8px 0;
+    font-style: italic;
+}
+
+.shell-session-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 12px;
+    transition: all 0.2s;
+}
+
+.shell-session-item:hover {
+    border-color: var(--accent-color);
+}
+
+.shell-session-item.active {
+    border-color: var(--accent-color);
+    background: rgba(0, 122, 204, 0.15);
+}
+
+.shell-session-item-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.shell-session-item-close {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-size: 10px;
+    line-height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 50%;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: all 0.2s;
+}
+
+.shell-session-item:hover .shell-session-item-close {
+    opacity: 1;
+}
+
+.shell-session-item-close:hover {
+    background: var(--danger-color);
+    color: #fff;
+}
+
+.shell-options-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.shell-options-group label {
+    font-size: 12px;
+}
+
+/* Active state for shell sidebar toggle button */
+#toggle-shell-sidebar.active {
+    background: rgba(0, 122, 204, 0.2);
+    color: #fff;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.2);
+}
