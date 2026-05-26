@@ -72,6 +72,7 @@ SerialTerminal/
 - 创建主窗口与设置窗口
 - 读取/写入用户配置 `config.json`
 - 串口连接、收发、解码、日志缓冲
+- 主日志与各 tab 独立日志缓冲、文件名生成、落盘与 flush
 - 向渲染进程发送串口输出、错误、吞吐量数据
 - 自动更新逻辑
 - 启动时自动检查更新与用户确认安装逻辑
@@ -88,6 +89,7 @@ SerialTerminal/
 - 主终端初始化（xterm）
 - shell tab 初始化与输出渲染
 - 串口数据显示解析与渲染
+- 主终端 / 过滤 tab / shell tab 的独立日志采集与关闭时 flush
 - 过滤标签页创建、关闭、过滤历史
 - 搜索逻辑与结果计数显示
 - 主输入框发送逻辑
@@ -175,8 +177,10 @@ npm run dist:linux
   "timestampColor": "#00ff00",
   "lineNoColor": "#ffff00",
   "logEnabled": false,
+  "saveAllTabsLogToFiles": false,
   "logPath": ".../SerialTerminalLogs",
   "logFileNameFormat": "log_%Y-%m-%d_%H-%M-%S.txt",
+  "logFileSuffix": ".txt",
   "logEncoding": "utf8",
   "highlightRules": [],
   "showTimestamp": false,
@@ -246,7 +250,10 @@ npm run dist:linux
 
 ### 重要说明
 - `filterHistory`：过滤输入框的历史记录
+- `saveAllTabsLogToFiles`：是否将主终端、过滤 tab、shell tab 分别保存为独立日志文件
 - `filterTabs`：过滤标签页恢复所需状态（过滤文本、大小写、正则、所属 pane 等）
+- `logFileNameFormat`：日志文件名格式，可直接包含扩展名，完整控制最终输出文件名
+- `logFileSuffix`：已废弃字段，旧配置仍兼容但不再影响最终文件名
 - `workspaceLayout`：主工作区分屏布局、pane 激活状态、各 tab 所属 pane
 - `workspaceLayout.paneSizes`：两个 pane 的分区比例，用于拖动分隔条后恢复尺寸
 - `windowBounds`：主窗口大小恢复
@@ -388,6 +395,14 @@ npm run dist:linux
 - 时间戳（若启用）
 - 行号（若启用）
 
+### 9.1A 日志文件命名与多 tab 日志
+- 当前日志系统除了原有总日志缓冲 `logBuffer` 外，还新增了 `tabLogBuffers`
+- 当启用 `saveAllTabsLogToFiles` 后，主终端 `tab-main`、过滤 tab、shell tab 都会分别写入独立日志缓冲
+- 日志文件名仍基于 `logFileNameFormat` 生成，并新增支持 `%tab` 占位符表示 tab 标题
+- `logFileNameFormat` 现在直接控制完整输出文件名，包括扩展名
+- 文件名会清理 Windows 非法字符，避免保存失败
+- 当前会在以下时机落盘：应用退出前、串口断开时、单个过滤 tab / shell tab 关闭时
+
 ### 9.2 高亮逻辑
 `applyHighlighting(text, filterRegex)`：
 - 先应用全局高亮规则 `highlightRules`
@@ -452,6 +467,7 @@ npm run dist:linux
 - 关闭应用后再次打开，应自动恢复之前打开的过滤标签页
 - 恢复过滤文本、正则状态、区分大小写状态
 - 过滤历史继续保留
+- 若启用多 tab 日志保存，过滤标签页输出应写入各自独立日志文件
 
 ### 10.4 终端右键菜单需求
 - 主终端支持右键菜单
@@ -467,6 +483,12 @@ npm run dist:linux
 
 ### 10.6 窗口状态需求
 - 主窗口大小应写入配置，关闭后再次打开恢复上次大小
+
+### 10.6A 日志保存需求
+- 设置窗口新增“将所有标签页日志保存到文件”开关
+- 设置窗口新增“日志文件后缀”输入项
+- 文件名格式支持 `%tab` 作为标签页标题占位符
+- 主终端、过滤 tab、shell tab 可分别保存为独立日志文件
 
 ### 10.7 多语言需求
 输入框相关区域必须多语言适配，包括：
@@ -548,6 +570,16 @@ npm run dist:linux
 - 当左侧为串口终端、右侧为 shell tab 时，若在 splitter 拖动高频过程中同步向主进程发送 `resize-shell-tab`，容易造成 shell 侧反复 resize，表现为分屏拖动抽搐
 - 当前修正原则：拖动 splitter 期间只做前端 xterm fit，不在每一帧都向主进程发送 shell PTY resize；待拖动结束后再统一同步最终 cols/rows
 
+### 11.9 多 tab 日志保存的实现注意点
+- 多 tab 日志采集应挂在各终端实际写入显示的链路上，避免修改串口主协议链路
+- 主终端、过滤 tab、shell tab 的日志标题取各自当前 tab 标题，用于 `%tab` 文件名替换
+- 单个 tab 关闭时要先 flush 再销毁终端，避免缓冲丢失
+- 串口断开时要统一 flush 所有 tab 日志，避免只在应用退出时落盘
+
+### 11.10 底部 shell 开关按钮一致性
+- 底部左下角 shell 切换按钮应与其他 footer 按钮保持统一尺寸和视觉对齐。
+- 修复已将 `#toggle-shell-sidebar.footer-btn` 也纳入与 `#open-prefs.footer-btn`、`#toggle-main-input.footer-btn` 相同的 `32px` 规则，并增加了图标居中对齐。
+
 ---
 
 ## 12. 关键函数与关注点清单
@@ -557,8 +589,15 @@ npm run dist:linux
 - `saveConfig()`：配置合并写回
 - `createWindow()`：主窗口大小恢复与 resize 持久化
 - `handleSerialData(str)`：串口文本接收主入口
+- `formatFileName(format, extra)`：日志文件名格式化，支持 `%tab`
+- `buildLogFileName(extra)`：统一构造最终日志文件名并应用自定义后缀
+- `saveAllTabLogs()`：统一保存所有 tab 独立日志
+- `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲
 - `ipcMain.on('serial-input')`：串口发送主入口
 - `ipcMain.on('save-config')`：渲染层配置保存
+- `ipcMain.on('write-tab-log')`：接收渲染层 tab 日志写入请求
+- `ipcMain.on('flush-tab-log')`：保存单个 tab 日志
+- `ipcMain.on('flush-tab-logs')`：保存所有 tab 日志
 - `ipcMain.on('show-terminal-context-menu')`：终端右键菜单入口
 - `checkForAppUpdates()`：统一的自动/手动检查更新入口
 - `promptForAvailableUpdate()`：新版提示与用户选择
@@ -568,8 +607,10 @@ npm run dist:linux
 ### `renderer.js`
 - `SerialDataParser`
 - `formatLineForTerminal()`
+- `writeTabLog()` / `writeMainTabLog()` / `writeFilterTabLog()` / `writeShellTabLog()`
 - `createFilterTab()`
 - `closeFilterTab()`
+- `closeShellTab()`
 - `persistFilterTabs()`
 - `bindTerminalContextMenu()`
 - `handleTerminalContextMenuAction()`

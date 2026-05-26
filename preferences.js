@@ -30,6 +30,7 @@ const elements = {
   addRuleBtn: document.getElementById('add-rule-btn'),
   
   logEnabled: document.getElementById('logEnabled'),
+    saveAllTabsLogToFiles: document.getElementById('saveAllTabsLogToFiles'),
   logSettings: document.getElementById('log-settings'),
   logPath: document.getElementById('logPath'),
   logFileNameFormat: document.getElementById('logFileNameFormat'),
@@ -276,6 +277,7 @@ async function init() {
   elements.mouseWheelScrollLines.value = config.mouseWheelScrollLines || 3;
 
   elements.logEnabled.checked = config.logEnabled;
+    elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
   elements.logPath.value = config.logPath;
   elements.logFileNameFormat.value = config.logFileNameFormat;
   elements.logEncoding.value = config.logEncoding;
@@ -474,6 +476,7 @@ elements.saveBtn.onclick = () => {
     historyBufferSize: parseInt(elements.historyBufferSize.value) || 5000000,
     mouseWheelScrollLines: parseInt(elements.mouseWheelScrollLines.value) || 3,
     logEnabled: elements.logEnabled.checked,
+    saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,

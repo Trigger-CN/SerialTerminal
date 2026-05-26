@@ -980,6 +980,33 @@ function updateTabTitles() {
     });
 }
 
+function getMainTabTitle() {
+    return tr('main.mainTerminal');
+}
+
+function writeTabLog(tabId, title, data) {
+    if (!tabId || typeof data !== 'string' || !data) {
+        return;
+    }
+    ipcRenderer.send('write-tab-log', { tabId, title, data });
+}
+
+function writeMainTabLog(data) {
+    writeTabLog('tab-main', getMainTabTitle(), data);
+}
+
+function writeFilterTabLog(tabState, data) {
+    if (!tabState) return;
+    const closeBtnText = tabState.btn?.querySelector('.main-tab-close')?.textContent || '';
+    const title = (tabState.btn?.textContent || '').replace(closeBtnText, '').trim() || tr('main.filter');
+    writeTabLog(tabState.id, title, data);
+}
+
+function writeShellTabLog(tabState, data) {
+    if (!tabState) return;
+    writeTabLog(tabState.id, tabState.title || tr('main.shell'), data);
+}
+
 function getDefaultShellType() {
     const profiles = Array.isArray(currentConfig?.shellProfiles) ? currentConfig.shellProfiles : [];
     if (!profiles.length) return 'auto';
@@ -1109,6 +1136,7 @@ function closeShellTab(tabId) {
     const index = shellTabs.findIndex(t => t.id === tabId);
     if (index === -1) return;
     const tab = shellTabs[index];
+    ipcRenderer.send('flush-tab-log', { tabId });
     tab.term.dispose();
     tab.element.remove();
     tab.btn.remove();
@@ -1425,6 +1453,7 @@ function closeFilterTab(tabId) {
     const index = filterTabs.findIndex(t => t.id === tabId);
     if (index > -1) {
         const tab = filterTabs[index];
+        ipcRenderer.send('flush-tab-log', { tabId });
         tab.term.dispose();
         if (tab.outsideClickListener) {
             document.removeEventListener('click', tab.outsideClickListener);
@@ -2036,6 +2065,7 @@ ipcRenderer.on('shell-tab-output', (event, payload = {}) => {
     const tab = getShellTabState(payload.tabId);
     if (tab && typeof payload.data === 'string') {
         tab.term.write(payload.data);
+        writeShellTabLog(tab, payload.data);
     }
 });
 
@@ -2065,6 +2095,7 @@ ipcRenderer.on('serial-output', (event, data) => {
             mainOutput += formatLineForTerminal(lineObj, null);
         });
         if (mainOutput) serialTerm.write(mainOutput);
+        if (mainOutput) writeMainTabLog(mainOutput);
         
         // Broadcast to filter tabs
         filterTabs.forEach(tab => {
@@ -2072,14 +2103,21 @@ ipcRenderer.on('serial-output', (event, data) => {
             lines.forEach(lineObj => {
                 tabOutput += formatLineForTerminal(lineObj, tab.filterRegex);
             });
-            if (tabOutput) tab.term.write(tabOutput);
+            if (tabOutput) {
+                tab.term.write(tabOutput);
+                writeFilterTabLog(tab, tabOutput);
+            }
         });
     }
 });
 ipcRenderer.on('serial-error', (event, err) => {
     const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
     serialTerm.write(errMsg);
-    filterTabs.forEach(tab => tab.term.write(errMsg));
+    writeMainTabLog(errMsg);
+    filterTabs.forEach(tab => {
+        tab.term.write(errMsg);
+        writeFilterTabLog(tab, errMsg);
+    });
 });
 
 const THROUGHPUT_BAR_COUNT = 30;
@@ -2191,14 +2229,24 @@ ipcRenderer.on('serial-disconnected', (event, message) => {
     if (message) {
         const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
         serialTerm.write(notice);
-        filterTabs.forEach(tab => tab.term.write(notice));
+        writeMainTabLog(notice);
+        filterTabs.forEach(tab => {
+            tab.term.write(notice);
+            writeFilterTabLog(tab, notice);
+        });
         setActionStatus(message);
     }
+    ipcRenderer.send('flush-tab-logs');
 });
 
 ipcRenderer.on('log-saved', (event, payload = {}) => {
     const filePath = payload.path || '';
     setActionStatus(filePath ? `日志已保存：${filePath}` : '日志已保存');
+});
+
+ipcRenderer.on('all-tabs-log-saved', (event, payload = {}) => {
+    const count = Array.isArray(payload.paths) ? payload.paths.length : 0;
+    setActionStatus(count > 0 ? `已保存 ${count} 个标签页日志文件` : '标签页日志已保存');
 });
 
 const portSelect = document.getElementById('port-select');

@@ -963,13 +963,16 @@ label:hover {
 }
 
 #open-prefs.footer-btn,
-#toggle-main-input.footer-btn {
+#toggle-main-input.footer-btn,
+#toggle-shell-sidebar.footer-btn {
     flex: 0 0 32px;
     width: 32px;
     min-width: 32px;
     height: 32px;
     padding: 0;
     font-size: 15px;
+    line-height: 1;
+    text-align: center;
 }
 
 .footer-btn.primary {

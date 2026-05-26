@@ -43,8 +43,10 @@ function loadConfig() {
     timestampColor: '#00ff00',
     lineNoColor: '#ffff00',
     logEnabled: false,
+    saveAllTabsLogToFiles: false,
     logPath: path.join(app.getPath('documents'), 'SerialTerminalLogs'),
     logFileNameFormat: 'log_%Y-%m-%d_%H-%M-%S.txt',
+    logFileSuffix: '.txt',
     logEncoding: 'utf8',
     highlightRules: [
         { regex: "\\b(error|fail|failed|fatal)\\b", color: "#ff4d4f", enabled: true, caseSensitive: false, useRegex: true },
@@ -129,16 +131,52 @@ displaySettings.showTimestamp = currentConfig.showTimestamp;
 displaySettings.showLineNumbers = currentConfig.showLineNumbers;
 
 let logBuffer = [];
+let tabLogBuffers = new Map();
 
-function formatFileName(format) {
+function sanitizeFileNamePart(value) {
+  return String(value || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatFileName(format, extra = {}) {
   const now = new Date();
-  return format
+  let formatted = String(format || 'log_%Y-%m-%d_%H-%M-%S')
     .replace('%Y', now.getFullYear())
     .replace('%m', String(now.getMonth() + 1).padStart(2, '0'))
     .replace('%d', String(now.getDate()).padStart(2, '0'))
     .replace('%H', String(now.getHours()).padStart(2, '0'))
     .replace('%M', String(now.getMinutes()).padStart(2, '0'))
     .replace('%S', String(now.getSeconds()).padStart(2, '0'));
+
+  if (typeof extra.tabTitle === 'string') {
+    formatted = formatted.replace(/%tab/g, sanitizeFileNamePart(extra.tabTitle) || 'tab');
+  }
+
+  return formatted;
+}
+
+function buildLogFileName(extra = {}) {
+  let fileName = formatFileName(currentConfig.logFileNameFormat, extra);
+  fileName = fileName.replace(/[\\/:*?"<>|]/g, '_').trim();
+  if (!fileName) fileName = 'log';
+  return fileName;
+}
+
+function ensureLogDirectory() {
+  if (!fs.existsSync(currentConfig.logPath)) {
+    fs.mkdirSync(currentConfig.logPath, { recursive: true });
+  }
+}
+
+function saveBufferToFile(data, extra = {}) {
+  ensureLogDirectory();
+  const fileName = buildLogFileName(extra);
+  const fullPath = path.join(currentConfig.logPath, fileName);
+  const buffer = iconv.encode(data, currentConfig.logEncoding);
+  fs.writeFileSync(fullPath, buffer);
+  return fullPath;
 }
 
 function saveLog() {
@@ -147,22 +185,9 @@ function saveLog() {
   // Even if logEnabled is currently false, if we have data, we should probably save it
   // as it was collected when logging was enabled.
   
-  if (!fs.existsSync(currentConfig.logPath)) {
-    try {
-        fs.mkdirSync(currentConfig.logPath, { recursive: true });
-    } catch (e) {
-        console.error('Failed to create log dir:', e);
-        return;
-    }
-  }
-
-  const fileName = formatFileName(currentConfig.logFileNameFormat);
-  const fullPath = path.join(currentConfig.logPath, fileName);
-  
   try {
       const allData = logBuffer.join('');
-      const buffer = iconv.encode(allData, currentConfig.logEncoding);
-      fs.writeFileSync(fullPath, buffer);
+      const fullPath = saveBufferToFile(allData);
       console.log('Log saved to:', fullPath);
       if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('log-saved', { path: fullPath });
@@ -174,10 +199,43 @@ function saveLog() {
   logBuffer = [];
 }
 
+function saveAllTabLogs() {
+  if (!currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) {
+    return;
+  }
+
+  const savedPaths = [];
+  for (const [tabId, entry] of tabLogBuffers.entries()) {
+    if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) continue;
+    try {
+      const fullPath = saveBufferToFile(entry.buffer.join(''), { tabTitle: entry.title || tabId });
+      savedPaths.push(fullPath);
+    } catch (err) {
+      console.error(`Failed to save tab log for ${tabId}:`, err);
+    }
+  }
+
+  tabLogBuffers.clear();
+
+  if (savedPaths.length && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('all-tabs-log-saved', { paths: savedPaths });
+  }
+}
+
 function writeLog(data) {
   if (currentConfig.logEnabled) {
     logBuffer.push(data);
   }
+}
+
+function writeTabLog(tabId, title, data) {
+  if (!currentConfig.logEnabled || !currentConfig.saveAllTabsLogToFiles || !tabId || !data) {
+    return;
+  }
+  const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [] };
+  existing.title = title || existing.title || tabId;
+  existing.buffer.push(data);
+  tabLogBuffers.set(tabId, existing);
 }
 
 function saveConfig(config) {
@@ -339,8 +397,8 @@ function createPrefsWindow() {
   }
 
   prefsWindow = new BrowserWindow({
-    width: 700,
-    height: 500,
+    width: 750,
+    height: 650,
     parent: mainWindow,
     modal: true,
     title: 'Preferences',
@@ -521,6 +579,7 @@ ipcMain.handle('get-about-info', () => {
 app.on('before-quit', () => {
   Array.from(shellSessions.keys()).forEach(tabId => closeShellSession(tabId));
   saveLog();
+  saveAllTabLogs();
 });
 
 ipcMain.handle('select-directory', async () => {
@@ -601,6 +660,33 @@ ipcMain.on('save-config', (event, config) => {
   saveConfig(config);
   if (mainWindow) {
     mainWindow.webContents.send('config-updated', currentConfig);
+  }
+});
+
+ipcMain.on('write-tab-log', (event, payload = {}) => {
+  writeTabLog(payload.tabId, payload.title, payload.data);
+});
+
+ipcMain.on('flush-tab-logs', () => {
+  saveAllTabLogs();
+});
+
+ipcMain.on('flush-tab-log', (event, payload = {}) => {
+  if (!currentConfig.saveAllTabsLogToFiles || !payload.tabId) {
+    return;
+  }
+  const entry = tabLogBuffers.get(payload.tabId);
+  if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) {
+    return;
+  }
+  try {
+    const fullPath = saveBufferToFile(entry.buffer.join(''), { tabTitle: entry.title || payload.tabId });
+    tabLogBuffers.delete(payload.tabId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('log-saved', { path: fullPath });
+    }
+  } catch (err) {
+    console.error(`Failed to flush tab log for ${payload.tabId}:`, err);
   }
 });
 

@@ -268,6 +268,11 @@
 
                 <div id="log-settings" style="display: none; padding-left: 15px; border-left: 2px solid var(--border-color); margin-left: 5px;">
                     <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                            <input type="checkbox" id="saveAllTabsLogToFiles"> <span data-i18n="prefs.saveAllTabsLogToFiles">Save logs from all tabs to files</span>
+                        </label>
+                    </div>
+                    <div class="form-group">
                         <label data-i18n="prefs.logSavePath">📂 Log Save Path</label>
                         <div style="display: flex; gap: 8px;">
                             <input type="text" id="logPath" readonly style="flex: 1;">
@@ -276,8 +281,9 @@
                     </div>
                     <div class="form-group">
                         <label data-i18n="prefs.fileNameFormat">📄 File Name Format</label>
-                        <input type="text" id="logFileNameFormat" placeholder="log_%Y-%m-%d_%H-%M-%S.txt" data-i18n-placeholder="prefs.fileNamePlaceholder">
+                        <input type="text" id="logFileNameFormat" placeholder="log_%Y-%m-%d_%H-%M-%S.txt" data-i18n-placeholder="prefs.fileNamePlaceholder" style="width: 100%; max-width: 480px;">
                         <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.supportedTags">Supported tags: %Y, %m, %d, %H, %M, %S</small>
+                        <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.tabLogTagsHelp">When enabled for all tabs, supports %tab for tab title.</small>
                     </div>
                     <div class="form-group">
                         <label data-i18n="prefs.textEncoding">🔡 Text Encoding</label>
