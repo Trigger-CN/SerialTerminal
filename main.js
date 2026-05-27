@@ -656,6 +656,14 @@ ipcMain.on('open-config-folder', () => {
     shell.showItemInFolder(configPath);
 });
 
+ipcMain.on('open-log-folder', () => {
+    const logDir = currentConfig.logPath;
+    if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+    }
+    shell.openPath(logDir);
+});
+
 ipcMain.on('save-config', (event, config) => {
   saveConfig(config);
   if (mainWindow) {

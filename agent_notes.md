@@ -83,6 +83,8 @@ SerialTerminal/
 - "管理配置文件…"按钮发送 `open-prefs` 消息打开设置窗口
 - shellProfiles 可通过设置窗口的"Shell Profiles"标签页进行 CRUD 管理
 - 每个 profile 支持"浏览"按钮选择可执行文件
+- `open-log-folder` IPC：在资源管理器中打开日志目录（自动创建）
+- 设置窗口默认大小：750×650
 
 #### `renderer.js`
 负责：
@@ -94,8 +96,10 @@ SerialTerminal/
 - 搜索逻辑与结果计数显示
 - 主输入框发送逻辑
 - 快捷发送、自动发送、吞吐量 UI 等
+- 清空日志 + 打开日志文件夹按钮事件绑定
 - 当前也承担多语言在主窗口中的部分应用逻辑
 - 右侧 shell 侧边栏的动态 profile 加载、会话列表管理
+- 已移除串口连接状态 indicator（statusDot / statusDiv）
 
 #### `workspace-manager.js`
 负责：
@@ -119,6 +123,7 @@ SerialTerminal/
 - 配置保存 / 恢复默认
 - 更新状态展示
 - Shell Profiles 标签页的 CRUD 编辑界面
+- 日志文件名格式（含扩展名）配置，不再单独设置后缀
 
 #### `i18n.js`
 负责：
@@ -267,9 +272,10 @@ npm run dist:linux
 
 ### 6.1 左侧侧边栏
 分为三块：
-1. 串口连接区
+1. 串口连接区（连接/断开按钮 + 波特率选择 + 清除日志按钮 + 打开日志文件夹按钮）
 2. 侧边栏 tab（设置 / 搜索 / 发送）
 3. 底部设置与输入框显示按钮
+4. 已移除串口连接状态指示（原状态圆点+文字）
 
 其中“发送”标签页内的快捷发送列表支持用户拖动排序，调整顺序后会按当前顺序持久化保存。
 
@@ -485,10 +491,10 @@ npm run dist:linux
 - 主窗口大小应写入配置，关闭后再次打开恢复上次大小
 
 ### 10.6A 日志保存需求
-- 设置窗口新增“将所有标签页日志保存到文件”开关
-- 设置窗口新增“日志文件后缀”输入项
-- 文件名格式支持 `%tab` 作为标签页标题占位符
+- 设置窗口新增"将所有标签页日志保存到文件"开关
+- 文件名格式支持 `%tab` 作为标签页标题占位符，可直接在格式中指定扩展名
 - 主终端、过滤 tab、shell tab 可分别保存为独立日志文件
+- `logFileSuffix` 已废弃，`logFileNameFormat` 现在完整控制输出文件名
 
 ### 10.7 多语言需求
 输入框相关区域必须多语言适配，包括：
@@ -590,7 +596,7 @@ npm run dist:linux
 - `createWindow()`：主窗口大小恢复与 resize 持久化
 - `handleSerialData(str)`：串口文本接收主入口
 - `formatFileName(format, extra)`：日志文件名格式化，支持 `%tab`
-- `buildLogFileName(extra)`：统一构造最终日志文件名并应用自定义后缀
+- `buildLogFileName(extra)`：基于 `logFileNameFormat` 直接生成最终日志文件名
 - `saveAllTabLogs()`：统一保存所有 tab 独立日志
 - `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲
 - `ipcMain.on('serial-input')`：串口发送主入口

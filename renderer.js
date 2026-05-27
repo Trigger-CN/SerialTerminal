@@ -952,6 +952,15 @@ function getNextTabId() {
     return nextFilterTabId++;
 }
 
+function syncNextFilterTabId(tabId) {
+    const match = String(tabId || '').match(/^tab-filter-(\d+)$/);
+    if (!match) return;
+    const numericId = Number(match[1]);
+    if (Number.isFinite(numericId) && numericId >= nextFilterTabId) {
+        nextFilterTabId = numericId + 1;
+    }
+}
+
 function getNextShellTabId() {
     return nextShellTabId++;
 }
@@ -1171,8 +1180,8 @@ function restoreShellSessions() {
 }
 
 function createFilterTab(initialState = {}, targetPaneId = null) {
-    const internalId = getNextTabId();
-    const tabId = `tab-filter-${internalId}`;
+    const tabId = typeof initialState.id === 'string' && initialState.id ? initialState.id : `tab-filter-${getNextTabId()}`;
+    syncNextFilterTabId(tabId);
     const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
     
     // 1. Create Tab Button
@@ -1481,6 +1490,7 @@ function closeFilterTab(tabId) {
 function persistFilterTabs() {
     ipcRenderer.send('save-config', {
         filterTabs: filterTabs.map(tab => ({
+            id: tab.id,
             filterText: tab.filterText || '',
             caseSensitive: tab.caseSensitive,
             useRegex: tab.useRegex,
@@ -2005,10 +2015,42 @@ function applyConfig(config) {
     // Preload shell profiles for the sidebar
     loadShellProfiles();
 
+    const layoutTabToPaneMap = new Map();
+    const layoutTabIdsByPane = {
+        'pane-1': [],
+        'pane-2': []
+    };
+    normalizedWorkspaceLayout.panes.forEach(pane => {
+        if (Array.isArray(pane.tabIds)) {
+            pane.tabIds.forEach(tabId => {
+                if (typeof tabId === 'string') {
+                    layoutTabToPaneMap.set(tabId, pane.id);
+                    if (pane.id === 'pane-1' || pane.id === 'pane-2') {
+                        layoutTabIdsByPane[pane.id].push(tabId);
+                    }
+                }
+            });
+        }
+    });
+
     if (filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
-            config.filterTabs.forEach(tabConfig => createFilterTab(tabConfig, tabConfig.paneId || 'pane-1'));
+            const paneFilterQueue = {
+                'pane-1': layoutTabIdsByPane['pane-1'].filter(id => /^tab-filter-\d+$/.test(id)),
+                'pane-2': layoutTabIdsByPane['pane-2'].filter(id => /^tab-filter-\d+$/.test(id))
+            };
+            config.filterTabs.forEach(tabConfig => {
+                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || 'pane-1';
+                if (!tabConfig.id) {
+                    const queue = paneFilterQueue[targetPaneId] || [];
+                    const nextId = queue.shift();
+                    if (nextId) {
+                        tabConfig.id = nextId;
+                    }
+                }
+                createFilterTab(tabConfig, targetPaneId);
+            });
         } finally {
             isRestoringWorkspaceSession = false;
         }
@@ -2017,7 +2059,21 @@ function applyConfig(config) {
     if (shellTabs.length === 0 && Array.isArray(config.shellTabs) && config.shellTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
-            config.shellTabs.forEach(tabConfig => createShellTab(tabConfig, tabConfig.paneId || 'pane-1'));
+            const paneShellQueue = {
+                'pane-1': layoutTabIdsByPane['pane-1'].filter(id => /^tab-shell-\d+$/.test(id)),
+                'pane-2': layoutTabIdsByPane['pane-2'].filter(id => /^tab-shell-\d+$/.test(id))
+            };
+            config.shellTabs.forEach(tabConfig => {
+                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || 'pane-1';
+                if (!tabConfig.id) {
+                    const queue = paneShellQueue[targetPaneId] || [];
+                    const nextId = queue.shift();
+                    if (nextId) {
+                        tabConfig.id = nextId;
+                    }
+                }
+                createShellTab(tabConfig, targetPaneId);
+            });
         } finally {
             isRestoringWorkspaceSession = false;
         }
@@ -2219,8 +2275,6 @@ ipcRenderer.on('serial-throughput-update', (event, payload) => {
 function updateSerialConnectionState(connected) {
     isConnected = connected;
     connectBtn.textContent = connected ? '❌ Disconnect' : '⚡ Connect';
-    statusDiv.textContent = connected ? 'Connected' : 'Disconnected';
-    statusDot.classList.toggle('online', connected);
     setActionStatus(connected ? '串口已连接' : '串口已断开');
 }
 
@@ -2285,8 +2339,6 @@ function getBaudRate() {
 }
 
 const refreshBtn = document.getElementById('refresh-btn');
-const statusDiv = document.getElementById('serial-status');
-const statusDot = document.getElementById('status-dot');
 
 let isConnected = false;
 
@@ -2334,6 +2386,12 @@ clearBtn.addEventListener('click', () => {
             filterTab.contextLineText = '';
         }
     }
+});
+
+const openLogFolderBtn = document.getElementById('open-log-folder-btn');
+openLogFolderBtn.addEventListener('click', () => {
+    ipcRenderer.send('open-log-folder');
+    setActionStatus('已打开日志文件夹');
 });
 
 connectBtn.addEventListener('click', async () => {
