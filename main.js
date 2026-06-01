@@ -236,9 +236,15 @@ function saveAllTabLogs() {
   }
 }
 
+function stripAnsi(str) {
+  if (typeof str !== 'string' || !str) return str || '';
+  // Strip all CSI / SGR escape sequences (color codes, cursor movement, etc.)
+  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+}
+
 function writeLog(data) {
   if (currentConfig.logEnabled) {
-    logBuffer.push(data);
+    logBuffer.push(stripAnsi(data));
   }
 }
 
@@ -248,7 +254,7 @@ function writeTabLog(tabId, title, data) {
   }
   const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [] };
   existing.title = title || existing.title || tabId;
-  existing.buffer.push(data);
+  existing.buffer.push(stripAnsi(data));
   tabLogBuffers.set(tabId, existing);
 }
 
