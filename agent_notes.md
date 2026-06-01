@@ -91,8 +91,9 @@ SerialTerminal/
 - 主终端初始化（xterm）
 - shell tab 初始化与输出渲染
 - 串口数据显示解析与渲染
-- 主终端 / 过滤 tab / shell tab 的独立日志采集与关闭时 flush
-- 过滤标签页创建、关闭、过滤历史
+- 主终端 / 过滤 tab / shell tab 的独立日志采集（使用固定英文标题）与关闭时 flush
+- 过滤标签页创建、关闭、ID 持久化与恢复
+- 过滤历史
 - 搜索逻辑与结果计数显示
 - 主输入框发送逻辑
 - 快捷发送、自动发送、吞吐量 UI 等
@@ -255,9 +256,9 @@ npm run dist:linux
 
 ### 重要说明
 - `filterHistory`：过滤输入框的历史记录
-- `saveAllTabsLogToFiles`：是否将主终端、过滤 tab、shell tab 分别保存为独立日志文件
-- `filterTabs`：过滤标签页恢复所需状态（过滤文本、大小写、正则、所属 pane 等）
-- `logFileNameFormat`：日志文件名格式，可直接包含扩展名，完整控制最终输出文件名
+- `saveAllTabsLogToFiles`：是否将主终端、过滤 tab、shell tab 分别保存为独立日志文件（独立于 `logEnabled`）
+- `filterTabs`：过滤标签页恢复所需状态（id、过滤文本、大小写、正则、所属 pane 等）
+- `logFileNameFormat`：日志文件名格式，可直接包含扩展名；支持 `%tab` 占位符；未使用 `%tab` 时自动在文件名开头追加 tab 标题前缀
 - `logFileSuffix`：已废弃字段，旧配置仍兼容但不再影响最终文件名
 - `workspaceLayout`：主工作区分屏布局、pane 激活状态、各 tab 所属 pane
 - `workspaceLayout.paneSizes`：两个 pane 的分区比例，用于拖动分隔条后恢复尺寸
@@ -337,9 +338,11 @@ npm run dist:linux
 ```json
 [
   {
+    "id": "tab-filter-1",
     "filterText": "error",
     "caseSensitive": false,
-    "useRegex": false
+    "useRegex": false,
+    "paneId": "pane-2"
   }
 ]
 ```
@@ -402,12 +405,19 @@ npm run dist:linux
 - 行号（若启用）
 
 ### 9.1A 日志文件命名与多 tab 日志
+
 - 当前日志系统除了原有总日志缓冲 `logBuffer` 外，还新增了 `tabLogBuffers`
 - 当启用 `saveAllTabsLogToFiles` 后，主终端 `tab-main`、过滤 tab、shell tab 都会分别写入独立日志缓冲
-- 日志文件名仍基于 `logFileNameFormat` 生成，并新增支持 `%tab` 占位符表示 tab 标题
-- `logFileNameFormat` 现在直接控制完整输出文件名，包括扩展名
-- 文件名会清理 Windows 非法字符，避免保存失败
-- 当前会在以下时机落盘：应用退出前、串口断开时、单个过滤 tab / shell tab 关闭时
+- `saveAllTabsLogToFiles` 独立于 `logEnabled`，不需要同时勾选"启用自动日志"
+- 日志文件名基于 `logFileNameFormat` 生成，支持 `%tab` 占位符表示 tab 标题
+- **自动命名差异**：若用户未在格式中使用 `%tab`，`buildLogFileName()` 会自动在文件名开头追加 tab 标题前缀（空格替换为下划线），确保不同 tab 产生不同文件
+- 日志标题使用固定英文名（`Main_Terminal`、`Filter_1`、`Shell_1`），不受界面语言切换影响
+- 日志缓冲采用内存缓冲后统一落盘模式，不在每条数据写入时同步写磁盘（避免高频串口数据造成磁盘 I/O 卡顿）
+- 当前落盘时机：
+  - 串口断开时（`cleanupSerialConnection` 调用 `saveAllTabLogs()`）
+  - 单个过滤 tab / shell tab 关闭时（渲染层发送 `flush-tab-log`）
+  - 应用退出前（`before-quit` 调用 `saveAllTabLogs()`）
+- 启用 `saveAllTabsLogToFiles` 时，`saveLog()` 自动跳过（不生成重复的主日志文件）
 
 ### 9.2 高亮逻辑
 `applyHighlighting(text, filterRegex)`：
@@ -586,6 +596,31 @@ npm run dist:linux
 - 底部左下角 shell 切换按钮应与其他 footer 按钮保持统一尺寸和视觉对齐。
 - 修复已将 `#toggle-shell-sidebar.footer-btn` 也纳入与 `#open-prefs.footer-btn`、`#toggle-main-input.footer-btn` 相同的 `32px` 规则，并增加了图标居中对齐。
 
+### 11.11 过滤 tab 恢复后不可用（无输入框、无右键菜单）
+- 根因是过滤 tab 的 `id` 没有写入 `config.filterTabs`，导致重启后 `filterTabs` 里缺少 `id` 字段，`workspaceLayout.panes[].tabIds` 引用的 tabId 无法匹配
+- 同时 `createFilterTab` 使用自增 `nextFilterTabId` 生成新 ID，与 layout 中保存的旧 ID 不一致
+- 修正：
+  - `persistFilterTabs()` 现在保存 `id` 字段
+  - `createFilterTab()` 恢复时优先使用 `initialState.id`
+  - 新增 `syncNextFilterTabId()` 避免恢复后新创建 tab 的 ID 与已恢复 tab 冲突
+  - `applyConfig()` 恢复顺序调整为：先创建 filterTabs / shellTabs，再恢复 workspaceLayout
+  - 新增 `layoutTabToPaneMap` 和 `paneFilterQueue` / `paneShellQueue`，兼容旧配置中缺少 `id` 的场景
+
+### 11.12 多 tab 日志保存不生效
+- 根因 1：`writeTabLog()` 要求 `logEnabled` 和 `saveAllTabsLogToFiles` 同时为 true，但用户可能只勾"保存全部 tab 日志"而未勾"启用自动日志"
+  - 修正：`writeTabLog()` 只依赖 `saveAllTabsLogToFiles`，不再要求 `logEnabled`
+- 根因 2：`cleanupSerialConnection()` 中未调用 `saveAllTabLogs()`，断开串口时 tab 日志缓冲未落盘
+  - 修正：`cleanupSerialConnection()` 中增加 `saveAllTabLogs()` 调用
+- 根因 3：同时启用两个开关时，`saveLog()` 和 `saveAllTabLogs()` 都会在 disconnect 时触发，导致多生成一个冗余的主日志文件
+  - 修正：`saveLog()` 在 `saveAllTabsLogToFiles` 启用时自动跳过
+- 重要设计决策：tab 日志采用**缓冲后统一落盘**，不在每条数据到达时同步写磁盘（避免高频串口 I/O 卡顿）
+
+### 11.13 多 tab 日志文件名冲突
+- 默认 `logFileNameFormat` 不含 `%tab`，多个 tab 同一秒落盘会写入同一文件互相覆盖
+- 修正：`buildLogFileName()` 在未使用 `%tab` 时自动在文件名开头追加 tab 标题
+- 日志标题使用固定英文名（`Main_Terminal` / `Filter_1` / `Shell_1`），不受界面语言影响
+- 文件名中空格自动替换为下划线
+
 ---
 
 ## 12. 关键函数与关注点清单
@@ -596,9 +631,10 @@ npm run dist:linux
 - `createWindow()`：主窗口大小恢复与 resize 持久化
 - `handleSerialData(str)`：串口文本接收主入口
 - `formatFileName(format, extra)`：日志文件名格式化，支持 `%tab`
-- `buildLogFileName(extra)`：基于 `logFileNameFormat` 直接生成最终日志文件名
-- `saveAllTabLogs()`：统一保存所有 tab 独立日志
-- `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲
+- `buildLogFileName(extra)`：基于 `logFileNameFormat` 生成最终日志文件名；未使用 `%tab` 时自动在文件名开头追加 tab 标题前缀
+- `saveAllTabLogs()`：统一保存所有 tab 独立日志（缓冲 -> 一次性写盘）
+- `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲（仅内存缓冲，不立即写磁盘）
+- `cleanupSerialConnection()`：清理串口连接，同时调用 `saveLog()` 和 `saveAllTabLogs()`
 - `ipcMain.on('serial-input')`：串口发送主入口
 - `ipcMain.on('save-config')`：渲染层配置保存
 - `ipcMain.on('write-tab-log')`：接收渲染层 tab 日志写入请求
@@ -614,10 +650,11 @@ npm run dist:linux
 - `SerialDataParser`
 - `formatLineForTerminal()`
 - `writeTabLog()` / `writeMainTabLog()` / `writeFilterTabLog()` / `writeShellTabLog()`
-- `createFilterTab()`
-- `closeFilterTab()`
-- `closeShellTab()`
-- `persistFilterTabs()`
+- `getMainTabTitle()` / `getFilterTabLogTitle()` / `getShellTabLogTitle()`：生成固定英文日志标题
+- `createFilterTab()` / `createShellTab()`
+- `closeFilterTab()` / `closeShellTab()`
+- `persistFilterTabs()` / `persistShellTabs()`
+- `syncNextFilterTabId()` / `syncNextShellTabId()`：恢复时同步自增计数器避免 ID 冲突
 - `bindTerminalContextMenu()`
 - `handleTerminalContextMenuAction()`
 - `getTerminalPlainText()`

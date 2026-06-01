@@ -990,7 +990,19 @@ function updateTabTitles() {
 }
 
 function getMainTabTitle() {
-    return tr('main.mainTerminal');
+    return 'Main_Terminal';
+}
+
+function getFilterTabLogTitle(tabState) {
+    if (!tabState) return 'Filter';
+    const index = filterTabs.indexOf(tabState);
+    return index >= 0 ? `Filter_${index + 1}` : 'Filter';
+}
+
+function getShellTabLogTitle(tabState) {
+    if (!tabState) return 'Shell';
+    const index = shellTabs.indexOf(tabState);
+    return index >= 0 ? `Shell_${index + 1}` : 'Shell';
 }
 
 function writeTabLog(tabId, title, data) {
@@ -1006,14 +1018,12 @@ function writeMainTabLog(data) {
 
 function writeFilterTabLog(tabState, data) {
     if (!tabState) return;
-    const closeBtnText = tabState.btn?.querySelector('.main-tab-close')?.textContent || '';
-    const title = (tabState.btn?.textContent || '').replace(closeBtnText, '').trim() || tr('main.filter');
-    writeTabLog(tabState.id, title, data);
+    writeTabLog(tabState.id, getFilterTabLogTitle(tabState), data);
 }
 
 function writeShellTabLog(tabState, data) {
     if (!tabState) return;
-    writeTabLog(tabState.id, tabState.title || tr('main.shell'), data);
+    writeTabLog(tabState.id, getShellTabLogTitle(tabState), data);
 }
 
 function getDefaultShellType() {

@@ -159,10 +159,20 @@ function formatFileName(format, extra = {}) {
 
 function buildLogFileName(extra = {}) {
   let fileName = formatFileName(currentConfig.logFileNameFormat, extra);
+
+  const hasTabTag = String(currentConfig.logFileNameFormat || '').includes('%tab');
+  if (!hasTabTag && typeof extra.tabTitle === 'string' && extra.tabTitle) {
+    const safeTitle = sanitizeFileNamePart(extra.tabTitle).replace(/\s+/g, '_');
+    if (safeTitle) {
+      fileName = safeTitle + '_' + fileName;
+    }
+  }
+
   fileName = fileName.replace(/[\\/:*?"<>|]/g, '_').trim();
   if (!fileName) fileName = 'log';
   return fileName;
 }
+
 
 function ensureLogDirectory() {
   if (!fs.existsSync(currentConfig.logPath)) {
@@ -181,6 +191,10 @@ function saveBufferToFile(data, extra = {}) {
 
 function saveLog() {
   if (logBuffer.length === 0) return;
+  if (currentConfig.saveAllTabsLogToFiles) {
+    logBuffer = [];
+    return;
+  }
   
   // Even if logEnabled is currently false, if we have data, we should probably save it
   // as it was collected when logging was enabled.
@@ -229,7 +243,7 @@ function writeLog(data) {
 }
 
 function writeTabLog(tabId, title, data) {
-  if (!currentConfig.logEnabled || !currentConfig.saveAllTabsLogToFiles || !tabId || !data) {
+  if (!currentConfig.saveAllTabsLogToFiles || !tabId || !data) {
     return;
   }
   const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [] };
@@ -1150,6 +1164,9 @@ function cleanupSerialConnection(message = null) {
   }
 
   currentSerialPort = null;
+  if (!currentConfig.saveAllTabsLogToFiles) {
+    saveLog();
+  }
   notifySerialDisconnected(message);
 }
 
