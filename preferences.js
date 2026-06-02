@@ -31,6 +31,7 @@ const elements = {
   
   logEnabled: document.getElementById('logEnabled'),
     saveAllTabsLogToFiles: document.getElementById('saveAllTabsLogToFiles'),
+    stripAnsiInLog: document.getElementById('stripAnsiInLog'),
   logSettings: document.getElementById('log-settings'),
   logPath: document.getElementById('logPath'),
   logFileNameFormat: document.getElementById('logFileNameFormat'),
@@ -278,6 +279,7 @@ async function init() {
 
   elements.logEnabled.checked = config.logEnabled;
     elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
+    elements.stripAnsiInLog.checked = config.stripAnsiInLog !== false;
   elements.logPath.value = config.logPath;
   elements.logFileNameFormat.value = config.logFileNameFormat;
   elements.logEncoding.value = config.logEncoding;
@@ -477,6 +479,7 @@ elements.saveBtn.onclick = () => {
     mouseWheelScrollLines: parseInt(elements.mouseWheelScrollLines.value) || 3,
     logEnabled: elements.logEnabled.checked,
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,
+    stripAnsiInLog: elements.stripAnsiInLog.checked,
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,

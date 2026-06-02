@@ -44,6 +44,8 @@ function loadConfig() {
     lineNoColor: '#ffff00',
     logEnabled: false,
     saveAllTabsLogToFiles: false,
+    rawBufferAutoFlushMB: 10,
+    stripAnsiInLog: true,
     logPath: path.join(app.getPath('documents'), 'SerialTerminalLogs'),
     logFileNameFormat: 'log_%Y-%m-%d_%H-%M-%S.txt',
     logFileSuffix: '.txt',
@@ -132,6 +134,50 @@ displaySettings.showLineNumbers = currentConfig.showLineNumbers;
 
 let logBuffer = [];
 let tabLogBuffers = new Map();
+let rawSerialBuffer = [];
+let rawBufferByteCount = 0;
+let rawBufferFlushing = false;
+
+function getAutoFlushThreshold() {
+  const mb = Number(currentConfig.rawBufferAutoFlushMB);
+  return (Number.isFinite(mb) && mb > 0 ? mb : 10) * 1024 * 1024;
+}
+
+function ensureTabLogFile(tabId) {
+  const entry = tabLogBuffers.get(tabId);
+  if (!entry) return '';
+  if (entry.filePath) return entry.filePath;
+  ensureLogDirectory();
+  entry.filePath = path.join(currentConfig.logPath, buildLogFileName({ tabTitle: entry.title || tabId }));
+  tabLogBuffers.set(tabId, entry);
+  return entry.filePath;
+}
+
+function appendToTabLogSync(tabId, data) {
+  if (!data) return;
+  const filePath = ensureTabLogFile(tabId);
+  if (!filePath) return;
+  const buffer = iconv.encode(data, currentConfig.logEncoding);
+  fs.appendFileSync(filePath, buffer);
+}
+
+function autoFlushRawBufferSync() {
+  if (rawSerialBuffer.length === 0) return;
+  if (rawBufferFlushing) return;
+  rawBufferFlushing = true;
+  const snapshot = rawSerialBuffer;
+  rawSerialBuffer = [];
+  rawBufferByteCount = 0;
+  const data = snapshot.join('');
+  appendToTabLogSync('tab-main', data);
+  rawBufferFlushing = false;
+}
+
+function triggerRawAutoFlush() {
+  if (rawBufferByteCount >= getAutoFlushThreshold()) {
+    autoFlushRawBufferSync();
+  }
+}
 
 function sanitizeFileNamePart(value) {
   return String(value || '')
@@ -180,57 +226,52 @@ function ensureLogDirectory() {
   }
 }
 
-function saveBufferToFile(data, extra = {}) {
-  ensureLogDirectory();
-  const fileName = buildLogFileName(extra);
-  const fullPath = path.join(currentConfig.logPath, fileName);
-  const buffer = iconv.encode(data, currentConfig.logEncoding);
-  fs.writeFileSync(fullPath, buffer);
-  return fullPath;
-}
-
 function saveLog() {
-  if (logBuffer.length === 0) return;
-  if (currentConfig.saveAllTabsLogToFiles) {
-    logBuffer = [];
-    return;
-  }
-  
-  // Even if logEnabled is currently false, if we have data, we should probably save it
-  // as it was collected when logging was enabled.
-  
   try {
-      const allData = logBuffer.join('');
-      const fullPath = saveBufferToFile(allData);
-      console.log('Log saved to:', fullPath);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('log-saved', { path: fullPath });
-      }
+    // flush raw buffer to main tab file if registered
+    if (rawSerialBuffer.length > 0 && tabLogBuffers.has('tab-main')) {
+      appendToTabLogSync('tab-main', rawSerialBuffer.join(''));
+      rawSerialBuffer = [];
+      rawBufferByteCount = 0;
+    }
+    if (logBuffer.length === 0) return;
+    if (currentConfig.saveAllTabsLogToFiles) { logBuffer = []; return; }
+    const allData = logBuffer.join('');
+    logBuffer = [];
+    if (!allData) return;
+    ensureLogDirectory();
+    const filePath = path.join(currentConfig.logPath, buildLogFileName({}));
+    fs.appendFileSync(filePath, iconv.encode(allData, currentConfig.logEncoding));
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('log-saved', { path: filePath });
+    }
   } catch (err) {
-      console.error('Failed to save log:', err);
+    console.error('Failed to save log:', err);
   }
-  
-  logBuffer = [];
 }
 
 function saveAllTabLogs() {
-  if (!currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) {
-    return;
+  if (!currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return;
+  // flush remaining raw buffer to main tab
+  if (rawSerialBuffer.length > 0) {
+    appendToTabLogSync('tab-main', rawSerialBuffer.join(''));
+    rawSerialBuffer = [];
+    rawBufferByteCount = 0;
   }
-
+  // flush remaining per-tab buffers
   const savedPaths = [];
   for (const [tabId, entry] of tabLogBuffers.entries()) {
-    if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) continue;
-    try {
-      const fullPath = saveBufferToFile(entry.buffer.join(''), { tabTitle: entry.title || tabId });
-      savedPaths.push(fullPath);
-    } catch (err) {
-      console.error(`Failed to save tab log for ${tabId}:`, err);
+    if (tabId === 'tab-main') {
+      if (entry.filePath && fs.existsSync(entry.filePath)) savedPaths.push(entry.filePath);
+      continue;
     }
+    if (Array.isArray(entry.buffer) && entry.buffer.length > 0) {
+      appendToTabLogSync(tabId, entry.buffer.join(''));
+      entry.buffer = [];
+    }
+    if (entry.filePath && fs.existsSync(entry.filePath)) savedPaths.push(entry.filePath);
   }
-
   tabLogBuffers.clear();
-
   if (savedPaths.length && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('all-tabs-log-saved', { paths: savedPaths });
   }
@@ -238,23 +279,36 @@ function saveAllTabLogs() {
 
 function stripAnsi(str) {
   if (typeof str !== 'string' || !str) return str || '';
-  // Strip all CSI / SGR escape sequences (color codes, cursor movement, etc.)
-  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  if (currentConfig.stripAnsiInLog === false) return str;
+  // Only strip SGR sequences (color/style codes ending with 'm'),
+  // avoiding false positives on raw binary data that contains other CSI sequences.
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
 function writeLog(data) {
   if (currentConfig.logEnabled) {
-    logBuffer.push(stripAnsi(data));
+    logBuffer.push(data);
   }
 }
 
 function writeTabLog(tabId, title, data) {
-  if (!currentConfig.saveAllTabsLogToFiles || !tabId || !data) {
-    return;
-  }
-  const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [] };
+  if (!currentConfig.saveAllTabsLogToFiles || !tabId) return;
+  const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [], filePath: '', byteCount: 0 };
   existing.title = title || existing.title || tabId;
-  existing.buffer.push(stripAnsi(data));
+  if (tabId === 'tab-main') {
+    // raw buffer is collected in handleSerialData() with auto-flush
+  } else {
+    if (typeof data === 'string' && data) {
+      const clean = stripAnsi(data);
+      existing.buffer.push(clean);
+      existing.byteCount = (existing.byteCount || 0) + clean.length;
+      if (existing.byteCount >= getAutoFlushThreshold()) {
+        appendToTabLogSync(tabId, existing.buffer.join(''));
+        existing.buffer = [];
+        existing.byteCount = 0;
+      }
+    }
+  }
   tabLogBuffers.set(tabId, existing);
 }
 
@@ -700,18 +754,30 @@ ipcMain.on('flush-tab-logs', () => {
 });
 
 ipcMain.on('flush-tab-log', (event, payload = {}) => {
-  if (!currentConfig.saveAllTabsLogToFiles || !payload.tabId) {
-    return;
-  }
+  if (!currentConfig.saveAllTabsLogToFiles || !payload.tabId) { return; }
   const entry = tabLogBuffers.get(payload.tabId);
-  if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) {
+  if (payload.tabId === 'tab-main') {
+    if (rawSerialBuffer.length > 0) {
+      appendToTabLogSync('tab-main', rawSerialBuffer.join(''));
+      rawSerialBuffer = [];
+      rawBufferByteCount = 0;
+    }
+    const mainFile = ensureTabLogFile('tab-main') || '';
+    tabLogBuffers.delete(payload.tabId);
+    if (mainFile && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('log-saved', { path: mainFile });
+    }
     return;
   }
+  if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) { return; }
   try {
-    const fullPath = saveBufferToFile(entry.buffer.join(''), { tabTitle: entry.title || payload.tabId });
+    appendToTabLogSync(payload.tabId, entry.buffer.join(''));
+    entry.buffer = [];
+    entry.byteCount = 0;
+    const filePath = entry.filePath || '';
     tabLogBuffers.delete(payload.tabId);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('log-saved', { path: fullPath });
+    if (filePath && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('log-saved', { path: filePath });
     }
   } catch (err) {
     console.error(`Failed to flush tab log for ${payload.tabId}:`, err);
@@ -1169,14 +1235,26 @@ function cleanupSerialConnection(message = null) {
     serialDecoderStream = null;
   }
 
+  const disconnectMsg = message || 'Serial port disconnected';
+  if (currentConfig.saveAllTabsLogToFiles && tabLogBuffers.has('tab-main')) {
+    rawSerialBuffer.push(`\r\n[INFO] ${disconnectMsg}\r\n`);
+    rawBufferByteCount += rawSerialBuffer[rawSerialBuffer.length - 1].length;
+  }
+
   currentSerialPort = null;
   if (!currentConfig.saveAllTabsLogToFiles) {
     saveLog();
   }
-  notifySerialDisconnected(message);
+  notifySerialDisconnected(disconnectMsg);
 }
 
 function handleSerialData(str) {
+    if (currentConfig.logEnabled || currentConfig.saveAllTabsLogToFiles) {
+        rawSerialBuffer.push(str);
+        rawBufferByteCount += str.length;
+        triggerRawAutoFlush();
+    }
+
     // Newline Mode (Receive):
     // If mode is CRLF or Auto, usually we want to ensure newlines render correctly in xterm.
     // xterm expects \r\n for a new line.
@@ -1238,6 +1316,13 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
             return;
         }
         writeLog(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`);
+        if (currentConfig.saveAllTabsLogToFiles) {
+          const title = 'Main_Terminal';
+          tabLogBuffers.set('tab-main', { title, buffer: [], byteCount: 0, filePath: '' });
+          ensureTabLogFile('tab-main');
+          rawSerialBuffer.push(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`);
+          rawBufferByteCount += rawSerialBuffer[rawSerialBuffer.length - 1].length;
+        }
         initializeThroughputState();
         resolve(true);
     });

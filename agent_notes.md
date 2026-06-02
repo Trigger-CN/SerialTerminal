@@ -72,7 +72,9 @@ SerialTerminal/
 - 创建主窗口与设置窗口
 - 读取/写入用户配置 `config.json`
 - 串口连接、收发、解码、日志缓冲
-- 主日志与各 tab 独立日志缓冲、文件名生成、落盘与 flush
+- 主日志与各 tab 独立日志缓冲、文件名生成、落盘与 auto-flush
+- 原始串口数据收集（`rawSerialBuffer`），供主终端日志使用
+- ANSI 颜色码剥离（可配置）
 - 向渲染进程发送串口输出、错误、吞吐量数据
 - 自动更新逻辑
 - 启动时自动检查更新与用户确认安装逻辑
@@ -184,6 +186,8 @@ npm run dist:linux
   "lineNoColor": "#ffff00",
   "logEnabled": false,
   "saveAllTabsLogToFiles": false,
+  "stripAnsiInLog": true,
+  "rawBufferAutoFlushMB": 10,
   "logPath": ".../SerialTerminalLogs",
   "logFileNameFormat": "log_%Y-%m-%d_%H-%M-%S.txt",
   "logFileSuffix": ".txt",
@@ -257,6 +261,8 @@ npm run dist:linux
 ### 重要说明
 - `filterHistory`：过滤输入框的历史记录
 - `saveAllTabsLogToFiles`：是否将主终端、过滤 tab、shell tab 分别保存为独立日志文件（独立于 `logEnabled`）
+- `stripAnsiInLog`：是否从日志文件中剥离 ANSI 颜色控制码（默认 true，可通过设置页关闭以保留原始控制序列）
+- `rawBufferAutoFlushMB`：raw 日志缓冲区达到多少 MB 后自动写入磁盘（默认 10），同时适用于主终端 raw 缓冲和各 tab 独立缓冲
 - `filterTabs`：过滤标签页恢复所需状态（id、过滤文本、大小写、正则、所属 pane 等）
 - `logFileNameFormat`：日志文件名格式，可直接包含扩展名；支持 `%tab` 占位符；未使用 `%tab` 时自动在文件名开头追加 tab 标题前缀
 - `logFileSuffix`：已废弃字段，旧配置仍兼容但不再影响最终文件名
@@ -406,18 +412,39 @@ npm run dist:linux
 
 ### 9.1A 日志文件命名与多 tab 日志
 
-- 当前日志系统除了原有总日志缓冲 `logBuffer` 外，还新增了 `tabLogBuffers`
-- 当启用 `saveAllTabsLogToFiles` 后，主终端 `tab-main`、过滤 tab、shell tab 都会分别写入独立日志缓冲
-- `saveAllTabsLogToFiles` 独立于 `logEnabled`，不需要同时勾选"启用自动日志"
-- 日志文件名基于 `logFileNameFormat` 生成，支持 `%tab` 占位符表示 tab 标题
-- **自动命名差异**：若用户未在格式中使用 `%tab`，`buildLogFileName()` 会自动在文件名开头追加 tab 标题前缀（空格替换为下划线），确保不同 tab 产生不同文件
-- 日志标题使用固定英文名（`Main_Terminal`、`Filter_1`、`Shell_1`），不受界面语言切换影响
-- 日志缓冲采用内存缓冲后统一落盘模式，不在每条数据写入时同步写磁盘（避免高频串口数据造成磁盘 I/O 卡顿）
-- 当前落盘时机：
-  - 串口断开时（`cleanupSerialConnection` 调用 `saveAllTabLogs()`）
-  - 单个过滤 tab / shell tab 关闭时（渲染层发送 `flush-tab-log`）
-  - 应用退出前（`before-quit` 调用 `saveAllTabLogs()`）
+#### 日志数据来源
+- **主终端日志**（`tab-main`）：取自主进程 `handleSerialData()` 中接收到的原始串口数据（`rawSerialBuffer`），不经渲染进程格式化，不含时间戳/行号/ANSI 颜色
+- **过滤 tab 日志**：取自渲染进程 `writeFilterTabLog()` 发送的已过滤数据，主进程端用 `stripAnsi()` 剥离颜色码
+- **Shell tab 日志**：取自渲染进程 `writeShellTabLog()` 发送的 shell 输出，主进程端用 `stripAnsi()` 剥离颜色码
+
+#### 缓冲与落盘机制
+- `rawSerialBuffer`：主进程在 `handleSerialData()` 中持续追加原始数据，用 `str.length` 近似计数字节数
+- 各 tab 独立缓冲：`tabLogBuffers` Map，每个条目包含 `{ title, buffer[], filePath, byteCount }`
+- **自动刷盘**：`triggerRawAutoFlush()` 在每次 `handleSerialData` 回调中检查，当 `rawBufferByteCount >= rawBufferAutoFlushMB × 1024 × 1024` 时调用 `autoFlushRawBufferSync()`
+- 过滤/shell tab 同样有自动刷盘：`writeTabLog()` 中 `existing.byteCount >= getAutoFlushThreshold()` 时触发 `appendToTabLogSync()`
+- 双缓冲保护：`autoFlushRawBufferSync()` 先 swap 出 `rawSerialBuffer` 副本再清空原数组，通过 `rawBufferFlushing` 布尔锁防重入
+- 全部使用同步 `fs.appendFileSync`，无异步并发风险
+- **filePath 缓存**：`ensureTabLogFile()` 首次调用时生成文件名并缓存，后续追加到同一文件，不会产生碎片文件
+- **tab-main 预注册**：`connect-serial` 成功时主进程主动注册 `tab-main` 条目并预创建 filePath，避免 auto-flush 在渲染进程注册前触发导致数据丢失
+
+#### 日志标题命名
+- 日志标题使用固定英文名，不受界面语言切换影响：
+  - `Main_Terminal` → 主终端
+  - `Filter_1` / `Filter_2` … → 过滤标签页（按 `filterTabs` 数组索引）
+  - `Shell_1` / `Shell_2` … → Shell 标签页（按 `shellTabs` 数组索引）
+- `buildLogFileName()` 在未使用 `%tab` 时自动在文件名开头追加 tab 标题（空格转下划线）
+
+#### 落盘时机
+- 自动刷盘：缓冲区超过 `rawBufferAutoFlushMB` 阈值
+- 串口断开：`cleanupSerialConnection()` → 渲染层 `flush-tab-logs` → `saveAllTabLogs()`
+- 单个 tab 关闭：渲染层 `flush-tab-log` → 主进程 `appendToTabLogSync()` + 清理
+- 应用退出：`before-quit` → `saveLog()` + `saveAllTabLogs()`
 - 启用 `saveAllTabsLogToFiles` 时，`saveLog()` 自动跳过（不生成重复的主日志文件）
+
+#### ANSI 剥离
+- `stripAnsi()` 仅剥离 SGR 序列（`\x1b[数字;数字m`），不触碰其他 CSI 命令，降低对原始二进制数据的误伤风险
+- 可通过设置页 `stripAnsiInLog` 选项关闭此行为
+- 只在过滤/shell tab 的 `writeTabLog` 路径中调用；主终端原始数据不经 `stripAnsi`
 
 ### 9.2 高亮逻辑
 `applyHighlighting(text, filterRegex)`：
@@ -621,6 +648,40 @@ npm run dist:linux
 - 日志标题使用固定英文名（`Main_Terminal` / `Filter_1` / `Shell_1`），不受界面语言影响
 - 文件名中空格自动替换为下划线
 
+### 11.14 日志文件中存在 ANSI 颜色控制码
+- 渲染进程传来的数据已包含 xterm 格式化后的 ANSI 序列（`\x1b[38;2;...m`），直接写入日志文件产生大量可读性差的控制字符
+- 修正：
+  - 主进程新增 `stripAnsi()` 函数，仅剥离 SGR 序列（`\x1b[...m`）
+  - `writeTabLog()` 中对过滤/shell tab 数据调用 `stripAnsi()`
+  - 主终端日志走 `rawSerialBuffer` 原始数据路径，天然不含 ANSI
+  - 新增 `stripAnsiInLog` 配置项（默认 true），允许用户关闭此行为以保留完整控制序列
+
+### 11.15 日志文件包含渲染格式化内容（时间戳、行号）
+- 渲染进程的 `writeFilterTabLog`/`writeShellTabLog` 传回的是已经 `formatLineForTerminal()` 格式化后的文本，包含时间戳、行号等前缀
+- 修正：
+  - 主终端日志改为取主进程 `handleSerialData()` 中的原始数据（`rawSerialBuffer`）
+  - `writeTabLog('tab-main', ...)` 忽略 data 参数，主终端日志完全从 raw buffer 写入
+  - 过滤/shell tab 仍保留格式化数据（因其需要过滤后内容），但剥离了 ANSI
+  - 连接/断开通知直接注入 `rawSerialBuffer`
+
+### 11.16 日志缓冲区无限增长导致内存问题
+- 长时间串口连接下 `rawSerialBuffer` 和各 tab 的 `buffer` 数组持续增长，可能占用数百 MB 甚至 GB 内存
+- 修正：
+  - 新增 `rawBufferAutoFlushMB` 配置项（默认 10MB）
+  - `triggerRawAutoFlush()` 在每次 `handleSerialData` 回调中检查阈值，超限时触发 `autoFlushRawBufferSync()`
+  - 双缓冲 swap 机制：先复制 `rawSerialBuffer` 引用，再清空原数组，避免并发丢数据
+  - `rawBufferFlushing` 布尔锁防重入
+  - 过滤/shell tab 同样在 `writeTabLog()` 中检查各自 `byteCount`，超限时同步刷盘
+  - 全部使用同步 `fs.appendFileSync`，无异步竞态
+
+### 11.17 auto-flush 文件碎片化与覆盖问题
+- 初版方案中每次 auto-flush 调用 `buildLogFileName()` 生成新文件名（含时间戳），导致一次连接产生几十个碎片文件；且断开时 `saveBufferToFile` 用 `writeFileSync` 覆盖了 auto-flush 已写入的内容
+- 修正：
+  - `ensureTabLogFile()` 首次生成 filePath 后缓存在 `tabLogBuffers` 条目中，后续全部追加到同一文件
+  - `saveAllTabLogs()` 和 `flush-tab-log` 统一改为 `appendFileSync` 追加模式，不再覆盖
+  - `connect-serial` 时预注册 `tab-main` 条目 + 预创建 filePath，避免首次 auto-flush 时未注册导致静默丢数据
+  - 删除了异步 `asyncAppendToTabLog`，全部统一为同步追加
+
 ---
 
 ## 12. 关键函数与关注点清单
@@ -629,12 +690,21 @@ npm run dist:linux
 - `loadConfig()`：配置默认值来源
 - `saveConfig()`：配置合并写回
 - `createWindow()`：主窗口大小恢复与 resize 持久化
-- `handleSerialData(str)`：串口文本接收主入口
+- `handleSerialData(str)`：串口文本接收主入口，同时将原始数据推入 `rawSerialBuffer` 并触发 auto-flush 检查
+- `stripAnsi(str)`：剥离 ANSI SGR 序列（仅 `\x1b[...m`），受 `stripAnsiInLog` 配置控制
 - `formatFileName(format, extra)`：日志文件名格式化，支持 `%tab`
 - `buildLogFileName(extra)`：基于 `logFileNameFormat` 生成最终日志文件名；未使用 `%tab` 时自动在文件名开头追加 tab 标题前缀
-- `saveAllTabLogs()`：统一保存所有 tab 独立日志（缓冲 -> 一次性写盘）
-- `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲（仅内存缓冲，不立即写磁盘）
-- `cleanupSerialConnection()`：清理串口连接，同时调用 `saveLog()` 和 `saveAllTabLogs()`
+- `ensureTabLogFile(tabId)`：首次调用时生成并缓存 filePath，后续复用
+- `appendToTabLogSync(tabId, data)`：同步追加数据到指定 tab 的日志文件
+- `autoFlushRawBufferSync()`：swap raw buffer 后同步追加到 tab-main 文件
+- `triggerRawAutoFlush()`：检查 raw buffer 是否超 `rawBufferAutoFlushMB` 阈值
+- `getAutoFlushThreshold()`：从配置读取阈值并转为字节数
+- `saveLog()`：保存通用日志（仅在未启用 `saveAllTabsLogToFiles` 时生效）
+- `saveAllTabLogs()`：统一刷盘所有 tab 的残余缓冲并清理
+- `writeLog(data)`：写入通用日志缓冲 `logBuffer`
+- `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲（主终端走 raw buffer，过滤/shell 走各自 buffer）
+- `cleanupSerialConnection()`：清理串口连接，注入断开通知到 raw buffer，最后触发渲染层 flush
+- `ipcMain.handle('connect-serial')`：串口连接入口，预注册 `tab-main` 条目
 - `ipcMain.on('serial-input')`：串口发送主入口
 - `ipcMain.on('save-config')`：渲染层配置保存
 - `ipcMain.on('write-tab-log')`：接收渲染层 tab 日志写入请求
