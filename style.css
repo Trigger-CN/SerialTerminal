@@ -203,8 +203,8 @@ label:hover {
 
 /* Quick Send List Styling */
 .quick-send-item {
+    position: relative;
     display: flex;
-    gap: 6px;
     align-items: center;
     padding: 2px;
     border-radius: 4px;
@@ -232,6 +232,7 @@ label:hover {
 
 .quick-send-main-btn {
     flex: 1;
+    min-width: 0;
     text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -252,22 +253,40 @@ label:hover {
 }
 
 .quick-send-actions {
+    position: absolute;
+    top: 50%;
+    right: 5px;
+    z-index: 1;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    gap: 3px;
+    padding-left: 8px;
+    background: var(--bg-input);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%) translateX(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.quick-send-item:hover .quick-send-actions,
+.quick-send-item:focus-within .quick-send-actions,
+.quick-send-item.editing .quick-send-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(-50%) translateX(0);
 }
 
 .quick-send-action-btn {
-    width: 24px;
-    height: 15px; /* Slightly taller for better touch */
+    width: 22px;
+    height: 22px;
     padding: 0;
-    font-size: 10px;
-    line-height: 15px;
+    font-size: 11px;
+    line-height: 22px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
+    border-radius: 3px;
     color: var(--text-secondary);
 }
 
