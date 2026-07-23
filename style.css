@@ -301,6 +301,94 @@ label:hover {
     border-color: var(--danger-color);
 }
 
+.quick-send-add-btn {
+    width: 100%;
+    flex: 0 0 auto;
+}
+
+.app-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(0, 0, 0, 0.58);
+}
+
+.app-dialog-overlay.hidden {
+    display: none;
+}
+
+.app-dialog {
+    width: min(440px, calc(100vw - 32px));
+    max-height: calc(100vh - 40px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.app-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.app-dialog-header h2 {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    font-size: 16px;
+}
+
+.app-dialog-close {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    flex: 0 0 auto;
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-secondary);
+}
+
+.app-dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    overflow-y: auto;
+}
+
+.app-dialog-field {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.quick-send-dialog .send-editor-textarea {
+    min-height: 120px;
+    max-height: 280px;
+}
+
+.app-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color);
+}
+
 /* Sidebar Layout */
 .sidebar {
     width: 200px;
@@ -417,11 +505,8 @@ label:hover {
 }
 
 .shared-send-profile {
-    padding: 8px;
-    border: 1px solid color-mix(in srgb, var(--accent-color) 65%, var(--border-color));
-    border-radius: 6px;
-    background: linear-gradient(145deg, rgba(0, 122, 204, 0.18), rgba(0, 122, 204, 0.05));
-    box-shadow: inset 3px 0 0 var(--accent-color);
+    padding: 2px 0 10px;
+    border-bottom: 1px solid var(--border-color);
 }
 
 .shared-send-profile-title {

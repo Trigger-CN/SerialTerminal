@@ -178,13 +178,7 @@
                 <div id="quick-send-list" class="quick-send-list-container">
                     <!-- Items will be added here -->
                 </div>
-                
-                <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px;">
-                    <input type="text" id="quick-send-label" placeholder="Label" data-i18n-placeholder="main.label">
-                    <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
-                    <div id="quick-send-validation" class="input-validation" role="status" aria-live="polite"></div>
-                </div>
-                <button id="add-quick-send-btn" class="secondary" style="width: 100%;" data-i18n="main.addToList">+ Add to List</button>
+                <button id="open-quick-send-dialog-btn" class="secondary quick-send-add-btn" data-i18n="main.addToList">+ Add to List</button>
             </div>
         </div>
 
@@ -306,6 +300,30 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <div id="quick-send-dialog" class="app-dialog-overlay hidden" role="presentation">
+        <section class="app-dialog quick-send-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-send-dialog-title">
+            <header class="app-dialog-header">
+                <h2 id="quick-send-dialog-title" data-i18n="main.addQuickSend">Add Quick Send</h2>
+                <button id="quick-send-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close">✕</button>
+            </header>
+            <div class="app-dialog-body">
+                <label class="app-dialog-field" for="quick-send-label">
+                    <span data-i18n="main.label">Label</span>
+                    <input type="text" id="quick-send-label" placeholder="Label" data-i18n-placeholder="main.label">
+                </label>
+                <label class="app-dialog-field" for="quick-send-content">
+                    <span data-i18n="main.content">Content</span>
+                    <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
+                </label>
+                <div id="quick-send-validation" class="input-validation" role="status" aria-live="polite"></div>
+            </div>
+            <footer class="app-dialog-actions">
+                <button id="quick-send-dialog-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
+                <button id="add-quick-send-btn" type="button" data-i18n="main.addToList">Add to List</button>
+            </footer>
+        </section>
     </div>
     
     <script src="renderer.js"></script>

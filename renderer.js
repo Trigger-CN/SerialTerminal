@@ -3044,6 +3044,11 @@ const autoSendTextInput = document.getElementById('auto-send-text');
 const autoSendValidation = document.getElementById('auto-send-validation');
 
 const quickSendListEl = document.getElementById('quick-send-list');
+const openQuickSendDialogBtn = document.getElementById('open-quick-send-dialog-btn');
+const quickSendDialog = document.getElementById('quick-send-dialog');
+const quickSendDialogTitle = document.getElementById('quick-send-dialog-title');
+const quickSendDialogCloseBtn = document.getElementById('quick-send-dialog-close');
+const quickSendDialogCancelBtn = document.getElementById('quick-send-dialog-cancel');
 const quickSendLabelInput = document.getElementById('quick-send-label');
 const quickSendContentInput = document.getElementById('quick-send-content');
 const addQuickSendBtn = document.getElementById('add-quick-send-btn');
@@ -3187,6 +3192,32 @@ function getQuickEditorItem() {
     });
 }
 
+function closeQuickSendDialog() {
+    quickSendDialog.classList.add('hidden');
+    editingIndex = -1;
+    quickSendLabelInput.value = '';
+    quickSendContentInput.value = '';
+    renderQuickSendList();
+}
+
+function openQuickSendDialog(index = -1) {
+    editingIndex = index;
+    const item = index >= 0 ? quickSendList[index] : null;
+    quickSendLabelInput.value = item?.label || '';
+    quickSendContentInput.value = item?.content || '';
+    const editing = Boolean(item);
+    quickSendDialogTitle.textContent = editing
+        ? trFallback('main.editQuickSend', 'Edit Quick Send')
+        : trFallback('main.addQuickSend', 'Add Quick Send');
+    addQuickSendBtn.textContent = editing
+        ? trFallback('main.updateItem', 'Update Item')
+        : tr('main.addToList');
+    updateQuickSendValidation();
+    renderQuickSendList();
+    quickSendDialog.classList.remove('hidden');
+    requestAnimationFrame(() => (editing ? quickSendContentInput : quickSendLabelInput).focus());
+}
+
 function updateQuickSendValidation() {
     const item = getQuickEditorItem();
     const result = validateSendContent(sendMode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
@@ -3281,7 +3312,7 @@ function renderQuickSendList() {
             await sendSerialRequest({ content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
         });
         
-        // Action buttons container (vertical stack)
+        // Actions are overlaid on the right and revealed on hover/focus.
         const actionDiv = document.createElement('div');
         actionDiv.className = 'quick-send-actions';
 
@@ -3290,13 +3321,7 @@ function renderQuickSendList() {
         editBtn.className = 'quick-send-action-btn';
         editBtn.title = 'Edit';
         editBtn.addEventListener('click', () => {
-            editingIndex = index;
-            quickSendLabelInput.value = item.label || '';
-            quickSendContentInput.value = item.content || '';
-            addQuickSendBtn.textContent = trFallback('main.updateItem', 'Update Item');
-            addQuickSendBtn.classList.remove('secondary'); // Make it primary color to indicate action
-            updateQuickSendValidation();
-            renderQuickSendList();
+            openQuickSendDialog(index);
             setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
         });
 
@@ -3307,11 +3332,7 @@ function renderQuickSendList() {
         delBtn.addEventListener('click', () => {
             // If deleting the item currently being edited, cancel edit mode
             if (editingIndex === index) {
-                editingIndex = -1;
-                addQuickSendBtn.textContent = '+ Add to List';
-                addQuickSendBtn.classList.add('secondary');
-                quickSendLabelInput.value = '';
-                quickSendContentInput.value = '';
+                closeQuickSendDialog();
             } else if (editingIndex > index) {
                 // Adjust index if deleting an item above the edited one
                 editingIndex--;
@@ -3345,19 +3366,22 @@ addQuickSendBtn.addEventListener('click', () => {
     if (updateQuickSendValidation().ok) {
         if (editingIndex > -1) {
             quickSendList[editingIndex] = item;
-            editingIndex = -1;
-            addQuickSendBtn.textContent = tr('main.addToList');
-            addQuickSendBtn.classList.add('secondary');
         } else {
             quickSendList.push(item);
         }
-        
-        quickSendLabelInput.value = '';
-        quickSendContentInput.value = '';
-        renderQuickSendList();
         saveQuickSendList();
-        updateQuickSendValidation();
+        closeQuickSendDialog();
     }
 });
 quickSendContentInput.addEventListener('input', updateQuickSendValidation);
-updateQuickSendValidation();
+openQuickSendDialogBtn.addEventListener('click', () => openQuickSendDialog());
+quickSendDialogCloseBtn.addEventListener('click', closeQuickSendDialog);
+quickSendDialogCancelBtn.addEventListener('click', closeQuickSendDialog);
+quickSendDialog.addEventListener('click', event => {
+    if (event.target === quickSendDialog) closeQuickSendDialog();
+});
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !quickSendDialog.classList.contains('hidden')) {
+        closeQuickSendDialog();
+    }
+});
