@@ -408,7 +408,7 @@ npm run dist:linux
 `renderer.js`
 - `ipcRenderer.on('serial-output-bytes')` 接收字节
 - RX Text：`iconv.getDecoder()` 流式解码，再经 `SerialDataParser`、时间戳/行号和高亮链路
-- RX Hex：`HexStreamFormatter.push()` 生成格式化行，绕过文本换行 parser
+- RX Hex：`HexStreamFormatter.push()` 生成格式化行，绕过文本换行 parser；每个 Hex dump 行仍调用一次 `getPrefix()`，因此显示终端和文本日志支持与 Text 相同的时间戳/行号，Raw `.bin` 不受影响
 - Text/Hex 切换会 flush 旧链路，不重放历史；重连重置 Hex offset，普通清屏 flush pending 但不重置 offset
 - 右键“清空并重置 Hex 偏移”同时清屏、清 pending 和 offset
 

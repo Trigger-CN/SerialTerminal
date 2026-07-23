@@ -390,13 +390,17 @@ function writeTextLines(lines) {
 
 function writeHexLines(lines) {
     if (!lines.length) return;
-    const mainOutput = lines.map(line => line.output).join('');
+    const formattedLines = lines.map(line => ({
+        text: line.output.replace(/\r?\n$/, ''),
+        prefix: getPrefix()
+    }));
+    const mainOutput = formattedLines.map(({ text, prefix }) => `${prefix}${text}\r\n`).join('');
     serialTerm.write(mainOutput);
     writeMainTabLog(mainOutput);
     filterTabs.forEach(tab => {
         if (tab.dataMode !== 'hex') return;
-        const matched = lines.filter(line => !tab.filterRegex || tab.filterRegex.test(line.output.replace(/\r?\n$/, '')));
-        const output = matched.map(line => applyHighlighting(line.output.replace(/\r?\n$/, ''), tab.filterRegex) + '\r\n').join('');
+        const matched = formattedLines.filter(({ text }) => !tab.filterRegex || tab.filterRegex.test(text));
+        const output = matched.map(({ text, prefix }) => `${prefix}${applyHighlighting(text, tab.filterRegex)}\r\n`).join('');
         if (output) {
             tab.term.write(output);
             writeFilterTabLog(tab, output);
