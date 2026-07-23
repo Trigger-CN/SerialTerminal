@@ -2644,7 +2644,14 @@ ipcRenderer.on('serial-throughput-update', (event, payload) => {
 
 function updateSerialConnectionState(connected) {
     isConnected = connected;
-    connectBtn.textContent = connected ? `X ${tr('main.disconnect')}` : `> ${tr('main.connect')}`;
+    const label = document.getElementById('connect-btn-label');
+    if (label) {
+        const translationKey = connected ? 'main.disconnect' : 'main.connect';
+        label.dataset.i18n = translationKey;
+        label.textContent = tr(translationKey);
+    }
+    connectBtn.classList.toggle('connect-action', !connected);
+    connectBtn.classList.toggle('disconnect-action', connected);
     setActionStatus(connected ? tr('main.connected') : tr('main.disconnected'));
 }
 

@@ -143,6 +143,28 @@ button.success:hover {
     background: #66bb6a;
 }
 
+#connect-btn.connect-action {
+    background: #b8e6c1;
+    color: #173d20;
+    border: 1px solid #79be87;
+}
+
+#connect-btn.connect-action:hover {
+    background: #c9efd0;
+    border-color: #91cf9d;
+}
+
+#connect-btn.disconnect-action {
+    background: #f2b8b5;
+    color: #551b18;
+    border: 1px solid #d77d78;
+}
+
+#connect-btn.disconnect-action:hover {
+    background: #f7c9c6;
+    border-color: #e19590;
+}
+
 /* Checkbox Styling */
 input[type="checkbox"] {
     appearance: none;
