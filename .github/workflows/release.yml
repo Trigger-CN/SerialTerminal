@@ -73,8 +73,17 @@ jobs:
           npm --version
           node --version
 
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
       - name: Install Dependencies
-        run: npm install --ignore-scripts
+        run: npm install
 
       - name: Rebuild Native Dependencies for Electron
         if: matrix.os == 'windows-2022'
@@ -134,6 +143,18 @@ jobs:
             - **Linux**: 使用 `.AppImage` 或 `.deb`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unblock app-builder executable
+        if: matrix.os == 'windows-2022'
+        shell: powershell
+        run: |
+          $path = 'node_modules\app-builder-bin\win\x64\app-builder.exe'
+          if (Test-Path $path) {
+            Unblock-File $path
+            Write-Host "Unblocked $path"
+          } else {
+            Write-Host "$path not found"
+          }
 
       - name: Build and Publish (Windows)
         if: matrix.os == 'windows-2022'
