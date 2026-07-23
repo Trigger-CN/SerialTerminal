@@ -1,5 +1,7 @@
 # SerialTerminal 项目接手说明 / AI 记忆文档
 
+> Hex 架构说明：本文档较早章节保留了部分历史背景；涉及串口收发、日志和配置时，以第 8 节及第 9.1B 节的 config v3/字节架构说明为准。
+
 ## 1. 项目概述
 
 - 项目名：`SerialTerminal`
@@ -55,6 +57,8 @@ SerialTerminal/
 ├─ index.html                 主窗口 HTML
 ├─ workspace-manager.js       主工作区 pane/tab 状态与 DOM 编排管理
 ├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、主输入框、侧边栏）
+├─ serial-codec.js             严格 Hex 解析、Text 编码和统一发送 Buffer 构造
+├─ hex-formatter.js            流式 Hex dump 行对象、偏移和空闲刷新
 ├─ main.js                    主进程逻辑（窗口、配置、串口、日志、更新）
 ├─ preferences.html           设置窗口 HTML
 ├─ preferences.js             设置窗口逻辑
@@ -71,9 +75,9 @@ SerialTerminal/
 负责：
 - 创建主窗口与设置窗口
 - 读取/写入用户配置 `config.json`
-- 串口连接、收发、解码、日志缓冲
+- 串口连接、原始字节收发、统一发送校验、日志缓冲
 - 主日志与各 tab 独立日志缓冲、文件名生成、落盘与 auto-flush
-- 原始串口数据收集（`rawSerialBuffer`），供主终端日志使用
+- 可选 RX-only 原始二进制日志缓冲（`rawBinaryBuffers`），与显示日志分离
 - ANSI 颜色码剥离（可配置）
 - 向渲染进程发送串口输出、错误、吞吐量数据
 - 自动更新逻辑
@@ -92,7 +96,7 @@ SerialTerminal/
 负责：
 - 主终端初始化（xterm）
 - shell tab 初始化与输出渲染
-- 串口数据显示解析与渲染
+- 原始 RX 字节的 Text 流式解码或 Hex 流式格式化与渲染
 - 主终端 / 过滤 tab / shell tab 的独立日志采集（使用固定英文标题）与关闭时 flush
 - 过滤标签页创建、关闭、ID 持久化与恢复
 - 过滤历史
@@ -101,6 +105,8 @@ SerialTerminal/
 - 快捷发送、自动发送、吞吐量 UI 等
 - 清空日志 + 打开日志文件夹按钮事件绑定
 - 当前也承担多语言在主窗口中的部分应用逻辑
+- 管理独立 RX/TX 模式、主输入双草稿、结构化发送历史、Hex 实时校验
+- 自动发送、快捷发送和过滤 tab 均保存各自的 Text/Hex 数据模式
 - 右侧 shell 侧边栏的动态 profile 加载、会话列表管理
 - 已移除串口连接状态 indicator（statusDot / statusDiv）
 
@@ -127,6 +133,21 @@ SerialTerminal/
 - 更新状态展示
 - Shell Profiles 标签页的 CRUD 编辑界面
 - 日志文件名格式（含扩展名）配置，不再单独设置后缀
+- Hex dump 设置和 RX 原始 `.bin` 日志设置的回填、归一化与保存
+
+#### `serial-codec.js`
+负责：
+- `parseHexInput()` 严格解析 Hex，支持连续输入、空白/逗号/冒号/连字符分隔和两位 `0xNN` token
+- 返回结构化错误 code、位置/token、标准化大写文本和字节数
+- `buildSerialWriteBuffer()` 统一处理 Text/Hex、Text 编码、终端 Enter 换行和追加 `0D 0A`
+- 默认单次载荷上限为 1 MiB；调用方可传入更小上限
+
+#### `hex-formatter.js`
+负责：
+- `HexStreamFormatter` 将任意串口 chunk 视为连续字节流，不把 `data` 事件边界当作帧边界
+- 按 8/16/24/32 字节成行，维护累计偏移与残余字节
+- 空闲超时刷新残余行，支持 flush/reset/configure/dispose
+- `formatHexLine()` 生成 `{ offset, bytes, hexText, asciiText, output }`；ASCII 可打印范围为 `0x20..0x7E`
 
 #### `i18n.js`
 负责：
@@ -364,30 +385,32 @@ npm run dist:linux
 
 ---
 
-## 8. 串口收发实现原理
+## 8. 串口收发实现原理（config v3 / Hex 当前实现）
 
 ### 8.1 主进程接收流程
 `main.js`
 1. `connect-serial` 创建 `SerialPort`
-2. 根据编码创建 `iconv.decodeStream()`（非 hex）
-3. `currentSerialPort.on('data')`
-4. 若 `hex` 模式则直接转 hex 字符串
-5. 否则走 decoder 输出文本
-6. 调用 `handleSerialData(str)`
-7. `mainWindow.webContents.send('serial-output', str)` 发给渲染进程
+2. `port.on('data')` 保留 Node `Buffer`，以 `data.length` 统计 RX 吞吐量
+3. 若启用 raw 日志，`bufferRawSerialBytes(data)` 复制并缓冲原始 RX 字节
+4. 通过 `serial-output-bytes` 发送 `Uint8Array` 和 `receivedAt`；主进程不再按显示模式解码
+5. 主窗口销毁和过期 port 回调均有保护
 
 ### 8.2 主进程发送流程
-`main.js -> ipcMain.on('serial-input')`
-- 根据换行模式处理 `\r`
-- 根据编码转换成 Buffer
-- 调用 `currentSerialPort.write(buffer)`
+`renderer.js -> sendSerialRequest() -> ipcRenderer.invoke('serial-write') -> main.js -> writeSerialPayload()`
+- 渲染层先校验并串行化写请求；主进程再次调用 `buildSerialWriteBuffer()` 做最终校验
+- Text 使用 UTF-8/ASCII/GBK 编码；终端 Enter 根据 `newlineMode` 变为 CR/LF/CRLF
+- Hex 使用严格 parser 生成实际字节，不把输入字符串作为待发数据
+- `appendCrLf` 对 Text/Hex 整段消息发送都追加真实 `0D 0A`，即使内容已以该字节序列结尾也会再次追加；主终端 Text 逐键输入不应用该选项，Enter 只服从 `newlineMode`
+- `SerialPort.write()` 回调成功后返回 `{ ok: true, bytesWritten }`，TX 吞吐量按最终 Buffer 长度统计；当前不调用 `drain()`
+- 旧 `serial-input` IPC 仍作为 Text 兼容入口存在，新增入口应使用 `serial-write`
 
 ### 8.3 渲染进程显示流程
 `renderer.js`
-- `ipcRenderer.on('serial-output')`
-- `SerialDataParser.parse(data)` 按换行拆分
-- `formatLineForTerminal()` 生成终端输出字符串
-- 写入主终端和各过滤标签页
+- `ipcRenderer.on('serial-output-bytes')` 接收字节
+- RX Text：`iconv.getDecoder()` 流式解码，再经 `SerialDataParser`、时间戳/行号和高亮链路
+- RX Hex：`HexStreamFormatter.push()` 生成格式化行，绕过文本换行 parser
+- Text/Hex 切换会 flush 旧链路，不重放历史；重连重置 Hex offset，普通清屏 flush pending 但不重置 offset
+- 右键“清空并重置 Hex 偏移”同时清屏、清 pending 和 offset
 
 ### 8.4 `SerialDataParser` 的作用
 - 累积不完整串口文本到 `incomingBuffer`
@@ -398,6 +421,71 @@ npm run dist:linux
   text: '实际文本',
   delimiter: '\n' | '\r' | '\r\n' | '',
   prefix: '时间戳/行号前缀'
+}
+```
+
+### 8.5 模式、输入和过滤
+- `receiveDisplayMode` 与全局 `sendMode` 独立；对应 Text 编码分别保存在 `receiveEncoding` / `sendEncoding`
+- RX/TX 为 Hex 时各自的编码控件禁用，但最近 Text 编码不会丢失；连接期间模式可切换并立即持久化
+- TX Hex 时主终端逐键输入被拦截并提示使用底部输入框；Ctrl+V 填入底部 Hex 输入而不直接发送
+- 左侧“发送”页顶部是唯一 TX profile：`sendMode`、`sendEncoding`、`appendCrLf`。底部输入、自动发送、快捷发送和右键整段发送在实际发送时读取这些运行时值；主终端 Text 逐键发送保持交互式终端语义，不逐键追加 CRLF
+- 连接建立期间若设备立即上报数据，renderer 会先接纳新 `sessionId` 再处理首批 RX，避免打开串口后的 banner 被旧 session 过滤
+- 断开、重连和开始新连接时会切换到新的写队列；旧驱动回调即使悬挂，也不会阻塞新连接发送
+- 清空 Text RX 会丢弃 decoder 和 parser 中尚未完成的数据，避免清空前的半个多字节字符出现在清空后的终端
+- 主输入框保存 Text/Hex 内存草稿；历史条目只需保存 mode/content，恢复历史模式时同步切换全局 TX，追加和编码不形成历史条目的独立语义
+- 发送上限：主输入、快捷发送、粘贴和终端 1 MiB；自动发送 64 KiB。自动发送最小间隔 10ms，并以 promise chain/in-flight 标记防重入
+- 每次串口连接分配 `serialSessionId`；渲染层排队请求和主进程写入都会校验该 ID，防止断开前排队的数据在重连后误发到新设备
+- 自动发送使用 generation token 取消断开、重配或重连前尚未完成的异步 tick，避免旧任务创建重复 timer 或关闭新会话
+- 自动发送断线时等待，重连后继续；输入无效或实际写入失败时停止
+- 快捷发送项只保存稳定 id、label、content，不显示模式 badge；编辑只恢复标签和内容，校验、tooltip、点击发送都使用当前全局 TX profile
+- 自动发送只保存 enabled、interval、content；全局 TX profile 变化时重新校验并用 generation token 安全重启，内容在新 profile 下无效时会停止
+- 过滤 tab 创建时保存 `dataMode`；仅消费同模式行，模式不一致时显示 paused。Hex 普通/正则过滤都作用于单条格式化 Hex 行，不支持跨行或字节通配符
+- 搜索仍由 xterm SearchAddon 完成，因此 Hex 模式可搜索偏移、Hex 文本和 ASCII 预览，并遵循现有大小写选项
+
+### 8.6 config v3 与迁移
+- `main.js` 的 `CONFIG_VERSION = 3`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，并在规范化结果变化时写回磁盘
+- 旧 `lastSerialOptions.encoding=hex` 迁移为 RX/TX mode 均为 `hex`、Text 编码为 `utf8`；其他旧编码迁移为 Text 模式并保留编码
+- 旧快捷发送项的 mode/encoding/appendCrLf 和自动发送的同类字段会在规范化时移除，不根据内容猜测 Hex；旧版主输入启用 append 时，由“加入快捷发送”生成的内容已内嵌 CRLF，因此迁移到共享 append 时会移除一个末尾 CRLF，避免再次发送造成重复
+- 旧过滤标签未保存 `dataMode` 时继承迁移后的 RX 模式；缺失或重复的快捷 ID 会生成唯一稳定 ID
+- 关闭 Raw 日志或修改日志目录/Raw 文件名格式前先刷盘；偏好设置使用可返回错误的 IPC，刷盘失败时保留窗口并提示错误
+- Hex formatter 对大块 `Uint8Array` 使用分段视图处理，不通过参数展开追加字节；已用 1 MiB 单块输入做模块级回归验证
+
+Hex 相关配置结构：
+```json
+{
+  "configVersion": 3,
+  "lastSerialOptions": {
+    "receiveDisplayMode": "text",
+    "receiveEncoding": "utf8",
+    "sendMode": "text",
+    "sendEncoding": "utf8",
+    "appendCrLf": false,
+    "newlineMode": "crlf"
+  },
+  "hexDisplaySettings": {
+    "bytesPerLine": 16,
+    "showOffset": true,
+    "showAscii": true,
+    "uppercase": true,
+    "idleFlushMs": 50
+  },
+  "mainInputSettings": {
+    "visible": true,
+    "sendOnEnter": true
+  },
+  "autoSendSettings": {
+    "enabled": false,
+    "interval": 1000,
+    "content": ""
+  },
+  "quickSendList": [{
+    "id": "quick-1",
+    "label": "Command",
+    "content": "AA 55"
+  }],
+  "filterTabs": [{ "id": "tab-filter-1", "dataMode": "hex" }],
+  "saveRawSerialToFile": false,
+  "rawLogFileNameFormat": "raw_%Y-%m-%d_%H-%M-%S.bin"
 }
 ```
 
@@ -445,6 +533,14 @@ npm run dist:linux
 - `stripAnsi()` 仅剥离 SGR 序列（`\x1b[数字;数字m`），不触碰其他 CSI 命令，降低对原始二进制数据的误伤风险
 - 可通过设置页 `stripAnsiInLog` 选项关闭此行为
 - 只在过滤/shell tab 的 `writeTabLog` 路径中调用；主终端原始数据不经 `stripAnsi`
+
+### 9.1B Hex 显示日志与 RX raw 日志
+- 显示日志来自渲染层实际写入终端的内容：Text 保存解码/格式化文本，Hex 保存当前 Hex dump；过滤日志保存命中的格式化行
+- raw 日志是独立路径，仅在 `saveRawSerialToFile` 启用时记录 `port.on('data')` 的 RX Buffer；不包含 TX、连接/断开提示、错误提示或 Hex 文本
+- `rawBinaryBuffers` + `rawBinaryByteCount` 达到 `rawBufferAutoFlushMB` 阈值时 `Buffer.concat()` 后同步追加；断开和应用退出也会 flush
+- `ensureRawBinaryLogPath()` 在本次连接首次写入时生成并缓存路径，重名时使用 `_2`、`_3`；文件名会清理非法字符并强制 `.bin`
+- `rawBinaryFlushError` 保存最近写盘错误。失败时缓冲不会被清空，但当前 UI 不主动展示该错误，这是后续可改进风险
+- 显示日志和 raw 日志开关彼此独立；raw 日志不受当前 RX Text/Hex 显示模式影响
 
 ### 9.2 高亮逻辑
 `applyHighlighting(text, filterRegex)`：
@@ -499,7 +595,7 @@ npm run dist:linux
 - 不做特殊按键发送
 - 发送后输入框**不自动清空**
 - 支持“按回车发送”开关
-- 支持“末尾自动追加 CRLF”开关
+- 末尾追加由左侧统一发送设置控制，底部不再提供独立开关
 
 ### 10.2 主终端需求
 - 主终端保留像终端一样的直接输入发送能力
@@ -541,7 +637,7 @@ npm run dist:linux
 - 上一条发送
 - 输入框显示/隐藏按钮
 - 按回车发送开关
-- 末尾追加 CRLF 开关
+- 左侧统一发送模式、文本编码和追加 CRLF / 0D 0A 设置
 - 终端右键菜单文案
 
 ### 10.8 自动更新需求
@@ -687,8 +783,11 @@ npm run dist:linux
 ## 12. 关键函数与关注点清单
 
 ### `main.js`
+- `normalizeConfig()`：config v3 归一化、统一 TX profile、旧 encoding/快捷项/自动发送迁移及 Hex/raw 字段校验
 - `loadConfig()`：配置默认值来源
 - `saveConfig()`：配置合并写回
+- `bufferRawSerialBytes()` / `flushRawBinaryLogSync()` / `ensureRawBinaryLogPath()`：RX-only Buffer 缓冲、追加刷盘和单连接文件路径
+- `writeSerialPayload()`：主进程发送最终校验、`SerialPort.write()` 和真实字节吞吐量统计
 - `createWindow()`：主窗口大小恢复与 resize 持久化
 - `handleSerialData(str)`：串口文本接收主入口，同时将原始数据推入 `rawSerialBuffer` 并触发 auto-flush 检查
 - `stripAnsi(str)`：剥离 ANSI SGR 序列（仅 `\x1b[...m`），受 `stripAnsiInLog` 配置控制
@@ -705,7 +804,7 @@ npm run dist:linux
 - `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲（主终端走 raw buffer，过滤/shell 走各自 buffer）
 - `cleanupSerialConnection()`：清理串口连接，注入断开通知到 raw buffer，最后触发渲染层 flush
 - `ipcMain.handle('connect-serial')`：串口连接入口，预注册 `tab-main` 条目
-- `ipcMain.on('serial-input')`：串口发送主入口
+- `ipcMain.handle('serial-write')`：当前统一串口发送入口；`serial-input` 仅保留 Text 兼容路径
 - `ipcMain.on('save-config')`：渲染层配置保存
 - `ipcMain.on('write-tab-log')`：接收渲染层 tab 日志写入请求
 - `ipcMain.on('flush-tab-log')`：保存单个 tab 日志
@@ -718,6 +817,10 @@ npm run dist:linux
 
 ### `renderer.js`
 - `SerialDataParser`
+- `switchReceiveMode()` / `switchReceiveEncoding()`：flush 旧 RX 链路并切换 Text decoder/Hex formatter
+- `writeTextLines()` / `writeHexLines()`：分别写主终端、同模式过滤 tab 和显示日志
+- `validateSendContent()` / `formatValidation()`：渲染层实时校验和本地化状态
+- `sendSerialRequest()`：所有现代发送入口的串行 IPC 包装
 - `formatLineForTerminal()`
 - `writeTabLog()` / `writeMainTabLog()` / `writeFilterTabLog()` / `writeShellTabLog()`
 - `getMainTabTitle()` / `getFilterTabLogTitle()` / `getShellTabLogTitle()`：生成固定英文日志标题
@@ -731,7 +834,17 @@ npm run dist:linux
 - `sendSerialData()`
 - `sendMainInputBuffer()`
 - `navigateMainInputHistory()`
+- `updateAutoSendValidation()` / `runAutoSendTick()`：自动发送校验、断线等待、防重入和失败停止
+- `normalizeQuickSendItem()` / `renderQuickSendList()`：快捷项 v2 字段、badge、tooltip 和拖动持久化
 - `applyConfig()`
+
+### `serial-codec.js`
+- `parseHexInput()`：严格语法、结构化错误、标准化 Hex 和 byte count
+- `buildSerialWriteBuffer()`：Text/Hex 统一构造最终 Buffer
+
+### `hex-formatter.js`
+- `HexStreamFormatter.push()` / `flush()` / `reset()` / `configure()`：流式成行、残余刷新、偏移和设置生命周期
+- `formatHexLine()` / `byteToPrintableAscii()`：Hex/ASCII 列和最终 xterm 行
 
 ### `workspace-manager.js`
 - `createWorkspaceManager()`
@@ -781,8 +894,19 @@ npm run dist:linux
    - 修改时需谨慎验证对主终端渲染的影响
 
 4. 自动发送和快捷发送属于旧功能区
-   - 这些功能保留在左侧“Send”标签页
-   - 与下方主输入框是两套不同发送体系
+   - 这些功能保留在左侧“Send”标签页，状态模型独立于下方主输入框
+   - 三者均经 `sendSerialRequest()` / `serial-write` 生成最终字节，不得再引入直接 `port.write()` 分支
+
+5. Hex 关键风险与既定决策
+   - 串口 `data` chunk 不是协议帧；formatter 必须持续跨 chunk 累积
+   - Text 必须使用流式 decoder；禁止逐 Buffer 独立 `toString()` 解码 UTF-8/GBK
+   - 禁止用 `Buffer.from(input, 'hex')` 替代严格解析器，否则非法尾部可能被静默截断
+   - Raw `.bin` 固定为 RX-only；若未来要混合 RX/TX，必须设计带方向和时间信息的新容器，不能改变现有 raw 文件语义
+   - `SerialPort.write()` 回调表示交给底层写缓冲，当前没有 `drain()`；不要把 UI 的“已发送”描述扩展为设备已接收
+   - Hex dump 会放大显示数据量；高吞吐、长时间 scrollback 和 raw 同步刷盘仍需实机性能验证
+   - 模式切换只影响新数据，普通清屏不重置 offset；修改这些产品决策必须同步 UI、README 和 TODO
+   - Shell IPC/输入链路与串口模式完全独立，Hex 改动不得复用到 Shell tab
+   - Raw 写盘失败会保留待写 Buffer 并记录 `rawBinaryFlushError`/electron-log；在待写数据成功刷盘前拒绝开始新连接，避免重连覆盖缓冲。当前仍没有独立的用户可见恢复界面
 
 ---
 

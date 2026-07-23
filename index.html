@@ -92,12 +92,16 @@
                     <option value="space">Parity: Space</option>
                 </select>
 
-                <select id="encoding-select" title="Encoding" data-i18n-title="main.encodingUtf8">
-                    <option value="utf8" selected>Enc: UTF-8</option>
-                    <option value="ascii">Enc: ASCII</option>
-                    <option value="hex">Enc: Hex</option>
-                    <option value="gbk">Enc: GBK</option>
-                </select>
+                <div class="serial-mode-grid" aria-label="Serial receive settings" data-i18n-aria-label="main.serialDataModes">
+                    <span class="serial-mode-label" data-i18n="main.receiveShort" data-i18n-fallback="RX">RX</span>
+                    <select id="receive-mode-select" title="Receive display mode" data-i18n-title="main.receiveDisplayMode">
+                        <option value="text" data-i18n="main.textMode" data-i18n-fallback="Text">Text</option>
+                        <option value="hex" data-i18n="main.hexMode" data-i18n-fallback="Hex">Hex</option>
+                    </select>
+                    <select id="receive-encoding-select" title="Receive encoding" data-i18n-title="main.receiveEncoding">
+                        <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
+                    </select>
+                </div>
 
                 <select id="newline-mode-select" title="Newline Mode (Receive/Send)" data-i18n-title="main.newlineCrlf">
                     <option value="crlf" selected>NL: CRLF / CRLF</option>
@@ -136,15 +140,36 @@
 
             <!-- Send Tab -->
             <div id="tab-send" class="sidebar-tab-pane">
+                <section class="shared-send-profile" aria-labelledby="shared-send-profile-title">
+                    <div class="shared-send-profile-title" id="shared-send-profile-title" data-i18n="main.sharedSendProfile" data-i18n-fallback="Send Profile">Send Profile</div>
+                    <div class="shared-send-profile-grid">
+                        <label for="send-mode-select" data-i18n="main.sendMode" data-i18n-fallback="Mode">Mode</label>
+                        <select id="send-mode-select" title="Send mode" data-i18n-title="main.sendMode">
+                            <option value="text" data-i18n="main.textMode" data-i18n-fallback="Text">Text</option>
+                            <option value="hex" data-i18n="main.hexMode" data-i18n-fallback="Hex">Hex</option>
+                        </select>
+                        <label for="send-encoding-select" data-i18n="main.sendEncoding" data-i18n-fallback="Encoding">Encoding</label>
+                        <select id="send-encoding-select" title="Send encoding" data-i18n-title="main.sendEncoding">
+                            <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
+                        </select>
+                    </div>
+                    <label class="shared-send-append" for="send-append-crlf">
+                        <input type="checkbox" id="send-append-crlf">
+                        <span data-i18n="main.sharedAppend" data-i18n-fallback="Append CRLF / 0D 0A">Append CRLF / 0D 0A</span>
+                    </label>
+                    <div class="shared-send-profile-hint" data-i18n="main.sharedSendProfileHint" data-i18n-fallback="Used by message send actions">Used by message send actions</div>
+                </section>
+
                 <!-- Auto Send -->
-                <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 6px; margin-bottom: 6px;">
+                <section class="send-sidebar-section">
                     <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 4px;">
                         <input type="checkbox" id="auto-send-enable">
                         <label for="auto-send-enable" style="font-size: 13px; color: var(--text-primary); cursor: pointer; display: inline;" data-i18n="main.autoSend">Auto Send</label>
                         <input type="number" id="auto-send-interval" placeholder="ms" value="1000" style="width: 60px; padding: 4px; margin-left: auto;">
                     </div>
-                    <textarea id="auto-send-text" placeholder="Text to auto send..." data-i18n-placeholder="main.autoSendText" style="margin-bottom: 4px; height: 60px;"></textarea>
-                </div>
+                    <textarea id="auto-send-text" placeholder="Text to auto send..." data-i18n-placeholder="main.autoSendText" class="send-editor-textarea"></textarea>
+                    <div id="auto-send-validation" class="input-validation" role="status" aria-live="polite"></div>
+                </section>
         
                 <!-- Quick Send -->
                 <div style="font-size: 13px; margin-bottom: 4px; color: var(--text-primary); display: flex; justify-content: space-between; align-items: center;">
@@ -156,7 +181,8 @@
                 
                 <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px;">
                     <input type="text" id="quick-send-label" placeholder="Label" data-i18n-placeholder="main.label">
-                    <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" style="height: 60px;"></textarea>
+                    <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
+                    <div id="quick-send-validation" class="input-validation" role="status" aria-live="polite"></div>
                 </div>
                 <button id="add-quick-send-btn" class="secondary" style="width: 100%;" data-i18n="main.addToList">+ Add to List</button>
             </div>
@@ -235,12 +261,9 @@
                     <input type="checkbox" id="main-send-on-enter" checked>
                     <span>⏎</span>
                 </label>
-                <label class="main-input-icon-toggle" for="main-append-crlf" title="末尾追加 CRLF" data-i18n-title="main.appendCrLfToggle">
-                    <input type="checkbox" id="main-append-crlf">
-                    <span>↵</span>
-                </label>
             </div>
             <div class="main-input-meta-row">
+                <div class="input-validation" id="main-input-validation" role="status" aria-live="polite"></div>
                 <div class="main-input-last" id="main-send-last" data-i18n="main.lastSentNone">上一条发送：暂无</div>
                 <div class="main-action-status" id="main-action-status">就绪</div>
             </div>

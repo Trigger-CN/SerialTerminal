@@ -8,6 +8,7 @@ const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
+const { buildSerialWriteBuffer } = require('./serial-codec');
 
 // Configure logging
 log.transports.file.level = 'info';
@@ -21,11 +22,123 @@ let updatePromptState = {
   downloadInitiatedByPrompt: false,
   latestInfo: null
 };
-// Store recent serial output
-let serialHistoryBuffer = '';
-// MAX_HISTORY_LENGTH is now in config (historyBufferSize)
-
 const configPath = path.join(app.getPath('userData'), 'config.json');
+const CONFIG_VERSION = 3;
+const SERIAL_MODES = new Set(['text', 'hex']);
+const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
+
+function oneOf(value, allowed, fallback) {
+  return allowed.has(value) ? value : fallback;
+}
+
+function normalizeBoolean(value, fallback) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function normalizeConfig(config, defaults) {
+  const source = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+  const normalized = { ...defaults, ...source, configVersion: CONFIG_VERSION };
+  const oldSerial = source.lastSerialOptions && typeof source.lastSerialOptions === 'object'
+    ? source.lastSerialOptions
+    : {};
+  const legacyEncoding = oneOf(oldSerial.encoding, new Set(['utf8', 'ascii', 'gbk', 'hex']), 'utf8');
+  const migratedMode = legacyEncoding === 'hex' ? 'hex' : 'text';
+  const migratedEncoding = legacyEncoding === 'hex' ? 'utf8' : legacyEncoding;
+  normalized.lastSerialOptions = {
+    ...defaults.lastSerialOptions,
+    ...oldSerial,
+    path: typeof oldSerial.path === 'string' ? oldSerial.path : defaults.lastSerialOptions.path,
+    baudRate: typeof oldSerial.baudRate === 'string' || Number.isFinite(oldSerial.baudRate)
+      ? String(oldSerial.baudRate)
+      : defaults.lastSerialOptions.baudRate,
+    dataBits: ['5', '6', '7', '8'].includes(String(oldSerial.dataBits))
+      ? String(oldSerial.dataBits)
+      : defaults.lastSerialOptions.dataBits,
+    stopBits: ['1', '1.5', '2'].includes(String(oldSerial.stopBits))
+      ? String(oldSerial.stopBits)
+      : defaults.lastSerialOptions.stopBits,
+    parity: oneOf(oldSerial.parity, new Set(['none', 'even', 'odd', 'mark', 'space']), defaults.lastSerialOptions.parity),
+    receiveDisplayMode: oneOf(oldSerial.receiveDisplayMode, SERIAL_MODES, migratedMode),
+    receiveEncoding: oneOf(oldSerial.receiveEncoding, SERIAL_ENCODINGS, migratedEncoding),
+    sendMode: oneOf(oldSerial.sendMode, SERIAL_MODES, migratedMode),
+    sendEncoding: oneOf(oldSerial.sendEncoding, SERIAL_ENCODINGS, migratedEncoding),
+    appendCrLf: normalizeBoolean(oldSerial.appendCrLf,
+      normalizeBoolean(source.mainInputSettings?.appendCrLf,
+        normalizeBoolean(source.autoSendSettings?.appendCrLf, false))),
+    newlineMode: oneOf(oldSerial.newlineMode, new Set(['crlf', 'lf', 'cr']), 'crlf')
+  };
+  delete normalized.lastSerialOptions.encoding;
+
+  const oldHex = source.hexDisplaySettings && typeof source.hexDisplaySettings === 'object'
+    ? source.hexDisplaySettings
+    : {};
+  const idleFlushMs = Number(oldHex.idleFlushMs);
+  normalized.hexDisplaySettings = {
+    bytesPerLine: oneOf(Number(oldHex.bytesPerLine), new Set([8, 16, 24, 32]), 16),
+    showOffset: normalizeBoolean(oldHex.showOffset, true),
+    showAscii: normalizeBoolean(oldHex.showAscii, true),
+    uppercase: normalizeBoolean(oldHex.uppercase, true),
+    idleFlushMs: Number.isFinite(idleFlushMs) && idleFlushMs >= 0 && idleFlushMs <= 1000
+      ? idleFlushMs
+      : 50
+  };
+
+  const oldMainInput = source.mainInputSettings && typeof source.mainInputSettings === 'object'
+    ? source.mainInputSettings
+    : {};
+  normalized.mainInputSettings = {
+    visible: normalizeBoolean(oldMainInput.visible, true),
+    sendOnEnter: normalizeBoolean(oldMainInput.sendOnEnter, true)
+  };
+
+  const oldAutoSend = source.autoSendSettings && typeof source.autoSendSettings === 'object'
+    ? source.autoSendSettings
+    : {};
+  normalized.autoSendSettings = {
+    enabled: normalizeBoolean(oldAutoSend.enabled, false),
+    interval: Number.isFinite(Number(oldAutoSend.interval)) && Number(oldAutoSend.interval) >= 10
+      ? Number(oldAutoSend.interval)
+      : 1000,
+    content: typeof oldAutoSend.content === 'string'
+      ? oldAutoSend.content
+      : (typeof oldAutoSend.text === 'string' ? oldAutoSend.text : '')
+  };
+
+  const usedQuickIds = new Set();
+  normalized.quickSendList = Array.isArray(source.quickSendList)
+    ? source.quickSendList.filter(item => item && typeof item === 'object').map((item, index) => {
+        let id = typeof item.id === 'string' && item.id ? item.id : `quick-${index + 1}`;
+        if (usedQuickIds.has(id)) {
+          let suffix = 2;
+          while (usedQuickIds.has(`${id}-${suffix}`)) suffix++;
+          id = `${id}-${suffix}`;
+        }
+        usedQuickIds.add(id);
+        return {
+          id,
+          label: typeof item.label === 'string' ? item.label : '',
+          content: typeof item.content === 'string'
+            && Number(source.configVersion || 0) < CONFIG_VERSION
+            && normalized.lastSerialOptions.appendCrLf
+            && /\r\n$/.test(item.content)
+            ? item.content.slice(0, -2)
+            : (typeof item.content === 'string' ? item.content : '')
+        };
+      })
+    : [];
+
+  normalized.filterTabs = Array.isArray(source.filterTabs)
+    ? source.filterTabs.filter(tab => tab && typeof tab === 'object').map(tab => ({
+        ...tab,
+        dataMode: oneOf(tab.dataMode, SERIAL_MODES, migratedMode)
+      }))
+    : [];
+  normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
+  normalized.rawLogFileNameFormat = typeof source.rawLogFileNameFormat === 'string' && source.rawLogFileNameFormat.trim()
+    ? source.rawLogFileNameFormat
+    : 'raw_%Y-%m-%d_%H-%M-%S.bin';
+  return normalized;
+}
 
 // Runtime Display Settings (Initialized from config later)
 let displaySettings = {
@@ -35,6 +148,7 @@ let displaySettings = {
 
 function loadConfig() {
   const defaults = {
+    configVersion: CONFIG_VERSION,
     fontSize: 14,
     fontFamily: 'Consolas',
     fontFamilyZh: '"Microsoft YaHei"',
@@ -45,6 +159,8 @@ function loadConfig() {
     logEnabled: false,
     saveAllTabsLogToFiles: false,
     rawBufferAutoFlushMB: 10,
+    saveRawSerialToFile: false,
+    rawLogFileNameFormat: 'raw_%Y-%m-%d_%H-%M-%S.bin',
     stripAnsiInLog: true,
     logPath: path.join(app.getPath('documents'), 'SerialTerminalLogs'),
     logFileNameFormat: 'log_%Y-%m-%d_%H-%M-%S.txt',
@@ -98,8 +214,20 @@ function loadConfig() {
     },
     mainInputSettings: {
       visible: true,
-      sendOnEnter: true,
-      appendCrLf: false
+      sendOnEnter: true
+    },
+    autoSendSettings: {
+      enabled: false,
+      interval: 1000,
+      content: ''
+    },
+    quickSendList: [],
+    hexDisplaySettings: {
+      bytesPerLine: 16,
+      showOffset: true,
+      showAscii: true,
+      uppercase: true,
+      idleFlushMs: 50
     },
     skippedUpdateVersion: '',
     lastSerialOptions: {
@@ -108,7 +236,11 @@ function loadConfig() {
         dataBits: '8',
         stopBits: '1',
         parity: 'none',
-        encoding: 'utf8',
+        receiveDisplayMode: 'text',
+        receiveEncoding: 'utf8',
+        sendMode: 'text',
+        sendEncoding: 'utf8',
+        appendCrLf: false,
         newlineMode: 'crlf'
     }
   };
@@ -116,12 +248,16 @@ function loadConfig() {
   if (fs.existsSync(configPath)) {
     try {
       const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      return { ...defaults, ...saved };
+      const normalized = normalizeConfig(saved, defaults);
+      if (JSON.stringify(saved) !== JSON.stringify(normalized)) {
+        fs.writeFileSync(configPath, JSON.stringify(normalized, null, 2));
+      }
+      return normalized;
     } catch (e) {
       console.error('Failed to load config:', e);
     }
   }
-  return defaults;
+  return normalizeConfig(defaults, defaults);
 }
 
 let currentConfig = loadConfig();
@@ -134,9 +270,10 @@ displaySettings.showLineNumbers = currentConfig.showLineNumbers;
 
 let logBuffer = [];
 let tabLogBuffers = new Map();
-let rawSerialBuffer = [];
-let rawBufferByteCount = 0;
-let rawBufferFlushing = false;
+let rawBinaryBuffers = [];
+let rawBinaryByteCount = 0;
+let rawBinaryLogPath = '';
+let rawBinaryFlushError = null;
 
 function getAutoFlushThreshold() {
   const mb = Number(currentConfig.rawBufferAutoFlushMB);
@@ -161,21 +298,53 @@ function appendToTabLogSync(tabId, data) {
   fs.appendFileSync(filePath, buffer);
 }
 
-function autoFlushRawBufferSync() {
-  if (rawSerialBuffer.length === 0) return;
-  if (rawBufferFlushing) return;
-  rawBufferFlushing = true;
-  const snapshot = rawSerialBuffer;
-  rawSerialBuffer = [];
-  rawBufferByteCount = 0;
-  const data = snapshot.join('');
-  appendToTabLogSync('tab-main', data);
-  rawBufferFlushing = false;
+function buildRawLogFileName() {
+  let fileName = formatFileName(currentConfig.rawLogFileNameFormat || 'raw_%Y-%m-%d_%H-%M-%S.bin');
+  fileName = fileName.replace(/[\\/:*?"<>|]/g, '_').trim();
+  fileName = fileName.replace(/\.+$/g, '');
+  if (!fileName) fileName = 'raw';
+  if (!fileName.toLowerCase().endsWith('.bin')) fileName += '.bin';
+  return fileName;
 }
 
-function triggerRawAutoFlush() {
-  if (rawBufferByteCount >= getAutoFlushThreshold()) {
-    autoFlushRawBufferSync();
+function ensureRawBinaryLogPath() {
+  if (rawBinaryLogPath) return rawBinaryLogPath;
+  ensureLogDirectory();
+  const fileName = buildRawLogFileName();
+  const extension = path.extname(fileName);
+  const baseName = path.basename(fileName, extension);
+  rawBinaryLogPath = path.join(currentConfig.logPath, fileName);
+  let suffix = 2;
+  while (fs.existsSync(rawBinaryLogPath)) {
+    rawBinaryLogPath = path.join(currentConfig.logPath, `${baseName}_${suffix}${extension}`);
+    suffix++;
+  }
+  return rawBinaryLogPath;
+}
+
+function flushRawBinaryLogSync() {
+  if (rawBinaryBuffers.length === 0) return true;
+  const snapshot = rawBinaryBuffers;
+  const byteCount = rawBinaryByteCount;
+  try {
+    fs.appendFileSync(ensureRawBinaryLogPath(), Buffer.concat(snapshot, byteCount));
+    rawBinaryBuffers = [];
+    rawBinaryByteCount = 0;
+    rawBinaryFlushError = null;
+    return true;
+  } catch (error) {
+    rawBinaryFlushError = error;
+    log.error('Failed to save raw serial log:', error);
+    return false;
+  }
+}
+
+function bufferRawSerialBytes(data) {
+  if (!currentConfig.saveRawSerialToFile || !Buffer.isBuffer(data) || data.length === 0) return;
+  rawBinaryBuffers.push(Buffer.from(data));
+  rawBinaryByteCount += data.length;
+  if (rawBinaryByteCount >= getAutoFlushThreshold()) {
+    flushRawBinaryLogSync();
   }
 }
 
@@ -228,12 +397,6 @@ function ensureLogDirectory() {
 
 function saveLog() {
   try {
-    // flush raw buffer to main tab file if registered
-    if (rawSerialBuffer.length > 0 && tabLogBuffers.has('tab-main')) {
-      appendToTabLogSync('tab-main', rawSerialBuffer.join(''));
-      rawSerialBuffer = [];
-      rawBufferByteCount = 0;
-    }
     if (logBuffer.length === 0) return;
     if (currentConfig.saveAllTabsLogToFiles) { logBuffer = []; return; }
     const allData = logBuffer.join('');
@@ -252,19 +415,9 @@ function saveLog() {
 
 function saveAllTabLogs() {
   if (!currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return;
-  // flush remaining raw buffer to main tab
-  if (rawSerialBuffer.length > 0) {
-    appendToTabLogSync('tab-main', rawSerialBuffer.join(''));
-    rawSerialBuffer = [];
-    rawBufferByteCount = 0;
-  }
   // flush remaining per-tab buffers
   const savedPaths = [];
   for (const [tabId, entry] of tabLogBuffers.entries()) {
-    if (tabId === 'tab-main') {
-      if (entry.filePath && fs.existsSync(entry.filePath)) savedPaths.push(entry.filePath);
-      continue;
-    }
     if (Array.isArray(entry.buffer) && entry.buffer.length > 0) {
       appendToTabLogSync(tabId, entry.buffer.join(''));
       entry.buffer = [];
@@ -292,28 +445,61 @@ function writeLog(data) {
 }
 
 function writeTabLog(tabId, title, data) {
-  if (!currentConfig.saveAllTabsLogToFiles || !tabId) return;
+  if (!tabId || typeof data !== 'string' || !data) return;
+  const clean = stripAnsi(data);
+  if (tabId === 'tab-main' && currentConfig.logEnabled) {
+    writeLog(clean);
+  }
+  if (!currentConfig.saveAllTabsLogToFiles) return;
   const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [], filePath: '', byteCount: 0 };
   existing.title = title || existing.title || tabId;
-  if (tabId === 'tab-main') {
-    // raw buffer is collected in handleSerialData() with auto-flush
-  } else {
-    if (typeof data === 'string' && data) {
-      const clean = stripAnsi(data);
-      existing.buffer.push(clean);
-      existing.byteCount = (existing.byteCount || 0) + clean.length;
-      if (existing.byteCount >= getAutoFlushThreshold()) {
-        appendToTabLogSync(tabId, existing.buffer.join(''));
-        existing.buffer = [];
-        existing.byteCount = 0;
-      }
-    }
+  existing.buffer.push(clean);
+  existing.byteCount = (existing.byteCount || 0) + Buffer.byteLength(clean);
+  if (existing.byteCount >= getAutoFlushThreshold()) {
+    appendToTabLogSync(tabId, existing.buffer.join(''));
+    existing.buffer = [];
+    existing.byteCount = 0;
   }
   tabLogBuffers.set(tabId, existing);
 }
 
 function saveConfig(config) {
-  currentConfig = { ...currentConfig, ...config };
+  const merged = { ...currentConfig, ...config };
+  for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'autoSendSettings']) {
+    if (config && config[key] && typeof config[key] === 'object') {
+      merged[key] = { ...currentConfig[key], ...config[key] };
+    }
+  }
+  if (config?.lastSerialOptions && typeof config.lastSerialOptions.encoding === 'string') {
+    const legacyEncoding = config.lastSerialOptions.encoding;
+    merged.lastSerialOptions.receiveDisplayMode = legacyEncoding === 'hex' ? 'hex' : 'text';
+    merged.lastSerialOptions.sendMode = legacyEncoding === 'hex' ? 'hex' : 'text';
+    if (legacyEncoding !== 'hex' && SERIAL_ENCODINGS.has(legacyEncoding)) {
+      merged.lastSerialOptions.receiveEncoding = legacyEncoding;
+      merged.lastSerialOptions.sendEncoding = legacyEncoding;
+    }
+  }
+  if (config?.autoSendSettings && typeof config.autoSendSettings.text === 'string'
+      && typeof config.autoSendSettings.content !== 'string') {
+    merged.autoSendSettings.content = config.autoSendSettings.text;
+  }
+  const normalized = normalizeConfig(merged, currentConfig);
+  const rawLogDestinationChanged = normalized.logPath !== currentConfig.logPath
+    || normalized.rawLogFileNameFormat !== currentConfig.rawLogFileNameFormat;
+  if (currentConfig.saveRawSerialToFile
+      && (!normalized.saveRawSerialToFile || rawLogDestinationChanged)
+      && !flushRawBinaryLogSync()) {
+    throw rawBinaryFlushError || new Error('Failed to flush pending raw serial log');
+  }
+  if (rawLogDestinationChanged) {
+    rawBinaryLogPath = '';
+  }
+  if (currentConfig.saveAllTabsLogToFiles && !normalized.saveAllTabsLogToFiles) {
+    saveAllTabLogs();
+  } else if (!currentConfig.saveAllTabsLogToFiles && normalized.saveAllTabsLogToFiles) {
+    saveLog();
+  }
+  currentConfig = normalized;
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
 }
 
@@ -652,6 +838,7 @@ ipcMain.handle('get-about-info', () => {
 
 app.on('before-quit', () => {
   Array.from(shellSessions.keys()).forEach(tabId => closeShellSession(tabId));
+  flushRawBinaryLogSync();
   saveLog();
   saveAllTabLogs();
 });
@@ -685,10 +872,6 @@ ipcMain.handle('select-shell-executable', async () => {
 
 ipcMain.handle('get-config', () => {
   return currentConfig;
-});
-
-ipcMain.handle('get-history', () => {
-  return serialHistoryBuffer;
 });
 
 ipcMain.on('open-prefs', () => {
@@ -739,10 +922,25 @@ ipcMain.on('open-log-folder', () => {
 });
 
 ipcMain.on('save-config', (event, config) => {
+  try {
+    saveConfig(config);
+    if (mainWindow) {
+      mainWindow.webContents.send('config-updated', currentConfig);
+    }
+  } catch (error) {
+    log.error('Failed to save config:', error);
+    if (!event.sender.isDestroyed()) {
+      event.sender.send('config-save-error', error?.message || String(error));
+    }
+  }
+});
+
+ipcMain.handle('save-config-request', (event, config) => {
   saveConfig(config);
   if (mainWindow) {
     mainWindow.webContents.send('config-updated', currentConfig);
   }
+  return { ok: true };
 });
 
 ipcMain.on('write-tab-log', (event, payload = {}) => {
@@ -750,25 +948,16 @@ ipcMain.on('write-tab-log', (event, payload = {}) => {
 });
 
 ipcMain.on('flush-tab-logs', () => {
-  saveAllTabLogs();
+  if (currentConfig.saveAllTabsLogToFiles) {
+    saveAllTabLogs();
+  } else {
+    saveLog();
+  }
 });
 
 ipcMain.on('flush-tab-log', (event, payload = {}) => {
   if (!currentConfig.saveAllTabsLogToFiles || !payload.tabId) { return; }
   const entry = tabLogBuffers.get(payload.tabId);
-  if (payload.tabId === 'tab-main') {
-    if (rawSerialBuffer.length > 0) {
-      appendToTabLogSync('tab-main', rawSerialBuffer.join(''));
-      rawSerialBuffer = [];
-      rawBufferByteCount = 0;
-    }
-    const mainFile = ensureTabLogFile('tab-main') || '';
-    tabLogBuffers.delete(payload.tabId);
-    if (mainFile && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('log-saved', { path: mainFile });
-    }
-    return;
-  }
   if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) { return; }
   try {
     appendToTabLogSync(payload.tabId, entry.buffer.join(''));
@@ -881,6 +1070,12 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         click: () => sendAction('clear-terminal')
       }
     );
+    if (payload.receiveDisplayMode === 'hex') {
+      template.push({
+        label: withIcon('[0]', labels.clearAndResetHex, 'Clear and Reset Hex Offset'),
+        click: () => sendAction('clear-and-reset-hex')
+      });
+    }
   } else if (terminalType === 'filter') {
     template.push(
       { type: 'separator' },
@@ -1147,9 +1342,11 @@ ipcMain.on('close-shell-tab-session', (event, payload = {}) => {
 
 // Serial Port Setup
 let currentSerialPort = null;
-let serialEncoding = 'utf8';
-let serialNewlineMode = 'crlf'; // 'crlf', 'lf', 'cr' (applies to receive: LF->CRLF if crlf, etc. AND send logic)
-let serialDecoderStream = null;
+let serialSendEncoding = 'utf8';
+let serialNewlineMode = 'crlf';
+let serialCleanupComplete = true;
+let serialSessionId = 0;
+let serialConnectInProgress = false;
 const THROUGHPUT_SAMPLE_MS = 1000;
 const THROUGHPUT_HISTORY_LENGTH = 30;
 let throughputTimer = null;
@@ -1221,26 +1418,16 @@ function notifySerialDisconnected(message = null) {
   }
 }
 
-function cleanupSerialConnection(message = null) {
+function cleanupSerialConnection(message = null, port = currentSerialPort) {
+  if (port && currentSerialPort && port !== currentSerialPort) return;
+  if (serialCleanupComplete) return;
+  serialCleanupComplete = true;
+  serialSessionId++;
   stopThroughputSampling();
   resetThroughputState(false);
   sendThroughputUpdate();
-
-  if (serialDecoderStream) {
-    try {
-      serialDecoderStream.end();
-    } catch (e) {
-      console.error('Failed to close decoder stream:', e);
-    }
-    serialDecoderStream = null;
-  }
-
+  flushRawBinaryLogSync();
   const disconnectMsg = message || 'Serial port disconnected';
-  if (currentConfig.saveAllTabsLogToFiles && tabLogBuffers.has('tab-main')) {
-    rawSerialBuffer.push(`\r\n[INFO] ${disconnectMsg}\r\n`);
-    rawBufferByteCount += rawSerialBuffer[rawSerialBuffer.length - 1].length;
-  }
-
   currentSerialPort = null;
   if (!currentConfig.saveAllTabsLogToFiles) {
     saveLog();
@@ -1248,51 +1435,70 @@ function cleanupSerialConnection(message = null) {
   notifySerialDisconnected(disconnectMsg);
 }
 
-function handleSerialData(str) {
-    if (currentConfig.logEnabled || currentConfig.saveAllTabsLogToFiles) {
-        rawSerialBuffer.push(str);
-        rawBufferByteCount += str.length;
-        triggerRawAutoFlush();
-    }
+function writeSerialPayload(request) {
+  if (!currentSerialPort || !currentSerialPort.isOpen) {
+    return Promise.resolve({ ok: false, code: 'SERIAL_NOT_OPEN', message: 'Serial port is not open' });
+  }
+  if (request?.sessionId !== undefined && request.sessionId !== serialSessionId) {
+    return Promise.resolve({ ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' });
+  }
 
-    // Newline Mode (Receive):
-    // If mode is CRLF or Auto, usually we want to ensure newlines render correctly in xterm.
-    // xterm expects \r\n for a new line.
-    // If we receive just \n and mode is CRLF, we might want to map \n -> \r\n.
-    if (serialNewlineMode === 'crlf') {
-        str = str.replace(/\r?\n/g, '\r\n');
-    }
-    
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('serial-output', str);
-    }
-    
-    // Update history buffer
-    serialHistoryBuffer += str;
-    const maxLen = currentConfig.historyBufferSize || 5000000;
-    if (serialHistoryBuffer.length > maxLen) {
-        serialHistoryBuffer = serialHistoryBuffer.slice(serialHistoryBuffer.length - maxLen);
-    }
+  const built = buildSerialWriteBuffer(request, {
+    defaultEncoding: serialSendEncoding,
+    defaultNewlineMode: serialNewlineMode
+  });
+  if (!built.ok) return Promise.resolve(built);
 
-    writeLog(str);
+  const port = currentSerialPort;
+  return new Promise(resolve => {
+    try {
+      port.write(built.bytes, error => {
+        if (error) {
+          resolve({ ok: false, code: 'SERIAL_WRITE_FAILED', message: error.message });
+          return;
+        }
+        throughputState.txCurrentBytes += built.bytes.length;
+        resolve({ ok: true, bytesWritten: built.bytes.length });
+      });
+    } catch (error) {
+      resolve({ ok: false, code: 'SERIAL_WRITE_FAILED', message: error.message });
+    }
+  });
 }
 
 ipcMain.handle('list-ports', async () => {
   return await SerialPort.list();
 });
 
-ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopBits, parity, encoding, newlineMode }) => {
-  if (currentSerialPort && currentSerialPort.isOpen) {
-    await new Promise(resolve => currentSerialPort.close(resolve));
-    cleanupSerialConnection();
+ipcMain.handle('connect-serial', async (event, options = {}) => {
+  if (serialConnectInProgress) {
+    throw new Error('A serial connection attempt is already in progress');
   }
+  serialConnectInProgress = true;
+  const { path, baudRate, dataBits, stopBits, parity, encoding, sendEncoding, newlineMode } = options;
+  try {
+    if (currentSerialPort && currentSerialPort.isOpen) {
+      await new Promise(resolve => currentSerialPort.close(resolve));
+      cleanupSerialConnection();
+    } else if (currentSerialPort && !serialCleanupComplete) {
+      throw new Error('A serial port is still opening');
+    }
+    if (rawBinaryBuffers.length > 0 && !flushRawBinaryLogSync()) {
+      throw new Error(`Failed to flush pending raw serial log: ${rawBinaryFlushError?.message || 'unknown error'}`);
+    }
 
-  serialEncoding = encoding || 'utf8';
-  serialNewlineMode = newlineMode || 'crlf';
-  serialDecoderStream = null;
+    serialSendEncoding = oneOf(sendEncoding || encoding, SERIAL_ENCODINGS, 'utf8');
+    serialNewlineMode = newlineMode || 'crlf';
+    serialCleanupComplete = false;
+    serialSessionId++;
+    const connectionSessionId = serialSessionId;
+    rawBinaryBuffers = [];
+    rawBinaryByteCount = 0;
+    rawBinaryLogPath = '';
+    rawBinaryFlushError = null;
 
-  return new Promise((resolve, reject) => {
-    currentSerialPort = new SerialPort({
+    return await new Promise((resolve, reject) => {
+    const port = new SerialPort({
         path,
         baudRate: parseInt(baudRate),
         dataBits: parseInt(dataBits || 8),
@@ -1300,18 +1506,11 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
         parity: parity || 'none',
         autoOpen: false
     });
+    currentSerialPort = port;
 
-    if (serialEncoding !== 'hex') {
-        serialDecoderStream = iconv.decodeStream(serialEncoding);
-        serialDecoderStream.on('data', handleSerialData);
-        serialDecoderStream.on('error', (err) => {
-             console.error('Decoder stream error:', err);
-        });
-    }
-
-    currentSerialPort.open((err) => {
+    port.open((err) => {
         if (err) {
-            cleanupSerialConnection();
+            cleanupSerialConnection(null, port);
             reject(err.message);
             return;
         }
@@ -1319,72 +1518,48 @@ ipcMain.handle('connect-serial', async (event, { path, baudRate, dataBits, stopB
         if (currentConfig.saveAllTabsLogToFiles) {
           const title = 'Main_Terminal';
           tabLogBuffers.set('tab-main', { title, buffer: [], byteCount: 0, filePath: '' });
-          ensureTabLogFile('tab-main');
-          rawSerialBuffer.push(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`);
-          rawBufferByteCount += rawSerialBuffer[rawSerialBuffer.length - 1].length;
         }
         initializeThroughputState();
-        resolve(true);
+        resolve({ ok: true, sessionId: connectionSessionId });
     });
 
-    currentSerialPort.on('data', (data) => {
+    port.on('data', (data) => {
+      if (currentSerialPort !== port || serialCleanupComplete) return;
       throughputState.rxCurrentBytes += data.length;
-      if (serialEncoding === 'hex') {
-          let str = data.toString('hex').match(/.{1,2}/g).join(' ') + ' ';
-          handleSerialData(str);
-      } else if (serialDecoderStream) {
-          serialDecoderStream.write(data);
-      } else {
-          handleSerialData(data.toString());
+      bufferRawSerialBytes(data);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('serial-output-bytes', {
+          bytes: new Uint8Array(data),
+          receivedAt: Date.now(),
+          sessionId: connectionSessionId
+        });
       }
     });
 
-    currentSerialPort.on('error', (err) => {
-      mainWindow.webContents.send('serial-error', err.message);
+    port.on('error', (err) => {
+      if (currentSerialPort !== port || serialCleanupComplete) return;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('serial-error', err.message);
+      }
       writeLog(`\n[SERIAL ERROR] ${err.message}\n`);
     });
 
-    currentSerialPort.on('close', () => {
+    port.on('close', () => {
+      if (currentSerialPort !== port || serialCleanupComplete) return;
       writeLog('\r\n[SERIAL DISCONNECTED]\r\n');
       saveLog();
-      cleanupSerialConnection('Serial port disconnected');
+      cleanupSerialConnection('Serial port disconnected', port);
     });
-  });
-});
-
-ipcMain.on('serial-input', (event, data) => {
-  if (currentSerialPort && currentSerialPort.isOpen) {
-    let buffer;
-    
-    // Newline Mode (Send):
-    // xterm sends \r when Enter is pressed.
-    // We should map \r to the desired sequence.
-    let str = data;
-    if (str === '\r') {
-        if (serialNewlineMode === 'crlf') str = '\r\n';
-        else if (serialNewlineMode === 'lf') str = '\n';
-        // if 'cr', leave as \r
-    }
-
-    if (serialEncoding === 'hex') {
-        // In hex mode, we might expect user to type hex?
-        // Or we just send ASCII as is?
-        // Usually Hex view is read-only or specific input.
-        // For now, let's just send ASCII if they type in terminal,
-        // or we could try to interpret hex string if we had a separate input box.
-        // Assuming terminal input is just chars.
-        buffer = Buffer.from(str, 'utf8');
-    } else {
-        buffer = iconv.encode(str, serialEncoding);
-    }
-
-    throughputState.txCurrentBytes += buffer.length;
-    currentSerialPort.write(buffer);
-    writeLog(str);
+    });
+  } finally {
+    serialConnectInProgress = false;
   }
 });
 
+ipcMain.handle('serial-write', (event, request) => writeSerialPayload(request));
+
 ipcMain.on('disconnect-serial', () => {
+  serialSessionId++;
   if (currentSerialPort && currentSerialPort.isOpen) {
     currentSerialPort.close();
   } else {

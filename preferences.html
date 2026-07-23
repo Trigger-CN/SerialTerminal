@@ -244,6 +244,38 @@
                         Number of lines to scroll per mouse wheel tick in the terminal display.
                     </div>
                 </div>
+                <h3 style="margin-top: 28px; margin-bottom: 16px; font-size: 16px;" data-i18n="prefs.hexDisplaySettings">Hex Display Settings</h3>
+                <div class="form-group">
+                    <label data-i18n="prefs.hexBytesPerLine">Bytes per Line</label>
+                    <select id="hexBytesPerLine" style="width: 150px;">
+                        <option value="8">8</option>
+                        <option value="16">16</option>
+                        <option value="24">24</option>
+                        <option value="32">32</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="hexShowOffset"> <span data-i18n="prefs.hexShowOffset">Show Offset</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="hexShowAscii"> <span data-i18n="prefs.hexShowAscii">Show ASCII Preview</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="hexUppercase"> <span data-i18n="prefs.hexUppercase">Use Uppercase Hex</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="prefs.hexIdleFlushMs">Idle Flush Time (ms)</label>
+                    <input type="number" id="hexIdleFlushMs" min="0" max="1000" step="1" style="width: 150px; padding: 6px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;" data-i18n="prefs.hexIdleFlushHelp">
+                        Flush an incomplete Hex line after this idle time. Use 0 to flush immediately.
+                    </div>
+                </div>
             </div>
 
             <!-- Highlighting Tab -->
@@ -266,6 +298,27 @@
                     </label>
                 </div>
 
+                <div class="form-group">
+                    <label data-i18n="prefs.logSavePath">📂 Log Save Path</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="logPath" readonly style="flex: 1;">
+                        <button class="secondary" id="browse-btn" style="white-space: nowrap;" data-i18n="prefs.browse">Browse...</button>
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 16px;" data-i18n="prefs.rawBinaryLogging">Raw RX Binary Logging</h3>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="saveRawSerialToFile"> <span data-i18n="prefs.saveRawSerialToFile">Save Raw Serial Data</span>
+                    </label>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.rawLogRxOnlyHelp">Raw binary logs contain RX bytes only and are saved as .bin files.</small>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="prefs.rawLogFileNameFormat">Raw File Name Format</label>
+                    <input type="text" id="rawLogFileNameFormat" placeholder="raw_%Y-%m-%d_%H-%M-%S.bin" data-i18n-placeholder="prefs.rawLogFileNamePlaceholder" style="width: 100%; max-width: 480px;">
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.supportedTags">Supported tags: %Y, %m, %d, %H, %M, %S</small>
+                </div>
+
                 <div id="log-settings" style="display: none; padding-left: 15px; border-left: 2px solid var(--border-color); margin-left: 5px;">
                     <div class="form-group">
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
@@ -276,13 +329,6 @@
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
                             <input type="checkbox" id="stripAnsiInLog" checked> <span data-i18n="prefs.stripAnsiInLog">Strip ANSI color codes from log files</span>
                         </label>
-                    </div>
-                    <div class="form-group">
-                        <label data-i18n="prefs.logSavePath">📂 Log Save Path</label>
-                        <div style="display: flex; gap: 8px;">
-                            <input type="text" id="logPath" readonly style="flex: 1;">
-                            <button class="secondary" id="browse-btn" style="white-space: nowrap;" data-i18n="prefs.browse">Browse...</button>
-                        </div>
                     </div>
                     <div class="form-group">
                         <label data-i18n="prefs.fileNameFormat">📄 File Name Format</label>

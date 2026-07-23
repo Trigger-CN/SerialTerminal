@@ -2,11 +2,29 @@ const { ipcRenderer } = require('electron');
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
+const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./i18n');
 const { createWorkspaceManager } = require('./workspace-manager');
+const { parseHexInput } = require('./serial-codec');
+const { HexStreamFormatter } = require('./hex-formatter');
+
+const SEND_LIMITS = Object.freeze({ main: 1024 * 1024, quick: 1024 * 1024, auto: 64 * 1024, paste: 1024 * 1024, terminal: 1024 * 1024 });
+const SUPPORTED_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 
 let currentConfig = null;
 let currentLanguage = 'en';
+let isApplyingConfig = false;
+let receiveDisplayMode = 'text';
+let receiveEncoding = 'utf8';
+let sendMode = 'text';
+let sendEncoding = 'utf8';
+let sendAppendCrLf = false;
+let newlineMode = 'crlf';
+let textDecoder = null;
+let appliedHexSettingsKey = '';
+let serialWriteChain = Promise.resolve();
+let serialSessionId = 0;
+let serialConnectInProgress = false;
 // let currentMode = 'terminal'; // Removed temporarily
 
 // Display Settings
@@ -44,6 +62,11 @@ let isDraggingWorkspaceSplitter = false;
 
 function tr(key, params = {}) {
     return t(currentLanguage, key, params);
+}
+
+function trFallback(key, fallback, params = {}) {
+    const value = tr(key, params);
+    return value === key ? fallback.replace(/\{(\w+)\}/g, (_, name) => params[name] ?? '') : value;
 }
 
 function cloneWorkspaceLayout(layout) {
@@ -105,7 +128,12 @@ const mainSendLast = document.getElementById('main-send-last');
 const mainActionStatus = document.getElementById('main-action-status');
 const mainInputPanel = document.getElementById('main-input-panel');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
-const mainAppendCrlfCb = document.getElementById('main-append-crlf');
+const mainInputValidation = document.getElementById('main-input-validation');
+const receiveModeSelect = document.getElementById('receive-mode-select');
+const receiveEncodingSelect = document.getElementById('receive-encoding-select');
+const sendModeSelect = document.getElementById('send-mode-select');
+const sendEncodingSelect = document.getElementById('send-encoding-select');
+const sendAppendCrlfCb = document.getElementById('send-append-crlf');
 const toggleMainInputBtn = document.getElementById('toggle-main-input');
 const toggleShellSidebarBtn = document.getElementById('toggle-shell-sidebar');
 const shellSidebar = document.getElementById('shell-sidebar');
@@ -121,11 +149,11 @@ let suppressMainInputFocus = false;
 
 function setActionStatus(message) {
     if (mainActionStatus) {
-        mainActionStatus.textContent = message || '就绪';
+        mainActionStatus.textContent = message || trFallback('main.ready', 'Ready');
     }
 }
 
-setActionStatus('就绪');
+setActionStatus(trFallback('main.ready', 'Ready'));
 
 showTimestampCb.addEventListener('change', (e) => {
     showTimestamp = e.target.checked;
@@ -327,9 +355,116 @@ class SerialDataParser {
         }
         return lines;
     }
+
+    flush() {
+        if (!this.incomingBuffer) return [];
+        const line = {
+            text: this.incomingBuffer,
+            delimiter: '',
+            prefix: this.isNewLine ? getPrefix() : ''
+        };
+        this.incomingBuffer = '';
+        this.isNewLine = false;
+        return [line];
+    }
 }
 
 const dataParser = new SerialDataParser();
+
+function writeTextLines(lines) {
+    if (!lines.length) return;
+    const mainOutput = lines.map(line => formatLineForTerminal(line)).join('');
+    if (mainOutput) {
+        serialTerm.write(mainOutput);
+        writeMainTabLog(mainOutput);
+    }
+    filterTabs.forEach(tab => {
+        if (tab.dataMode !== 'text') return;
+        const output = lines.map(line => formatLineForTerminal(line, tab.filterRegex)).join('');
+        if (output) {
+            tab.term.write(output);
+            writeFilterTabLog(tab, output);
+        }
+    });
+}
+
+function writeHexLines(lines) {
+    if (!lines.length) return;
+    const mainOutput = lines.map(line => line.output).join('');
+    serialTerm.write(mainOutput);
+    writeMainTabLog(mainOutput);
+    filterTabs.forEach(tab => {
+        if (tab.dataMode !== 'hex') return;
+        const matched = lines.filter(line => !tab.filterRegex || tab.filterRegex.test(line.output.replace(/\r?\n$/, '')));
+        const output = matched.map(line => applyHighlighting(line.output.replace(/\r?\n$/, ''), tab.filterRegex) + '\r\n').join('');
+        if (output) {
+            tab.term.write(output);
+            writeFilterTabLog(tab, output);
+        }
+    });
+}
+
+const hexFormatter = new HexStreamFormatter({}, writeHexLines);
+
+function createTextDecoder() {
+    textDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8');
+}
+
+function flushTextReceive() {
+    if (textDecoder) {
+        const finalText = textDecoder.end();
+        if (finalText) writeTextLines(dataParser.parse(finalText));
+        textDecoder = null;
+    }
+    writeTextLines(dataParser.flush());
+}
+
+function resetTextReceive() {
+    textDecoder = null;
+    dataParser.isNewLine = true;
+    dataParser.incomingBuffer = '';
+    if (receiveDisplayMode === 'text') createTextDecoder();
+}
+
+function updateFilterModeStatuses() {
+    filterTabs.forEach(tab => {
+        const paused = tab.dataMode !== receiveDisplayMode;
+        if (tab.modeStatus) {
+            tab.modeStatus.textContent = paused
+                ? `${tab.dataMode.toUpperCase()} ${trFallback('main.filterPaused', 'paused')}`
+                : tab.dataMode.toUpperCase();
+            tab.modeStatus.classList.toggle('paused', paused);
+        }
+    });
+}
+
+function switchReceiveMode(nextMode, { persist = true } = {}) {
+    const normalized = nextMode === 'hex' ? 'hex' : 'text';
+    if (normalized !== receiveDisplayMode) {
+        if (receiveDisplayMode === 'text') flushTextReceive();
+        else hexFormatter.flush();
+        receiveDisplayMode = normalized;
+        if (normalized === 'text') createTextDecoder();
+        else hexFormatter.reset({ resetOffset: false });
+    } else if (normalized === 'text' && !textDecoder) {
+        createTextDecoder();
+    }
+    if (receiveModeSelect) receiveModeSelect.value = normalized;
+    if (receiveEncodingSelect) receiveEncodingSelect.disabled = normalized === 'hex';
+    updateFilterModeStatuses();
+    if (persist && !isApplyingConfig) saveSerialModeConfig();
+}
+
+function switchReceiveEncoding(nextEncoding, { persist = true } = {}) {
+    const normalized = SUPPORTED_ENCODINGS.has(nextEncoding) ? nextEncoding : 'utf8';
+    if (normalized !== receiveEncoding) {
+        if (receiveDisplayMode === 'text') flushTextReceive();
+        receiveEncoding = normalized;
+        if (receiveDisplayMode === 'text') createTextDecoder();
+    }
+    if (receiveEncodingSelect) receiveEncodingSelect.value = normalized;
+    if (persist && !isApplyingConfig) saveSerialModeConfig();
+}
 
 function formatLineForTerminal(lineObj, filterRegex = null) {
     if (filterRegex && !filterRegex.test(lineObj.text)) {
@@ -381,6 +516,7 @@ function getContextMenuLabels() {
         copyAll: tr('main.contextCopyAll'),
         findSelection: tr('main.contextFindSelection'),
         clearTerminal: tr('main.contextClearTerminal'),
+        clearAndResetHex: trFallback('main.contextClearAndResetHex', 'Clear and Reset Hex Offset'),
         pasteAndSend: tr('main.contextPasteAndSend'),
         sendSelection: tr('main.contextSendSelection'),
         createFilterFromSelection: tr('main.contextCreateFilterFromSelection'),
@@ -443,7 +579,8 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
             filterText: tabState?.filterText || '',
             canLocateInMain: Boolean(tabState?.contextLineText),
             caseSensitive: Boolean(tabState?.caseSensitive),
-            useRegex: Boolean(tabState?.useRegex)
+            useRegex: Boolean(tabState?.useRegex),
+            receiveDisplayMode
         });
     });
 }
@@ -497,10 +634,10 @@ function setSearchFromText(text) {
 
 function clearTerminalByTabId(tabId) {
     if (!tabId || tabId === 'tab-main') {
+        if (receiveDisplayMode === 'hex') hexFormatter.reset({ resetOffset: false });
+        else resetTextReceive();
         serialTerm.clear();
         serialLineCounter = 1;
-        dataParser.isNewLine = true;
-        dataParser.incomingBuffer = '';
         return;
     }
     const filterTab = filterTabs.find(t => t.id === tabId);
@@ -558,7 +695,15 @@ async function handleTerminalContextMenuAction(payload = {}) {
         }
         case 'clear-terminal': {
             clearTerminalByTabId(isFilter ? tabId : 'tab-main');
-            setActionStatus(isFilter ? '已清空过滤终端' : '已清空主终端');
+            setActionStatus(trFallback('main.terminalCleared', 'Terminal cleared'));
+            break;
+        }
+        case 'clear-reset-hex':
+        case 'clear-and-reset-hex':
+        case 'reset-hex-offset': {
+            clearTerminalByTabId('tab-main');
+            hexFormatter.reset({ resetOffset: true });
+            setActionStatus(trFallback('main.hexOffsetReset', 'Terminal cleared and Hex offset reset'));
             break;
         }
         case 'paste-send': {
@@ -566,8 +711,10 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (text) {
                 if (isShell && shellTab) {
                     ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
+                } else if (sendMode === 'hex') {
+                    putTextInMainInput(text, 'hex');
                 } else if (isConnected) {
-                    ipcRenderer.send('serial-input', text);
+                    await sendSerialRequest({ mode: sendMode, content: text, encoding: sendEncoding, source: 'paste' }, SEND_LIMITS.paste);
                 }
             }
             break;
@@ -577,14 +724,14 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (text && isShell && shellTab) {
                 ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
             } else if (text && isConnected) {
-                ipcRenderer.send('serial-input', text);
+                await sendSerialRequest({ mode: sendMode, content: text, encoding: sendEncoding, source: 'selection' }, SEND_LIMITS.paste);
             }
             break;
         }
         case 'create-filter-from-selection': {
             const text = targetTerm?.getSelection();
             if (text) {
-                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false }, resolvePaneId(paneId, tabId));
+                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false, dataMode: receiveDisplayMode }, resolvePaneId(paneId, tabId));
                 setActionStatus('已用选中文本新建过滤标签页');
             }
             break;
@@ -978,7 +1125,7 @@ function updateTabTitles() {
     filterTabs.forEach((tab, index) => {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
-        tab.btn.innerHTML = `${tr('main.filter')} ${displayIndex} `;
+        tab.btn.innerHTML = `${tr('main.filter')} ${displayIndex} <span class="mode-badge ${tab.dataMode}">${tab.dataMode === 'hex' ? 'HEX' : 'TXT'}</span> `;
         tab.btn.appendChild(closeBtn);
     });
     shellTabs.forEach((tab, index) => {
@@ -1234,6 +1381,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
             <button class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}">Aa</button>
             <button class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}">.*</button>
         </div>
+        <span class="filter-mode-status" role="status"></span>
     `;
     
     const terminalWrapper = document.createElement('div');
@@ -1278,6 +1426,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         caseSensitive: false,
         useRegex: false,
         filterText: '',
+        dataMode: initialState.dataMode === 'hex' ? 'hex' : (initialState.dataMode === 'text' ? 'text' : receiveDisplayMode),
         contextLineText: '',
         element: tabPane,
         btn: tabBtn
@@ -1288,6 +1437,8 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     const caseBtn = filterHeader.querySelector('.filter-case-btn');
     const regexBtn = filterHeader.querySelector('.filter-regex-btn');
     const dropdownMenu = filterHeader.querySelector('.filter-history-dropdown');
+    const modeStatus = filterHeader.querySelector('.filter-mode-status');
+    tabState.modeStatus = modeStatus;
 
     input.addEventListener('focus', () => {
         suppressMainInputFocus = true;
@@ -1454,6 +1605,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     
     filterTabs.push(tabState);
     updateTabTitles();
+    updateFilterModeStatuses();
     addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
     if (!isRestoringWorkspaceSession) {
         switchPaneTab(resolvedPaneId, tabId, { persist: false });
@@ -1498,12 +1650,14 @@ function closeFilterTab(tabId) {
 }
 
 function persistFilterTabs() {
+    if (isApplyingConfig) return;
     ipcRenderer.send('save-config', {
         filterTabs: filterTabs.map(tab => ({
             id: tab.id,
             filterText: tab.filterText || '',
             caseSensitive: tab.caseSensitive,
             useRegex: tab.useRegex,
+            dataMode: tab.dataMode,
             paneId: tab.paneId || getTabPaneId(tab.id)
         }))
     });
@@ -1558,19 +1712,17 @@ function createTerminalKeyHandler(targetTerm, terminalType = 'serial', getTabId 
         }
 
         if (ctrlKey && key === 'v') {
-            if (targetTerm.hasSelection()) {
-                navigator.clipboard.readText().then(text => {
-                    if (text) {
-                        if (terminalType === 'shell') {
-                            ipcRenderer.send('shell-tab-input', { tabId: typeof getTabId === 'function' ? getTabId() : '', data: text });
-                        } else {
-                            ipcRenderer.send('serial-input', text);
-                        }
-                    }
-                });
-                return false;
-            }
-            return true;
+            navigator.clipboard.readText().then(text => {
+                if (!text) return;
+                if (terminalType === 'shell') {
+                    ipcRenderer.send('shell-tab-input', { tabId: typeof getTabId === 'function' ? getTabId() : '', data: text });
+                } else if (sendMode === 'hex') {
+                    putTextInMainInput(text, 'hex');
+                } else {
+                    sendSerialRequest({ mode: 'text', content: text, encoding: sendEncoding, source: 'paste' }, SEND_LIMITS.paste);
+                }
+            });
+            return false;
         }
 
         return true;
@@ -1592,12 +1744,80 @@ ipcRenderer.on('terminal-context-menu-action', (event, payload) => {
 
 let mainInputHistory = [];
 let mainInputHistoryIndex = -1;
-let mainInputDraft = '';
+let mainInputHistoryDraft = null;
+const mainInputDrafts = { text: '', hex: '' };
+let mainInputMode = 'text';
 
-function sendSerialData(data) {
-    if (!isConnected || !data) return false;
-    ipcRenderer.send('serial-input', data);
-    return true;
+function validateSendContent(mode, content, encoding, maxBytes) {
+    if (mode === 'hex') return parseHexInput(content, { maxBytes });
+    if (!content) return { ok: false, code: 'EMPTY_INPUT', message: 'Input is empty', position: 0 };
+    const byteCount = iconv.encode(content, SUPPORTED_ENCODINGS.has(encoding) ? encoding : 'utf8').length;
+    if (byteCount > maxBytes) return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: `Payload exceeds ${maxBytes} bytes`, byteCount, maxBytes };
+    return { ok: true, byteCount, normalized: content };
+}
+
+function formatValidation(result, mode, appendCrLf = false) {
+    if (!result.ok) {
+        const suffix = result.token ? `: ${result.token}` : (Number.isInteger(result.position) ? ` @ ${result.position + 1}` : '');
+        return trFallback(`main.hexError.${result.code}`, result.message || result.code) + suffix;
+    }
+    const count = result.byteCount + (appendCrLf ? 2 : 0);
+    return mode === 'hex'
+        ? trFallback('main.hexValidBytes', 'Valid Hex, {count} bytes', { count })
+        : trFallback('main.textCountBytes', '{chars} characters, {count} bytes', { chars: String(result.normalized).length, count });
+}
+
+async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent = false } = {}) {
+    if (!isConnected) {
+        const result = { ok: false, code: 'SERIAL_NOT_OPEN', message: trFallback('main.serialNotOpen', 'Serial port is not connected') };
+        if (!silent) setActionStatus(result.message);
+        return result;
+    }
+    const profileRequest = {
+        ...request,
+        mode: sendMode,
+        encoding: sendEncoding,
+        appendCrLf: request.source === 'terminal' ? false : sendAppendCrLf
+    };
+    const validation = validateSendContent(profileRequest.mode, profileRequest.content, profileRequest.encoding, maxBytes - (profileRequest.appendCrLf ? 2 : 0));
+    if (!validation.ok) {
+        if (!silent) setActionStatus(formatValidation(validation, profileRequest.mode));
+        return validation;
+    }
+    try {
+        const requestSessionId = serialSessionId;
+        const writeRequest = {
+            mode: profileRequest.mode, content: profileRequest.content,
+            encoding: profileRequest.encoding, appendCrLf: profileRequest.appendCrLf,
+            source: request.source || 'renderer', terminalEnter: request.terminalEnter === true,
+            newlineMode: request.newlineMode || newlineMode, sessionId: requestSessionId
+        };
+        const pendingWrite = serialWriteChain.then(() => {
+            if (!isConnected || requestSessionId !== serialSessionId) {
+                return { ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' };
+            }
+            return ipcRenderer.invoke('serial-write', writeRequest);
+        });
+        serialWriteChain = pendingWrite.catch(() => undefined);
+        const result = await pendingWrite;
+        if (!silent) setActionStatus(result.ok
+            ? trFallback('main.bytesSent', 'Sent {count} bytes', { count: result.bytesWritten })
+            : trFallback('main.serialWriteFailed', 'Write failed: {error}', { error: result.message || result.code }));
+        return result;
+    } catch (error) {
+        const result = { ok: false, code: 'SERIAL_WRITE_FAILED', message: error?.message || String(error) };
+        if (!silent) setActionStatus(trFallback('main.serialWriteFailed', 'Write failed: {error}', { error: result.message }));
+        return result;
+    }
+}
+
+function putTextInMainInput(text, mode = sendMode) {
+    switchMainInputMode(mode, { syncGlobal: true, persist: true });
+    mainSendInput.value = text;
+    mainInputDrafts[mode] = text;
+    updateMainInputState();
+    setMainInputPanelVisible(true, true);
+    focusMainInput();
 }
 
 function updateMainInputHeight() {
@@ -1777,23 +1997,24 @@ function focusMainInput() {
     mainSendInput.setSelectionRange(len, len);
 }
 
-function pushMainInputHistory(text) {
-    if (!text) return;
-    if (mainInputHistory[mainInputHistory.length - 1] !== text) {
-        mainInputHistory.push(text);
+function pushMainInputHistory(entry) {
+    if (!entry?.content) return;
+    const previous = mainInputHistory[mainInputHistory.length - 1];
+    if (!previous || JSON.stringify(previous) !== JSON.stringify(entry)) {
+        mainInputHistory.push(entry);
         if (mainInputHistory.length > 100) {
             mainInputHistory.shift();
         }
     }
     mainInputHistoryIndex = -1;
-    mainInputDraft = '';
+    mainInputHistoryDraft = null;
 }
 
 function navigateMainInputHistory(direction) {
     if (!mainInputHistory.length) return;
 
     if (mainInputHistoryIndex === -1) {
-        mainInputDraft = mainSendInput.value;
+        mainInputHistoryDraft = getMainInputRequest();
     }
 
     const nextIndex = mainInputHistoryIndex + direction;
@@ -1802,35 +2023,68 @@ function navigateMainInputHistory(direction) {
     }
 
     mainInputHistoryIndex = nextIndex;
-    mainSendInput.value = mainInputHistoryIndex === -1
-        ? mainInputDraft
-        : mainInputHistory[mainInputHistory.length - 1 - mainInputHistoryIndex];
+    const entry = mainInputHistoryIndex === -1 ? mainInputHistoryDraft : mainInputHistory[mainInputHistory.length - 1 - mainInputHistoryIndex];
+    const preservedDrafts = { ...mainInputDrafts };
+    switchMainInputMode(entry.mode, { syncGlobal: true, persist: true });
+    mainSendInput.value = entry.content;
     updateMainInputHeight();
+    const validation = validateSendContent(sendMode, entry.content, sendEncoding, SEND_LIMITS.main - (sendAppendCrLf ? 2 : 0));
+    mainInputValidation.textContent = formatValidation(validation, sendMode, sendAppendCrLf);
+    mainInputValidation.classList.toggle('valid', validation.ok);
+    mainInputValidation.classList.toggle('invalid', !validation.ok && entry.content.length > 0);
+    mainSendBtn.disabled = !validation.ok;
+    mainAddQuickSendBtn.disabled = !validation.ok;
+    mainSendInput.placeholder = sendMode === 'hex' ? 'AA 55 01 FF' : tr('main.sendInputPlaceholder');
+    Object.assign(mainInputDrafts, preservedDrafts);
     focusMainInput();
 }
 
 function clearMainInput() {
     mainSendInput.value = '';
     mainInputHistoryIndex = -1;
-    mainInputDraft = '';
-    updateMainInputHeight();
+    mainInputHistoryDraft = null;
+    updateMainInputState();
 }
 
-function sendMainInputBuffer() {
-    const text = mainSendInput.value;
-    if (!text) {
+function getMainInputRequest() {
+    return { mode: sendMode, content: mainSendInput.value, encoding: sendEncoding, appendCrLf: sendAppendCrLf };
+}
+
+function updateMainInputState() {
+    updateMainInputHeight();
+    const request = getMainInputRequest();
+    mainInputDrafts[request.mode] = request.content;
+    const validation = validateSendContent(request.mode, request.content, request.encoding, SEND_LIMITS.main - (request.appendCrLf ? 2 : 0));
+    mainInputValidation.textContent = formatValidation(validation, request.mode, request.appendCrLf);
+    mainInputValidation.classList.toggle('valid', validation.ok);
+    mainInputValidation.classList.toggle('invalid', !validation.ok && request.content.length > 0);
+    mainSendBtn.disabled = !validation.ok;
+    mainAddQuickSendBtn.disabled = !validation.ok;
+    mainSendInput.placeholder = request.mode === 'hex' ? 'AA 55 01 FF' : tr('main.sendInputPlaceholder');
+}
+
+function switchMainInputMode(mode, { syncGlobal = true, persist = true } = {}) {
+    const normalized = mode === 'hex' ? 'hex' : 'text';
+    const oldMode = mainInputMode;
+    if (oldMode !== normalized) mainInputDrafts[oldMode] = mainSendInput.value;
+    mainInputMode = normalized;
+    mainSendInput.value = mainInputDrafts[normalized];
+    if (syncGlobal) switchSendMode(normalized, { syncInput: false, persist });
+    updateMainInputState();
+}
+
+async function sendMainInputBuffer() {
+    const request = { ...getMainInputRequest(), source: 'main-input' };
+    if (!request.content) {
         focusMainInput();
         return;
     }
-    const payload = mainAppendCrlfCb?.checked ? `${text}\r\n` : text;
-    if (!sendSerialData(payload)) {
-        setActionStatus('发送失败：串口未连接');
-        focusMainInput();
-        return;
+    const result = await sendSerialRequest(request, SEND_LIMITS.main);
+    if (result.ok) {
+        pushMainInputHistory({ mode: request.mode, content: request.content });
+        const preview = request.mode === 'hex' ? parseHexInput(request.content).normalized : request.content;
+        setLastSentPreview(preview);
     }
-    pushMainInputHistory(text);
-    setLastSentPreview(payload);
-    setActionStatus(`已发送输入框内容（${payload.length} 字符）`);
     focusMainInput();
 }
 
@@ -1848,11 +2102,10 @@ function addMainInputToQuickSend() {
         return;
     }
 
-    const quickSendContent = mainAppendCrlfCb?.checked ? `${content}\r\n` : content;
-
     quickSendList.push({
+        id: createQuickSendId(),
         label: buildQuickSendLabel(content),
-        content: quickSendContent
+        content
     });
     renderQuickSendList();
     saveQuickSendList();
@@ -1864,8 +2117,7 @@ function saveMainInputSettings() {
     ipcRenderer.send('save-config', {
         mainInputSettings: {
             visible: !mainInputPanel?.classList.contains('hidden'),
-            sendOnEnter: mainSendOnEnterCb?.checked !== false,
-            appendCrLf: mainAppendCrlfCb?.checked === true
+            sendOnEnter: mainSendOnEnterCb?.checked !== false
         }
     });
 }
@@ -1893,17 +2145,16 @@ function bindMainInputEvents() {
         }
     });
 
-    mainSendInput.addEventListener('input', updateMainInputHeight);
+    mainSendInput.addEventListener('input', updateMainInputState);
     mainSendBtn.addEventListener('click', sendMainInputBuffer);
     mainAddQuickSendBtn?.addEventListener('click', addMainInputToQuickSend);
     mainSendOnEnterCb?.addEventListener('change', saveMainInputSettings);
-    mainAppendCrlfCb?.addEventListener('change', saveMainInputSettings);
     toggleMainInputBtn?.addEventListener('click', () => {
         const visible = mainInputPanel?.classList.contains('hidden');
         setMainInputPanelVisible(visible, true);
     });
 
-    updateMainInputHeight();
+    updateMainInputState();
     setLastSentPreview('');
 }
 
@@ -1913,18 +2164,97 @@ function applyMainInputConfig(config) {
     if (mainSendOnEnterCb) {
         mainSendOnEnterCb.checked = settings.sendOnEnter !== false;
     }
-    if (mainAppendCrlfCb) {
-        mainAppendCrlfCb.checked = settings.appendCrLf === true;
-    }
-    updateMainInputHeight();
+    switchMainInputMode(sendMode, { syncGlobal: false, persist: false });
 }
 
 bindMainInputEvents();
 bindWorkspaceSplitter();
 bindShellSidebarEvents();
 
+function getSerialOptionsFromUi() {
+    return {
+        path: document.getElementById('port-select')?.value || currentConfig?.lastSerialOptions?.path || '',
+        baudRate: typeof getBaudRate === 'function' ? getBaudRate() : (currentConfig?.lastSerialOptions?.baudRate || '9600'),
+        dataBits: document.getElementById('data-bits-select')?.value || '8',
+        stopBits: document.getElementById('stop-bits-select')?.value || '1',
+        parity: document.getElementById('parity-select')?.value || 'none',
+        receiveDisplayMode, receiveEncoding, sendMode, sendEncoding, appendCrLf: sendAppendCrLf, newlineMode
+    };
+}
+
+function saveSerialModeConfig() {
+    if (isApplyingConfig) return;
+    const lastSerialOptions = getSerialOptionsFromUi();
+    if (currentConfig) currentConfig.lastSerialOptions = lastSerialOptions;
+    ipcRenderer.send('save-config', { lastSerialOptions });
+}
+
+function switchSendMode(nextMode, { syncInput = true, persist = true, refresh = true } = {}) {
+    sendMode = nextMode === 'hex' ? 'hex' : 'text';
+    if (sendModeSelect) sendModeSelect.value = sendMode;
+    if (sendEncodingSelect) sendEncodingSelect.disabled = sendMode === 'hex';
+    if (syncInput) {
+        switchMainInputMode(sendMode, { syncGlobal: false, persist: false });
+    }
+    if (refresh) refreshSharedSendConsumers();
+    if (persist && !isApplyingConfig) {
+        saveSharedSendProfile();
+    }
+}
+
+function switchSendEncoding(nextEncoding, { persist = true, refresh = true } = {}) {
+    sendEncoding = SUPPORTED_ENCODINGS.has(nextEncoding) ? nextEncoding : 'utf8';
+    if (sendEncodingSelect) sendEncodingSelect.value = sendEncoding;
+    if (refresh) refreshSharedSendConsumers();
+    if (persist && !isApplyingConfig) saveSharedSendProfile();
+}
+
+function switchSendAppendCrLf(appendCrLf, { persist = true, refresh = true } = {}) {
+    sendAppendCrLf = appendCrLf === true;
+    if (sendAppendCrlfCb) sendAppendCrlfCb.checked = sendAppendCrLf;
+    if (refresh) refreshSharedSendConsumers();
+    if (persist && !isApplyingConfig) saveSharedSendProfile();
+}
+
+function refreshSharedSendConsumers() {
+    updateMainInputState();
+    if (typeof updateAutoSendValidation === 'function') {
+        updateAutoSendValidation();
+        updateAutoSendState();
+    }
+    if (typeof updateQuickSendValidation === 'function') updateQuickSendValidation();
+    if (typeof renderQuickSendList === 'function') renderQuickSendList();
+}
+
+function saveSharedSendProfile() {
+    const lastSerialOptions = getSerialOptionsFromUi();
+    const config = { lastSerialOptions };
+    if (autoSendEnableCb) {
+        config.autoSendSettings = getAutoSendSettings();
+        appliedAutoSendKey = JSON.stringify(config.autoSendSettings);
+    }
+    if (currentConfig) {
+        currentConfig.lastSerialOptions = lastSerialOptions;
+        if (config.autoSendSettings) currentConfig.autoSendSettings = config.autoSendSettings;
+    }
+    ipcRenderer.send('save-config', config);
+}
+
+receiveModeSelect?.addEventListener('change', () => switchReceiveMode(receiveModeSelect.value));
+receiveEncodingSelect?.addEventListener('change', () => switchReceiveEncoding(receiveEncodingSelect.value));
+sendModeSelect?.addEventListener('change', () => switchSendMode(sendModeSelect.value));
+sendEncodingSelect?.addEventListener('change', () => switchSendEncoding(sendEncodingSelect.value));
+sendAppendCrlfCb?.addEventListener('change', () => switchSendAppendCrLf(sendAppendCrlfCb.checked));
+document.getElementById('newline-mode-select')?.addEventListener('change', event => {
+    newlineMode = event.target.value;
+    saveSerialModeConfig();
+});
+
 function applyConfig(config) {
+    isApplyingConfig = true;
+    try {
     currentConfig = config;
+    let sendProfileChanged = false;
     currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
     const normalizedWorkspaceLayout = normalizeWorkspaceLayout(config.workspaceLayout);
@@ -1967,7 +2297,10 @@ function applyConfig(config) {
 
     document.title = tr('appTitle');
     document.querySelectorAll('[data-i18n]').forEach(el => {
-        el.textContent = tr(el.dataset.i18n);
+        const translated = tr(el.dataset.i18n);
+        el.textContent = translated === el.dataset.i18n && el.dataset.i18nFallback
+            ? el.dataset.i18nFallback
+            : translated;
     });
     document.querySelectorAll('[data-i18n-title]').forEach(el => {
         el.title = tr(el.dataset.i18nTitle);
@@ -1975,9 +2308,14 @@ function applyConfig(config) {
     document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
         el.placeholder = tr(el.dataset.i18nPlaceholder);
     });
+    document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+        const translated = tr(el.dataset.i18nAriaLabel);
+        if (translated !== el.dataset.i18nAriaLabel) el.setAttribute('aria-label', translated);
+    });
     
     // Restore Serial Settings
     if (config.lastSerialOptions) {
+        const previousSendProfileKey = JSON.stringify([sendMode, sendEncoding, sendAppendCrLf]);
         // Elements are defined below, but this function runs async or after load
         const baud = document.getElementById('baud-select');
         const baudInput = document.getElementById('baud-custom-input');
@@ -2010,17 +2348,33 @@ function applyConfig(config) {
         const par = document.getElementById('parity-select');
         if (par) par.value = config.lastSerialOptions.parity;
         
-        const enc = document.getElementById('encoding-select');
-        if (enc) enc.value = config.lastSerialOptions.encoding;
-        
         const nl = document.getElementById('newline-mode-select');
         if (nl) nl.value = config.lastSerialOptions.newlineMode;
+        newlineMode = config.lastSerialOptions.newlineMode || 'crlf';
+        switchReceiveEncoding(config.lastSerialOptions.receiveEncoding, { persist: false });
+        switchReceiveMode(config.lastSerialOptions.receiveDisplayMode, { persist: false });
+        switchSendEncoding(config.lastSerialOptions.sendEncoding, { persist: false, refresh: false });
+        switchSendMode(config.lastSerialOptions.sendMode, { syncInput: false, persist: false, refresh: false });
+        switchSendAppendCrLf(config.lastSerialOptions.appendCrLf, { persist: false, refresh: false });
+        sendProfileChanged = previousSendProfileKey !== JSON.stringify([sendMode, sendEncoding, sendAppendCrLf]);
         
         // Refresh ports to update selection based on config
         refreshPorts();
     }
 
     applyMainInputConfig(config);
+    const hexSettingsKey = JSON.stringify(config.hexDisplaySettings || {});
+    if (appliedHexSettingsKey && appliedHexSettingsKey !== hexSettingsKey) hexFormatter.flush();
+    hexFormatter.configure(config.hexDisplaySettings || {});
+    appliedHexSettingsKey = hexSettingsKey;
+    const autoSendChanged = applyAutoSendConfig(config.autoSendSettings || {});
+    quickSendList = Array.isArray(config.quickSendList) ? config.quickSendList.map(normalizeQuickSendItem) : [];
+    renderQuickSendList();
+    updateQuickSendValidation();
+    if (sendProfileChanged || autoSendChanged) {
+        updateAutoSendValidation();
+        updateAutoSendState();
+    }
 
     // Preload shell profiles for the sidebar
     loadShellProfiles();
@@ -2098,6 +2452,9 @@ function applyConfig(config) {
     serialFitAddon.fit();
 
     fitWorkspaceTerminals();
+    } finally {
+        isApplyingConfig = false;
+    }
 }
 
 /*
@@ -2149,31 +2506,30 @@ serialTerm.onData((data) => {
     if (!isConnected) {
         return;
     }
-    ipcRenderer.send('serial-input', data);
-    serialTerm.write(data === '\r' ? '\r\n' : data);
+    if (sendMode === 'hex') {
+        setActionStatus(trFallback('main.hexUseInput', 'Hex mode: use the bottom input'));
+        return;
+    }
+    sendSerialRequest({
+        mode: 'text', content: data, encoding: sendEncoding, source: 'terminal',
+        terminalEnter: data === '\r', newlineMode
+    }, SEND_LIMITS.terminal).then(result => {
+        if (result.ok) serialTerm.write(data === '\r' ? '\r\n' : data);
+    });
 });
-ipcRenderer.on('serial-output', (event, data) => {
-    const lines = dataParser.parse(data);
-    
-    if (lines.length > 0) {
-        let mainOutput = '';
-        lines.forEach(lineObj => {
-            mainOutput += formatLineForTerminal(lineObj, null);
-        });
-        if (mainOutput) serialTerm.write(mainOutput);
-        if (mainOutput) writeMainTabLog(mainOutput);
-        
-        // Broadcast to filter tabs
-        filterTabs.forEach(tab => {
-            let tabOutput = '';
-            lines.forEach(lineObj => {
-                tabOutput += formatLineForTerminal(lineObj, tab.filterRegex);
-            });
-            if (tabOutput) {
-                tab.term.write(tabOutput);
-                writeFilterTabLog(tab, tabOutput);
-            }
-        });
+ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
+    if (serialConnectInProgress && Number.isInteger(payload.sessionId) && payload.sessionId !== serialSessionId) {
+        serialSessionId = payload.sessionId;
+    }
+    if (payload.sessionId !== undefined && payload.sessionId !== serialSessionId) return;
+    const bytes = payload.bytes instanceof Uint8Array ? payload.bytes : Uint8Array.from(payload.bytes || []);
+    if (!bytes.length) return;
+    if (receiveDisplayMode === 'hex') {
+        hexFormatter.push(bytes);
+    } else {
+        if (!textDecoder) createTextDecoder();
+        const text = textDecoder.write(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+        if (text) writeTextLines(dataParser.parse(text));
     }
 });
 ipcRenderer.on('serial-error', (event, err) => {
@@ -2284,11 +2640,16 @@ ipcRenderer.on('serial-throughput-update', (event, payload) => {
 
 function updateSerialConnectionState(connected) {
     isConnected = connected;
-    connectBtn.textContent = connected ? '❌ Disconnect' : '⚡ Connect';
-    setActionStatus(connected ? '串口已连接' : '串口已断开');
+    connectBtn.textContent = connected ? `X ${tr('main.disconnect')}` : `> ${tr('main.connect')}`;
+    setActionStatus(connected ? tr('main.connected') : tr('main.disconnected'));
 }
 
 ipcRenderer.on('serial-disconnected', (event, message) => {
+    serialSessionId++;
+    serialWriteChain = Promise.resolve();
+    if (receiveDisplayMode === 'hex') hexFormatter.flush();
+    else flushTextReceive();
+    stopAutoSendRuntime();
     updateSerialConnectionState(false);
     if (message) {
         const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
@@ -2385,10 +2746,10 @@ clearBtn.addEventListener('click', () => {
     if (!activeTabPane) return;
 
     if (activeTabPane.id === 'tab-main') {
+        if (receiveDisplayMode === 'hex') hexFormatter.reset({ resetOffset: false });
+        else resetTextReceive();
         serialTerm.clear();
         serialLineCounter = 1;
-        dataParser.isNewLine = true;
-        dataParser.incomingBuffer = '';
     } else {
         const filterTab = filterTabs.find(t => t.id === activeTabPane.id);
         if (filterTab) {
@@ -2405,7 +2766,12 @@ openLogFolderBtn.addEventListener('click', () => {
 });
 
 connectBtn.addEventListener('click', async () => {
+    if (serialConnectInProgress) return;
     if (isConnected) {
+        serialSessionId++;
+        serialWriteChain = Promise.resolve();
+        stopAutoSendRuntime();
+        updateSerialConnectionState(false);
         ipcRenderer.send('disconnect-serial');
     } else {
         const path = portSelect.value;
@@ -2413,20 +2779,25 @@ connectBtn.addEventListener('click', async () => {
         const dataBits = document.getElementById('data-bits-select').value;
         const stopBits = document.getElementById('stop-bits-select').value;
         const parity = document.getElementById('parity-select').value;
-        const encoding = document.getElementById('encoding-select').value;
-        const newlineMode = document.getElementById('newline-mode-select').value;
+        newlineMode = document.getElementById('newline-mode-select').value;
 
         if (!path) return;
+        serialConnectInProgress = true;
+        serialWriteChain = Promise.resolve();
+        hexFormatter.reset({ resetOffset: true });
+        resetTextReceive();
+        connectBtn.disabled = true;
         try {
-            await ipcRenderer.invoke('connect-serial', {
+            const connectResult = await ipcRenderer.invoke('connect-serial', {
                 path,
                 baudRate,
                 dataBits,
                 stopBits,
                 parity,
-                encoding,
+                sendEncoding,
                 newlineMode
             });
+            serialSessionId = Number.isInteger(connectResult?.sessionId) ? connectResult.sessionId : serialSessionId + 1;
 
             ipcRenderer.send('save-config', {
                 lastSerialOptions: {
@@ -2435,12 +2806,17 @@ connectBtn.addEventListener('click', async () => {
                     dataBits,
                     stopBits,
                     parity,
-                    encoding,
+                    receiveDisplayMode,
+                    receiveEncoding,
+                    sendMode,
+                    sendEncoding,
+                    appendCrLf: sendAppendCrLf,
                     newlineMode
                 }
             });
 
             updateSerialConnectionState(true);
+            updateAutoSendState();
 
             serialLineCounter = 1;
             serialNewLine = true;
@@ -2450,6 +2826,9 @@ connectBtn.addEventListener('click', async () => {
         } catch (err) {
             setActionStatus(`串口连接失败：${err}`);
             alert('Failed to connect: ' + err);
+        } finally {
+            serialConnectInProgress = false;
+            connectBtn.disabled = false;
         }
     }
 });
@@ -2656,47 +3035,121 @@ window.addEventListener('main-tab-changed', () => {
 // --- Auto Send & Quick Send Logic ---
 
 let autoSendTimer = null;
+let autoSendInFlight = false;
+let autoSendGeneration = 0;
+let appliedAutoSendKey = '';
 const autoSendEnableCb = document.getElementById('auto-send-enable');
 const autoSendIntervalInput = document.getElementById('auto-send-interval');
 const autoSendTextInput = document.getElementById('auto-send-text');
+const autoSendValidation = document.getElementById('auto-send-validation');
 
 const quickSendListEl = document.getElementById('quick-send-list');
 const quickSendLabelInput = document.getElementById('quick-send-label');
 const quickSendContentInput = document.getElementById('quick-send-content');
 const addQuickSendBtn = document.getElementById('add-quick-send-btn');
+const quickSendValidation = document.getElementById('quick-send-validation');
 
 let quickSendList = [];
 
-function updateAutoSendState() {
-    if (autoSendTimer) {
-        clearInterval(autoSendTimer);
-        autoSendTimer = null;
-    }
+function stopAutoSendRuntime() {
+    autoSendGeneration++;
+    if (autoSendTimer) clearTimeout(autoSendTimer);
+    autoSendTimer = null;
+    autoSendInFlight = false;
+}
 
-    if (autoSendEnableCb.checked) {
-        const interval = parseInt(autoSendIntervalInput.value) || 1000;
-        
-        if (interval > 0) {
-            autoSendTimer = setInterval(() => {
-                if (isConnected) {
-                    const text = autoSendTextInput.value;
-                    if (text) {
-                        ipcRenderer.send('serial-input', text);
-                    }
-                }
-            }, interval);
-        }
+function getAutoSendRequest() {
+    return {
+        mode: sendMode, content: autoSendTextInput.value,
+        encoding: sendEncoding, appendCrLf: sendAppendCrLf,
+        source: 'auto-send'
+    };
+}
+
+function updateAutoSendValidation() {
+    const request = getAutoSendRequest();
+    const result = validateSendContent(request.mode, request.content, request.encoding, SEND_LIMITS.auto - (request.appendCrLf ? 2 : 0));
+    autoSendValidation.textContent = formatValidation(result, request.mode, request.appendCrLf);
+    autoSendValidation.classList.toggle('valid', result.ok);
+    autoSendValidation.classList.toggle('invalid', !result.ok && request.content.length > 0);
+    autoSendEnableCb.disabled = !result.ok;
+    autoSendTextInput.placeholder = request.mode === 'hex' ? 'AA 55 01 FF' : tr('main.autoSendText');
+    if (!result.ok && autoSendEnableCb.checked) {
+        autoSendEnableCb.checked = false;
+        stopAutoSendRuntime();
+    }
+    return result;
+}
+
+async function runAutoSendTick() {
+    if (!autoSendEnableCb.checked || autoSendInFlight) return;
+    const generation = autoSendGeneration;
+    const interval = Math.max(10, Number.parseInt(autoSendIntervalInput.value, 10) || 1000);
+    if (!isConnected) {
+        autoSendValidation.textContent = trFallback('main.autoSendWaiting', 'Waiting for serial connection');
+        autoSendTimer = setTimeout(() => {
+            if (generation === autoSendGeneration) runAutoSendTick();
+        }, interval);
+        return;
+    }
+    const request = getAutoSendRequest();
+    if (!updateAutoSendValidation().ok) return;
+    autoSendInFlight = true;
+    const result = await sendSerialRequest(request, SEND_LIMITS.auto, { silent: true });
+    if (generation !== autoSendGeneration) return;
+    autoSendInFlight = false;
+    if (!result.ok) {
+        autoSendEnableCb.checked = false;
+        stopAutoSendRuntime();
+        setActionStatus(trFallback('main.autoSendStopped', 'Auto send stopped: {error}', { error: result.message || result.code }));
+        saveAutoSendSettings();
+        return;
+    }
+    autoSendValidation.textContent = trFallback('main.bytesSent', 'Sent {count} bytes', { count: result.bytesWritten });
+    autoSendTimer = setTimeout(() => {
+        if (generation === autoSendGeneration) runAutoSendTick();
+    }, interval);
+}
+
+function updateAutoSendState() {
+    stopAutoSendRuntime();
+    if (autoSendEnableCb.checked && updateAutoSendValidation().ok) {
+        const generation = autoSendGeneration;
+        const interval = Math.max(10, Number.parseInt(autoSendIntervalInput.value, 10) || 1000);
+        autoSendTimer = setTimeout(() => {
+            if (generation === autoSendGeneration) runAutoSendTick();
+        }, interval);
     }
 }
 
 function saveAutoSendSettings() {
-    ipcRenderer.send('save-config', {
-        autoSendSettings: {
-            enabled: autoSendEnableCb.checked,
-            interval: autoSendIntervalInput.value,
-            text: autoSendTextInput.value
-        }
-    });
+    if (isApplyingConfig) return;
+    const autoSendSettings = getAutoSendSettings();
+    appliedAutoSendKey = JSON.stringify(autoSendSettings);
+    ipcRenderer.send('save-config', { autoSendSettings });
+}
+
+function getAutoSendSettings() {
+    return {
+        enabled: autoSendEnableCb.checked,
+        interval: Math.max(10, Number.parseInt(autoSendIntervalInput.value, 10) || 1000),
+        content: autoSendTextInput.value
+    };
+}
+
+function applyAutoSendConfig(settings) {
+    const normalized = {
+        enabled: settings.enabled === true,
+        interval: Math.max(10, Number(settings.interval) || 1000),
+        content: settings.content || ''
+    };
+    const settingsKey = JSON.stringify(normalized);
+    if (settingsKey === appliedAutoSendKey) return false;
+    appliedAutoSendKey = settingsKey;
+    autoSendEnableCb.checked = normalized.enabled;
+    autoSendIntervalInput.value = normalized.interval;
+    autoSendTextInput.value = normalized.content;
+    return true;
 }
 
 autoSendEnableCb.addEventListener('change', () => {
@@ -2705,18 +3158,45 @@ autoSendEnableCb.addEventListener('change', () => {
 });
 
 autoSendIntervalInput.addEventListener('change', () => {
+    autoSendIntervalInput.value = Math.max(10, Number.parseInt(autoSendIntervalInput.value, 10) || 1000);
     updateAutoSendState();
     saveAutoSendSettings();
 });
-
-// Only save on blur to avoid frequent config saves while typing
+autoSendTextInput.addEventListener('input', updateAutoSendValidation);
 autoSendTextInput.addEventListener('blur', saveAutoSendSettings);
-
-// We don't need an input listener for text because the timer reads the value dynamically
-
-
 let editingIndex = -1;
 let draggedQuickSendIndex = -1;
+
+function createQuickSendId() {
+    return `quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeQuickSendItem(item = {}) {
+    return {
+        id: typeof item.id === 'string' && item.id ? item.id : createQuickSendId(),
+        label: typeof item.label === 'string' ? item.label : '',
+        content: typeof item.content === 'string' ? item.content : ''
+    };
+}
+
+function getQuickEditorItem() {
+    return normalizeQuickSendItem({
+        id: editingIndex >= 0 ? quickSendList[editingIndex]?.id : createQuickSendId(),
+        label: quickSendLabelInput.value.trim(),
+        content: quickSendContentInput.value
+    });
+}
+
+function updateQuickSendValidation() {
+    const item = getQuickEditorItem();
+    const result = validateSendContent(sendMode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
+    quickSendValidation.textContent = formatValidation(result, sendMode, sendAppendCrLf);
+    quickSendValidation.classList.toggle('valid', result.ok);
+    quickSendValidation.classList.toggle('invalid', !result.ok && item.content.length > 0);
+    addQuickSendBtn.disabled = !result.ok;
+    quickSendContentInput.placeholder = sendMode === 'hex' ? 'AA 55 01 FF' : tr('main.contentMultiLine');
+    return result;
+}
 
 function moveQuickSendItem(fromIndex, toIndex) {
     if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= quickSendList.length || toIndex >= quickSendList.length) {
@@ -2788,17 +3268,17 @@ function renderQuickSendList() {
         });
 
         const btn = document.createElement('button');
-        btn.textContent = item.label || item.content;
-        btn.title = `Send: ${item.content}`;
+        const label = document.createElement('span');
+        label.textContent = item.label || item.content;
+        label.style.overflow = 'hidden';
+        label.style.textOverflow = 'ellipsis';
+        const validation = validateSendContent(sendMode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
+        btn.title = validation.ok ? `${validation.normalized} (${validation.byteCount + (sendAppendCrLf ? 2 : 0)} B)` : validation.message;
         btn.className = 'quick-send-main-btn';
+        btn.append(label);
         
-        btn.addEventListener('click', () => {
-            if (isConnected) {
-                ipcRenderer.send('serial-input', item.content);
-                setActionStatus(`已发送快捷指令：${item.label || item.content}`);
-            } else {
-                setActionStatus('快捷发送失败：串口未连接');
-            }
+        btn.addEventListener('click', async () => {
+            await sendSerialRequest({ content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
         });
         
         // Action buttons container (vertical stack)
@@ -2813,8 +3293,9 @@ function renderQuickSendList() {
             editingIndex = index;
             quickSendLabelInput.value = item.label || '';
             quickSendContentInput.value = item.content || '';
-            addQuickSendBtn.textContent = 'Update Item';
+            addQuickSendBtn.textContent = trFallback('main.updateItem', 'Update Item');
             addQuickSendBtn.classList.remove('secondary'); // Make it primary color to indicate action
+            updateQuickSendValidation();
             renderQuickSendList();
             setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
         });
@@ -2853,54 +3334,30 @@ function renderQuickSendList() {
 }
 
 function saveQuickSendList() {
+    if (isApplyingConfig) return;
     ipcRenderer.send('save-config', {
-        quickSendList: quickSendList
+        quickSendList: quickSendList.map(normalizeQuickSendItem)
     });
 }
 
 addQuickSendBtn.addEventListener('click', () => {
-    const label = quickSendLabelInput.value.trim();
-    const content = quickSendContentInput.value;
-    
-    if (content) {
+    const item = getQuickEditorItem();
+    if (updateQuickSendValidation().ok) {
         if (editingIndex > -1) {
-            // Update existing item
-            quickSendList[editingIndex] = { label, content };
+            quickSendList[editingIndex] = item;
             editingIndex = -1;
-            addQuickSendBtn.textContent = '+ Add to List';
+            addQuickSendBtn.textContent = tr('main.addToList');
             addQuickSendBtn.classList.add('secondary');
-            setActionStatus(`已更新快捷指令：${label || content}`);
         } else {
-            // Add new item
-            quickSendList.push({ label, content });
-            setActionStatus(`已新增快捷指令：${label || content}`);
+            quickSendList.push(item);
         }
         
         quickSendLabelInput.value = '';
         quickSendContentInput.value = '';
         renderQuickSendList();
         saveQuickSendList();
+        updateQuickSendValidation();
     }
 });
-
-// Update applyConfig to load these settings
-const originalApplyConfig = applyConfig;
-applyConfig = function(config) {
-    originalApplyConfig(config);
-    
-    // Auto Send Settings
-    if (config.autoSendSettings) {
-        autoSendEnableCb.checked = config.autoSendSettings.enabled || false;
-        autoSendIntervalInput.value = config.autoSendSettings.interval || 1000;
-        autoSendTextInput.value = config.autoSendSettings.text || '';
-        
-        // Only update runtime state, do not save back to config
-        updateAutoSendState(); 
-    }
-    
-    // Quick Send List
-    if (config.quickSendList) {
-        quickSendList = config.quickSendList;
-        renderQuickSendList();
-    }
-};
+quickSendContentInput.addEventListener('input', updateQuickSendValidation);
+updateQuickSendValidation();

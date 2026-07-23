@@ -25,6 +25,11 @@ const elements = {
   scrollbackLimit: document.getElementById('scrollbackLimit'),
   historyBufferSize: document.getElementById('historyBufferSize'),
   mouseWheelScrollLines: document.getElementById('mouseWheelScrollLines'),
+  hexBytesPerLine: document.getElementById('hexBytesPerLine'),
+  hexShowOffset: document.getElementById('hexShowOffset'),
+  hexShowAscii: document.getElementById('hexShowAscii'),
+  hexUppercase: document.getElementById('hexUppercase'),
+  hexIdleFlushMs: document.getElementById('hexIdleFlushMs'),
 
   highlightRulesList: document.getElementById('highlight-rules-list'),
   addRuleBtn: document.getElementById('add-rule-btn'),
@@ -36,6 +41,8 @@ const elements = {
   logPath: document.getElementById('logPath'),
   logFileNameFormat: document.getElementById('logFileNameFormat'),
   logEncoding: document.getElementById('logEncoding'),
+  saveRawSerialToFile: document.getElementById('saveRawSerialToFile'),
+  rawLogFileNameFormat: document.getElementById('rawLogFileNameFormat'),
   browseBtn: document.getElementById('browse-btn'),
   
   saveBtn: document.getElementById('save-btn'),
@@ -57,6 +64,36 @@ const elements = {
 
 let shellProfiles = [];
 let defaultShellProfileName = '';
+
+const DEFAULT_HEX_DISPLAY_SETTINGS = {
+    bytesPerLine: 16,
+    showOffset: true,
+    showAscii: true,
+    uppercase: true,
+    idleFlushMs: 50
+};
+const DEFAULT_RAW_LOG_FILE_NAME_FORMAT = 'raw_%Y-%m-%d_%H-%M-%S.bin';
+
+function normalizeHexDisplaySettings(settings = {}) {
+    const bytesPerLine = Number.parseInt(settings.bytesPerLine, 10);
+    const idleFlushMs = Number.parseInt(settings.idleFlushMs, 10);
+    return {
+        bytesPerLine: [8, 16, 24, 32].includes(bytesPerLine) ? bytesPerLine : DEFAULT_HEX_DISPLAY_SETTINGS.bytesPerLine,
+        showOffset: typeof settings.showOffset === 'boolean' ? settings.showOffset : DEFAULT_HEX_DISPLAY_SETTINGS.showOffset,
+        showAscii: typeof settings.showAscii === 'boolean' ? settings.showAscii : DEFAULT_HEX_DISPLAY_SETTINGS.showAscii,
+        uppercase: typeof settings.uppercase === 'boolean' ? settings.uppercase : DEFAULT_HEX_DISPLAY_SETTINGS.uppercase,
+        idleFlushMs: Number.isFinite(idleFlushMs) ? Math.min(1000, Math.max(0, idleFlushMs)) : DEFAULT_HEX_DISPLAY_SETTINGS.idleFlushMs
+    };
+}
+
+function normalizeRawLogFileNameFormat(value) {
+    let fileName = String(value || '').trim() || DEFAULT_RAW_LOG_FILE_NAME_FORMAT;
+    fileName = fileName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+    if (!/\.bin$/i.test(fileName)) {
+        fileName = fileName.replace(/\.[^.]+$/, '') + '.bin';
+    }
+    return fileName;
+}
 
 function applyPrefsI18n() {
     document.title = tr('prefsTitle');
@@ -277,12 +314,21 @@ async function init() {
   elements.historyBufferSize.value = config.historyBufferSize || 5000000;
   elements.mouseWheelScrollLines.value = config.mouseWheelScrollLines || 3;
 
+  const hexDisplaySettings = normalizeHexDisplaySettings(config.hexDisplaySettings);
+  elements.hexBytesPerLine.value = String(hexDisplaySettings.bytesPerLine);
+  elements.hexShowOffset.checked = hexDisplaySettings.showOffset;
+  elements.hexShowAscii.checked = hexDisplaySettings.showAscii;
+  elements.hexUppercase.checked = hexDisplaySettings.uppercase;
+  elements.hexIdleFlushMs.value = String(hexDisplaySettings.idleFlushMs);
+
   elements.logEnabled.checked = config.logEnabled;
     elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
     elements.stripAnsiInLog.checked = config.stripAnsiInLog !== false;
   elements.logPath.value = config.logPath;
   elements.logFileNameFormat.value = config.logFileNameFormat;
   elements.logEncoding.value = config.logEncoding;
+  elements.saveRawSerialToFile.checked = config.saveRawSerialToFile === true;
+  elements.rawLogFileNameFormat.value = normalizeRawLogFileNameFormat(config.rawLogFileNameFormat);
   
   toggleLogSettings(config.logEnabled);
 
@@ -451,6 +497,15 @@ elements.foreground.oninput = (e) => elements.foregroundHex.textContent = e.targ
 elements.background.oninput = (e) => elements.backgroundHex.textContent = e.target.value;
 elements.timestampColor.oninput = (e) => elements.timestampColorHex.textContent = e.target.value;
 elements.lineNoColor.oninput = (e) => elements.lineNoColorHex.textContent = e.target.value;
+elements.hexIdleFlushMs.onchange = () => {
+    elements.hexIdleFlushMs.value = String(normalizeHexDisplaySettings({
+        ...DEFAULT_HEX_DISPLAY_SETTINGS,
+        idleFlushMs: elements.hexIdleFlushMs.value
+    }).idleFlushMs);
+};
+elements.rawLogFileNameFormat.onchange = () => {
+    elements.rawLogFileNameFormat.value = normalizeRawLogFileNameFormat(elements.rawLogFileNameFormat.value);
+};
 
 elements.browseBtn.onclick = async () => {
   const path = await ipcRenderer.invoke('select-directory');
@@ -459,11 +514,20 @@ elements.browseBtn.onclick = async () => {
   }
 };
 
-elements.saveBtn.onclick = () => {
+elements.saveBtn.onclick = async () => {
   const rules = [];
   Array.from(elements.highlightRulesList.children).forEach(div => {
       rules.push(div.getRuleData());
   });
+
+  const hexDisplaySettings = normalizeHexDisplaySettings({
+      bytesPerLine: elements.hexBytesPerLine.value,
+      showOffset: elements.hexShowOffset.checked,
+      showAscii: elements.hexShowAscii.checked,
+      uppercase: elements.hexUppercase.checked,
+      idleFlushMs: elements.hexIdleFlushMs.value
+  });
+  const rawLogFileNameFormat = normalizeRawLogFileNameFormat(elements.rawLogFileNameFormat.value);
 
   const config = {
         language: elements.languageSelect.value,
@@ -477,18 +541,25 @@ elements.saveBtn.onclick = () => {
     scrollbackLimit: parseInt(elements.scrollbackLimit.value) || 100000,
     historyBufferSize: parseInt(elements.historyBufferSize.value) || 5000000,
     mouseWheelScrollLines: parseInt(elements.mouseWheelScrollLines.value) || 3,
+    hexDisplaySettings,
     logEnabled: elements.logEnabled.checked,
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,
     stripAnsiInLog: elements.stripAnsiInLog.checked,
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,
+    saveRawSerialToFile: elements.saveRawSerialToFile.checked,
+    rawLogFileNameFormat,
     highlightRules: rules,
     shellProfiles,
     defaultShellProfile: defaultShellProfileName
   };
-  ipcRenderer.send('save-config', config);
-  window.close();
+  try {
+    await ipcRenderer.invoke('save-config-request', config);
+    window.close();
+  } catch (error) {
+    alert(error?.message || String(error));
+  }
 };
 
 elements.cancelBtn.onclick = () => {
