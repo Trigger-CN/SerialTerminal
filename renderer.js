@@ -651,8 +651,7 @@ function locateInMainTerminalByLineNumber(lineNo) {
     searchCase.checked = true;
     searchWord.checked = false;
     resetSearchState();
-    refreshSearchCount({ force: true });
-    serialSearchAddon.findNext(searchText, getSearchOptions());
+    selectFirstSearchResult({ force: true });
     return true;
 }
 
@@ -663,7 +662,7 @@ function setSearchFromText(text) {
     }
     searchInput.value = text;
     resetSearchState();
-    refreshSearchCount({ force: true });
+    selectFirstSearchResult({ force: true });
 }
 
 function clearTerminalByTabId(tabId) {
@@ -2912,7 +2911,8 @@ const searchState = {
     key: '',
     total: 0,
     current: 0,
-    regexError: ''
+    regexError: '',
+    matches: []
 };
 
 function getActiveSearchTarget() {
@@ -2968,6 +2968,11 @@ function setSearchButtonsEnabled(enabled) {
 function clearSearchDecorations(addon) {
     if (typeof addon?.clearDecorations === 'function') addon.clearDecorations();
     else if (typeof addon?.clearActiveDecoration === 'function') addon.clearActiveDecoration();
+}
+
+function clearSearchSelection(target = getActiveSearchTarget()) {
+    clearSearchDecorations(target.addon);
+    if (typeof target.term?.clearSelection === 'function') target.term.clearSelection();
 }
 
 function updateSearchResultCount(current = 0, resultCount = 0, regexError = '') {
@@ -3060,18 +3065,21 @@ function refreshSearchCount({ force = false } = {}) {
 
     const term = target.term;
     const bufferLines = term.buffer.active.length;
-    let total = 0;
+    const matches = [];
     for (let i = 0; i < bufferLines; i++) {
         const line = term.buffer.active.getLine(i);
         const text = line ? line.translateToString(true) : '';
         regex.lastIndex = 0;
-        const matches = text.match(regex);
-        if (matches) {
-            total += matches.length;
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+            const value = match[0] || '';
+            matches.push({ line: i, column: match.index, length: Math.max(1, value.length) });
+            if (value.length === 0) regex.lastIndex++;
         }
     }
 
-    searchState.total = total;
+    searchState.matches = matches;
+    searchState.total = matches.length;
     if (!searchState.total) {
         searchState.current = 0;
         updateSearchResultCount(0, 0);
@@ -3085,9 +3093,21 @@ function refreshSearchCount({ force = false } = {}) {
     return searchState;
 }
 
-function scheduleSearchCount() {
+function selectFirstSearchResult({ force = true } = {}) {
     clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => refreshSearchCount({ force: true }), 200);
+    const state = refreshSearchCount({ force });
+    clearSearchSelection();
+    if (!searchInput.value || state.regexError || !state.total) {
+        searchState.current = 0;
+        updateSearchResultCount(0, state.total, state.regexError);
+        return false;
+    }
+    return selectSearchMatch(1);
+}
+
+function scheduleSearchSelection() {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => selectFirstSearchResult({ force: true }), 200);
 }
 
 function resetSearchState() {
@@ -3095,6 +3115,26 @@ function resetSearchState() {
     searchState.total = 0;
     searchState.current = 0;
     searchState.regexError = '';
+    searchState.matches = [];
+}
+
+function selectSearchMatch(index) {
+    const target = getActiveSearchTarget();
+    if (!searchState.total || index < 1 || index > searchState.total) {
+        clearSearchSelection(target);
+        return false;
+    }
+    const match = searchState.matches[index - 1];
+    if (!match) return false;
+    if (typeof target.term.scrollToLine === 'function') {
+        target.term.scrollToLine(match.line);
+    }
+    if (typeof target.term.select === 'function') {
+        target.term.select(match.column, match.line, match.length);
+    }
+    searchState.current = index;
+    updateSearchResultCount(searchState.current, searchState.total);
+    return true;
 }
 
 function getSearchOptions() {
@@ -3107,25 +3147,17 @@ function getSearchOptions() {
 }
 
 findNextBtn.addEventListener('click', () => {
-    const { addon } = getActiveSearchTarget();
     refreshSearchCount();
     if (searchState.regexError || !searchState.total) return;
-    const found = addon.findNext(searchInput.value, getSearchOptions());
-    if (found && searchState.total > 0) {
-        searchState.current = searchState.current >= searchState.total ? 1 : searchState.current + 1;
-        updateSearchResultCount(searchState.current, searchState.total);
-    }
+    const nextIndex = searchState.current >= searchState.total ? 1 : searchState.current + 1;
+    selectSearchMatch(nextIndex);
 });
 
 findPrevBtn.addEventListener('click', () => {
-    const { addon } = getActiveSearchTarget();
     refreshSearchCount();
     if (searchState.regexError || !searchState.total) return;
-    const found = addon.findPrevious(searchInput.value, getSearchOptions());
-    if (found && searchState.total > 0) {
-        searchState.current = searchState.current <= 1 ? searchState.total : searchState.current - 1;
-        updateSearchResultCount(searchState.current, searchState.total);
-    }
+    const previousIndex = searchState.current <= 1 ? searchState.total : searchState.current - 1;
+    selectSearchMatch(previousIndex);
 });
 
 searchInput.addEventListener('keydown', (e) => {
@@ -3142,11 +3174,11 @@ searchInput.addEventListener('input', () => {
     resetSearchState();
     if (!searchInput.value) {
         clearTimeout(searchDebounceTimer);
-        clearSearchDecorations(getActiveSearchTarget().addon);
+        clearSearchSelection();
         updateSearchResultCount(0, 0);
         return;
     }
-    scheduleSearchCount();
+    scheduleSearchSelection();
 });
 
 [searchRegex, searchCase, searchWord].forEach(control => {
@@ -3156,7 +3188,7 @@ searchInput.addEventListener('input', () => {
             updateSearchResultCount(0, 0);
             return;
         }
-        scheduleSearchCount();
+        selectFirstSearchResult({ force: true });
     });
 });
 
@@ -3167,7 +3199,7 @@ window.addEventListener('main-tab-changed', () => {
         updateSearchResultCount(0, 0);
         return;
     }
-    scheduleSearchCount();
+    scheduleSearchSelection();
 });
 
 updateSearchTargetLabel();

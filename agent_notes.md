@@ -433,7 +433,7 @@ npm run dist:linux
 - 串口主操作按钮按动作显示状态色：未连接时“连接”为浅绿色，已连接时“断开”为浅红色；连接成功、主动断开和异常掉线统一通过 `updateSerialConnectionState()` 切换 class，并同步更新 `#connect-btn-label` 的文本与 `data-i18n` key，以保留按钮原有 emoji 且防止语言刷新覆盖当前状态
 - 快捷发送条目的编辑/删除按钮位于条目右侧悬浮层，仅在 hover、条目内 focus 或编辑状态显示；两个操作横向排列且不常驻占用标签宽度
 - 快捷发送列表下方只保留添加按钮；新增和编辑共用页面内模态框，支持取消、右上角关闭、点击遮罩和 Escape 关闭，内容校验继续使用当前共享 TX profile
-- 搜索页显示当前搜索目标；搜索计数使用 query/options/target/buffer 版本缓存并对输入做 200ms debounce，Prev/Next 不再每次全量扫描。无效正则会显示独立错误提示并禁用搜索按钮；清空输入时尝试清除 search addon decorations
+- 搜索页显示当前搜索目标；搜索计数使用 query/options/target/buffer 版本缓存并对输入做 200ms debounce。搜索会维护自己的匹配数组（buffer 行、列、长度），Prev/Next 直接按该数组 `scrollToLine()` + `select()`，不再依赖 search addon 的 active match 状态。查询、目标或 Regex/大小写/整词选项变化后会清理旧高亮并重新定位新结果集的首个匹配；无效正则会显示独立错误提示并禁用搜索按钮；清空输入时尝试清除 search addon decorations
 - 连接建立期间若设备立即上报数据，renderer 会先接纳新 `sessionId` 再处理首批 RX，避免打开串口后的 banner 被旧 session 过滤
 - 断开、重连和开始新连接时会切换到新的写队列；旧驱动回调即使悬挂，也不会阻塞新连接发送
 - 清空 Text RX 会丢弃 decoder 和 parser 中尚未完成的数据，避免清空前的半个多字节字符出现在清空后的终端
