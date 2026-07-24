@@ -131,6 +131,7 @@ SerialTerminal/
 - 字体加载
 - 配置保存 / 恢复默认
 - 更新状态展示
+- About 页 QQ 群二维码展示（`assets/Snipaste_2026-07-24_16-14-14.png`），用于问题反馈和需求建议
 - Shell Profiles 标签页的 CRUD 编辑界面
 - 日志文件名格式（含扩展名）配置，不再单独设置后缀
 - Hex dump 设置和 RX 原始 `.bin` 日志设置的回填、归一化与保存

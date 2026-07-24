@@ -124,6 +124,45 @@
             text-align: right;
             word-break: break-all;
         }
+
+        .qq-feedback-card {
+            margin-top: 14px;
+            background: var(--bg-primary);
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+
+        .qq-feedback-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .qq-feedback-title {
+            margin: 0 0 6px;
+            font-size: 15px;
+            color: var(--text-primary);
+        }
+
+        .qq-feedback-desc {
+            margin: 0;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .qq-feedback-qr {
+            width: 116px;
+            height: 116px;
+            flex: 0 0 auto;
+            border-radius: 6px;
+            background: #fff;
+            padding: 6px;
+            object-fit: contain;
+        }
         
         a {
             color: var(--accent-color);
@@ -391,6 +430,14 @@
                         <span class="about-label" data-i18n="prefs.github">GitHub</span>
                         <span class="about-value"><a href="#" id="app-github" data-i18n="common.loading">Loading...</a></span>
                     </div>
+                </div>
+
+                <div class="qq-feedback-card">
+                    <div class="qq-feedback-text">
+                        <h3 class="qq-feedback-title" data-i18n="prefs.qqGroup">QQ Group</h3>
+                        <p class="qq-feedback-desc" data-i18n="prefs.qqGroupFeedback">Scan the QR code to join the QQ group. Feedback and feature requests are welcome.</p>
+                    </div>
+                    <img class="qq-feedback-qr" src="assets/Snipaste_2026-07-24_16-14-14.png" alt="QQ group QR code" data-i18n-alt="prefs.qqGroupQrAlt">
                 </div>
 
                 <div style="margin-top: 20px; padding: 15px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);">

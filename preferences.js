@@ -114,6 +114,10 @@ function applyPrefsI18n() {
         el.placeholder = tr(el.dataset.i18nPlaceholder);
     });
 
+    document.querySelectorAll('[data-i18n-alt]').forEach(el => {
+        el.alt = tr(el.dataset.i18nAlt);
+    });
+
     if (elements.addRuleBtn) elements.addRuleBtn.textContent = tr('prefs.addRule');
     if (elements.checkUpdateBtn) elements.checkUpdateBtn.textContent = tr('prefs.checkForUpdates');
     if (elements.restartInstallBtn) elements.restartInstallBtn.textContent = tr('prefs.restartInstall');
