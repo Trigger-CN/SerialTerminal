@@ -41,6 +41,8 @@ const elements = {
   logPath: document.getElementById('logPath'),
   logFileNameFormat: document.getElementById('logFileNameFormat'),
   logEncoding: document.getElementById('logEncoding'),
+  logIncludeTimestamp: document.getElementById('logIncludeTimestamp'),
+  logIncludeLineNumbers: document.getElementById('logIncludeLineNumbers'),
   rawBufferAutoFlushMB: document.getElementById('rawBufferAutoFlushMB'),
   saveRawSerialToFile: document.getElementById('saveRawSerialToFile'),
   rawLogFileNameFormat: document.getElementById('rawLogFileNameFormat'),
@@ -333,6 +335,8 @@ async function init() {
   elements.logPath.value = config.logPath;
   elements.logFileNameFormat.value = config.logFileNameFormat;
   elements.logEncoding.value = config.logEncoding;
+  elements.logIncludeTimestamp.checked = config.logIncludeTimestamp === true;
+  elements.logIncludeLineNumbers.checked = config.logIncludeLineNumbers === true;
   elements.rawBufferAutoFlushMB.value = String(normalizeLogAutoFlushMB(config.rawBufferAutoFlushMB));
   elements.saveRawSerialToFile.checked = config.saveRawSerialToFile === true;
   elements.rawLogFileNameFormat.value = normalizeRawLogFileNameFormat(config.rawLogFileNameFormat);
@@ -558,6 +562,8 @@ elements.saveBtn.onclick = async () => {
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,
+    logIncludeTimestamp: elements.logIncludeTimestamp.checked,
+    logIncludeLineNumbers: elements.logIncludeLineNumbers.checked,
     rawBufferAutoFlushMB: normalizeLogAutoFlushMB(elements.rawBufferAutoFlushMB.value),
     saveRawSerialToFile: elements.saveRawSerialToFile.checked,
     rawLogFileNameFormat,

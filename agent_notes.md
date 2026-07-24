@@ -433,6 +433,7 @@ npm run dist:linux
 - 串口主操作按钮按动作显示状态色：未连接时“连接”为浅绿色，已连接时“断开”为浅红色；连接成功、主动断开和异常掉线统一通过 `updateSerialConnectionState()` 切换 class，并同步更新 `#connect-btn-label` 的文本与 `data-i18n` key，以保留按钮原有 emoji 且防止语言刷新覆盖当前状态
 - 快捷发送条目的编辑/删除按钮位于条目右侧悬浮层，仅在 hover、条目内 focus 或编辑状态显示；两个操作横向排列且不常驻占用标签宽度
 - 快捷发送列表下方只保留添加按钮；新增和编辑共用页面内模态框，支持取消、右上角关闭、点击遮罩和 Escape 关闭，内容校验继续使用当前共享 TX profile
+- 搜索页显示当前搜索目标；搜索计数使用 query/options/target/buffer 版本缓存并对输入做 200ms debounce，Prev/Next 不再每次全量扫描。无效正则会显示独立错误提示并禁用搜索按钮；清空输入时尝试清除 search addon decorations
 - 连接建立期间若设备立即上报数据，renderer 会先接纳新 `sessionId` 再处理首批 RX，避免打开串口后的 banner 被旧 session 过滤
 - 断开、重连和开始新连接时会切换到新的写队列；旧驱动回调即使悬挂，也不会阻塞新连接发送
 - 清空 Text RX 会丢弃 decoder 和 parser 中尚未完成的数据，避免清空前的半个多字节字符出现在清空后的终端
@@ -543,6 +544,7 @@ Hex 相关配置结构：
 - `rawBufferAutoFlushMB` 现在作为通用日志缓存刷盘阈值暴露在设置中，默认 10 MB、范围 1-1024 MB；普通主日志、标签页日志和 Raw `.bin` 均达到该字节阈值后写盘，主日志路径在本次日志会话内缓存，避免长时间自动刷盘生成碎片文件
 - 日志每 5 秒静默刷盘一次，降低异常退出时的丢失窗口；定时刷盘只 flush 不关闭标签页日志条目，断开/退出/手动 flush 才关闭条目
 - 文本日志、标签页日志和 Raw 日志写盘失败会通过 `log-error` 通知 renderer；同一错误去重提示，成功写盘后清除错误状态。若持续失败且缓存已达到阈值，会暂停继续缓存该类日志以保护内存
+- `logIncludeTimestamp` / `logIncludeLineNumbers` 是独立日志前缀设置，不依赖终端显示时间戳/行号；renderer 为每个接收行生成一次日志前缀并复用于主日志和过滤日志，避免行号因多处写日志重复递增。Raw `.bin` 不写入这些前缀
 - raw 日志是独立路径，仅在 `saveRawSerialToFile` 启用时记录 `port.on('data')` 的 RX Buffer；不包含 TX、连接/断开提示、错误提示或 Hex 文本
 - `rawBinaryBuffers` + `rawBinaryByteCount` 达到 `rawBufferAutoFlushMB` 阈值时 `Buffer.concat()` 后同步追加；断开和应用退出也会 flush
 - `ensureRawBinaryLogPath()` 在本次连接首次写入时生成并缓存路径，重名时使用 `_2`、`_3`；文件名会清理非法字符并强制 `.bin`

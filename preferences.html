@@ -312,6 +312,16 @@
                     <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logAutoFlushHelp">Text, tab, and raw logs are flushed to disk when this cache size is reached.</small>
                 </div>
 
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="logIncludeTimestamp"> <span data-i18n="prefs.logIncludeTimestamp">Save timestamps in text logs</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="logIncludeLineNumbers"> <span data-i18n="prefs.logIncludeLineNumbers">Save line numbers in text logs</span>
+                    </label>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logPrefixHelp">These prefixes affect text log files only. Raw .bin logs remain unchanged.</small>
+                </div>
+
                 <h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 16px;" data-i18n="prefs.rawBinaryLogging">Raw RX Binary Logging</h3>
                 <div class="form-group">
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">

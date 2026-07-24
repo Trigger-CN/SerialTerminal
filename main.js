@@ -134,6 +134,8 @@ function normalizeConfig(config, defaults) {
       }))
     : [];
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
+  normalized.logIncludeTimestamp = normalizeBoolean(source.logIncludeTimestamp, false);
+  normalized.logIncludeLineNumbers = normalizeBoolean(source.logIncludeLineNumbers, false);
   const rawBufferAutoFlushMB = Number(source.rawBufferAutoFlushMB);
   normalized.rawBufferAutoFlushMB = Number.isFinite(rawBufferAutoFlushMB)
     ? Math.min(1024, Math.max(1, rawBufferAutoFlushMB))
@@ -162,6 +164,8 @@ function loadConfig() {
     lineNoColor: '#ffff00',
     logEnabled: false,
     saveAllTabsLogToFiles: false,
+    logIncludeTimestamp: false,
+    logIncludeLineNumbers: false,
     rawBufferAutoFlushMB: 10,
     saveRawSerialToFile: false,
     rawLogFileNameFormat: 'raw_%Y-%m-%d_%H-%M-%S.bin',

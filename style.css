@@ -223,6 +223,16 @@ label:hover {
     align-items: center;
 }
 
+.search-target-label {
+    min-height: 16px;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Quick Send List Styling */
 .quick-send-item {
     position: relative;

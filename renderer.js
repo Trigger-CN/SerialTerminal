@@ -31,6 +31,9 @@ let serialConnectInProgress = false;
 let showTimestamp = false;
 let showLineNumbers = false;
 let serialLineCounter = 1;
+let logIncludeTimestamp = false;
+let logIncludeLineNumbers = false;
+let logLineCounter = 1;
 let serialNewLine = true;
 let lastCharWasCR = false;
 
@@ -188,6 +191,20 @@ function getPrefix() {
         const color = hexToAnsi(lineNoColor);
         s += `${color}[${lineNo}]${reset} `;
         serialLineCounter++;
+    }
+    return s;
+}
+
+function getLogPrefix() {
+    let s = '';
+    if (logIncludeTimestamp) {
+        const now = new Date();
+        const time = now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        s += `[${time}] `;
+    }
+    if (logIncludeLineNumbers) {
+        s += `[${String(logLineCounter).padStart(4, '0')}] `;
+        logLineCounter++;
     }
     return s;
 }
@@ -373,17 +390,18 @@ const dataParser = new SerialDataParser();
 
 function writeTextLines(lines) {
     if (!lines.length) return;
+    const logLines = lines.map(line => ({ line, prefix: getLogPrefix() }));
     const mainOutput = lines.map(line => formatLineForTerminal(line)).join('');
     if (mainOutput) {
         serialTerm.write(mainOutput);
-        writeMainTabLog(mainOutput);
+        writeMainTabLog(logLines.map(({ line, prefix }) => formatLineForLog(line, prefix)).join(''));
     }
     filterTabs.forEach(tab => {
         if (tab.dataMode !== 'text') return;
         const output = lines.map(line => formatLineForTerminal(line, tab.filterRegex)).join('');
         if (output) {
             tab.term.write(output);
-            writeFilterTabLog(tab, output);
+            writeFilterTabLog(tab, logLines.map(({ line, prefix }) => formatLineForLog(line, prefix, tab.filterRegex)).join(''));
         }
     });
 }
@@ -392,18 +410,19 @@ function writeHexLines(lines) {
     if (!lines.length) return;
     const formattedLines = lines.map(line => ({
         text: line.output.replace(/\r?\n$/, ''),
-        prefix: getPrefix()
+        prefix: getPrefix(),
+        logPrefix: getLogPrefix()
     }));
     const mainOutput = formattedLines.map(({ text, prefix }) => `${prefix}${text}\r\n`).join('');
     serialTerm.write(mainOutput);
-    writeMainTabLog(mainOutput);
+    writeMainTabLog(formattedLines.map(({ text, logPrefix }) => `${logPrefix}${text}\r\n`).join(''));
     filterTabs.forEach(tab => {
         if (tab.dataMode !== 'hex') return;
         const matched = formattedLines.filter(({ text }) => !tab.filterRegex || tab.filterRegex.test(text));
         const output = matched.map(({ text, prefix }) => `${prefix}${applyHighlighting(text, tab.filterRegex)}\r\n`).join('');
         if (output) {
             tab.term.write(output);
-            writeFilterTabLog(tab, output);
+            writeFilterTabLog(tab, matched.map(({ text, logPrefix }) => `${logPrefix}${applyHighlighting(text, tab.filterRegex)}\r\n`).join(''));
         }
     });
 }
@@ -478,6 +497,17 @@ function formatLineForTerminal(lineObj, filterRegex = null) {
     let output = lineObj.prefix + applyHighlighting(lineObj.text, filterRegex);
     if (lineObj.delimiter) {
         output += '\r\n'; // Normalize to xterm newline
+    }
+    return output;
+}
+
+function formatLineForLog(lineObj, prefix = '', filterRegex = null) {
+    if (filterRegex && !filterRegex.test(lineObj.text)) {
+        return '';
+    }
+    let output = prefix + applyHighlighting(lineObj.text, filterRegex);
+    if (lineObj.delimiter) {
+        output += '\r\n';
     }
     return output;
 }
@@ -620,8 +650,8 @@ function locateInMainTerminalByLineNumber(lineNo) {
     searchRegex.checked = false;
     searchCase.checked = true;
     searchWord.checked = false;
-    searchResultCurrent = 0;
-    countSearchResults();
+    resetSearchState();
+    refreshSearchCount({ force: true });
     serialSearchAddon.findNext(searchText, getSearchOptions());
     return true;
 }
@@ -632,8 +662,8 @@ function setSearchFromText(text) {
         showSidebarTab('tab-search');
     }
     searchInput.value = text;
-    searchResultCurrent = 0;
-    countSearchResults();
+    resetSearchState();
+    refreshSearchCount({ force: true });
 }
 
 function clearTerminalByTabId(tabId) {
@@ -642,6 +672,7 @@ function clearTerminalByTabId(tabId) {
         else resetTextReceive();
         serialTerm.clear();
         serialLineCounter = 1;
+        logLineCounter = 1;
         return;
     }
     const filterTab = filterTabs.find(t => t.id === tabId);
@@ -2272,6 +2303,8 @@ function applyConfig(config) {
     // Update Checkboxes
     showTimestamp = config.showTimestamp || false;
     showLineNumbers = config.showLineNumbers || false;
+    logIncludeTimestamp = config.logIncludeTimestamp === true;
+    logIncludeLineNumbers = config.logIncludeLineNumbers === true;
     if (showTimestampCb) showTimestampCb.checked = showTimestamp;
     if (showLinenoCb) showLinenoCb.checked = showLineNumbers;
 
@@ -2774,6 +2807,7 @@ clearBtn.addEventListener('click', () => {
         else resetTextReceive();
         serialTerm.clear();
         serialLineCounter = 1;
+        logLineCounter = 1;
     } else {
         const filterTab = filterTabs.find(t => t.id === activeTabPane.id);
         if (filterTab) {
@@ -2843,6 +2877,7 @@ connectBtn.addEventListener('click', async () => {
             updateAutoSendState();
 
             serialLineCounter = 1;
+            logLineCounter = 1;
             serialNewLine = true;
 
             serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
@@ -2865,19 +2900,27 @@ window.addEventListener('resize', () => {
 
 // Search Logic
 const searchInput = document.getElementById('search-input');
+const searchTargetLabel = document.getElementById('search-target-label');
 const findNextBtn = document.getElementById('find-next-btn');
 const findPrevBtn = document.getElementById('find-prev-btn');
 const searchRegex = document.getElementById('search-regex');
 const searchCase = document.getElementById('search-case');
 const searchWord = document.getElementById('search-word');
 const searchResultCount = document.getElementById('search-result-count');
-let searchResultTotal = 0;
-let searchResultCurrent = 0;
+let searchDebounceTimer = null;
+const searchState = {
+    key: '',
+    total: 0,
+    current: 0,
+    regexError: ''
+};
 
 function getActiveSearchTarget() {
     const activeTabId = getActiveTabId();
     if (activeTabId === 'tab-main') {
         return {
+            id: 'tab-main',
+            label: tr('main.mainTerminal'),
             term: serialTerm,
             addon: serialSearchAddon
         };
@@ -2886,6 +2929,8 @@ function getActiveSearchTarget() {
     const filterTab = filterTabs.find(tab => tab.id === activeTabId);
     if (filterTab) {
         return {
+            id: filterTab.id,
+            label: getFilterTabLogTitle(filterTab),
             term: filterTab.term,
             addon: filterTab.searchAddon
         };
@@ -2894,32 +2939,61 @@ function getActiveSearchTarget() {
     const shellTab = getShellTabState(activeTabId);
     if (shellTab) {
         return {
+            id: shellTab.id,
+            label: shellTab.btn?.textContent?.trim() || getShellTabLogTitle(shellTab),
             term: shellTab.term,
             addon: shellTab.searchAddon
         };
     }
 
     return {
+        id: 'tab-main',
+        label: tr('main.mainTerminal'),
         term: serialTerm,
         addon: serialSearchAddon
     };
 }
 
-function updateSearchResultCount(resultIndex = -1, resultCount = 0) {
+function updateSearchTargetLabel() {
+    if (!searchTargetLabel) return;
+    const target = getActiveSearchTarget();
+    searchTargetLabel.textContent = trFallback('main.searchTarget', 'Target: {target}', { target: target.label });
+}
+
+function setSearchButtonsEnabled(enabled) {
+    if (findNextBtn) findNextBtn.disabled = !enabled;
+    if (findPrevBtn) findPrevBtn.disabled = !enabled;
+}
+
+function clearSearchDecorations(addon) {
+    if (typeof addon?.clearDecorations === 'function') addon.clearDecorations();
+    else if (typeof addon?.clearActiveDecoration === 'function') addon.clearActiveDecoration();
+}
+
+function updateSearchResultCount(current = 0, resultCount = 0, regexError = '') {
     if (!searchResultCount) return;
 
     if (!searchInput.value) {
         searchResultCount.textContent = tr('main.searchResultEmpty');
+        setSearchButtonsEnabled(false);
         return;
     }
 
-    if (!resultCount || resultIndex < 0) {
+    if (regexError) {
+        searchResultCount.textContent = trFallback('main.searchRegexInvalid', 'Invalid regex: {error}', { error: regexError });
+        setSearchButtonsEnabled(false);
+        return;
+    }
+
+    if (!resultCount) {
         searchResultCount.textContent = tr('main.searchResultZero');
+        setSearchButtonsEnabled(false);
         return;
     }
 
+    setSearchButtonsEnabled(true);
     searchResultCount.textContent = tr('main.searchResultCount', {
-        current: resultIndex + 1,
+        current,
         total: resultCount
     });
 }
@@ -2930,7 +3004,7 @@ function escapeRegex(text) {
 
 function buildSearchRegex() {
     const term = searchInput.value;
-    if (!term) return null;
+    if (!term) return { regex: null, error: '' };
 
     let pattern = term;
     if (!searchRegex.checked) {
@@ -2941,22 +3015,50 @@ function buildSearchRegex() {
     }
 
     try {
-        return new RegExp(pattern, searchCase.checked ? 'g' : 'gi');
-    } catch {
-        return null;
+        return { regex: new RegExp(pattern, searchCase.checked ? 'g' : 'gi'), error: '' };
+    } catch (error) {
+        return { regex: null, error: error.message || String(error) };
     }
 }
 
-function countSearchResults() {
-    const regex = buildSearchRegex();
-    const { term } = getActiveSearchTarget();
-    if (!regex) {
-        searchResultTotal = 0;
-        searchResultCurrent = 0;
-        updateSearchResultCount(-1, 0);
-        return;
+function getSearchBufferVersion(term) {
+    const buffer = term?.buffer?.active;
+    if (!buffer) return '0:0:0:';
+    const lastLine = buffer.length > 0 ? buffer.getLine(buffer.length - 1)?.translateToString(true) || '' : '';
+    return `${buffer.length}:${buffer.baseY || 0}:${buffer.cursorY || 0}:${lastLine.length}:${lastLine.slice(-64)}`;
+}
+
+function buildSearchKey(target) {
+    return JSON.stringify({
+        query: searchInput.value,
+        regex: searchRegex.checked,
+        caseSensitive: searchCase.checked,
+        wholeWord: searchWord.checked,
+        target: target.id,
+        buffer: getSearchBufferVersion(target.term)
+    });
+}
+
+function refreshSearchCount({ force = false } = {}) {
+    updateSearchTargetLabel();
+    const target = getActiveSearchTarget();
+    const key = buildSearchKey(target);
+    if (!force && key === searchState.key) {
+        updateSearchResultCount(searchState.current, searchState.total, searchState.regexError);
+        return searchState;
     }
 
+    searchState.key = key;
+    const { regex, error } = buildSearchRegex();
+    searchState.regexError = error;
+    if (!regex) {
+        searchState.total = 0;
+        searchState.current = 0;
+        updateSearchResultCount(0, 0, error);
+        return searchState;
+    }
+
+    const term = target.term;
     const bufferLines = term.buffer.active.length;
     let total = 0;
     for (let i = 0; i < bufferLines; i++) {
@@ -2969,17 +3071,30 @@ function countSearchResults() {
         }
     }
 
-    searchResultTotal = total;
-    if (!searchResultTotal) {
-        searchResultCurrent = 0;
-        updateSearchResultCount(-1, 0);
-        return;
+    searchState.total = total;
+    if (!searchState.total) {
+        searchState.current = 0;
+        updateSearchResultCount(0, 0);
+        return searchState;
     }
 
-    if (!searchResultCurrent || searchResultCurrent > searchResultTotal) {
-        searchResultCurrent = 1;
+    if (searchState.current > searchState.total) {
+        searchState.current = 0;
     }
-    updateSearchResultCount(searchResultCurrent - 1, searchResultTotal);
+    updateSearchResultCount(searchState.current, searchState.total);
+    return searchState;
+}
+
+function scheduleSearchCount() {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => refreshSearchCount({ force: true }), 200);
+}
+
+function resetSearchState() {
+    searchState.key = '';
+    searchState.total = 0;
+    searchState.current = 0;
+    searchState.regexError = '';
 }
 
 function getSearchOptions() {
@@ -2993,21 +3108,23 @@ function getSearchOptions() {
 
 findNextBtn.addEventListener('click', () => {
     const { addon } = getActiveSearchTarget();
+    refreshSearchCount();
+    if (searchState.regexError || !searchState.total) return;
     const found = addon.findNext(searchInput.value, getSearchOptions());
-    countSearchResults();
-    if (found && searchResultTotal > 0) {
-        searchResultCurrent = searchResultCurrent >= searchResultTotal ? 1 : searchResultCurrent + 1;
-        updateSearchResultCount(searchResultCurrent - 1, searchResultTotal);
+    if (found && searchState.total > 0) {
+        searchState.current = searchState.current >= searchState.total ? 1 : searchState.current + 1;
+        updateSearchResultCount(searchState.current, searchState.total);
     }
 });
 
 findPrevBtn.addEventListener('click', () => {
     const { addon } = getActiveSearchTarget();
+    refreshSearchCount();
+    if (searchState.regexError || !searchState.total) return;
     const found = addon.findPrevious(searchInput.value, getSearchOptions());
-    countSearchResults();
-    if (found && searchResultTotal > 0) {
-        searchResultCurrent = searchResultCurrent <= 1 ? searchResultTotal : searchResultCurrent - 1;
-        updateSearchResultCount(searchResultCurrent - 1, searchResultTotal);
+    if (found && searchState.total > 0) {
+        searchState.current = searchState.current <= 1 ? searchState.total : searchState.current - 1;
+        updateSearchResultCount(searchState.current, searchState.total);
     }
 });
 
@@ -3022,36 +3139,39 @@ searchInput.addEventListener('keydown', (e) => {
 });
 
 searchInput.addEventListener('input', () => {
-    searchResultCurrent = 0;
+    resetSearchState();
     if (!searchInput.value) {
-        updateSearchResultCount(-1, 0);
-        searchResultTotal = 0;
+        clearTimeout(searchDebounceTimer);
+        clearSearchDecorations(getActiveSearchTarget().addon);
+        updateSearchResultCount(0, 0);
         return;
     }
-    countSearchResults();
+    scheduleSearchCount();
 });
 
 [searchRegex, searchCase, searchWord].forEach(control => {
     control.addEventListener('change', () => {
-        searchResultCurrent = 0;
+        resetSearchState();
         if (!searchInput.value) {
-            updateSearchResultCount(-1, 0);
-            searchResultTotal = 0;
+            updateSearchResultCount(0, 0);
             return;
         }
-        countSearchResults();
+        scheduleSearchCount();
     });
 });
 
 window.addEventListener('main-tab-changed', () => {
-    searchResultCurrent = 0;
+    resetSearchState();
+    updateSearchTargetLabel();
     if (!searchInput.value) {
-        updateSearchResultCount(-1, 0);
-        searchResultTotal = 0;
+        updateSearchResultCount(0, 0);
         return;
     }
-    countSearchResults();
+    scheduleSearchCount();
 });
+
+updateSearchTargetLabel();
+updateSearchResultCount(0, 0);
 
 // Remove legacy filter window btn reference
 // document.getElementById('new-filter-window-btn').addEventListener('click', ...);
