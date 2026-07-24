@@ -306,6 +306,12 @@
                     </div>
                 </div>
 
+                <div class="form-group">
+                    <label data-i18n="prefs.logAutoFlushSize">Log Cache Flush Size (MB)</label>
+                    <input type="number" id="rawBufferAutoFlushMB" min="1" max="1024" step="1" style="width: 150px;">
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logAutoFlushHelp">Text, tab, and raw logs are flushed to disk when this cache size is reached.</small>
+                </div>
+
                 <h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 16px;" data-i18n="prefs.rawBinaryLogging">Raw RX Binary Logging</h3>
                 <div class="form-group">
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">

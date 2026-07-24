@@ -134,6 +134,10 @@ function normalizeConfig(config, defaults) {
       }))
     : [];
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
+  const rawBufferAutoFlushMB = Number(source.rawBufferAutoFlushMB);
+  normalized.rawBufferAutoFlushMB = Number.isFinite(rawBufferAutoFlushMB)
+    ? Math.min(1024, Math.max(1, rawBufferAutoFlushMB))
+    : defaults.rawBufferAutoFlushMB;
   normalized.rawLogFileNameFormat = typeof source.rawLogFileNameFormat === 'string' && source.rawLogFileNameFormat.trim()
     ? source.rawLogFileNameFormat
     : 'raw_%Y-%m-%d_%H-%M-%S.bin';
@@ -269,6 +273,8 @@ displaySettings.showTimestamp = currentConfig.showTimestamp;
 displaySettings.showLineNumbers = currentConfig.showLineNumbers;
 
 let logBuffer = [];
+let logBufferByteCount = 0;
+let mainLogFilePath = '';
 let tabLogBuffers = new Map();
 let rawBinaryBuffers = [];
 let rawBinaryByteCount = 0;
@@ -305,6 +311,13 @@ function buildRawLogFileName() {
   if (!fileName) fileName = 'raw';
   if (!fileName.toLowerCase().endsWith('.bin')) fileName += '.bin';
   return fileName;
+}
+
+function ensureMainLogFilePath() {
+  if (mainLogFilePath) return mainLogFilePath;
+  ensureLogDirectory();
+  mainLogFilePath = path.join(currentConfig.logPath, buildLogFileName({}));
+  return mainLogFilePath;
 }
 
 function ensureRawBinaryLogPath() {
@@ -398,13 +411,24 @@ function ensureLogDirectory() {
 function saveLog() {
   try {
     if (logBuffer.length === 0) return;
-    if (currentConfig.saveAllTabsLogToFiles) { logBuffer = []; return; }
-    const allData = logBuffer.join('');
-    logBuffer = [];
+    if (currentConfig.saveAllTabsLogToFiles) {
+      logBuffer = [];
+      logBufferByteCount = 0;
+      return;
+    }
+    const snapshot = logBuffer;
+    const byteCount = logBufferByteCount;
+    const allData = snapshot.join('');
     if (!allData) return;
-    ensureLogDirectory();
-    const filePath = path.join(currentConfig.logPath, buildLogFileName({}));
+    const filePath = ensureMainLogFilePath();
     fs.appendFileSync(filePath, iconv.encode(allData, currentConfig.logEncoding));
+    if (logBuffer === snapshot) {
+      logBuffer = [];
+      logBufferByteCount = 0;
+    } else {
+      logBuffer.splice(0, snapshot.length);
+      logBufferByteCount = Math.max(0, logBufferByteCount - byteCount);
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('log-saved', { path: filePath });
     }
@@ -439,8 +463,11 @@ function stripAnsi(str) {
 }
 
 function writeLog(data) {
-  if (currentConfig.logEnabled) {
-    logBuffer.push(data);
+  if (!currentConfig.logEnabled || !data || currentConfig.saveAllTabsLogToFiles) return;
+  logBuffer.push(data);
+  logBufferByteCount += Buffer.byteLength(data);
+  if (logBufferByteCount >= getAutoFlushThreshold()) {
+    saveLog();
   }
 }
 
@@ -486,10 +513,20 @@ function saveConfig(config) {
   const normalized = normalizeConfig(merged, currentConfig);
   const rawLogDestinationChanged = normalized.logPath !== currentConfig.logPath
     || normalized.rawLogFileNameFormat !== currentConfig.rawLogFileNameFormat;
+  const textLogDestinationChanged = normalized.logPath !== currentConfig.logPath
+    || normalized.logFileNameFormat !== currentConfig.logFileNameFormat
+    || normalized.logEncoding !== currentConfig.logEncoding;
+  if (currentConfig.logEnabled && textLogDestinationChanged) {
+    if (currentConfig.saveAllTabsLogToFiles) saveAllTabLogs();
+    else saveLog();
+  }
   if (currentConfig.saveRawSerialToFile
       && (!normalized.saveRawSerialToFile || rawLogDestinationChanged)
       && !flushRawBinaryLogSync()) {
     throw rawBinaryFlushError || new Error('Failed to flush pending raw serial log');
+  }
+  if (textLogDestinationChanged) {
+    mainLogFilePath = '';
   }
   if (rawLogDestinationChanged) {
     rawBinaryLogPath = '';

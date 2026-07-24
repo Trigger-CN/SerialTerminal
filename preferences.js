@@ -41,6 +41,7 @@ const elements = {
   logPath: document.getElementById('logPath'),
   logFileNameFormat: document.getElementById('logFileNameFormat'),
   logEncoding: document.getElementById('logEncoding'),
+  rawBufferAutoFlushMB: document.getElementById('rawBufferAutoFlushMB'),
   saveRawSerialToFile: document.getElementById('saveRawSerialToFile'),
   rawLogFileNameFormat: document.getElementById('rawLogFileNameFormat'),
   browseBtn: document.getElementById('browse-btn'),
@@ -73,6 +74,11 @@ const DEFAULT_HEX_DISPLAY_SETTINGS = {
     idleFlushMs: 50
 };
 const DEFAULT_RAW_LOG_FILE_NAME_FORMAT = 'raw_%Y-%m-%d_%H-%M-%S.bin';
+
+function normalizeLogAutoFlushMB(value) {
+    const mb = Number.parseInt(value, 10);
+    return Number.isFinite(mb) ? Math.min(1024, Math.max(1, mb)) : 10;
+}
 
 function normalizeHexDisplaySettings(settings = {}) {
     const bytesPerLine = Number.parseInt(settings.bytesPerLine, 10);
@@ -327,6 +333,7 @@ async function init() {
   elements.logPath.value = config.logPath;
   elements.logFileNameFormat.value = config.logFileNameFormat;
   elements.logEncoding.value = config.logEncoding;
+  elements.rawBufferAutoFlushMB.value = String(normalizeLogAutoFlushMB(config.rawBufferAutoFlushMB));
   elements.saveRawSerialToFile.checked = config.saveRawSerialToFile === true;
   elements.rawLogFileNameFormat.value = normalizeRawLogFileNameFormat(config.rawLogFileNameFormat);
   
@@ -506,6 +513,9 @@ elements.hexIdleFlushMs.onchange = () => {
 elements.rawLogFileNameFormat.onchange = () => {
     elements.rawLogFileNameFormat.value = normalizeRawLogFileNameFormat(elements.rawLogFileNameFormat.value);
 };
+elements.rawBufferAutoFlushMB.onchange = () => {
+    elements.rawBufferAutoFlushMB.value = String(normalizeLogAutoFlushMB(elements.rawBufferAutoFlushMB.value));
+};
 
 elements.browseBtn.onclick = async () => {
   const path = await ipcRenderer.invoke('select-directory');
@@ -548,6 +558,7 @@ elements.saveBtn.onclick = async () => {
     logPath: elements.logPath.value,
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,
+    rawBufferAutoFlushMB: normalizeLogAutoFlushMB(elements.rawBufferAutoFlushMB.value),
     saveRawSerialToFile: elements.saveRawSerialToFile.checked,
     rawLogFileNameFormat,
     highlightRules: rules,
