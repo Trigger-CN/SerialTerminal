@@ -2780,17 +2780,24 @@ updateThroughputPanel({
 });
 
 async function refreshPorts() {
+    const selectedPath = portSelect.value;
+    const preferredPath = selectedPath || currentConfig?.lastSerialOptions?.path || '';
     const ports = await ipcRenderer.invoke('list-ports');
     portSelect.innerHTML = '<option value="">Select Port</option>';
+    let hasPreferredPath = false;
     ports.forEach(port => {
         const opt = document.createElement('option');
         opt.value = port.path;
         opt.textContent = `${port.path} ${port.manufacturer || ''}`;
-        if (currentConfig && currentConfig.lastSerialOptions && currentConfig.lastSerialOptions.path === port.path) {
+        if (preferredPath === port.path) {
             opt.selected = true;
+            hasPreferredPath = true;
         }
         portSelect.appendChild(opt);
     });
+    if (preferredPath && !hasPreferredPath) {
+        portSelect.value = '';
+    }
     setActionStatus(`已刷新串口列表，共 ${ports.length} 个端口`);
 }
 

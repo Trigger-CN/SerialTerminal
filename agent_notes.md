@@ -435,6 +435,7 @@ npm run dist:linux
 - 快捷发送列表下方只保留添加按钮；新增和编辑共用页面内模态框，支持取消、右上角关闭、点击遮罩和 Escape 关闭，内容校验继续使用当前共享 TX profile
 - 搜索页显示当前搜索目标；搜索计数使用 query/options/target/buffer 版本缓存并对输入做 200ms debounce。搜索会维护自己的匹配数组（buffer 行、列、长度），Prev/Next 直接按该数组 `scrollToLine()` + `select()`，不再依赖 search addon 的 active match 状态。查询、目标或 Regex/大小写/整词选项变化后会清理旧高亮并重新定位新结果集的首个匹配；无效正则会显示独立错误提示并禁用搜索按钮；清空输入时尝试清除 search addon decorations
 - 连接建立期间若设备立即上报数据，renderer 会先接纳新 `sessionId` 再处理首批 RX，避免打开串口后的 banner 被旧 session 过滤
+- 串口端口刷新会优先保留用户当前下拉框选择；只有当前无选择时才回退到 `lastSerialOptions.path`，避免 `config-updated -> applyConfig -> refreshPorts()` 把未连接前刚选择的新端口覆盖回旧端口
 - 断开、重连和开始新连接时会切换到新的写队列；旧驱动回调即使悬挂，也不会阻塞新连接发送
 - 清空 Text RX 会丢弃 decoder 和 parser 中尚未完成的数据，避免清空前的半个多字节字符出现在清空后的终端
 - 主输入框保存 Text/Hex 内存草稿；历史条目只需保存 mode/content，恢复历史模式时同步切换全局 TX，追加和编码不形成历史条目的独立语义
