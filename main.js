@@ -276,14 +276,47 @@ let logBuffer = [];
 let logBufferByteCount = 0;
 let mainLogFilePath = '';
 let tabLogBuffers = new Map();
+let textLogFlushError = null;
+let tabLogFlushError = null;
 let rawBinaryBuffers = [];
 let rawBinaryByteCount = 0;
 let rawBinaryLogPath = '';
 let rawBinaryFlushError = null;
+let rawBinaryLogOverflowNotified = false;
+let textLogOverflowNotified = false;
+let tabLogOverflowNotified = false;
+let logFlushTimer = null;
+const logErrorNoticeKeys = new Set();
+const LOG_AUTO_FLUSH_INTERVAL_MS = 5000;
 
 function getAutoFlushThreshold() {
   const mb = Number(currentConfig.rawBufferAutoFlushMB);
   return (Number.isFinite(mb) && mb > 0 ? mb : 10) * 1024 * 1024;
+}
+
+function notifyLogError(kind, error, details = {}) {
+  const message = error?.message || String(error || 'Unknown log write error');
+  const noticeKey = `${kind}:${details.paused ? 'paused' : 'write'}:${message}`;
+  if (logErrorNoticeKeys.has(noticeKey)) return;
+  logErrorNoticeKeys.add(noticeKey);
+  log.error(`Log write failed (${kind}):`, error);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('log-error', { kind, message, ...details });
+  }
+}
+
+function clearLogErrorNotice(kind) {
+  for (const key of Array.from(logErrorNoticeKeys)) {
+    if (key.startsWith(`${kind}:`)) logErrorNoticeKeys.delete(key);
+  }
+}
+
+function shouldAcceptMoreCachedLog(kind, byteCount, error, wasNotified) {
+  if (!error || byteCount < getAutoFlushThreshold()) return true;
+  if (!wasNotified) {
+    notifyLogError(kind, error, { paused: true });
+  }
+  return false;
 }
 
 function ensureTabLogFile(tabId) {
@@ -302,6 +335,29 @@ function appendToTabLogSync(tabId, data) {
   if (!filePath) return;
   const buffer = iconv.encode(data, currentConfig.logEncoding);
   fs.appendFileSync(filePath, buffer);
+}
+
+function flushTabLogEntrySync(tabId, entry) {
+  if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) return true;
+  const allData = entry.buffer.join('');
+  if (!allData) {
+    entry.buffer = [];
+    entry.byteCount = 0;
+    return true;
+  }
+  try {
+    appendToTabLogSync(tabId, allData);
+    entry.buffer = [];
+    entry.byteCount = 0;
+    tabLogFlushError = null;
+    tabLogOverflowNotified = false;
+    clearLogErrorNotice('tab');
+    return true;
+  } catch (error) {
+    tabLogFlushError = error;
+    notifyLogError('tab', error, { tabId });
+    return false;
+  }
 }
 
 function buildRawLogFileName() {
@@ -344,16 +400,22 @@ function flushRawBinaryLogSync() {
     rawBinaryBuffers = [];
     rawBinaryByteCount = 0;
     rawBinaryFlushError = null;
+    rawBinaryLogOverflowNotified = false;
+    clearLogErrorNotice('raw');
     return true;
   } catch (error) {
     rawBinaryFlushError = error;
-    log.error('Failed to save raw serial log:', error);
+    notifyLogError('raw', error);
     return false;
   }
 }
 
 function bufferRawSerialBytes(data) {
   if (!currentConfig.saveRawSerialToFile || !Buffer.isBuffer(data) || data.length === 0) return;
+  if (!shouldAcceptMoreCachedLog('raw', rawBinaryByteCount, rawBinaryFlushError, rawBinaryLogOverflowNotified)) {
+    rawBinaryLogOverflowNotified = true;
+    return;
+  }
   rawBinaryBuffers.push(Buffer.from(data));
   rawBinaryByteCount += data.length;
   if (rawBinaryByteCount >= getAutoFlushThreshold()) {
@@ -408,7 +470,7 @@ function ensureLogDirectory() {
   }
 }
 
-function saveLog() {
+function saveLog({ notify = true } = {}) {
   try {
     if (logBuffer.length === 0) return;
     if (currentConfig.saveAllTabsLogToFiles) {
@@ -429,27 +491,32 @@ function saveLog() {
       logBuffer.splice(0, snapshot.length);
       logBufferByteCount = Math.max(0, logBufferByteCount - byteCount);
     }
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    textLogFlushError = null;
+    textLogOverflowNotified = false;
+    clearLogErrorNotice('text');
+    if (notify && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('log-saved', { path: filePath });
     }
   } catch (err) {
-    console.error('Failed to save log:', err);
+    textLogFlushError = err;
+    notifyLogError('text', err);
   }
 }
 
-function saveAllTabLogs() {
+function saveAllTabLogs({ notify = true, closeEntries = true } = {}) {
   if (!currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return;
-  // flush remaining per-tab buffers
   const savedPaths = [];
+  const completedTabIds = [];
   for (const [tabId, entry] of tabLogBuffers.entries()) {
-    if (Array.isArray(entry.buffer) && entry.buffer.length > 0) {
-      appendToTabLogSync(tabId, entry.buffer.join(''));
-      entry.buffer = [];
+    if (!flushTabLogEntrySync(tabId, entry)) {
+      tabLogBuffers.set(tabId, entry);
+      continue;
     }
     if (entry.filePath && fs.existsSync(entry.filePath)) savedPaths.push(entry.filePath);
+    if (closeEntries) completedTabIds.push(tabId);
   }
-  tabLogBuffers.clear();
-  if (savedPaths.length && mainWindow && !mainWindow.isDestroyed()) {
+  completedTabIds.forEach(tabId => tabLogBuffers.delete(tabId));
+  if (notify && savedPaths.length && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('all-tabs-log-saved', { paths: savedPaths });
   }
 }
@@ -464,10 +531,14 @@ function stripAnsi(str) {
 
 function writeLog(data) {
   if (!currentConfig.logEnabled || !data || currentConfig.saveAllTabsLogToFiles) return;
+  if (!shouldAcceptMoreCachedLog('text', logBufferByteCount, textLogFlushError, textLogOverflowNotified)) {
+    textLogOverflowNotified = true;
+    return;
+  }
   logBuffer.push(data);
   logBufferByteCount += Buffer.byteLength(data);
   if (logBufferByteCount >= getAutoFlushThreshold()) {
-    saveLog();
+    saveLog({ notify: false });
   }
 }
 
@@ -479,15 +550,31 @@ function writeTabLog(tabId, title, data) {
   }
   if (!currentConfig.saveAllTabsLogToFiles) return;
   const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [], filePath: '', byteCount: 0 };
+  if (!shouldAcceptMoreCachedLog('tab', existing.byteCount || 0, tabLogFlushError, tabLogOverflowNotified)) {
+    tabLogOverflowNotified = true;
+    return;
+  }
   existing.title = title || existing.title || tabId;
   existing.buffer.push(clean);
   existing.byteCount = (existing.byteCount || 0) + Buffer.byteLength(clean);
   if (existing.byteCount >= getAutoFlushThreshold()) {
-    appendToTabLogSync(tabId, existing.buffer.join(''));
-    existing.buffer = [];
-    existing.byteCount = 0;
+    flushTabLogEntrySync(tabId, existing);
   }
   tabLogBuffers.set(tabId, existing);
+}
+
+function flushPendingLogs({ notify = false } = {}) {
+  flushRawBinaryLogSync();
+  if (currentConfig.saveAllTabsLogToFiles) {
+    saveAllTabLogs({ notify, closeEntries: false });
+  } else {
+    saveLog({ notify });
+  }
+}
+
+function startLogAutoFlushTimer() {
+  if (logFlushTimer) clearInterval(logFlushTimer);
+  logFlushTimer = setInterval(() => flushPendingLogs({ notify: false }), LOG_AUTO_FLUSH_INTERVAL_MS);
 }
 
 function saveConfig(config) {
@@ -846,6 +933,7 @@ function checkForAppUpdates({ manual = false } = {}) {
 
 app.whenReady().then(() => {
   createWindow();
+  startLogAutoFlushTimer();
   checkForAppUpdates();
 
   app.on('activate', () => {
@@ -874,6 +962,7 @@ ipcMain.handle('get-about-info', () => {
 });
 
 app.on('before-quit', () => {
+  if (logFlushTimer) clearInterval(logFlushTimer);
   Array.from(shellSessions.keys()).forEach(tabId => closeShellSession(tabId));
   flushRawBinaryLogSync();
   saveLog();
@@ -996,17 +1085,12 @@ ipcMain.on('flush-tab-log', (event, payload = {}) => {
   if (!currentConfig.saveAllTabsLogToFiles || !payload.tabId) { return; }
   const entry = tabLogBuffers.get(payload.tabId);
   if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) { return; }
-  try {
-    appendToTabLogSync(payload.tabId, entry.buffer.join(''));
-    entry.buffer = [];
-    entry.byteCount = 0;
+  if (flushTabLogEntrySync(payload.tabId, entry)) {
     const filePath = entry.filePath || '';
     tabLogBuffers.delete(payload.tabId);
     if (filePath && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('log-saved', { path: filePath });
     }
-  } catch (err) {
-    console.error(`Failed to flush tab log for ${payload.tabId}:`, err);
   }
 });
 

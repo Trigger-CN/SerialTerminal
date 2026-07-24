@@ -541,6 +541,8 @@ Hex 相关配置结构：
 ### 9.1B Hex 显示日志与 RX raw 日志
 - 显示日志来自渲染层实际写入终端的内容：Text 保存解码/格式化文本，Hex 保存当前 Hex dump；过滤日志保存命中的格式化行
 - `rawBufferAutoFlushMB` 现在作为通用日志缓存刷盘阈值暴露在设置中，默认 10 MB、范围 1-1024 MB；普通主日志、标签页日志和 Raw `.bin` 均达到该字节阈值后写盘，主日志路径在本次日志会话内缓存，避免长时间自动刷盘生成碎片文件
+- 日志每 5 秒静默刷盘一次，降低异常退出时的丢失窗口；定时刷盘只 flush 不关闭标签页日志条目，断开/退出/手动 flush 才关闭条目
+- 文本日志、标签页日志和 Raw 日志写盘失败会通过 `log-error` 通知 renderer；同一错误去重提示，成功写盘后清除错误状态。若持续失败且缓存已达到阈值，会暂停继续缓存该类日志以保护内存
 - raw 日志是独立路径，仅在 `saveRawSerialToFile` 启用时记录 `port.on('data')` 的 RX Buffer；不包含 TX、连接/断开提示、错误提示或 Hex 文本
 - `rawBinaryBuffers` + `rawBinaryByteCount` 达到 `rawBufferAutoFlushMB` 阈值时 `Buffer.concat()` 后同步追加；断开和应用退出也会 flush
 - `ensureRawBinaryLogPath()` 在本次连接首次写入时生成并缓存路径，重名时使用 `_2`、`_3`；文件名会清理非法字符并强制 `.bin`

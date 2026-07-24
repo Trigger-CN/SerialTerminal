@@ -2685,6 +2685,19 @@ ipcRenderer.on('all-tabs-log-saved', (event, payload = {}) => {
     setActionStatus(count > 0 ? `已保存 ${count} 个标签页日志文件` : '标签页日志已保存');
 });
 
+ipcRenderer.on('log-error', (event, payload = {}) => {
+    const message = trFallback(
+        'main.logWriteFailed',
+        'Log write failed ({kind}): {error}{paused}',
+        {
+            kind: payload.kind || 'log',
+            error: payload.message || 'unknown error',
+            paused: payload.paused ? trFallback('main.logWritePaused', ' Logging paused to protect memory.') : ''
+        }
+    );
+    setActionStatus(message);
+});
+
 const portSelect = document.getElementById('port-select');
 const baudSelect = document.getElementById('baud-select');
 const baudCustomWrapper = document.getElementById('baud-custom-wrapper');
