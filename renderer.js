@@ -2687,6 +2687,14 @@ function updateSerialConnectionState(connected) {
     setActionStatus(connected ? tr('main.connected') : tr('main.disconnected'));
 }
 
+function disconnectSerial() {
+    serialSessionId++;
+    serialWriteChain = Promise.resolve();
+    stopAutoSendRuntime();
+    updateSerialConnectionState(false);
+    ipcRenderer.send('disconnect-serial');
+}
+
 ipcRenderer.on('serial-disconnected', (event, message) => {
     serialSessionId++;
     serialWriteChain = Promise.resolve();
@@ -2803,6 +2811,13 @@ async function refreshPorts() {
 
 refreshBtn.addEventListener('click', refreshPorts);
 
+portSelect.addEventListener('change', () => {
+    if (isConnected && !serialConnectInProgress) {
+        disconnectSerial();
+        setActionStatus(trFallback('main.serialDisconnected', 'Serial port disconnected'));
+    }
+});
+
 clearBtn.addEventListener('click', () => {
     const { tabId: activeTabId } = getActiveTabInfo();
     const activeTabPane = activeTabId ? document.getElementById(activeTabId) : null;
@@ -2832,11 +2847,7 @@ openLogFolderBtn.addEventListener('click', () => {
 connectBtn.addEventListener('click', async () => {
     if (serialConnectInProgress) return;
     if (isConnected) {
-        serialSessionId++;
-        serialWriteChain = Promise.resolve();
-        stopAutoSendRuntime();
-        updateSerialConnectionState(false);
-        ipcRenderer.send('disconnect-serial');
+        disconnectSerial();
     } else {
         const path = portSelect.value;
         const baudRate = getBaudRate();
