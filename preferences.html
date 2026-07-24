@@ -321,7 +321,10 @@
             <div id="highlighting" class="tab-pane">
                 <h2 data-i18n="prefs.keywordHighlighting">Keyword Highlighting</h2>
                 <div class="form-group">
-                    <button class="secondary" id="add-rule-btn" style="margin-bottom: 10px;" data-i18n="prefs.addRule">+ Add New Rule</button>
+                    <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                        <button class="secondary" id="add-rule-btn" data-i18n="prefs.addRule">+ Add New Rule</button>
+                        <button class="secondary" id="reset-highlight-rules-btn" data-i18n="prefs.resetHighlightDefaults">Reset Highlight Defaults</button>
+                    </div>
                     <div id="highlight-rules-list" style="display: flex; flex-direction: column; gap: 8px;">
                         <!-- Rules will be added here -->
                     </div>

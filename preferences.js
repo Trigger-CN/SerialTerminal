@@ -33,6 +33,7 @@ const elements = {
 
   highlightRulesList: document.getElementById('highlight-rules-list'),
   addRuleBtn: document.getElementById('add-rule-btn'),
+  resetHighlightRulesBtn: document.getElementById('reset-highlight-rules-btn'),
   
   logEnabled: document.getElementById('logEnabled'),
     saveAllTabsLogToFiles: document.getElementById('saveAllTabsLogToFiles'),
@@ -76,6 +77,14 @@ const DEFAULT_HEX_DISPLAY_SETTINGS = {
     idleFlushMs: 50
 };
 const DEFAULT_RAW_LOG_FILE_NAME_FORMAT = 'raw_%Y-%m-%d_%H-%M-%S.bin';
+const DEFAULT_HIGHLIGHT_RULES = [
+    { regex: "\\b(error|fail|failed|fatal)\\b", color: "#ff4d4f", enabled: true, caseSensitive: false, useRegex: true },
+    { regex: "\\b(warn|warning)\\b", color: "#faad14", enabled: true, caseSensitive: false, useRegex: true },
+    { regex: "\\b(info|debug|trace)\\b", color: "#1890ff", enabled: true, caseSensitive: false, useRegex: true },
+    { regex: "\\b(success|ok|done)\\b", color: "#52c41a", enabled: true, caseSensitive: false, useRegex: true },
+    { regex: "\\b\\d+(\\.\\d+)?\\b", color: "#13c2c2", enabled: true, caseSensitive: true, useRegex: true },
+    { regex: "[+\\-*/=<>!&|%^~]+", color: "#eb2f96", enabled: true, caseSensitive: true, useRegex: true }
+];
 
 function normalizeLogAutoFlushMB(value) {
     const mb = Number.parseInt(value, 10);
@@ -119,6 +128,7 @@ function applyPrefsI18n() {
     });
 
     if (elements.addRuleBtn) elements.addRuleBtn.textContent = tr('prefs.addRule');
+    if (elements.resetHighlightRulesBtn) elements.resetHighlightRulesBtn.textContent = tr('prefs.resetHighlightDefaults');
     if (elements.checkUpdateBtn) elements.checkUpdateBtn.textContent = tr('prefs.checkForUpdates');
     if (elements.restartInstallBtn) elements.restartInstallBtn.textContent = tr('prefs.restartInstall');
     if (elements.saveBtn) elements.saveBtn.textContent = tr('prefs.saveApply');
@@ -254,9 +264,22 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     return div;
 }
 
+function renderHighlightRules(rules = []) {
+    elements.highlightRulesList.innerHTML = '';
+    rules.forEach(rule => {
+        elements.highlightRulesList.appendChild(createRuleElement(rule));
+    });
+}
+
 elements.addRuleBtn.onclick = () => {
     elements.highlightRulesList.appendChild(createRuleElement());
 };
+
+if (elements.resetHighlightRulesBtn) {
+    elements.resetHighlightRulesBtn.onclick = () => {
+        renderHighlightRules(DEFAULT_HIGHLIGHT_RULES);
+    };
+}
 
 async function init() {
   const config = await ipcRenderer.invoke('get-config');
@@ -347,12 +370,7 @@ async function init() {
   
   toggleLogSettings(config.logEnabled);
 
-  // Load rules
-  if (config.highlightRules) {
-      config.highlightRules.forEach(rule => {
-          elements.highlightRulesList.appendChild(createRuleElement(rule));
-      });
-  }
+  renderHighlightRules(config.highlightRules || []);
 
   // Load shell profiles
   shellProfiles = Array.isArray(config.shellProfiles) ? JSON.parse(JSON.stringify(config.shellProfiles)) : [];
