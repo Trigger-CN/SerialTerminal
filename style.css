@@ -287,20 +287,26 @@ label:hover {
 .quick-send-actions {
     position: absolute;
     top: 50%;
-    right: 5px;
+    left: 5px;
     z-index: 1;
     display: flex;
-    gap: 3px;
-    padding-left: 8px;
-    background: var(--bg-input);
+    flex-direction: column;
+    gap: 2px;
+    background: transparent;
     opacity: 0;
     pointer-events: none;
-    transform: translateY(-50%) translateX(4px);
+    transform: translateY(-50%) translateX(-4px);
     transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
+.quick-send-item:hover .quick-send-main-btn,
+.quick-send-item.actions-focused .quick-send-main-btn,
+.quick-send-item.editing .quick-send-main-btn {
+    padding-left: 30px;
+}
+
 .quick-send-item:hover .quick-send-actions,
-.quick-send-item:focus-within .quick-send-actions,
+.quick-send-item.actions-focused .quick-send-actions,
 .quick-send-item.editing .quick-send-actions {
     opacity: 1;
     pointer-events: auto;
@@ -308,11 +314,11 @@ label:hover {
 }
 
 .quick-send-action-btn {
-    width: 22px;
-    height: 22px;
+    width: 20px;
+    height: 13px;
     padding: 0;
-    font-size: 11px;
-    line-height: 22px;
+    font-size: 10px;
+    line-height: 13px;
     display: flex;
     align-items: center;
     justify-content: center;

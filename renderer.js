@@ -3698,9 +3698,17 @@ function renderQuickSendList() {
             await sendSerialRequest({ content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
         });
         
-        // Actions are overlaid on the right and revealed on hover/focus.
+        // Actions are overlaid on the left and revealed on hover/focus.
         const actionDiv = document.createElement('div');
         actionDiv.className = 'quick-send-actions';
+        actionDiv.addEventListener('focusin', () => {
+            div.classList.add('actions-focused');
+        });
+        actionDiv.addEventListener('focusout', (event) => {
+            if (!actionDiv.contains(event.relatedTarget)) {
+                div.classList.remove('actions-focused');
+            }
+        });
 
         const editBtn = document.createElement('button');
         editBtn.textContent = '✎';
@@ -3730,8 +3738,8 @@ function renderQuickSendList() {
             setActionStatus(`已删除快捷指令：${item.label || item.content}`);
         });
 
-        actionDiv.appendChild(editBtn);
         actionDiv.appendChild(delBtn);
+        actionDiv.appendChild(editBtn);
         
         div.appendChild(btn);
         div.appendChild(actionDiv);
