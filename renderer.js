@@ -2058,9 +2058,9 @@ function navigateMainInputHistory(direction) {
 
     mainInputHistoryIndex = nextIndex;
     const entry = mainInputHistoryIndex === -1 ? mainInputHistoryDraft : mainInputHistory[mainInputHistory.length - 1 - mainInputHistoryIndex];
-    const preservedDrafts = { ...mainInputDrafts };
     switchMainInputMode(entry.mode, { syncGlobal: true, persist: true });
     mainSendInput.value = entry.content;
+    mainInputDrafts[entry.mode] = entry.content;
     updateMainInputHeight();
     const validation = validateSendContent(sendMode, entry.content, sendEncoding, SEND_LIMITS.main - (sendAppendCrLf ? 2 : 0));
     mainInputValidation.textContent = formatValidation(validation, sendMode, sendAppendCrLf);
@@ -2069,7 +2069,6 @@ function navigateMainInputHistory(direction) {
     mainSendBtn.disabled = !validation.ok;
     mainAddQuickSendBtn.disabled = !validation.ok;
     mainSendInput.placeholder = sendMode === 'hex' ? 'AA 55 01 FF' : tr('main.sendInputPlaceholder');
-    Object.assign(mainInputDrafts, preservedDrafts);
     focusMainInput();
 }
 

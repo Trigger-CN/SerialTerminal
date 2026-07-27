@@ -61,7 +61,7 @@
     "type": "git",
     "url": "https://github.com/Trigger-CN/SerialTerminal.git"
   },
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
     "electron": "^28.3.3",
