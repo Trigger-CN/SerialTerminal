@@ -151,6 +151,17 @@ const shellClearOnRestartCb = document.getElementById('shell-clear-on-restart');
 const workspaceRootEl = document.getElementById('workspace-root');
 const workspaceSplitterEl = document.getElementById('workspace-splitter');
 let suppressMainInputFocus = false;
+const DEFAULT_SHORTCUTS = {
+    sendMainInput: 'Ctrl+Enter',
+    toggleSendHistory: 'Alt+H',
+    historyPrevious: 'Alt+Up',
+    historyNext: 'Alt+Down',
+    focusSearch: 'Ctrl+F',
+    clearActiveTerminal: 'Ctrl+L',
+    refreshPorts: 'Ctrl+R',
+    toggleSerialConnection: 'Ctrl+Shift+D'
+};
+let activeShortcuts = { ...DEFAULT_SHORTCUTS };
 
 function setActionStatus(message) {
     if (mainActionStatus) {
@@ -665,6 +676,18 @@ function setSearchFromText(text) {
     searchInput.value = text;
     resetSearchState();
     selectFirstSearchResult({ force: true });
+}
+
+function focusSearchWithActiveSelection() {
+    const target = getActiveSearchTarget();
+    const selectedText = target?.term?.hasSelection?.() ? target.term.getSelection() : '';
+    if (selectedText) {
+        setSearchFromText(selectedText);
+        return;
+    }
+    showSidebarTab('tab-search');
+    searchInput?.focus();
+    searchInput?.select();
 }
 
 function clearTerminalByTabId(tabId) {
@@ -2089,6 +2112,85 @@ function toggleMainInputHistoryMenu() {
     mainInputHistoryMenu.classList.toggle('hidden');
 }
 
+function normalizeShortcutKeyName(key) {
+    if (key === ' ') return 'Space';
+    if (key === 'ArrowUp') return 'Up';
+    if (key === 'ArrowDown') return 'Down';
+    if (key === 'ArrowLeft') return 'Left';
+    if (key === 'ArrowRight') return 'Right';
+    if (key.length === 1) return key.toUpperCase();
+    return key;
+}
+
+function shortcutFromEvent(event) {
+    const key = normalizeShortcutKeyName(event.key);
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) return '';
+    const parts = [];
+    if (event.ctrlKey) parts.push('Ctrl');
+    if (event.altKey) parts.push('Alt');
+    if (event.shiftKey) parts.push('Shift');
+    if (event.metaKey) parts.push('Meta');
+    parts.push(key);
+    return parts.join('+');
+}
+
+function normalizeShortcutSettings(shortcuts = {}) {
+    const normalized = { ...DEFAULT_SHORTCUTS };
+    Object.keys(DEFAULT_SHORTCUTS).forEach(action => {
+        if (typeof shortcuts[action] === 'string') normalized[action] = shortcuts[action].trim();
+    });
+    return normalized;
+}
+
+function isEditableShortcutTarget(target) {
+    if (!target) return false;
+    if (target === mainSendInput || target === searchInput) return false;
+    if (target.closest?.('.xterm')) return false;
+    return target.matches?.('input, textarea, select, [contenteditable="true"]') === true;
+}
+
+function getShortcutAction(combo) {
+    return Object.entries(activeShortcuts).find(([, value]) => value && value === combo)?.[0] || '';
+}
+
+function handleAppShortcut(event) {
+    const combo = shortcutFromEvent(event);
+    if (!combo) return;
+    const action = getShortcutAction(combo);
+    if (!action) return;
+    if (isEditableShortcutTarget(event.target)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    switch (action) {
+        case 'sendMainInput':
+            sendMainInputBuffer();
+            break;
+        case 'toggleSendHistory':
+            toggleMainInputHistoryMenu();
+            break;
+        case 'historyPrevious':
+            navigateMainInputHistory(1);
+            break;
+        case 'historyNext':
+            navigateMainInputHistory(-1);
+            break;
+        case 'focusSearch':
+            focusSearchWithActiveSelection();
+            break;
+        case 'clearActiveTerminal':
+            clearActiveTerminal();
+            break;
+        case 'refreshPorts':
+            refreshPorts();
+            break;
+        case 'toggleSerialConnection':
+            toggleSerialConnection();
+            break;
+    }
+}
+
 function pushMainInputHistory(entry) {
     if (!entry?.content) return;
     if (mainInputHistoryLimit <= 0) return;
@@ -2131,6 +2233,16 @@ function navigateMainInputHistory(direction) {
     mainAddQuickSendBtn.disabled = !validation.ok;
     mainSendInput.placeholder = sendMode === 'hex' ? 'AA 55 01 FF' : tr('main.sendInputPlaceholder');
     focusMainInput();
+}
+
+function isMainInputCaretOnFirstLine() {
+    const caretStart = mainSendInput.selectionStart ?? 0;
+    return !mainSendInput.value.slice(0, caretStart).includes('\n');
+}
+
+function isMainInputCaretOnLastLine() {
+    const caretEnd = mainSendInput.selectionEnd ?? 0;
+    return !mainSendInput.value.slice(caretEnd).includes('\n');
 }
 
 function clearMainInput() {
@@ -2220,6 +2332,8 @@ function saveMainInputSettings() {
 function bindMainInputEvents() {
     if (!mainSendInput) return;
 
+    document.addEventListener('keydown', handleAppShortcut, true);
+
     mainSendInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey && mainSendOnEnterCb?.checked) {
             event.preventDefault();
@@ -2227,13 +2341,13 @@ function bindMainInputEvents() {
             return;
         }
 
-        if (event.key === 'ArrowUp') {
+        if (event.key === 'ArrowUp' && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && isMainInputCaretOnFirstLine()) {
             event.preventDefault();
             navigateMainInputHistory(1);
             return;
         }
 
-        if (event.key === 'ArrowDown') {
+        if (event.key === 'ArrowDown' && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && isMainInputCaretOnLastLine()) {
             event.preventDefault();
             navigateMainInputHistory(-1);
             return;
@@ -2361,6 +2475,7 @@ function applyConfig(config) {
     isApplyingConfig = true;
     try {
     currentConfig = config;
+    activeShortcuts = normalizeShortcutSettings(config.shortcuts);
     let sendProfileChanged = false;
     currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
@@ -2891,7 +3006,7 @@ portSelect.addEventListener('change', () => {
     }
 });
 
-clearBtn.addEventListener('click', () => {
+function clearActiveTerminal() {
     const { tabId: activeTabId } = getActiveTabInfo();
     const activeTabPane = activeTabId ? document.getElementById(activeTabId) : null;
     if (!activeTabPane) return;
@@ -2909,7 +3024,9 @@ clearBtn.addEventListener('click', () => {
             filterTab.contextLineText = '';
         }
     }
-});
+}
+
+clearBtn.addEventListener('click', clearActiveTerminal);
 
 const openLogFolderBtn = document.getElementById('open-log-folder-btn');
 openLogFolderBtn.addEventListener('click', () => {
@@ -2917,7 +3034,7 @@ openLogFolderBtn.addEventListener('click', () => {
     setActionStatus('已打开日志文件夹');
 });
 
-connectBtn.addEventListener('click', async () => {
+async function toggleSerialConnection() {
     if (serialConnectInProgress) return;
     if (isConnected) {
         disconnectSerial();
@@ -2980,7 +3097,9 @@ connectBtn.addEventListener('click', async () => {
             connectBtn.disabled = false;
         }
     }
-});
+}
+
+connectBtn.addEventListener('click', toggleSerialConnection);
 
 // refreshPorts(); // Moved to config load chain
 

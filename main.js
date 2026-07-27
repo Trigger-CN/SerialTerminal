@@ -26,6 +26,16 @@ const configPath = path.join(app.getPath('userData'), 'config.json');
 const CONFIG_VERSION = 3;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
+const DEFAULT_SHORTCUTS = {
+  sendMainInput: 'Ctrl+Enter',
+  toggleSendHistory: 'Alt+H',
+  historyPrevious: 'Alt+Up',
+  historyNext: 'Alt+Down',
+  focusSearch: 'Ctrl+F',
+  clearActiveTerminal: 'Ctrl+L',
+  refreshPorts: 'Ctrl+R',
+  toggleSerialConnection: 'Ctrl+Shift+D'
+};
 
 function oneOf(value, allowed, fallback) {
   return allowed.has(value) ? value : fallback;
@@ -48,6 +58,15 @@ function normalizeMainInputHistory(history, limit) {
       content: item.content
     }))
     .slice(-limit);
+}
+
+function normalizeShortcuts(shortcuts) {
+  const source = shortcuts && typeof shortcuts === 'object' && !Array.isArray(shortcuts) ? shortcuts : {};
+  const normalized = { ...DEFAULT_SHORTCUTS };
+  Object.keys(DEFAULT_SHORTCUTS).forEach(action => {
+    if (typeof source[action] === 'string') normalized[action] = source[action].trim();
+  });
+  return normalized;
 }
 
 function normalizeConfig(config, defaults) {
@@ -107,6 +126,7 @@ function normalizeConfig(config, defaults) {
     historyLimit: normalizeMainInputHistoryLimit(oldMainInput.historyLimit)
   };
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
+  normalized.shortcuts = normalizeShortcuts(source.shortcuts);
 
   const oldAutoSend = source.autoSendSettings && typeof source.autoSendSettings === 'object'
     ? source.autoSendSettings
@@ -243,6 +263,7 @@ function loadConfig() {
       historyLimit: 20
     },
     mainInputHistory: [],
+    shortcuts: DEFAULT_SHORTCUTS,
     autoSendSettings: {
       enabled: false,
       interval: 1000,

@@ -64,7 +64,11 @@ const elements = {
 
   // Shell profiles
   shellProfilesList: document.getElementById('shell-profiles-list'),
-  addShellProfileBtn: document.getElementById('add-shell-profile-btn')
+  addShellProfileBtn: document.getElementById('add-shell-profile-btn'),
+
+  // Shortcuts
+  shortcutsList: document.getElementById('shortcuts-list'),
+  resetShortcutsBtn: document.getElementById('reset-shortcuts-btn')
 };
 
 let shellProfiles = [];
@@ -86,6 +90,27 @@ const DEFAULT_HIGHLIGHT_RULES = [
     { regex: "\\b\\d+(\\.\\d+)?\\b", color: "#13c2c2", enabled: true, caseSensitive: true, useRegex: true },
     { regex: "[+\\-*/=<>!&|%^~]+", color: "#eb2f96", enabled: true, caseSensitive: true, useRegex: true }
 ];
+const DEFAULT_SHORTCUTS = {
+    sendMainInput: 'Ctrl+Enter',
+    toggleSendHistory: 'Alt+H',
+    historyPrevious: 'Alt+Up',
+    historyNext: 'Alt+Down',
+    focusSearch: 'Ctrl+F',
+    clearActiveTerminal: 'Ctrl+L',
+    refreshPorts: 'Ctrl+R',
+    toggleSerialConnection: 'Ctrl+Shift+D'
+};
+const SHORTCUT_ACTIONS = [
+    ['sendMainInput', 'prefs.shortcutSendMainInput'],
+    ['toggleSendHistory', 'prefs.shortcutToggleSendHistory'],
+    ['historyPrevious', 'prefs.shortcutHistoryPrevious'],
+    ['historyNext', 'prefs.shortcutHistoryNext'],
+    ['focusSearch', 'prefs.shortcutFocusSearch'],
+    ['clearActiveTerminal', 'prefs.shortcutClearActiveTerminal'],
+    ['refreshPorts', 'prefs.shortcutRefreshPorts'],
+    ['toggleSerialConnection', 'prefs.shortcutToggleSerialConnection']
+];
+let shortcutValues = { ...DEFAULT_SHORTCUTS };
 
 function normalizeLogAutoFlushMB(value) {
     const mb = Number.parseInt(value, 10);
@@ -141,6 +166,72 @@ function applyPrefsI18n() {
     if (elements.cancelBtn) elements.cancelBtn.textContent = tr('prefs.cancel');
     if (elements.resetBtn) elements.resetBtn.textContent = tr('prefs.resetDefaults');
     if (elements.openConfigBtn) elements.openConfigBtn.textContent = tr('prefs.openConfigFolder');
+    if (elements.resetShortcutsBtn) elements.resetShortcutsBtn.textContent = tr('prefs.resetShortcutDefaults');
+    renderShortcuts();
+}
+
+function normalizeShortcutKeyName(key) {
+    if (key === ' ') return 'Space';
+    if (key === 'ArrowUp') return 'Up';
+    if (key === 'ArrowDown') return 'Down';
+    if (key === 'ArrowLeft') return 'Left';
+    if (key === 'ArrowRight') return 'Right';
+    if (key.length === 1) return key.toUpperCase();
+    return key;
+}
+
+function formatShortcutFromEvent(event) {
+    const key = normalizeShortcutKeyName(event.key);
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) return '';
+    if (key === 'Backspace' || key === 'Delete') return '';
+    const parts = [];
+    if (event.ctrlKey) parts.push('Ctrl');
+    if (event.altKey) parts.push('Alt');
+    if (event.shiftKey) parts.push('Shift');
+    if (event.metaKey) parts.push('Meta');
+    parts.push(key);
+    return parts.join('+');
+}
+
+function normalizeShortcuts(shortcuts = {}) {
+    const normalized = { ...DEFAULT_SHORTCUTS };
+    Object.keys(DEFAULT_SHORTCUTS).forEach(action => {
+        if (typeof shortcuts[action] === 'string') normalized[action] = shortcuts[action].trim();
+    });
+    return normalized;
+}
+
+function renderShortcuts() {
+    if (!elements.shortcutsList) return;
+    elements.shortcutsList.innerHTML = '';
+    SHORTCUT_ACTIONS.forEach(([action, labelKey]) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display: grid; grid-template-columns: minmax(160px, 1fr) 180px; gap: 10px; align-items: center; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px;';
+
+        const label = document.createElement('label');
+        label.textContent = tr(labelKey);
+        label.style.margin = '0';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.readOnly = true;
+        input.value = shortcutValues[action] || '';
+        input.placeholder = tr('prefs.shortcutDisabled');
+        input.dataset.action = action;
+        input.style.cssText = 'width: 100%; font-family: Consolas, monospace; cursor: pointer;';
+        input.addEventListener('keydown', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const next = formatShortcutFromEvent(event);
+            shortcutValues[action] = next;
+            input.value = next;
+        });
+        input.addEventListener('focus', () => input.select());
+
+        row.appendChild(label);
+        row.appendChild(input);
+        elements.shortcutsList.appendChild(row);
+    });
 }
 
 function populateLanguageOptions() {
@@ -379,6 +470,9 @@ async function init() {
 
   renderHighlightRules(config.highlightRules || []);
 
+  shortcutValues = normalizeShortcuts(config.shortcuts);
+  renderShortcuts();
+
   // Load shell profiles
   shellProfiles = Array.isArray(config.shellProfiles) ? JSON.parse(JSON.stringify(config.shellProfiles)) : [];
   defaultShellProfileName = config.defaultShellProfile || '';
@@ -533,6 +627,13 @@ if (elements.addShellProfileBtn) {
     elements.addShellProfileBtn.onclick = addShellProfile;
 }
 
+if (elements.resetShortcutsBtn) {
+    elements.resetShortcutsBtn.onclick = () => {
+        shortcutValues = { ...DEFAULT_SHORTCUTS };
+        renderShortcuts();
+    };
+}
+
 elements.foreground.oninput = (e) => elements.foregroundHex.textContent = e.target.value;
 elements.background.oninput = (e) => elements.backgroundHex.textContent = e.target.value;
 elements.timestampColor.oninput = (e) => elements.timestampColorHex.textContent = e.target.value;
@@ -605,6 +706,7 @@ elements.saveBtn.onclick = async () => {
     saveRawSerialToFile: elements.saveRawSerialToFile.checked,
     rawLogFileNameFormat,
     highlightRules: rules,
+    shortcuts: normalizeShortcuts(shortcutValues),
     shellProfiles,
     defaultShellProfile: defaultShellProfileName
   };

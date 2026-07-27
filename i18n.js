@@ -354,6 +354,31 @@ Object.assign(translations['zh-TW'].main, { sendHistory: '傳送歷史' });
 Object.assign(translations.fr.main, { sendHistory: 'Historique d’envoi' });
 Object.assign(translations.ru.main, { sendHistory: 'История отправки' });
 Object.assign(translations.de.main, { sendHistory: 'Sendungsverlauf' });
+
+Object.assign(translations.en.prefs, {
+  shortcuts: 'Shortcuts', shortcutsSettings: 'Shortcut Settings', shortcutsHelp: 'Click a shortcut field and press a key combination. Backspace clears a shortcut.', resetShortcutDefaults: 'Reset Shortcut Defaults', shortcutDisabled: 'Disabled',
+  shortcutSendMainInput: 'Send bottom input', shortcutToggleSendHistory: 'Open send history', shortcutHistoryPrevious: 'Previous send history', shortcutHistoryNext: 'Next send history', shortcutFocusSearch: 'Focus search', shortcutClearActiveTerminal: 'Clear active terminal', shortcutRefreshPorts: 'Refresh serial ports', shortcutToggleSerialConnection: 'Connect / disconnect serial'
+});
+Object.assign(translations['zh-CN'].prefs, {
+  shortcuts: '快捷键', shortcutsSettings: '快捷键设置', shortcutsHelp: '点击快捷键输入框后按下组合键。按 Backspace 清空快捷键。', resetShortcutDefaults: '恢复默认快捷键', shortcutDisabled: '已禁用',
+  shortcutSendMainInput: '发送底部输入框', shortcutToggleSendHistory: '打开发送历史', shortcutHistoryPrevious: '上一条发送历史', shortcutHistoryNext: '下一条发送历史', shortcutFocusSearch: '聚焦搜索', shortcutClearActiveTerminal: '清空当前终端', shortcutRefreshPorts: '刷新串口', shortcutToggleSerialConnection: '连接 / 断开串口'
+});
+Object.assign(translations['zh-TW'].prefs, {
+  shortcuts: '快捷鍵', shortcutsSettings: '快捷鍵設定', shortcutsHelp: '點擊快捷鍵輸入框後按下組合鍵。按 Backspace 清空快捷鍵。', resetShortcutDefaults: '恢復預設快捷鍵', shortcutDisabled: '已停用',
+  shortcutSendMainInput: '傳送底部輸入框', shortcutToggleSendHistory: '開啟傳送歷史', shortcutHistoryPrevious: '上一筆傳送歷史', shortcutHistoryNext: '下一筆傳送歷史', shortcutFocusSearch: '聚焦搜尋', shortcutClearActiveTerminal: '清空目前終端', shortcutRefreshPorts: '重新整理串口', shortcutToggleSerialConnection: '連接 / 中斷串口'
+});
+Object.assign(translations.fr.prefs, {
+  shortcuts: 'Raccourcis', shortcutsSettings: 'Paramètres des raccourcis', shortcutsHelp: 'Cliquez dans un champ puis appuyez sur une combinaison. Backspace efface le raccourci.', resetShortcutDefaults: 'Réinitialiser les raccourcis', shortcutDisabled: 'Désactivé',
+  shortcutSendMainInput: 'Envoyer la saisie inférieure', shortcutToggleSendHistory: 'Ouvrir l’historique d’envoi', shortcutHistoryPrevious: 'Historique précédent', shortcutHistoryNext: 'Historique suivant', shortcutFocusSearch: 'Focus recherche', shortcutClearActiveTerminal: 'Effacer le terminal actif', shortcutRefreshPorts: 'Actualiser les ports série', shortcutToggleSerialConnection: 'Connecter / déconnecter le port série'
+});
+Object.assign(translations.ru.prefs, {
+  shortcuts: 'Горячие клавиши', shortcutsSettings: 'Настройки горячих клавиш', shortcutsHelp: 'Нажмите поле и введите комбинацию клавиш. Backspace очищает сочетание.', resetShortcutDefaults: 'Сбросить горячие клавиши', shortcutDisabled: 'Отключено',
+  shortcutSendMainInput: 'Отправить нижнее поле', shortcutToggleSendHistory: 'Открыть историю отправки', shortcutHistoryPrevious: 'Предыдущая история отправки', shortcutHistoryNext: 'Следующая история отправки', shortcutFocusSearch: 'Фокус на поиск', shortcutClearActiveTerminal: 'Очистить активный терминал', shortcutRefreshPorts: 'Обновить порты', shortcutToggleSerialConnection: 'Подключить / отключить порт'
+});
+Object.assign(translations.de.prefs, {
+  shortcuts: 'Tastenkürzel', shortcutsSettings: 'Tastenkürzel-Einstellungen', shortcutsHelp: 'In ein Feld klicken und eine Tastenkombination drücken. Backspace löscht das Kürzel.', resetShortcutDefaults: 'Tastenkürzel zurücksetzen', shortcutDisabled: 'Deaktiviert',
+  shortcutSendMainInput: 'Unteres Eingabefeld senden', shortcutToggleSendHistory: 'Sendungsverlauf öffnen', shortcutHistoryPrevious: 'Vorheriger Sendungsverlauf', shortcutHistoryNext: 'Nächster Sendungsverlauf', shortcutFocusSearch: 'Suche fokussieren', shortcutClearActiveTerminal: 'Aktives Terminal leeren', shortcutRefreshPorts: 'Serielle Ports aktualisieren', shortcutToggleSerialConnection: 'Seriell verbinden / trennen'
+});
 function getLanguage(configLanguage) {
   return translations[configLanguage] ? configLanguage : 'en';
 }
