@@ -25,6 +25,7 @@ const elements = {
   scrollbackLimit: document.getElementById('scrollbackLimit'),
   historyBufferSize: document.getElementById('historyBufferSize'),
   mouseWheelScrollLines: document.getElementById('mouseWheelScrollLines'),
+  mainInputHistoryLimit: document.getElementById('mainInputHistoryLimit'),
   hexBytesPerLine: document.getElementById('hexBytesPerLine'),
   hexShowOffset: document.getElementById('hexShowOffset'),
   hexShowAscii: document.getElementById('hexShowAscii'),
@@ -89,6 +90,11 @@ const DEFAULT_HIGHLIGHT_RULES = [
 function normalizeLogAutoFlushMB(value) {
     const mb = Number.parseInt(value, 10);
     return Number.isFinite(mb) ? Math.min(1024, Math.max(1, mb)) : 10;
+}
+
+function normalizeMainInputHistoryLimit(value) {
+    const limit = Number.parseInt(value, 10);
+    return Number.isFinite(limit) ? Math.min(200, Math.max(0, limit)) : 20;
 }
 
 function normalizeHexDisplaySettings(settings = {}) {
@@ -348,6 +354,7 @@ async function init() {
   elements.scrollbackLimit.value = config.scrollbackLimit || 100000;
   elements.historyBufferSize.value = config.historyBufferSize || 5000000;
   elements.mouseWheelScrollLines.value = config.mouseWheelScrollLines || 3;
+  elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(config.mainInputSettings?.historyLimit));
 
   const hexDisplaySettings = normalizeHexDisplaySettings(config.hexDisplaySettings);
   elements.hexBytesPerLine.value = String(hexDisplaySettings.bytesPerLine);
@@ -542,6 +549,9 @@ elements.rawLogFileNameFormat.onchange = () => {
 elements.rawBufferAutoFlushMB.onchange = () => {
     elements.rawBufferAutoFlushMB.value = String(normalizeLogAutoFlushMB(elements.rawBufferAutoFlushMB.value));
 };
+elements.mainInputHistoryLimit.onchange = () => {
+    elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(elements.mainInputHistoryLimit.value));
+};
 
 elements.browseBtn.onclick = async () => {
   const path = await ipcRenderer.invoke('select-directory');
@@ -564,6 +574,7 @@ elements.saveBtn.onclick = async () => {
       idleFlushMs: elements.hexIdleFlushMs.value
   });
   const rawLogFileNameFormat = normalizeRawLogFileNameFormat(elements.rawLogFileNameFormat.value);
+  const existingMainInputSettings = await ipcRenderer.invoke('get-config').then(cfg => cfg.mainInputSettings || {}).catch(() => ({}));
 
   const config = {
         language: elements.languageSelect.value,
@@ -577,6 +588,10 @@ elements.saveBtn.onclick = async () => {
     scrollbackLimit: parseInt(elements.scrollbackLimit.value) || 100000,
     historyBufferSize: parseInt(elements.historyBufferSize.value) || 5000000,
     mouseWheelScrollLines: parseInt(elements.mouseWheelScrollLines.value) || 3,
+    mainInputSettings: {
+        ...existingMainInputSettings,
+        historyLimit: normalizeMainInputHistoryLimit(elements.mainInputHistoryLimit.value)
+    },
     hexDisplaySettings,
     logEnabled: elements.logEnabled.checked,
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,

@@ -125,6 +125,8 @@ function hexToAnsi(hex) {
 const showTimestampCb = document.getElementById('show-timestamp');
 const showLinenoCb = document.getElementById('show-lineno');
 const mainSendInput = document.getElementById('main-send-input');
+const mainInputHistoryBtn = document.getElementById('main-input-history-btn');
+const mainInputHistoryMenu = document.getElementById('main-input-history-menu');
 const mainSendBtn = document.getElementById('main-send-btn');
 const mainAddQuickSendBtn = document.getElementById('main-add-quick-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
@@ -1779,6 +1781,7 @@ ipcRenderer.on('terminal-context-menu-action', (event, payload) => {
 let mainInputHistory = [];
 let mainInputHistoryIndex = -1;
 let mainInputHistoryDraft = null;
+let mainInputHistoryLimit = 20;
 const mainInputDrafts = { text: '', hex: '' };
 let mainInputMode = 'text';
 
@@ -2031,17 +2034,75 @@ function focusMainInput() {
     mainSendInput.setSelectionRange(len, len);
 }
 
+function normalizeMainInputHistoryLimit(value) {
+    const limit = Number.parseInt(value, 10);
+    return Number.isFinite(limit) ? Math.min(200, Math.max(0, limit)) : 20;
+}
+
+function normalizeMainInputHistory(history, limit = mainInputHistoryLimit) {
+    if (!Array.isArray(history) || limit <= 0) return [];
+    return history.filter(item => item && typeof item === 'object' && typeof item.content === 'string' && item.content)
+        .map(item => ({ mode: item.mode === 'hex' ? 'hex' : 'text', content: item.content }))
+        .slice(-limit);
+}
+
+function formatMainInputHistoryPreview(entry) {
+    const normalized = String(entry.content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const [firstLine = ''] = normalized.split('\n');
+    const suffix = normalized.includes('\n') ? '...' : '';
+    return `[${entry.mode.toUpperCase()}] ${firstLine || tr('common.emptyContent')}${suffix}`;
+}
+
+function saveMainInputHistory() {
+    if (isApplyingConfig) return;
+    if (currentConfig) currentConfig.mainInputHistory = mainInputHistory;
+    ipcRenderer.send('save-config', { mainInputHistory });
+}
+
+function renderMainInputHistoryMenu() {
+    if (!mainInputHistoryMenu || !mainInputHistoryBtn) return;
+    mainInputHistoryMenu.innerHTML = '';
+    mainInputHistoryBtn.disabled = mainInputHistory.length === 0;
+    if (!mainInputHistory.length) {
+        mainInputHistoryMenu.classList.add('hidden');
+        return;
+    }
+
+    mainInputHistory.slice().reverse().forEach(entry => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'main-input-history-item';
+        item.textContent = formatMainInputHistoryPreview(entry);
+        item.title = entry.content;
+        item.addEventListener('click', () => {
+            mainInputHistoryMenu.classList.add('hidden');
+            mainInputHistoryIndex = -1;
+            mainInputHistoryDraft = null;
+            putTextInMainInput(entry.content, entry.mode);
+        });
+        mainInputHistoryMenu.appendChild(item);
+    });
+}
+
+function toggleMainInputHistoryMenu() {
+    if (!mainInputHistoryMenu || !mainInputHistory.length) return;
+    mainInputHistoryMenu.classList.toggle('hidden');
+}
+
 function pushMainInputHistory(entry) {
     if (!entry?.content) return;
-    const previous = mainInputHistory[mainInputHistory.length - 1];
-    if (!previous || JSON.stringify(previous) !== JSON.stringify(entry)) {
-        mainInputHistory.push(entry);
-        if (mainInputHistory.length > 100) {
-            mainInputHistory.shift();
-        }
+    if (mainInputHistoryLimit <= 0) return;
+    const normalizedEntry = { mode: entry.mode === 'hex' ? 'hex' : 'text', content: entry.content };
+    const existingIndex = mainInputHistory.findIndex(item => item.mode === normalizedEntry.mode && item.content === normalizedEntry.content);
+    if (existingIndex >= 0) {
+        mainInputHistory.splice(existingIndex, 1);
     }
+    mainInputHistory.push(normalizedEntry);
+    mainInputHistory = normalizeMainInputHistory(mainInputHistory, mainInputHistoryLimit);
     mainInputHistoryIndex = -1;
     mainInputHistoryDraft = null;
+    renderMainInputHistoryMenu();
+    saveMainInputHistory();
 }
 
 function navigateMainInputHistory(direction) {
@@ -2150,7 +2211,8 @@ function saveMainInputSettings() {
     ipcRenderer.send('save-config', {
         mainInputSettings: {
             visible: !mainInputPanel?.classList.contains('hidden'),
-            sendOnEnter: mainSendOnEnterCb?.checked !== false
+            sendOnEnter: mainSendOnEnterCb?.checked !== false,
+            historyLimit: mainInputHistoryLimit
         }
     });
 }
@@ -2181,6 +2243,15 @@ function bindMainInputEvents() {
     mainSendInput.addEventListener('input', updateMainInputState);
     mainSendBtn.addEventListener('click', sendMainInputBuffer);
     mainAddQuickSendBtn?.addEventListener('click', addMainInputToQuickSend);
+    mainInputHistoryBtn?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleMainInputHistoryMenu();
+    });
+    document.addEventListener('click', (event) => {
+        if (mainInputHistoryMenu?.classList.contains('hidden')) return;
+        if (mainInputHistoryMenu.contains(event.target) || mainInputHistoryBtn?.contains(event.target)) return;
+        mainInputHistoryMenu.classList.add('hidden');
+    });
     mainSendOnEnterCb?.addEventListener('change', saveMainInputSettings);
     toggleMainInputBtn?.addEventListener('click', () => {
         const visible = mainInputPanel?.classList.contains('hidden');
@@ -2193,6 +2264,9 @@ function bindMainInputEvents() {
 
 function applyMainInputConfig(config) {
     const settings = config.mainInputSettings || {};
+    mainInputHistoryLimit = normalizeMainInputHistoryLimit(settings.historyLimit);
+    mainInputHistory = normalizeMainInputHistory(config.mainInputHistory, mainInputHistoryLimit);
+    renderMainInputHistoryMenu();
     setMainInputPanelVisible(settings.visible !== false, false);
     if (mainSendOnEnterCb) {
         mainSendOnEnterCb.checked = settings.sendOnEnter !== false;

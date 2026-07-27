@@ -35,6 +35,21 @@ function normalizeBoolean(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+function normalizeMainInputHistoryLimit(value) {
+  const limit = Number.parseInt(value, 10);
+  return Number.isFinite(limit) ? Math.min(200, Math.max(0, limit)) : 20;
+}
+
+function normalizeMainInputHistory(history, limit) {
+  if (!Array.isArray(history) || limit <= 0) return [];
+  return history.filter(item => item && typeof item === 'object' && typeof item.content === 'string' && item.content)
+    .map(item => ({
+      mode: oneOf(item.mode, SERIAL_MODES, 'text'),
+      content: item.content
+    }))
+    .slice(-limit);
+}
+
 function normalizeConfig(config, defaults) {
   const source = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
   const normalized = { ...defaults, ...source, configVersion: CONFIG_VERSION };
@@ -88,8 +103,10 @@ function normalizeConfig(config, defaults) {
     : {};
   normalized.mainInputSettings = {
     visible: normalizeBoolean(oldMainInput.visible, true),
-    sendOnEnter: normalizeBoolean(oldMainInput.sendOnEnter, true)
+    sendOnEnter: normalizeBoolean(oldMainInput.sendOnEnter, true),
+    historyLimit: normalizeMainInputHistoryLimit(oldMainInput.historyLimit)
   };
+  normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
 
   const oldAutoSend = source.autoSendSettings && typeof source.autoSendSettings === 'object'
     ? source.autoSendSettings
@@ -222,8 +239,10 @@ function loadConfig() {
     },
     mainInputSettings: {
       visible: true,
-      sendOnEnter: true
+      sendOnEnter: true,
+      historyLimit: 20
     },
+    mainInputHistory: [],
     autoSendSettings: {
       enabled: false,
       interval: 1000,

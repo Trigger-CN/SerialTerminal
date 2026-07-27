@@ -21,6 +21,8 @@
 - 设置-高亮页提供“恢复默认高亮”，仅重置高亮规则列表，保存后写入默认高亮配置，不影响其它设置；`README.md` 已同步说明。
 - 项目开源协议为 MIT；`LICENSE`、`package.json`、`package-lock.json` 和 `README.md` 应保持一致。
 - 底部发送框历史导航需同步 `mainInputDrafts[entry.mode]`，避免上/下方向键切到历史内容后又被当前草稿覆盖。
+- 底部发送框 meta 行中长度/校验提示应优先保留宽度；“上一条发送”提示右对齐并让位，窄屏再恢复左对齐换行。
+- 底部发送框发送历史持久化到 `mainInputHistory`；设置项 `mainInputSettings.historyLimit` 默认 20，范围 0-200，新增历史时去重后追加，超限删除最老条目。历史下拉只替换输入框内容，不立即发送。
 
 ---
 
