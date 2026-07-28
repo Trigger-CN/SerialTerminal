@@ -27,6 +27,8 @@ let appliedHexSettingsKey = '';
 let serialWriteChain = Promise.resolve();
 let serialSessionId = 0;
 let serialConnectInProgress = false;
+let serialReconnectInProgress = false;
+let serialDisconnectWaiters = [];
 // let currentMode = 'terminal'; // Removed temporarily
 
 // Display Settings
@@ -2904,6 +2906,12 @@ function disconnectSerial() {
     ipcRenderer.send('disconnect-serial');
 }
 
+function waitForSerialDisconnected() {
+    return new Promise(resolve => {
+        serialDisconnectWaiters.push(resolve);
+    });
+}
+
 ipcRenderer.on('serial-disconnected', (event, message) => {
     serialSessionId++;
     serialWriteChain = Promise.resolve();
@@ -2923,6 +2931,9 @@ ipcRenderer.on('serial-disconnected', (event, message) => {
         setActionStatus(message);
     }
     ipcRenderer.send('flush-tab-logs');
+    const waiters = serialDisconnectWaiters;
+    serialDisconnectWaiters = [];
+    waiters.forEach(resolve => resolve());
 });
 
 ipcRenderer.on('log-saved', (event, payload = {}) => {
@@ -2969,19 +2980,19 @@ baudSelect.addEventListener('change', () => {
         baudCustomInput.focus();
         return;
     }
-    saveSerialModeConfig();
+    applySerialParameterChange({ reconnect: true });
 });
 
 baudCustomCancel.addEventListener('click', () => {
     baudCustomWrapper.style.display = 'none';
     baudSelect.style.display = 'block';
     baudSelect.value = '115200'; // Reset to default
-    saveSerialModeConfig();
+    applySerialParameterChange({ reconnect: true });
 });
 
 function saveCustomBaudRate() {
     if (baudSelect.value === 'custom' && baudCustomInput.value.trim()) {
-        saveSerialModeConfig();
+        applySerialParameterChange({ reconnect: true });
     }
 }
 
@@ -2991,6 +3002,13 @@ baudCustomInput.addEventListener('blur', saveCustomBaudRate);
 ['data-bits-select', 'stop-bits-select', 'parity-select'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', saveSerialModeConfig);
 });
+
+function applySerialParameterChange({ reconnect = false } = {}) {
+    saveSerialModeConfig();
+    if (reconnect && isConnected && !serialConnectInProgress && !serialReconnectInProgress) {
+        reconnectSerialFromUi();
+    }
+}
 
 function getBaudRate() {
     if (baudSelect.value === 'custom') {
@@ -3072,69 +3090,97 @@ openLogFolderBtn.addEventListener('click', () => {
     setActionStatus('已打开日志文件夹');
 });
 
-async function toggleSerialConnection() {
+async function connectSerialFromUi({ reconnecting = false } = {}) {
     if (serialConnectInProgress) return;
-    if (isConnected) {
-        disconnectSerial();
-    } else {
-        const path = portSelect.value;
-        const baudRate = getBaudRate();
-        const dataBits = document.getElementById('data-bits-select').value;
-        const stopBits = document.getElementById('stop-bits-select').value;
-        const parity = document.getElementById('parity-select').value;
-        newlineMode = document.getElementById('newline-mode-select').value;
+    const path = portSelect.value;
+    const baudRate = getBaudRate();
+    const dataBits = document.getElementById('data-bits-select').value;
+    const stopBits = document.getElementById('stop-bits-select').value;
+    const parity = document.getElementById('parity-select').value;
+    newlineMode = document.getElementById('newline-mode-select').value;
 
-        if (!path) return;
-        serialConnectInProgress = true;
-        serialWriteChain = Promise.resolve();
-        hexFormatter.reset({ resetOffset: true });
-        resetTextReceive();
-        resetQuickTriggerReceive();
-        connectBtn.disabled = true;
-        try {
-            const connectResult = await ipcRenderer.invoke('connect-serial', {
+    if (!path) return;
+    serialConnectInProgress = true;
+    serialWriteChain = Promise.resolve();
+    hexFormatter.reset({ resetOffset: true });
+    resetTextReceive();
+    resetQuickTriggerReceive();
+    connectBtn.disabled = true;
+    if (reconnecting) setActionStatus(`正在应用新的波特率 ${baudRate}...`);
+    try {
+        const connectResult = await ipcRenderer.invoke('connect-serial', {
+            path,
+            baudRate,
+            dataBits,
+            stopBits,
+            parity,
+            sendEncoding,
+            newlineMode
+        });
+        serialSessionId = Number.isInteger(connectResult?.sessionId) ? connectResult.sessionId : serialSessionId + 1;
+
+        ipcRenderer.send('save-config', {
+            lastSerialOptions: {
                 path,
                 baudRate,
                 dataBits,
                 stopBits,
                 parity,
+                receiveDisplayMode,
+                receiveEncoding,
+                sendMode,
                 sendEncoding,
+                appendCrLf: sendAppendCrLf,
                 newlineMode
-            });
-            serialSessionId = Number.isInteger(connectResult?.sessionId) ? connectResult.sessionId : serialSessionId + 1;
+            }
+        });
 
-            ipcRenderer.send('save-config', {
-                lastSerialOptions: {
-                    path,
-                    baudRate,
-                    dataBits,
-                    stopBits,
-                    parity,
-                    receiveDisplayMode,
-                    receiveEncoding,
-                    sendMode,
-                    sendEncoding,
-                    appendCrLf: sendAppendCrLf,
-                    newlineMode
-                }
-            });
+        updateSerialConnectionState(true);
+        updateAutoSendState();
 
-            updateSerialConnectionState(true);
-            updateAutoSendState();
+        serialLineCounter = 1;
+        logLineCounter = 1;
+        serialNewLine = true;
 
-            serialLineCounter = 1;
-            logLineCounter = 1;
-            serialNewLine = true;
+        serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
+        setActionStatus(reconnecting ? `已重新连接串口 ${path} @ ${baudRate}` : `已连接串口 ${path} @ ${baudRate}`);
+    } catch (err) {
+        setActionStatus(reconnecting ? `串口重连失败：${err}` : `串口连接失败：${err}`);
+        alert((reconnecting ? 'Failed to reconnect: ' : 'Failed to connect: ') + err);
+    } finally {
+        serialConnectInProgress = false;
+        connectBtn.disabled = false;
+    }
+}
 
-            serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
-            setActionStatus(`已连接串口 ${path} @ ${baudRate}`);
-        } catch (err) {
-            setActionStatus(`串口连接失败：${err}`);
-            alert('Failed to connect: ' + err);
-        } finally {
-            serialConnectInProgress = false;
-            connectBtn.disabled = false;
-        }
+async function reconnectSerialFromUi() {
+    if (serialReconnectInProgress || serialConnectInProgress) return;
+    if (!isConnected) {
+        await connectSerialFromUi({ reconnecting: true });
+        return;
+    }
+
+    const baudRate = getBaudRate();
+    serialReconnectInProgress = true;
+    connectBtn.disabled = true;
+    setActionStatus(`正在应用新的波特率 ${baudRate}...`);
+    try {
+        const disconnected = waitForSerialDisconnected();
+        disconnectSerial();
+        await disconnected;
+        await connectSerialFromUi({ reconnecting: true });
+    } finally {
+        serialReconnectInProgress = false;
+        if (!serialConnectInProgress) connectBtn.disabled = false;
+    }
+}
+
+async function toggleSerialConnection() {
+    if (serialConnectInProgress) return;
+    if (isConnected) {
+        disconnectSerial();
+    } else {
+        await connectSerialFromUi();
     }
 }
 
