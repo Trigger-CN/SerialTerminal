@@ -835,7 +835,7 @@ function createPrefsWindow() {
     width: 750,
     height: 650,
     parent: mainWindow,
-    modal: true,
+    modal: false,
     title: 'Preferences',
     backgroundColor: '#252526',
     autoHideMenuBar: true, // Hide the menu bar

@@ -104,6 +104,7 @@ SerialTerminal/
 - 每个 profile 支持"浏览"按钮选择可执行文件
 - `open-log-folder` IPC：在资源管理器中打开日志目录（自动创建）
 - 设置窗口默认大小：750×650
+- 设置窗口使用主窗口作为 parent，但不使用 `modal: true`；Windows 下模态子窗口关闭会重新启用父窗口，容易导致主窗口 UI 整体闪烁
 
 #### `renderer.js`
 负责：
@@ -413,6 +414,7 @@ npm run dist:linux
 `renderer.js -> sendSerialRequest() -> ipcRenderer.invoke('serial-write') -> main.js -> writeSerialPayload()`
 - 渲染层先校验并串行化写请求；主进程再次调用 `buildSerialWriteBuffer()` 做最终校验
 - Text 使用 UTF-8/ASCII/GBK 编码；终端 Enter 根据 `newlineMode` 变为 CR/LF/CRLF
+- Text 发送最终只在 `serial-codec.js` 中通过 `iconv.encode(content, sendEncoding)` 转为 Buffer；主进程直接 `port.write()`，不会再次字符串转码。若对端文本显示乱码，优先让对端切 Hex 对照实际字节并确认其显示编码与 TX 编码一致，例如 `中文` UTF-8 为 `E4 B8 AD E6 96 87`，GBK 为 `D6 D0 CE C4`
 - Hex 使用严格 parser 生成实际字节，不把输入字符串作为待发数据
 - `appendCrLf` 对 Text/Hex 整段消息发送都追加真实 `0D 0A`，即使内容已以该字节序列结尾也会再次追加；主终端 Text 逐键输入不应用该选项，Enter 只服从 `newlineMode`
 - `SerialPort.write()` 回调成功后返回 `{ ok: true, bytesWritten }`，TX 吞吐量按最终 Buffer 长度统计；当前不调用 `drain()`
