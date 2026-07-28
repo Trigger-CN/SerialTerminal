@@ -140,7 +140,6 @@ function normalizeConfig(config, defaults) {
       ? oldAutoSend.content
       : (typeof oldAutoSend.text === 'string' ? oldAutoSend.text : '')
   };
-
   const usedQuickIds = new Set();
   normalized.quickSendList = Array.isArray(source.quickSendList)
     ? source.quickSendList.filter(item => item && typeof item === 'object').map((item, index) => {
@@ -151,6 +150,7 @@ function normalizeConfig(config, defaults) {
           id = `${id}-${suffix}`;
         }
         usedQuickIds.add(id);
+        const trigger = item.autoTrigger && typeof item.autoTrigger === 'object' ? item.autoTrigger : {};
         return {
           id,
           label: typeof item.label === 'string' ? item.label : '',
@@ -159,7 +159,14 @@ function normalizeConfig(config, defaults) {
             && normalized.lastSerialOptions.appendCrLf
             && /\r\n$/.test(item.content)
             ? item.content.slice(0, -2)
-            : (typeof item.content === 'string' ? item.content : '')
+            : (typeof item.content === 'string' ? item.content : ''),
+          autoTrigger: {
+            enabled: normalizeBoolean(trigger.enabled, false),
+            text: typeof trigger.text === 'string' ? trigger.text : '',
+            useRegex: normalizeBoolean(trigger.useRegex, false),
+            caseSensitive: normalizeBoolean(trigger.caseSensitive, false),
+            wholeWord: normalizeBoolean(trigger.wholeWord, false)
+          }
         };
       })
     : [];

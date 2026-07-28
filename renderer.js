@@ -21,6 +21,8 @@ let sendEncoding = 'utf8';
 let sendAppendCrLf = false;
 let newlineMode = 'crlf';
 let textDecoder = null;
+let quickTriggerDecoder = null;
+let quickTriggerBuffer = '';
 let appliedHexSettingsKey = '';
 let serialWriteChain = Promise.resolve();
 let serialSessionId = 0;
@@ -446,6 +448,15 @@ function createTextDecoder() {
     textDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8');
 }
 
+function createQuickTriggerDecoder() {
+    quickTriggerDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8');
+}
+
+function resetQuickTriggerReceive() {
+    quickTriggerDecoder = null;
+    quickTriggerBuffer = '';
+}
+
 function flushTextReceive() {
     if (textDecoder) {
         const finalText = textDecoder.end();
@@ -497,6 +508,7 @@ function switchReceiveEncoding(nextEncoding, { persist = true } = {}) {
         if (receiveDisplayMode === 'text') flushTextReceive();
         receiveEncoding = normalized;
         if (receiveDisplayMode === 'text') createTextDecoder();
+        resetQuickTriggerReceive();
     }
     if (receiveEncodingSelect) receiveEncodingSelect.value = normalized;
     if (persist && !isApplyingConfig) saveSerialModeConfig();
@@ -2311,7 +2323,14 @@ function addMainInputToQuickSend() {
     quickSendList.push({
         id: createQuickSendId(),
         label: buildQuickSendLabel(content),
-        content
+        content,
+        autoTrigger: {
+            enabled: false,
+            text: '',
+            useRegex: false,
+            caseSensitive: false,
+            wholeWord: false
+        }
     });
     renderQuickSendList();
     saveQuickSendList();
@@ -2748,6 +2767,7 @@ ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     if (payload.sessionId !== undefined && payload.sessionId !== serialSessionId) return;
     const bytes = payload.bytes instanceof Uint8Array ? payload.bytes : Uint8Array.from(payload.bytes || []);
     if (!bytes.length) return;
+    processQuickSendAutoTriggers(bytes);
     if (receiveDisplayMode === 'hex') {
         hexFormatter.push(bytes);
     } else {
@@ -2879,6 +2899,7 @@ function disconnectSerial() {
     serialSessionId++;
     serialWriteChain = Promise.resolve();
     stopAutoSendRuntime();
+    resetQuickTriggerReceive();
     updateSerialConnectionState(false);
     ipcRenderer.send('disconnect-serial');
 }
@@ -2889,6 +2910,7 @@ ipcRenderer.on('serial-disconnected', (event, message) => {
     if (receiveDisplayMode === 'hex') hexFormatter.flush();
     else flushTextReceive();
     stopAutoSendRuntime();
+    resetQuickTriggerReceive();
     updateSerialConnectionState(false);
     if (message) {
         const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
@@ -3051,6 +3073,7 @@ async function toggleSerialConnection() {
         serialWriteChain = Promise.resolve();
         hexFormatter.reset({ resetOffset: true });
         resetTextReceive();
+        resetQuickTriggerReceive();
         connectBtn.disabled = true;
         try {
             const connectResult = await ipcRenderer.invoke('connect-serial', {
@@ -3437,10 +3460,17 @@ const quickSendDialogCloseBtn = document.getElementById('quick-send-dialog-close
 const quickSendDialogCancelBtn = document.getElementById('quick-send-dialog-cancel');
 const quickSendLabelInput = document.getElementById('quick-send-label');
 const quickSendContentInput = document.getElementById('quick-send-content');
+const quickSendTriggerEnableInput = document.getElementById('quick-send-trigger-enable');
+const quickSendTriggerTextInput = document.getElementById('quick-send-trigger-text');
+const quickSendTriggerRegexInput = document.getElementById('quick-send-trigger-regex');
+const quickSendTriggerCaseInput = document.getElementById('quick-send-trigger-case');
+const quickSendTriggerWordInput = document.getElementById('quick-send-trigger-word');
 const addQuickSendBtn = document.getElementById('add-quick-send-btn');
 const quickSendValidation = document.getElementById('quick-send-validation');
 
 let quickSendList = [];
+const quickSendTriggerInFlight = new Set();
+const quickSendFlashTimers = new WeakMap();
 
 function stopAutoSendRuntime() {
     autoSendGeneration++;
@@ -3563,18 +3593,50 @@ function createQuickSendId() {
 }
 
 function normalizeQuickSendItem(item = {}) {
+    const trigger = item.autoTrigger && typeof item.autoTrigger === 'object' ? item.autoTrigger : {};
     return {
         id: typeof item.id === 'string' && item.id ? item.id : createQuickSendId(),
         label: typeof item.label === 'string' ? item.label : '',
-        content: typeof item.content === 'string' ? item.content : ''
+        content: typeof item.content === 'string' ? item.content : '',
+        autoTrigger: {
+            enabled: trigger.enabled === true,
+            text: typeof trigger.text === 'string' ? trigger.text : '',
+            useRegex: trigger.useRegex === true,
+            caseSensitive: trigger.caseSensitive === true,
+            wholeWord: trigger.wholeWord === true
+        }
     };
+}
+
+function buildQuickTriggerRegex(trigger = {}) {
+    const text = typeof trigger.text === 'string' ? trigger.text : '';
+    if (!text) return { ok: true, regex: null };
+    let pattern = text;
+    if (trigger.useRegex !== true) {
+        pattern = escapeRegex(pattern);
+    }
+    if (trigger.wholeWord === true) {
+        pattern = `\\b(?:${pattern})\\b`;
+    }
+    try {
+        return { ok: true, regex: new RegExp(pattern, trigger.caseSensitive === true ? '' : 'i') };
+    } catch (error) {
+        return { ok: false, message: trFallback('main.quickTriggerRegexInvalid', 'Auto-trigger regex is invalid: {error}', { error: error.message }) };
+    }
 }
 
 function getQuickEditorItem() {
     return normalizeQuickSendItem({
         id: editingIndex >= 0 ? quickSendList[editingIndex]?.id : createQuickSendId(),
         label: quickSendLabelInput.value.trim(),
-        content: quickSendContentInput.value
+        content: quickSendContentInput.value,
+        autoTrigger: {
+            enabled: quickSendTriggerEnableInput.checked,
+            text: quickSendTriggerTextInput.value,
+            useRegex: quickSendTriggerRegexInput.checked,
+            caseSensitive: quickSendTriggerCaseInput.checked,
+            wholeWord: quickSendTriggerWordInput.checked
+        }
     });
 }
 
@@ -3583,6 +3645,11 @@ function closeQuickSendDialog() {
     editingIndex = -1;
     quickSendLabelInput.value = '';
     quickSendContentInput.value = '';
+    quickSendTriggerEnableInput.checked = false;
+    quickSendTriggerTextInput.value = '';
+    quickSendTriggerRegexInput.checked = false;
+    quickSendTriggerCaseInput.checked = false;
+    quickSendTriggerWordInput.checked = false;
     renderQuickSendList();
 }
 
@@ -3591,6 +3658,11 @@ function openQuickSendDialog(index = -1) {
     const item = index >= 0 ? quickSendList[index] : null;
     quickSendLabelInput.value = item?.label || '';
     quickSendContentInput.value = item?.content || '';
+    quickSendTriggerEnableInput.checked = item?.autoTrigger?.enabled === true;
+    quickSendTriggerTextInput.value = item?.autoTrigger?.text || '';
+    quickSendTriggerRegexInput.checked = item?.autoTrigger?.useRegex === true;
+    quickSendTriggerCaseInput.checked = item?.autoTrigger?.caseSensitive === true;
+    quickSendTriggerWordInput.checked = item?.autoTrigger?.wholeWord === true;
     const editing = Boolean(item);
     quickSendDialogTitle.textContent = editing
         ? trFallback('main.editQuickSend', 'Edit Quick Send')
@@ -3607,12 +3679,71 @@ function openQuickSendDialog(index = -1) {
 function updateQuickSendValidation() {
     const item = getQuickEditorItem();
     const result = validateSendContent(sendMode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
-    quickSendValidation.textContent = formatValidation(result, sendMode, sendAppendCrLf);
-    quickSendValidation.classList.toggle('valid', result.ok);
-    quickSendValidation.classList.toggle('invalid', !result.ok && item.content.length > 0);
-    addQuickSendBtn.disabled = !result.ok;
+    const triggerResult = !item.autoTrigger.enabled
+        ? { ok: true, regex: null }
+        : (!item.autoTrigger.text
+            ? { ok: false, message: trFallback('main.quickTriggerTextRequired', 'Auto trigger needs match text') }
+            : buildQuickTriggerRegex(item.autoTrigger));
+    quickSendValidation.textContent = triggerResult.ok
+        ? formatValidation(result, sendMode, sendAppendCrLf)
+        : triggerResult.message;
+    quickSendValidation.classList.toggle('valid', result.ok && triggerResult.ok);
+    quickSendValidation.classList.toggle('invalid', (!result.ok && item.content.length > 0) || !triggerResult.ok);
+    addQuickSendBtn.disabled = !result.ok || !triggerResult.ok;
     quickSendContentInput.placeholder = sendMode === 'hex' ? 'AA 55 01 FF' : tr('main.contentMultiLine');
-    return result;
+    return { ...result, ok: result.ok && triggerResult.ok };
+}
+
+async function triggerQuickSendItem(item) {
+    if (quickSendTriggerInFlight.has(item.id)) return;
+    quickSendTriggerInFlight.add(item.id);
+    try {
+        flashQuickSendItem(item.id);
+        const result = await sendSerialRequest({ content: item.content, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
+        const label = item.label || item.content;
+        setActionStatus(result.ok
+            ? trFallback('main.quickTriggerSent', 'Auto-trigger sent: {label}', { label })
+            : trFallback('main.quickTriggerFailed', 'Auto-trigger failed: {error}', { error: result.message || result.code }));
+    } finally {
+        quickSendTriggerInFlight.delete(item.id);
+    }
+}
+
+function flashQuickSendItem(itemId) {
+    if (!itemId) return;
+    const itemEl = Array.from(quickSendListEl.querySelectorAll('.quick-send-item'))
+        .find(element => element.dataset.quickId === itemId);
+    const button = itemEl?.querySelector('.quick-send-main-btn');
+    if (!button) return;
+    button.classList.remove('auto-trigger-flash');
+    void button.offsetWidth;
+    button.classList.add('auto-trigger-flash');
+    const previousTimer = quickSendFlashTimers.get(button);
+    if (previousTimer) clearTimeout(previousTimer);
+    const timer = setTimeout(() => {
+        button.classList.remove('auto-trigger-flash');
+        quickSendFlashTimers.delete(button);
+    }, 1300);
+    quickSendFlashTimers.set(button, timer);
+}
+
+function processQuickSendAutoTriggers(bytes) {
+    const triggerItems = quickSendList.filter(item => item.autoTrigger?.enabled === true && item.autoTrigger.text);
+    if (!triggerItems.length) return;
+    if (!quickTriggerDecoder) createQuickTriggerDecoder();
+    const text = quickTriggerDecoder.write(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    if (!text) return;
+    quickTriggerBuffer = (quickTriggerBuffer + text).slice(-4096);
+    const matchedItems = [];
+    triggerItems.forEach(item => {
+        const triggerResult = buildQuickTriggerRegex(item.autoTrigger);
+        if (triggerResult.ok && triggerResult.regex?.test(quickTriggerBuffer)) {
+            matchedItems.push(item);
+        }
+    });
+    if (!matchedItems.length) return;
+    quickTriggerBuffer = '';
+    matchedItems.forEach(triggerQuickSendItem);
 }
 
 function moveQuickSendItem(fromIndex, toIndex) {
@@ -3643,6 +3774,7 @@ function renderQuickSendList() {
         div.className = 'quick-send-item';
         div.draggable = true;
         div.dataset.index = String(index);
+        div.dataset.quickId = item.id;
         
         // If this item is being edited, highlight it
         if (index === editingIndex) {
@@ -3768,6 +3900,11 @@ addQuickSendBtn.addEventListener('click', () => {
     }
 });
 quickSendContentInput.addEventListener('input', updateQuickSendValidation);
+quickSendTriggerEnableInput.addEventListener('change', updateQuickSendValidation);
+quickSendTriggerTextInput.addEventListener('input', updateQuickSendValidation);
+quickSendTriggerRegexInput.addEventListener('change', updateQuickSendValidation);
+quickSendTriggerCaseInput.addEventListener('change', updateQuickSendValidation);
+quickSendTriggerWordInput.addEventListener('change', updateQuickSendValidation);
 openQuickSendDialogBtn.addEventListener('click', () => openQuickSendDialog());
 quickSendDialogCloseBtn.addEventListener('click', closeQuickSendDialog);
 quickSendDialogCancelBtn.addEventListener('click', closeQuickSendDialog);

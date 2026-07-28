@@ -320,6 +320,21 @@
                     <span data-i18n="main.content">Content</span>
                     <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
                 </label>
+                <section class="quick-trigger-settings" aria-label="Auto trigger settings" data-i18n-aria-label="main.quickTriggerSettings">
+                    <label class="quick-trigger-enable" for="quick-send-trigger-enable">
+                        <input type="checkbox" id="quick-send-trigger-enable">
+                        <span data-i18n="main.quickSendAutoTrigger">Auto Trigger</span>
+                    </label>
+                    <label class="app-dialog-field" for="quick-send-trigger-text">
+                        <span data-i18n="main.quickTriggerText">Match text</span>
+                        <input type="text" id="quick-send-trigger-text" placeholder="READY" data-i18n-placeholder="main.quickTriggerTextPlaceholder">
+                    </label>
+                    <div class="quick-trigger-options">
+                        <label><input type="checkbox" id="quick-send-trigger-regex"> <span data-i18n="main.regex">Regex</span></label>
+                        <label><input type="checkbox" id="quick-send-trigger-case"> <span data-i18n="main.caseSensitive">Case Sensitive</span></label>
+                        <label><input type="checkbox" id="quick-send-trigger-word"> <span data-i18n="main.wholeWord">Whole Word</span></label>
+                    </div>
+                </section>
                 <div id="quick-send-validation" class="input-validation" role="status" aria-live="polite"></div>
             </div>
             <footer class="app-dialog-actions">
