@@ -312,27 +312,27 @@
                 <button id="quick-send-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close">✕</button>
             </header>
             <div class="app-dialog-body">
-                <label class="app-dialog-field" for="quick-send-label">
-                    <span data-i18n="main.label">Label</span>
+                <div class="form-group">
+                    <label for="quick-send-label" data-i18n="main.label">Label</label>
                     <input type="text" id="quick-send-label" placeholder="Label" data-i18n-placeholder="main.label">
-                </label>
-                <label class="app-dialog-field" for="quick-send-content">
-                    <span data-i18n="main.content">Content</span>
+                </div>
+                <div class="form-group">
+                    <label for="quick-send-content" data-i18n="main.content">Content</label>
                     <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
-                </label>
-                <section class="quick-trigger-settings" aria-label="Auto trigger settings" data-i18n-aria-label="main.quickTriggerSettings">
-                    <label class="quick-trigger-enable" for="quick-send-trigger-enable">
+                </div>
+                <section class="form-group quick-trigger-settings" aria-label="Auto trigger settings" data-i18n-aria-label="main.quickTriggerSettings">
+                    <label class="quick-trigger-check" for="quick-send-trigger-enable">
                         <input type="checkbox" id="quick-send-trigger-enable">
                         <span data-i18n="main.quickSendAutoTrigger">Auto Trigger</span>
                     </label>
-                    <label class="app-dialog-field" for="quick-send-trigger-text">
-                        <span data-i18n="main.quickTriggerText">Match text</span>
+                    <div class="form-group">
+                        <label for="quick-send-trigger-text" data-i18n="main.quickTriggerText">Match text</label>
                         <input type="text" id="quick-send-trigger-text" placeholder="READY" data-i18n-placeholder="main.quickTriggerTextPlaceholder">
-                    </label>
+                    </div>
                     <div class="quick-trigger-options">
-                        <label><input type="checkbox" id="quick-send-trigger-regex"> <span data-i18n="main.regex">Regex</span></label>
-                        <label><input type="checkbox" id="quick-send-trigger-case"> <span data-i18n="main.caseSensitive">Case Sensitive</span></label>
-                        <label><input type="checkbox" id="quick-send-trigger-word"> <span data-i18n="main.wholeWord">Whole Word</span></label>
+                        <label class="quick-trigger-check"><input type="checkbox" id="quick-send-trigger-regex"> <span data-i18n="main.regex">Regex</span></label>
+                        <label class="quick-trigger-check"><input type="checkbox" id="quick-send-trigger-case"> <span data-i18n="main.caseSensitive">Case Sensitive</span></label>
+                        <label class="quick-trigger-check"><input type="checkbox" id="quick-send-trigger-word"> <span data-i18n="main.wholeWord">Whole Word</span></label>
                     </div>
                 </section>
                 <div id="quick-send-validation" class="input-validation" role="status" aria-live="polite"></div>

@@ -2967,13 +2967,29 @@ baudSelect.addEventListener('change', () => {
         baudSelect.style.display = 'none';
         baudCustomWrapper.style.display = 'flex';
         baudCustomInput.focus();
+        return;
     }
+    saveSerialModeConfig();
 });
 
 baudCustomCancel.addEventListener('click', () => {
     baudCustomWrapper.style.display = 'none';
     baudSelect.style.display = 'block';
     baudSelect.value = '115200'; // Reset to default
+    saveSerialModeConfig();
+});
+
+function saveCustomBaudRate() {
+    if (baudSelect.value === 'custom' && baudCustomInput.value.trim()) {
+        saveSerialModeConfig();
+    }
+}
+
+baudCustomInput.addEventListener('change', saveCustomBaudRate);
+baudCustomInput.addEventListener('blur', saveCustomBaudRate);
+
+['data-bits-select', 'stop-bits-select', 'parity-select'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', saveSerialModeConfig);
 });
 
 function getBaudRate() {

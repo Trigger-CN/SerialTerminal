@@ -426,18 +426,30 @@ label:hover {
 .app-dialog-body {
     display: flex;
     flex-direction: column;
-    gap: 12px;
     padding: 16px;
     overflow-y: auto;
 }
 
-.app-dialog-field {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-    color: var(--text-secondary);
-    font-size: 12px;
+.quick-send-dialog .form-group {
+    margin-bottom: 14px;
+}
+
+.quick-send-dialog .form-group:last-child {
+    margin-bottom: 0;
+}
+
+.quick-send-dialog .form-group > label:not(.quick-trigger-check) {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: var(--text-primary);
+    font-weight: 500;
+    cursor: default;
+}
+
+.quick-send-dialog input[type="text"],
+.quick-send-dialog textarea {
+    width: 100%;
 }
 
 .quick-send-dialog .send-editor-textarea {
@@ -446,16 +458,12 @@ label:hover {
 }
 
 .quick-trigger-settings {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
     padding: 10px;
     border: 1px solid var(--border-color);
     border-radius: 4px;
-    background: var(--bg-input);
 }
 
-.quick-trigger-enable,
+.quick-trigger-check,
 .quick-trigger-options {
     display: flex;
     align-items: center;
@@ -469,10 +477,14 @@ label:hover {
     gap: 6px 10px;
 }
 
-.quick-trigger-enable,
+.quick-trigger-check,
 .quick-trigger-options label {
     margin: 0;
     cursor: pointer;
+}
+
+.quick-trigger-settings > .quick-trigger-check {
+    margin-bottom: 12px;
 }
 
 .app-dialog-actions {
