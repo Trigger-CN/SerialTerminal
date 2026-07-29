@@ -9,6 +9,11 @@ const log = require('electron-log');
 const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
+const {
+  findShellProfile: findConfiguredShellProfile,
+  normalizeShellProfiles,
+  resolveDefaultShellProfileId
+} = require('./shell-profiles');
 
 // Configure logging
 log.transports.file.level = 'info';
@@ -23,7 +28,7 @@ let updatePromptState = {
   latestInfo: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 3;
+const CONFIG_VERSION = 4;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const DEFAULT_SHORTCUTS = {
@@ -129,6 +134,21 @@ function normalizeConfig(config, defaults) {
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
 
+  normalized.shellProfiles = normalizeShellProfiles(source.shellProfiles, defaults.shellProfiles);
+  normalized.defaultShellProfileId = resolveDefaultShellProfileId(source, normalized.shellProfiles);
+  delete normalized.defaultShellProfile;
+  normalized.shellTabs = Array.isArray(source.shellTabs)
+    ? source.shellTabs.filter(tab => tab && typeof tab === 'object').map(tab => {
+        const selector = typeof tab.profileId === 'string' && tab.profileId
+          ? tab.profileId
+          : (typeof tab.shellType === 'string' ? tab.shellType : '');
+        const profile = findConfiguredShellProfile(normalized.shellProfiles, selector);
+        const normalizedTab = { ...tab, profileId: profile?.id || '' };
+        delete normalizedTab.shellType;
+        return normalizedTab;
+      })
+    : [];
+
   const oldAutoSend = source.autoSendSettings && typeof source.autoSendSettings === 'object'
     ? source.autoSendSettings
     : {};
@@ -156,7 +176,7 @@ function normalizeConfig(config, defaults) {
           id,
           label: typeof item.label === 'string' ? item.label : '',
           content: typeof item.content === 'string'
-            && Number(source.configVersion || 0) < CONFIG_VERSION
+            && Number(source.configVersion || 0) < 3
             && normalized.lastSerialOptions.appendCrLf
             && /\r\n$/.test(item.content)
             ? item.content.slice(0, -2)
@@ -240,10 +260,10 @@ function loadConfig() {
     filterTabs: [],
     shellTabs: [],
     shellProfiles: [
-      { name: 'CMD', executable: 'cmd.exe', args: [], shellType: 'cmd' },
-      { name: 'PowerShell', executable: 'powershell.exe', args: ['-NoLogo'], shellType: 'powershell' }
+      { id: 'shell-cmd', name: 'CMD', executable: 'cmd.exe', args: [], shellType: 'cmd' },
+      { id: 'shell-powershell', name: 'PowerShell', executable: 'powershell.exe', args: ['-NoLogo'], shellType: 'powershell' }
     ],
-    defaultShellProfile: '',
+    defaultShellProfileId: '',
     workspaceLayout: {
       splitEnabled: false,
       orientation: 'horizontal',
@@ -682,22 +702,11 @@ function saveConfig(config) {
 
 function findShellProfile(shellTypeOrName) {
   const profiles = Array.isArray(currentConfig.shellProfiles) ? currentConfig.shellProfiles : [];
-  if (!profiles.length) {
-    return null;
-  }
-  const search = String(shellTypeOrName || 'auto').toLowerCase();
-  // First try exact name match
-  const byName = profiles.find(p => String(p.name || '').toLowerCase() === search);
-  if (byName) return byName;
-  // Then try shellType match
-  const byType = profiles.find(p => String(p.shellType || '').toLowerCase() === search);
-  if (byType) return byType;
-  // Return first profile as fallback
-  return profiles[0] || null;
+  return findConfiguredShellProfile(profiles, shellTypeOrName);
 }
 
-function getDefaultShellPath(shellType = 'auto') {
-  const profile = findShellProfile(shellType);
+function getDefaultShellPath(shellType = '') {
+  const profile = shellType ? findShellProfile(shellType) : null;
   if (profile && profile.executable) {
     return profile.executable;
   }
@@ -717,7 +726,7 @@ function getDefaultShellPath(shellType = 'auto') {
 }
 
 function getShellLaunchArgs(shellPath, shellTypeOrName) {
-  const profile = findShellProfile(shellTypeOrName);
+  const profile = shellTypeOrName ? findShellProfile(shellTypeOrName) : null;
   if (profile && Array.isArray(profile.args) && profile.args.length > 0) {
     return profile.args;
   }
@@ -738,19 +747,21 @@ function createShellSession(tabId, options = {}) {
     return shellSessions.get(tabId) || null;
   }
 
-  const shellType = typeof options.shellType === 'string' ? options.shellType : 'auto';
-  const shellPath = getDefaultShellPath(shellType);
+  const profileSelector = typeof options.profileId === 'string' && options.profileId
+    ? options.profileId
+    : (typeof options.shellType === 'string' ? options.shellType : '');
+  const shellPath = getDefaultShellPath(profileSelector);
   const session = {
     tabId,
     shellPath,
-    shellType,
+    profileSelector,
     cols: Math.max(1, Number(options.cols) || 80),
     rows: Math.max(1, Number(options.rows) || 24),
     cwd: process.cwd(),
     ptyProcess: null
   };
 
-  const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath, shellType), {
+  const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath, profileSelector), {
     name: 'xterm-color',
     cols: session.cols,
     rows: session.rows,
@@ -1470,15 +1481,16 @@ ipcMain.handle('create-shell-tab-session', async (event, payload = {}) => {
 
 ipcMain.handle('get-shell-profiles', async () => {
   const profiles = Array.isArray(currentConfig.shellProfiles) ? currentConfig.shellProfiles : [];
-  const defaultName = currentConfig.defaultShellProfile || '';
+  const defaultId = currentConfig.defaultShellProfileId || '';
   return {
     profiles: profiles.map(p => ({
+      id: p.id || '',
       name: p.name || '',
       executable: p.executable || '',
       args: Array.isArray(p.args) ? p.args : [],
       shellType: p.shellType || 'auto'
     })),
-    defaultName
+    defaultId
   };
 });
 

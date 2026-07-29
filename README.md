@@ -120,6 +120,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
   - 逐项启动参数（含空格或引号的单个参数会按原始 argv 保存）
   - Shell 类型
 - 支持设置默认 Shell Profile
+- Shell Profile 使用稳定 ID；重命名不会改变默认选择，删除默认项后不会静默改用其他 Profile
 - 当前默认内置 `CMD` 和 `PowerShell`
 - Shell 标签页状态和布局可恢复，进程会在启动时重新创建
 
@@ -204,12 +205,11 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 .
 ├─ assets/                    图标与截图资源
 ├─ scripts/                   辅助脚本
-├─ test/                      Python 串口测试脚本
-│  ├─ serial_test.py
-│  └─ serial_tester.py
+├─ test/                      Node 自动化测试与 Python 串口测试脚本
 ├─ index.html                 主窗口界面
 ├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、输入、Shell）
 ├─ serial-codec.js             Text/Hex 发送请求校验与字节构造
+├─ shell-profiles.js           Shell Profile 归一化、迁移与查找
 ├─ hex-formatter.js            流式 Hex dump 格式化
 ├─ workspace-manager.js       工作区 pane/tab 布局管理
 ├─ main.js                    主进程逻辑（窗口、配置、串口、日志、更新、Shell PTY）

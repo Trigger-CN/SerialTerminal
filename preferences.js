@@ -1,4 +1,5 @@
 const { ipcRenderer, shell } = require('electron');
+const { randomUUID } = require('crypto');
 const { t, getLanguage } = require('./i18n');
 
 let currentLanguage = 'en';
@@ -72,7 +73,7 @@ const elements = {
 };
 
 let shellProfiles = [];
-let defaultShellProfileName = '';
+let defaultShellProfileId = '';
 
 const DEFAULT_HEX_DISPLAY_SETTINGS = {
     bytesPerLine: 16,
@@ -475,7 +476,7 @@ async function init() {
 
   // Load shell profiles
   shellProfiles = Array.isArray(config.shellProfiles) ? JSON.parse(JSON.stringify(config.shellProfiles)) : [];
-  defaultShellProfileName = config.defaultShellProfile || '';
+  defaultShellProfileId = config.defaultShellProfileId || '';
   renderShellProfiles();
 
   // Load About Info
@@ -534,6 +535,7 @@ function createShellProfileCard(profile, index) {
     removeBtn.style.cssText = 'width: 28px; padding: 0 6px;';
     removeBtn.title = tr('prefs.removeRule');
     removeBtn.onclick = () => {
+        if (profile.id === defaultShellProfileId) defaultShellProfileId = '';
         shellProfiles.splice(index, 1);
         renderShellProfiles();
     };
@@ -632,12 +634,12 @@ function createShellProfileCard(profile, index) {
     const defaultCb = document.createElement('input');
     defaultCb.type = 'radio';
     defaultCb.name = 'default-shell-profile';
-    defaultCb.value = profile.name || '';
-    defaultCb.checked = profile.name === defaultShellProfileName;
+    defaultCb.value = profile.id || '';
+    defaultCb.checked = profile.id === defaultShellProfileId;
     defaultCb.style.cssText = 'margin: 0 4px;';
     defaultCb.onchange = () => {
         if (defaultCb.checked) {
-            defaultShellProfileName = profile.name;
+            defaultShellProfileId = profile.id;
             renderShellProfiles();
         }
     };
@@ -652,7 +654,7 @@ function createShellProfileCard(profile, index) {
 }
 
 function addShellProfile() {
-    shellProfiles.push({ name: '', executable: '', args: [], shellType: 'auto' });
+    shellProfiles.push({ id: randomUUID(), name: '', executable: '', args: [], shellType: 'auto' });
     renderShellProfiles();
     // Scroll to bottom
     if (elements.shellProfilesList) {
@@ -745,7 +747,7 @@ elements.saveBtn.onclick = async () => {
     highlightRules: rules,
     shortcuts: normalizeShortcuts(shortcutValues),
     shellProfiles,
-    defaultShellProfile: defaultShellProfileName
+    defaultShellProfileId
   };
   try {
     await ipcRenderer.invoke('save-config-request', config);

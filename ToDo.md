@@ -62,11 +62,12 @@
   - 验收：`--rcfile` 与包含空格的路径保存、重开设置后保持原始 argv。
   - 结果：设置窗口改为逐项编辑 argv，每个输入框直接对应数组元素，不再进行空格拼接或拆分。
 
-- [ ] 为 Shell profile 使用稳定 ID
+- [x] 为 Shell profile 使用稳定 ID
   - 位置：`preferences.js`、`main.js` 的 `defaultShellProfile` 与 profile 查找。
   - 问题：默认 profile 以名称引用；重命名或删除后引用悬空并静默回退第一个 profile。
   - 方案：profile 增加稳定 ID，默认值保存 ID；删除默认项时明确选择新默认项或清空。
   - 验收：重命名默认 profile 不改变默认选择；删除时不会静默启动其他 Shell。
+  - 结果：配置版本升级到 4，旧名称引用自动迁移到 `defaultShellProfileId`；删除默认项会清空引用，侧边栏按 profile ID 精确启动。
 
 - [ ] 在主进程统一校验设置数值范围
   - 位置：`main.js` 的 `normalizeConfig()`，`preferences.js` 的保存逻辑。
@@ -86,7 +87,7 @@
   - 使用 Node 内置 `node:test` 覆盖 `serial-codec.js`、`hex-formatter.js`、配置归一化和 i18n key 完整性。
   - 增加 mock serialport 的 IPC 写入测试，以及 Shell/session 生命周期测试。
   - 发布 workflow 在打包前必须执行测试。
-  - 进度：已增加 `npm test` 和 `test/serial-codec.test.js`，覆盖 Hex 格式/错误/上限、UTF-8/GBK、不可表示字符和 CRLF 语义；formatter、配置、i18n、IPC 与 CI 门禁仍待补齐。
+  - 进度：已增加 `npm test`，覆盖 codec 行为以及 Shell profile ID 生成、旧默认项迁移和精确查找；formatter、完整配置归一化、i18n、IPC 与 CI 门禁仍待补齐。
 
 - [ ] 发布安装改为可复现流程
   - 位置：`.github/workflows/release.yml`。

@@ -65,13 +65,12 @@
 ```text
 SerialTerminal/
 ├─ assets/                    图标、截图资源
-├─ test/                      Python 测试脚本
-│  ├─ serial_test.py
-│  └─ serial_tester.py
+├─ test/                      Node 自动化测试与 Python 串口测试脚本
 ├─ index.html                 主窗口 HTML
 ├─ workspace-manager.js       主工作区 pane/tab 状态与 DOM 编排管理
 ├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、主输入框、侧边栏）
 ├─ serial-codec.js             严格 Hex 解析、Text 编码和统一发送 Buffer 构造
+├─ shell-profiles.js           Shell Profile ID 归一化、迁移与查找
 ├─ hex-formatter.js            流式 Hex dump 行对象、偏移和空闲刷新
 ├─ main.js                    主进程逻辑（窗口、配置、串口、日志、更新）
 ├─ preferences.html           设置窗口 HTML
@@ -115,6 +114,7 @@ SerialTerminal/
 - Text 发送校验与最终发送均复用 `buildSerialWriteBuffer()`；ASCII/GBK 对无法表示的字符返回 `UNREPRESENTABLE_CHARACTER`，不得静默替换为 `?`。`parseHexInput()` 在扫描/累计超过 `maxBytes` 时应提前失败，避免超大输入构造完整副本
 - `npm test` 当前使用 Node 内置 test runner，首批测试位于 `test/serial-codec.test.js`；新增 codec 行为必须同步测试
 - Shell profile 参数在设置窗口中逐项编辑并始终以 argv 字符串数组保存；不得通过空格 join/split 往返转换
+- 配置版本为 4；Shell profile 使用稳定 `id`，默认项保存为 `defaultShellProfileId`。旧版名称引用由主进程归一化迁移，renderer 创建 profile 会话时应传 profile ID
 
 #### `renderer.js`
 负责：
@@ -252,19 +252,21 @@ npm run dist:linux
   "shellTabs": [],
   "shellProfiles": [
     {
+      "id": "shell-cmd",
       "name": "CMD",
       "executable": "cmd.exe",
       "args": [],
       "shellType": "cmd"
     },
     {
+      "id": "shell-powershell",
       "name": "PowerShell",
       "executable": "powershell.exe",
       "args": ["-NoLogo"],
       "shellType": "powershell"
     }
   ],
-  "defaultShellProfile": "PowerShell",
+  "defaultShellProfileId": "shell-powershell",
   "workspaceLayout": {
     "splitEnabled": false,
     "orientation": "horizontal",
@@ -475,18 +477,19 @@ npm run dist:linux
 - 过滤 tab 创建时保存 `dataMode`；仅消费同模式行，模式不一致时显示 paused。Hex 普通/正则过滤都作用于单条格式化 Hex 行，不支持跨行或字节通配符
 - 搜索仍由 xterm SearchAddon 完成，因此 Hex 模式可搜索偏移、Hex 文本和 ASCII 预览，并遵循现有大小写选项
 
-### 8.6 config v3 与迁移
-- `main.js` 的 `CONFIG_VERSION = 3`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，并在规范化结果变化时写回磁盘
+### 8.6 config v4 与迁移
+- `main.js` 的 `CONFIG_VERSION = 4`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，并在规范化结果变化时写回磁盘
 - 旧 `lastSerialOptions.encoding=hex` 迁移为 RX/TX mode 均为 `hex`、Text 编码为 `utf8`；其他旧编码迁移为 Text 模式并保留编码
 - 旧快捷发送项的 mode/encoding/appendCrLf 和自动发送的同类字段会在规范化时移除，不根据内容猜测 Hex；旧版主输入启用 append 时，由“加入快捷发送”生成的内容已内嵌 CRLF，因此迁移到共享 append 时会移除一个末尾 CRLF，避免再次发送造成重复
 - 旧过滤标签未保存 `dataMode` 时继承迁移后的 RX 模式；缺失或重复的快捷 ID 会生成唯一稳定 ID
+- Shell profile 缺失或重复的 ID 会生成唯一稳定 ID；旧 `defaultShellProfile` 名称引用会迁移为 `defaultShellProfileId`
 - 关闭 Raw 日志或修改日志目录/Raw 文件名格式前先刷盘；偏好设置使用可返回错误的 IPC，刷盘失败时保留窗口并提示错误
 - Hex formatter 对大块 `Uint8Array` 使用分段视图处理，不通过参数展开追加字节；已用 1 MiB 单块输入做模块级回归验证
 
 Hex 相关配置结构：
 ```json
 {
-  "configVersion": 3,
+  "configVersion": 4,
   "lastSerialOptions": {
     "receiveDisplayMode": "text",
     "receiveEncoding": "utf8",
@@ -1348,29 +1351,32 @@ workspaceLayout = {
 {
   "shellProfiles": [
     {
+      "id": "git-bash",
       "name": "Git Bash",
       "executable": "C:\\Program Files\\Git\\bin\\bash.exe",
       "args": ["-i", "-l"],
       "shellType": "bash"
     }
-  ]
+  ],
+  "defaultShellProfileId": "git-bash"
 }
 ```
 
+- `id`: 稳定且唯一的 profile 标识
 - `name`: 显示名称
 - `executable`: 可执行文件路径
 - `args`: 启动参数数组
 - `shellType`: shell 类型标识（cmd/powershell/bash/zsh 等）
 
-`defaultShellProfile`: 字符串，设为 profile 的 `name`，用作默认新建 shell tab 时使用的 profile。
+`defaultShellProfileId`: 字符串，设为 profile 的 `id`，用作默认新建 shell tab 时使用的 profile。
 - 面板中的 `>_` 按钮和右键菜单的"新建 Shell 标签页"均使用此默认 profile
-- 若未设置，则使用 `shellProfiles[0]`
+- 若未设置或默认项已删除，则使用系统默认 Shell，不会静默改用其他 profile
 - 渲染层侧边栏中默认 profile 带 ● 标记
 - 设置窗口可选中设为默认 Shell
 
 实现要点：
-- `getDefaultShellPath(shellType)` 优先从 shellProfiles 查找匹配的 profile，再回退到系统默认
-- `getShellLaunchArgs(shellPath, shellTypeOrName)` 优先使用 profile 内的 args
+- `getDefaultShellPath(profileSelector)` 优先按 profile ID 查找，再兼容旧名称/类型，最后回退到系统默认
+- `getShellLaunchArgs(shellPath, profileSelector)` 优先使用 profile 内的 args
 - IPC `get-shell-profiles` 返回 profiles 列表给渲染层
 - 渲染层 shell 侧边栏动态加载 profiles 并生成按钮
 - "管理配置文件…"按钮发送 `open-prefs` 消息打开设置窗口

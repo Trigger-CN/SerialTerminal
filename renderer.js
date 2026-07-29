@@ -744,7 +744,7 @@ function restartShellTab(tabId) {
     shellTab.term.clear();
     shellTab.btn?.classList.remove('exited');
     shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
-    ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows, shellType: shellTab.shellType || 'auto' })
+    ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows, profileId: shellTab.profileId || '' })
         .then(() => {
             shellTab.sessionReady = true;
             ipcRenderer.send('resize-shell-tab', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows });
@@ -905,7 +905,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'new-shell-tab': {
-            createShellTab({ shellType: getDefaultShellType() }, resolvePaneId(paneId, tabId));
+            createShellTab({ profileId: getDefaultShellProfileId() }, resolvePaneId(paneId, tabId));
             setActionStatus(tr('main.shellStarting'));
             break;
         }
@@ -1281,15 +1281,15 @@ function writeShellTabLog(tabState, data) {
     writeTabLog(tabState.id, getShellTabLogTitle(tabState), data);
 }
 
-function getDefaultShellType() {
+function getDefaultShellProfileId() {
     const profiles = Array.isArray(currentConfig?.shellProfiles) ? currentConfig.shellProfiles : [];
-    if (!profiles.length) return 'auto';
-    const defaultName = currentConfig?.defaultShellProfile || '';
-    if (defaultName) {
-        const found = profiles.find(p => p.name === defaultName);
-        if (found) return found.shellType || found.name || 'auto';
+    if (!profiles.length) return '';
+    const defaultId = currentConfig?.defaultShellProfileId || '';
+    if (defaultId) {
+        const found = profiles.find(p => p.id === defaultId);
+        if (found) return found.id;
     }
-    return profiles[0].shellType || profiles[0].name || 'auto';
+    return '';
 }
 
 function persistShellTabs() {
@@ -1298,7 +1298,7 @@ function persistShellTabs() {
             id: tab.id,
             title: tab.title || '',
             paneId: tab.paneId || getTabPaneId(tab.id),
-            shellType: tab.shellType || 'auto'
+            profileId: tab.profileId || ''
         }))
     });
 }
@@ -1307,7 +1307,9 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     const tabId = typeof initialState.id === 'string' && initialState.id ? initialState.id : `tab-shell-${getNextShellTabId()}`;
     syncNextShellTabId(tabId);
     const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
-    const shellType = typeof initialState.shellType === 'string' ? initialState.shellType : 'auto';
+    const profileId = typeof initialState.profileId === 'string' && initialState.profileId
+        ? initialState.profileId
+        : (typeof initialState.shellType === 'string' ? initialState.shellType : '');
 
     const tabList = getPaneTabsList(resolvedPaneId);
     const tabBtn = document.createElement('div');
@@ -1362,7 +1364,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         id: tabId,
         paneId: resolvedPaneId,
         title: initialState.title || '',
-        shellType,
+        profileId,
         term,
         fitAddon,
         searchAddon,
@@ -1399,7 +1401,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         tabState.sessionCreateTimer = null;
         if (tabState.closed || !shellTabs.includes(tabState)) return;
         fitAddon.fit();
-        ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: term.cols, rows: term.rows, shellType })
+        ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: term.cols, rows: term.rows, profileId })
             .then(() => {
                 if (tabState.closed || !shellTabs.includes(tabState)) {
                     ipcRenderer.send('close-shell-tab-session', { tabId });
@@ -1447,7 +1449,7 @@ function restoreShellSessions() {
     shellTabs.forEach(tab => {
         tab.term.clear();
         tab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
-        ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows, shellType: tab.shellType || 'auto' })
+        ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows, profileId: tab.profileId || '' })
             .then(() => {
                 tab.sessionReady = true;
                 ipcRenderer.send('resize-shell-tab', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows });
@@ -1802,8 +1804,8 @@ function persistFilterTabs({ debounce = false } = {}) {
 
 document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-1'));
 document.getElementById('pane-2-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-2'));
-document.getElementById('pane-1-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ shellType: getDefaultShellType() }, 'pane-1'));
-document.getElementById('pane-2-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ shellType: getDefaultShellType() }, 'pane-2'));
+document.getElementById('pane-1-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ profileId: getDefaultShellProfileId() }, 'pane-1'));
+document.getElementById('pane-2-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ profileId: getDefaultShellProfileId() }, 'pane-2'));
 
 document.querySelectorAll('.workspace-pane').forEach(paneEl => {
     paneEl.addEventListener('mousedown', () => {
@@ -2078,7 +2080,7 @@ async function loadShellProfiles() {
     try {
         const result = await ipcRenderer.invoke('get-shell-profiles');
         const profiles = result.profiles || result;
-        const defaultName = result.defaultName || '';
+        const defaultId = result.defaultId || '';
         shellProfileBtns.innerHTML = '';
         if (!profiles || !profiles.length) {
             const empty = document.createElement('div');
@@ -2088,14 +2090,13 @@ async function loadShellProfiles() {
             return;
         }
         profiles.forEach(profile => {
-            const isDefault = profile.name === defaultName;
+            const isDefault = profile.id === defaultId;
             const btn = document.createElement('button');
             btn.className = 'secondary shell-new-btn';
             btn.title = `${profile.name} (${profile.executable})${isDefault ? ' — ' + (tr('main.defaultProfile') || 'Default') : ''}`;
             btn.innerHTML = `<span>${escapeHtml(profile.name)}</span>${isDefault ? ' <span style="font-size:10px;opacity:0.7;">⬤</span>' : ''}`;
             btn.addEventListener('click', () => {
-                const shellType = profile.shellType || profile.name;
-                createShellTab({ shellType }, getActivePane()?.id || 'pane-1');
+                createShellTab({ profileId: profile.id }, getActivePane()?.id || 'pane-1');
             });
             shellProfileBtns.appendChild(btn);
         });
