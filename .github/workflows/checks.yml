@@ -1,0 +1,27 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          find . -path ./node_modules -prune -o -path ./dist -prune -o -name '*.js' -print0 |
+            xargs -0 -n1 node --check
+      - run: npm audit --package-lock-only --omit=dev --audit-level=high --registry=https://registry.npmjs.org

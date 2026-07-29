@@ -240,7 +240,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 
 ## 开发环境要求
 
-- Node.js 16+
+- Node.js 22.12+
 - npm
 - 由于项目依赖原生模块，首次安装通常需要本机具备编译环境
 

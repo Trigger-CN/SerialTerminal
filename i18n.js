@@ -352,7 +352,9 @@ for (const [language, sections] of Object.entries(hexTranslations)) {
   Object.assign(translations[language].prefs, sections.prefs);
 }
 
-Object.assign(translations['zh-CN'].main, { sendHistory: '发送历史' });
+Object.assign(translations['zh-CN'].main, {
+  sendHistory: '发送历史', sidebarQuickTools: '快捷工具', expandSidebar: '展开侧边栏', collapseSidebar: '收起侧边栏'
+});
 Object.assign(translations['zh-TW'].main, { sendHistory: '傳送歷史' });
 Object.assign(translations.fr.main, { sendHistory: 'Historique d’envoi' });
 Object.assign(translations.ru.main, { sendHistory: 'История отправки' });
@@ -364,7 +366,8 @@ Object.assign(translations.en.prefs, {
 });
 Object.assign(translations['zh-CN'].prefs, {
   shortcuts: '快捷键', shortcutsSettings: '快捷键设置', shortcutsHelp: '点击快捷键输入框后按下组合键。按 Backspace 清空快捷键。', resetShortcutDefaults: '恢复默认快捷键', shortcutDisabled: '已禁用',
-  shortcutSendMainInput: '发送底部输入框', shortcutToggleSendHistory: '打开发送历史', shortcutHistoryPrevious: '上一条发送历史', shortcutHistoryNext: '下一条发送历史', shortcutFocusSearch: '聚焦搜索', shortcutClearActiveTerminal: '清空当前终端', shortcutRefreshPorts: '刷新串口', shortcutToggleSerialConnection: '连接 / 断开串口'
+  shortcutSendMainInput: '发送底部输入框', shortcutToggleSendHistory: '打开发送历史', shortcutHistoryPrevious: '上一条发送历史', shortcutHistoryNext: '下一条发送历史', shortcutFocusSearch: '聚焦搜索', shortcutClearActiveTerminal: '清空当前终端', shortcutRefreshPorts: '刷新串口', shortcutToggleSerialConnection: '连接 / 断开串口',
+  logFileSuffix: '日志文件后缀', logFileSuffixPlaceholder: '.txt'
 });
 Object.assign(translations['zh-TW'].prefs, {
   shortcuts: '快捷鍵', shortcutsSettings: '快捷鍵設定', shortcutsHelp: '點擊快捷鍵輸入框後按下組合鍵。按 Backspace 清空快捷鍵。', resetShortcutDefaults: '恢復預設快捷鍵', shortcutDisabled: '已停用',

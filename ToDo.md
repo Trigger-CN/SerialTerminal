@@ -89,16 +89,17 @@
   - 使用 Node 内置 `node:test` 覆盖 `serial-codec.js`、`hex-formatter.js`、配置归一化和 i18n key 完整性。
   - 增加 mock serialport 的 IPC 写入测试，以及 Shell/session 生命周期测试。
   - 发布 workflow 在打包前必须执行测试。
-  - 进度：已增加 `npm test`，覆盖 codec、Shell profile ID、设置数值边界和损坏工作区布局恢复；formatter、完整配置归一化、i18n、IPC 与 CI 门禁仍待补齐。
+  - 进度：已增加 `npm test`，覆盖 codec、formatter、Shell profile ID、设置数值边界、损坏工作区布局恢复和 i18n 基线；GitHub Checks 已执行干净安装、测试、语法和生产审计。完整配置归一化、IPC 与 Shell 生命周期集成测试仍待补齐。
 
 - [ ] 发布安装改为可复现流程
   - 位置：`.github/workflows/release.yml`。
   - 将 `npm install` 改为 `npm ci`；统一 lockfile registry URL；native rebuild 保持显式步骤。
   - 验收：Windows/Linux 使用同一 lockfile 安装，构建后 lockfile 不变化。
 
-- [ ] 修正文档和 Node 版本约束
+- [x] 修正文档和 Node 版本约束
   - `README.md` 当前写 Node.js 16+，但 `serialport@13` 要求 Node 20+。
   - README 与 `package.json.engines` 统一声明 Node `>=20`，CI 固定受支持版本。
+  - 结果：当前构建工具链要求 Node `>=22.12.0`，README、package engines 和 CI 已统一到该版本。
 
 - [ ] 限制大 scrollback 搜索对 UI 的阻塞
   - 位置：`renderer.js` 的搜索计数扫描。

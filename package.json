@@ -63,6 +63,9 @@
     "url": "https://github.com/Trigger-CN/SerialTerminal.git"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
     "electron": "^28.3.3",
