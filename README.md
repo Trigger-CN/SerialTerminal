@@ -117,7 +117,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 支持自定义 Shell Profiles：
   - 名称
   - 可执行文件路径
-  - 启动参数
+  - 逐项启动参数（含空格或引号的单个参数会按原始 argv 保存）
   - Shell 类型
 - 支持设置默认 Shell Profile
 - 当前默认内置 `CMD` 和 `PowerShell`

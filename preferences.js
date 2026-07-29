@@ -568,13 +568,50 @@ function createShellProfileCard(profile, index) {
 
     // Row 3: Args + Shell Type
     const row3 = document.createElement('div');
-    row3.style.cssText = 'display: flex; gap: 6px; align-items: center;';
-    const argsInput = document.createElement('input');
-    argsInput.type = 'text';
-    argsInput.value = (profile.args || []).join(' ');
-    argsInput.placeholder = tr('prefs.shellProfileArgsPlaceholder') || 'Arguments (e.g. -i -l)';
-    argsInput.style.cssText = 'flex: 1; font-family: Consolas, monospace; font-size: 12px;';
-    argsInput.onchange = () => { shellProfiles[index].args = argsInput.value.split(/\s+/).filter(Boolean); };
+    row3.style.cssText = 'display: flex; gap: 6px; align-items: flex-start;';
+    const argsContainer = document.createElement('div');
+    argsContainer.style.cssText = 'display: flex; flex: 1; flex-direction: column; gap: 6px;';
+    const args = Array.isArray(profile.args) ? profile.args : [];
+    shellProfiles[index].args = args;
+
+    const renderArgs = () => {
+        argsContainer.innerHTML = '';
+        args.forEach((arg, argIndex) => {
+            const argRow = document.createElement('div');
+            argRow.style.cssText = 'display: flex; gap: 6px;';
+            const argsInput = document.createElement('input');
+            argsInput.type = 'text';
+            argsInput.value = arg;
+            argsInput.placeholder = tr('prefs.shellProfileArgsPlaceholder') || 'Argument (e.g. -NoLogo)';
+            argsInput.style.cssText = 'flex: 1; font-family: Consolas, monospace; font-size: 12px;';
+            argsInput.oninput = () => { args[argIndex] = argsInput.value; };
+            const removeArgBtn = document.createElement('button');
+            removeArgBtn.className = 'secondary danger';
+            removeArgBtn.textContent = '✕';
+            removeArgBtn.style.cssText = 'width: 28px; padding: 0 6px;';
+            removeArgBtn.title = tr('prefs.removeRule');
+            removeArgBtn.onclick = () => {
+                args.splice(argIndex, 1);
+                renderArgs();
+            };
+            argRow.appendChild(argsInput);
+            argRow.appendChild(removeArgBtn);
+            argsContainer.appendChild(argRow);
+        });
+
+        const addArgBtn = document.createElement('button');
+        addArgBtn.className = 'secondary';
+        addArgBtn.textContent = '+';
+        addArgBtn.style.cssText = 'width: 100%; padding: 2px 8px;';
+        addArgBtn.title = tr('prefs.shellProfileArgsPlaceholder') || 'Add argument';
+        addArgBtn.onclick = () => {
+            args.push('');
+            renderArgs();
+            argsContainer.children[argsContainer.children.length - 2]?.querySelector('input')?.focus();
+        };
+        argsContainer.appendChild(addArgBtn);
+    };
+    renderArgs();
     const typeSelect = document.createElement('select');
     typeSelect.style.cssText = 'width: 110px; font-size: 12px;';
     ['auto', 'cmd', 'powershell', 'bash', 'zsh', 'pwsh'].forEach(t => {
@@ -585,7 +622,7 @@ function createShellProfileCard(profile, index) {
         typeSelect.appendChild(opt);
     });
     typeSelect.onchange = () => { shellProfiles[index].shellType = typeSelect.value; };
-    row3.appendChild(argsInput);
+    row3.appendChild(argsContainer);
     row3.appendChild(typeSelect);
     card.appendChild(row3);
 

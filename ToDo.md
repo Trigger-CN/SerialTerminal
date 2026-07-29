@@ -55,11 +55,12 @@
   - 方案：扫描时累计有效数字，超过 `maxBytes * 2` 立即返回；减少 token 和完整字符串副本。
   - 验收：远超 1 MiB 的输入能快速失败，内存占用不会随完整输入产生多份副本。
 
-- [ ] 修复 Shell profile 参数的往返保存
+- [x] 修复 Shell profile 参数的往返保存
   - 位置：`preferences.js` 的 Shell profile 参数编辑器。
   - 问题：参数先用空格 join，保存时再按空格 split，带空格或引号的参数会损坏。
   - 方案：改为逐项参数列表；配置继续保存字符串数组。
   - 验收：`--rcfile` 与包含空格的路径保存、重开设置后保持原始 argv。
+  - 结果：设置窗口改为逐项编辑 argv，每个输入框直接对应数组元素，不再进行空格拼接或拆分。
 
 - [ ] 为 Shell profile 使用稳定 ID
   - 位置：`preferences.js`、`main.js` 的 `defaultShellProfile` 与 profile 查找。
@@ -122,7 +123,7 @@
 
 - [ ] 所有项目 JavaScript 文件通过 `node --check`。
 - [ ] `git diff --check` 通过。
-- [ ] Windows 和 Linux 打包通过。
+- [ ] Windows 和 Linux 打包通过（Windows NSIS/portable 已通过，Linux 待验证）。
 - [ ] 真实或虚拟串口覆盖 Text/Hex、UTF-8/ASCII/GBK、自动发送、快捷发送和重连。
 - [ ] 主终端、过滤标签、Shell 标签、分屏、侧边栏收起/展开进行人工交互回归。
 - [ ] `npm audit --registry=https://registry.npmjs.org --omit=dev` 无 High/Critical。
