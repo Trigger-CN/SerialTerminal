@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test test",
     "rebuild": "electron-rebuild -f -w serialport,node-pty",
     "dist": "electron-builder -c.npmRebuild=false",
     "dist:win": "electron-builder --win -c.npmRebuild=false",
@@ -72,10 +73,13 @@
     "@xterm/addon-search": "^0.16.0",
     "@xterm/xterm": "^6.0.0",
     "electron-log": "^5.4.3",
-    "electron-updater": "^6.7.3",
+    "electron-updater": "^6.8.9",
     "font-list": "^2.0.2",
     "iconv-lite": "^0.7.2",
     "node-pty": "^1.1.0",
     "serialport": "^13.0.0"
+  },
+  "overrides": {
+    "js-yaml": "^4.3.0"
   }
 }

@@ -537,12 +537,52 @@ label:hover {
     flex: 1;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-end;
     gap: 6px;
     width: 48px;
     min-width: 48px;
     padding: 8px 6px;
     box-sizing: border-box;
+}
+
+.sidebar-throughput-compact {
+    width: 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 2px 0 8px;
+    margin-bottom: auto;
+}
+
+.sidebar-throughput-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sidebar-throughput-label {
+    font: 700 9px/1 Consolas, monospace;
+}
+
+.sidebar-throughput-item.rx .sidebar-throughput-label {
+    color: var(--accent-hover);
+}
+
+.sidebar-throughput-item.tx .sidebar-throughput-label {
+    color: var(--warning-color);
+}
+
+.sidebar-throughput-value {
+    width: 36px;
+    color: var(--text-primary);
+    font: 600 8px/1.1 Consolas, monospace;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+.sidebar-throughput-compact.inactive {
+    opacity: 0.45;
 }
 
 .sidebar-tool-btn {
@@ -558,7 +598,7 @@ label:hover {
     line-height: 1;
 }
 
-.sidebar-tool-btn:first-child {
+.sidebar-tool-btn#sidebar-expand-btn {
     order: 5;
     margin-top: 8px;
 }

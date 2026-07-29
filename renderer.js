@@ -5,7 +5,7 @@ const { SearchAddon } = require('@xterm/addon-search');
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./i18n');
 const { createWorkspaceManager } = require('./workspace-manager');
-const { parseHexInput } = require('./serial-codec');
+const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 
 const SEND_LIMITS = Object.freeze({ main: 1024 * 1024, quick: 1024 * 1024, auto: 64 * 1024, paste: 1024 * 1024, terminal: 1024 * 1024 });
@@ -140,9 +140,13 @@ const sidebar = document.getElementById('sidebar');
 const sidebarExpandBtn = document.getElementById('sidebar-expand-btn');
 const sidebarCollapseBtn = document.getElementById('sidebar-collapse-btn');
 const sidebarConnectBtn = document.getElementById('sidebar-connect-btn');
+const sidebarClearBtn = document.getElementById('sidebar-clear-btn');
 const sidebarPrefsBtn = document.getElementById('sidebar-prefs-btn');
 const sidebarInputBtn = document.getElementById('sidebar-input-btn');
 const sidebarShellBtn = document.getElementById('sidebar-shell-btn');
+const sidebarThroughputCompact = document.getElementById('sidebar-throughput-compact');
+const sidebarThroughputRx = document.getElementById('sidebar-throughput-rx');
+const sidebarThroughputTx = document.getElementById('sidebar-throughput-tx');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const mainInputValidation = document.getElementById('main-input-validation');
 const receiveModeSelect = document.getElementById('receive-mode-select');
@@ -700,6 +704,7 @@ function setSearchFromText(text) {
 }
 
 function focusSearchWithActiveSelection() {
+    setSidebarCollapsed(false);
     const target = getActiveSearchTarget();
     const selectedText = target?.term?.hasSelection?.() ? target.term.getSelection() : '';
     if (selectedText) {
@@ -723,6 +728,7 @@ function clearTerminalByTabId(tabId) {
     const filterTab = filterTabs.find(t => t.id === tabId);
     if (filterTab) {
         filterTab.term.clear();
+        filterTab.contextLineText = '';
         return;
     }
     const shellTab = getShellTabState(tabId);
@@ -774,7 +780,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'clear-terminal': {
-            clearTerminalByTabId(isFilter ? tabId : 'tab-main');
+            clearTerminalByTabId(tabId || 'tab-main');
             setActionStatus(trFallback('main.terminalCleared', 'Terminal cleared'));
             break;
         }
@@ -1006,8 +1012,12 @@ workspaceManager = createWorkspaceManager({
     fitWorkspace: fitWorkspaceTerminals
 });
 
+let workspaceFitFrame = null;
+
 function fitWorkspaceTerminals() {
-    setTimeout(() => {
+    if (workspaceFitFrame !== null) return;
+    workspaceFitFrame = requestAnimationFrame(() => {
+        workspaceFitFrame = null;
         serialFitAddon.fit();
         filterTabs.forEach(tab => {
             const paneEl = getPaneDom(tab.paneId || getTabPaneId(tab.id));
@@ -1020,11 +1030,14 @@ function fitWorkspaceTerminals() {
             const tabPane = document.getElementById(tab.id);
             if (!paneEl || paneEl.hidden || !tabPane || !isTabActive(tab.id)) return;
             tab.fitAddon.fit();
-            if (!isDraggingWorkspaceSplitter) {
+            const sizeChanged = tab.lastFitCols !== tab.term.cols || tab.lastFitRows !== tab.term.rows;
+            tab.lastFitCols = tab.term.cols;
+            tab.lastFitRows = tab.term.rows;
+            if (!isDraggingWorkspaceSplitter && sizeChanged) {
                 ipcRenderer.send('resize-shell-tab', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows });
             }
         });
-    }, 0);
+    });
 }
 
 function getPaneById(paneId) {
@@ -1170,15 +1183,15 @@ function bindWorkspaceSplitter() {
 function bindWorkspacePaneTransitionFit() {
     if (!workspaceRootEl) return;
 
-    let fitTimer = null;
     workspaceRootEl.addEventListener('transitionend', (event) => {
         if (event.propertyName !== 'flex-basis' || isDraggingWorkspaceSplitter) return;
         if (event.target?.id !== 'pane-1' && event.target?.id !== 'pane-2') return;
-        if (fitTimer !== null) clearTimeout(fitTimer);
-        fitTimer = setTimeout(() => {
-            fitTimer = null;
-            fitWorkspaceTerminals();
-        }, 0);
+        fitWorkspaceTerminals();
+    });
+
+    sidebar?.addEventListener('transitionend', (event) => {
+        if (event.target !== sidebar || event.propertyName !== 'width') return;
+        fitWorkspaceTerminals();
     });
 }
 
@@ -1355,7 +1368,9 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         searchAddon,
         element: tabPane,
         btn: tabBtn,
-        sessionReady: false
+        sessionReady: false,
+        sessionCreateTimer: null,
+        closed: false
     };
 
     term.attachCustomKeyEventHandler(createTerminalKeyHandler(term, 'shell', () => tabId));
@@ -1380,14 +1395,21 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         setActionStatus(tr('main.shellStarting'));
     }
 
-    setTimeout(() => {
+    tabState.sessionCreateTimer = setTimeout(() => {
+        tabState.sessionCreateTimer = null;
+        if (tabState.closed || !shellTabs.includes(tabState)) return;
         fitAddon.fit();
         ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: term.cols, rows: term.rows, shellType })
             .then(() => {
+                if (tabState.closed || !shellTabs.includes(tabState)) {
+                    ipcRenderer.send('close-shell-tab-session', { tabId });
+                    return;
+                }
                 tabState.sessionReady = true;
                 ipcRenderer.send('resize-shell-tab', { tabId, cols: term.cols, rows: term.rows });
             })
             .catch((error) => {
+                if (tabState.closed) return;
                 term.writeln(`\r\n[ERROR] ${tr('main.shellStartFailed', { error: error?.message || error })}\r\n`);
             });
     }, 50);
@@ -1397,6 +1419,11 @@ function closeShellTab(tabId) {
     const index = shellTabs.findIndex(t => t.id === tabId);
     if (index === -1) return;
     const tab = shellTabs[index];
+    tab.closed = true;
+    if (tab.sessionCreateTimer !== null) {
+        clearTimeout(tab.sessionCreateTimer);
+        tab.sessionCreateTimer = null;
+    }
     ipcRenderer.send('flush-tab-log', { tabId });
     tab.term.dispose();
     tab.element.remove();
@@ -1638,7 +1665,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
             tabState.filterRegex = null;
             input.style.borderColor = 'var(--danger-color)';
         }
-        persistFilterTabs();
+        persistFilterTabs({ debounce: true });
     }
 
     tabState.updateRegex = updateRegex;
@@ -1744,18 +1771,33 @@ function closeFilterTab(tabId) {
     }
 }
 
-function persistFilterTabs() {
+let persistFilterTabsTimer = null;
+
+function persistFilterTabs({ debounce = false } = {}) {
     if (isApplyingConfig) return;
-    ipcRenderer.send('save-config', {
-        filterTabs: filterTabs.map(tab => ({
+    const save = () => {
+        persistFilterTabsTimer = null;
+        const savedTabs = filterTabs.map(tab => ({
             id: tab.id,
             filterText: tab.filterText || '',
             caseSensitive: tab.caseSensitive,
             useRegex: tab.useRegex,
             dataMode: tab.dataMode,
             paneId: tab.paneId || getTabPaneId(tab.id)
-        }))
-    });
+        }));
+        if (currentConfig) currentConfig.filterTabs = savedTabs;
+        ipcRenderer.send('save-config', { filterTabs: savedTabs });
+    };
+
+    if (persistFilterTabsTimer !== null) {
+        clearTimeout(persistFilterTabsTimer);
+        persistFilterTabsTimer = null;
+    }
+    if (debounce) {
+        persistFilterTabsTimer = setTimeout(save, 250);
+        return;
+    }
+    save();
 }
 
 document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-1'));
@@ -1847,9 +1889,8 @@ let mainInputMode = 'text';
 function validateSendContent(mode, content, encoding, maxBytes) {
     if (mode === 'hex') return parseHexInput(content, { maxBytes });
     if (!content) return { ok: false, code: 'EMPTY_INPUT', message: 'Input is empty', position: 0 };
-    const byteCount = iconv.encode(content, SUPPORTED_ENCODINGS.has(encoding) ? encoding : 'utf8').length;
-    if (byteCount > maxBytes) return { ok: false, code: 'PAYLOAD_TOO_LARGE', message: `Payload exceeds ${maxBytes} bytes`, byteCount, maxBytes };
-    return { ok: true, byteCount, normalized: content };
+    const result = buildSerialWriteBuffer({ mode: 'text', content, encoding }, { maxBytes });
+    return result.ok ? { ...result, normalized: content } : result;
 }
 
 function formatValidation(result, mode, appendCrLf = false) {
@@ -2101,6 +2142,7 @@ function bindSidebarToolbarEvents() {
     sidebarExpandBtn?.addEventListener('click', toggle);
     sidebarCollapseBtn?.addEventListener('click', toggle);
     sidebarConnectBtn?.addEventListener('click', () => connectBtn?.click());
+    sidebarClearBtn?.addEventListener('click', () => document.getElementById('clear-btn')?.click());
     sidebarPrefsBtn?.addEventListener('click', () => document.getElementById('open-prefs')?.click());
     sidebarInputBtn?.addEventListener('click', () => toggleMainInputBtn?.click());
     sidebarShellBtn?.addEventListener('click', () => toggleShellSidebarBtn?.click());
@@ -2929,6 +2971,9 @@ function updateThroughputPanel({ connected, rxHistory, txHistory, rxBytesPerSeco
     throughputPanel.classList.toggle('inactive', !connected);
     throughputRxRate.textContent = formatThroughput(rxBytesPerSecond || 0);
     throughputTxRate.textContent = formatThroughput(txBytesPerSecond || 0);
+    if (sidebarThroughputRx) sidebarThroughputRx.textContent = formatThroughput(rxBytesPerSecond || 0);
+    if (sidebarThroughputTx) sidebarThroughputTx.textContent = formatThroughput(txBytesPerSecond || 0);
+    sidebarThroughputCompact?.classList.toggle('inactive', !connected);
     renderThroughputChart(throughputRxChart, rxHistory || []);
     renderThroughputChart(throughputTxChart, txHistory || []);
 }
@@ -3123,22 +3168,8 @@ portSelect.addEventListener('change', () => {
 
 function clearActiveTerminal() {
     const { tabId: activeTabId } = getActiveTabInfo();
-    const activeTabPane = activeTabId ? document.getElementById(activeTabId) : null;
-    if (!activeTabPane) return;
-
-    if (activeTabPane.id === 'tab-main') {
-        if (receiveDisplayMode === 'hex') hexFormatter.reset({ resetOffset: false });
-        else resetTextReceive();
-        serialTerm.clear();
-        serialLineCounter = 1;
-        logLineCounter = 1;
-    } else {
-        const filterTab = filterTabs.find(t => t.id === activeTabPane.id);
-        if (filterTab) {
-            filterTab.term.clear();
-            filterTab.contextLineText = '';
-        }
-    }
+    if (!activeTabId) return;
+    clearTerminalByTabId(activeTabId);
 }
 
 clearBtn.addEventListener('click', clearActiveTerminal);

@@ -1103,9 +1103,6 @@ ipcMain.on('open-log-folder', () => {
 ipcMain.on('save-config', (event, config) => {
   try {
     saveConfig(config);
-    if (mainWindow) {
-      mainWindow.webContents.send('config-updated', currentConfig);
-    }
   } catch (error) {
     log.error('Failed to save config:', error);
     if (!event.sender.isDestroyed()) {

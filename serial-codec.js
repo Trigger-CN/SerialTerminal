@@ -18,6 +18,7 @@ function parseHexInput(input, options = {}) {
   const maxBytes = Number.isSafeInteger(options.maxBytes) && options.maxBytes >= 0
     ? options.maxBytes
     : DEFAULT_MAX_PAYLOAD_BYTES;
+  const maxHexDigits = maxBytes * 2;
   const tokens = [];
   let tokenStart = -1;
 
@@ -30,6 +31,12 @@ function parseHexInput(input, options = {}) {
       }
     } else if (tokenStart === -1) {
       tokenStart = index;
+    }
+    if (tokenStart !== -1 && index - tokenStart + 1 > maxHexDigits + 2) {
+      return failure('PAYLOAD_TOO_LARGE', `Payload exceeds the ${maxBytes} byte limit`, {
+        byteCount: Math.floor((index - tokenStart + 1) / 2),
+        maxBytes
+      });
     }
   }
 
@@ -46,6 +53,12 @@ function parseHexInput(input, options = {}) {
           position: token.position
         });
       }
+      if (hexDigits.length + 2 > maxHexDigits) {
+        return failure('PAYLOAD_TOO_LARGE', `Payload exceeds the ${maxBytes} byte limit`, {
+          byteCount: hexDigits.length / 2 + 1,
+          maxBytes
+        });
+      }
       hexDigits += token.value.slice(2);
       continue;
     }
@@ -55,6 +68,12 @@ function parseHexInput(input, options = {}) {
       return failure('INVALID_HEX_CHAR', `Invalid hex character: ${token.value[invalidOffset]}`, {
         token: token.value,
         position: token.position + invalidOffset
+      });
+    }
+    if (hexDigits.length + token.value.length > maxHexDigits) {
+      return failure('PAYLOAD_TOO_LARGE', `Payload exceeds the ${maxBytes} byte limit`, {
+        byteCount: Math.ceil((hexDigits.length + token.value.length) / 2),
+        maxBytes
       });
     }
     hexDigits += token.value;
@@ -141,6 +160,11 @@ function buildSerialWriteBuffer(request, options = {}) {
       return failure('EMPTY_INPUT', 'Serial write content is empty');
     }
     bytes = iconv.encode(content, encoding);
+    if (encoding !== 'utf8' && iconv.decode(bytes, encoding) !== content) {
+      return failure('UNREPRESENTABLE_CHARACTER', `Text contains characters that cannot be encoded as ${encoding.toUpperCase()}`, {
+        encoding
+      });
+    }
   }
 
   if (request.appendCrLf === true) {

@@ -25,6 +25,7 @@
 - 底部发送框发送历史持久化到 `mainInputHistory`；设置项 `mainInputSettings.historyLimit` 默认 20，范围 0-200，新增历史时去重后追加，超限删除最老条目。历史下拉只替换输入框内容，不立即发送。
 - 快捷键配置保存于 `shortcuts`，默认包括 `Ctrl+Enter` 发送、`Alt+H` 历史菜单、`Alt+Up/Down` 历史导航、`Ctrl+F` 搜索、`Ctrl+L` 清空当前终端、`Ctrl+R` 刷新串口、`Ctrl+Shift+D` 连接/断开；设置窗口“快捷键”页可修改或恢复默认。
 - `Ctrl+F`/搜索快捷键优先使用当前活动终端的选中文本填充搜索框并立即搜索；无选区时只聚焦搜索框。
+- `Ctrl+F`/自定义搜索快捷键触发 `focusSearchWithActiveSelection()` 时必须先展开左侧边栏，再切换搜索页；展开状态按现有 `sidebarCollapsed` 规则持久化。
 - 底部发送框普通 `ArrowUp/ArrowDown` 在多行内容中先保留 textarea 光标移动；只有光标位于第一行/最后一行时才切换历史。带修饰键的历史快捷键仍由全局快捷键处理。
 - 快捷发送条目的编辑/删除动作按钮位于主快捷发送按钮左侧，悬浮/动作按钮聚焦/编辑态显示，竖向排列且删除在上、编辑在下；主快捷发送按钮点击后不应因焦点停留而持续显示动作按钮。
 - 快捷发送支持每条指令独立的 `autoTrigger` 设置（`enabled`、`text`、`useRegex`、`caseSensitive`、`wholeWord`），配置入口在快捷指令编辑窗口，默认关闭；开启后 RX 原始字节按当前接收编码解码，匹配最近 4096 字符窗口，命中后按当前统一 TX 设置自动发送对应快捷指令，同一指令发送未完成时不重复排队，并让对应快捷发送按钮绿色慢速闪烁一次。
@@ -105,7 +106,14 @@ SerialTerminal/
 - `open-log-folder` IPC：在资源管理器中打开日志目录（自动创建）
 - 设置窗口默认大小：750×650
 - 设置窗口使用主窗口作为 parent，但不使用 `modal: true`；Windows 下模态子窗口关闭会重新启用父窗口，容易导致主窗口 UI 整体闪烁
-- 左侧边栏可通过 `sidebarCollapsed` 持久化为 48px 窄工具栏；窄工具栏按钮转发现有连接、设置、输入栏和 Shell 栏按钮行为，不要复制对应业务逻辑。折叠状态切换后需调用 `fitWorkspaceTerminals()`
+- 左侧边栏可通过 `sidebarCollapsed` 持久化为 48px 窄工具栏；顶部 RX/TX 速率复用 `updateThroughputPanel()` 数据，底部按钮转发现有连接、清空日志、设置、输入栏和 Shell 栏按钮行为，不要复制对应业务逻辑。折叠状态切换后需调用 `fitWorkspaceTerminals()`
+- 全仓库审查后的已确认问题、优化顺序和验收标准集中记录在根目录 `ToDo.md`；实施完成后应同步勾选对应条目并更新本文档中的架构约定
+- P0 优化已落地：Shell tab 保存 `sessionCreateTimer`/`closed` 防止快速关闭后创建孤儿 PTY；主窗口 `save-config` 只合并落盘，不再把完整配置回广播给自身，首选项 `save-config-request` 仍广播；过滤条件输入按 250ms debounce 持久化
+- 生产更新依赖已升级到 `electron-updater ^6.8.9`，并通过 npm `overrides` 固定 `js-yaml ^4.3.0`；使用官方 registry 执行 `npm audit --omit=dev` 应保持 0 High/Critical
+- 主按钮、快捷键、右键菜单和窄工具栏清空动作统一按活动/目标 `tabId` 调用 `clearTerminalByTabId()`，Shell 标签不得回退清空主终端
+- `fitWorkspaceTerminals()` 使用单一 `requestAnimationFrame` 合并请求，Shell 仅在 cols/rows 变化时发送 resize；pane `flex-basis` 和 sidebar `width` 过渡结束后均需触发 fit
+- Text 发送校验与最终发送均复用 `buildSerialWriteBuffer()`；ASCII/GBK 对无法表示的字符返回 `UNREPRESENTABLE_CHARACTER`，不得静默替换为 `?`。`parseHexInput()` 在扫描/累计超过 `maxBytes` 时应提前失败，避免超大输入构造完整副本
+- `npm test` 当前使用 Node 内置 test runner，首批测试位于 `test/serial-codec.test.js`；新增 codec 行为必须同步测试
 
 #### `renderer.js`
 负责：
