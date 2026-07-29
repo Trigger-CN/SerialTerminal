@@ -4,7 +4,7 @@ const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./i18n');
-const { createWorkspaceManager } = require('./workspace-manager');
+const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./workspace-manager');
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 
@@ -81,40 +81,7 @@ function cloneWorkspaceLayout(layout) {
 }
 
 function ensureWorkspaceLayoutShape(layout) {
-    const normalized = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
-    const source = layout && typeof layout === 'object' ? layout : {};
-    normalized.splitEnabled = source.splitEnabled === true;
-    normalized.orientation = source.orientation === 'vertical' ? 'vertical' : 'horizontal';
-    normalized.activePaneId = source.activePaneId === 'pane-2' ? 'pane-2' : 'pane-1';
-    const sourceSizes = source.paneSizes && typeof source.paneSizes === 'object' ? source.paneSizes : {};
-    const pane1Size = Number(sourceSizes['pane-1']);
-    const pane2Size = Number(sourceSizes['pane-2']);
-    if (Number.isFinite(pane1Size) && pane1Size > 0 && pane1Size < 1) {
-        normalized.paneSizes['pane-1'] = pane1Size;
-    }
-    if (Number.isFinite(pane2Size) && pane2Size > 0 && pane2Size < 1) {
-        normalized.paneSizes['pane-2'] = pane2Size;
-    }
-    const totalSize = normalized.paneSizes['pane-1'] + normalized.paneSizes['pane-2'];
-    if (totalSize > 0) {
-        normalized.paneSizes['pane-1'] /= totalSize;
-        normalized.paneSizes['pane-2'] /= totalSize;
-    }
-
-    if (Array.isArray(source.panes)) {
-        source.panes.forEach(pane => {
-            const target = normalized.panes.find(item => item.id === pane.id);
-            if (!target) return;
-            target.activeTabId = typeof pane.activeTabId === 'string' ? pane.activeTabId : target.activeTabId;
-            target.tabIds = Array.isArray(pane.tabIds) ? pane.tabIds.filter(id => typeof id === 'string') : target.tabIds;
-        });
-    }
-
-    if (!normalized.panes[0].tabIds.includes('tab-main')) {
-        normalized.panes[0].tabIds.unshift('tab-main');
-    }
-
-    return normalized;
+    return normalizeWorkspaceLayoutShape(layout);
 }
 
 function hexToAnsi(hex) {

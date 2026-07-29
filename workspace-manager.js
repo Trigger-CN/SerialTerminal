@@ -1,3 +1,50 @@
+const DEFAULT_WORKSPACE_LAYOUT = {
+    splitEnabled: false,
+    orientation: 'horizontal',
+    activePaneId: 'pane-1',
+    paneSizes: { 'pane-1': 0.5, 'pane-2': 0.5 },
+    panes: [
+        { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main'] },
+        { id: 'pane-2', activeTabId: null, tabIds: [] }
+    ]
+};
+
+function normalizeWorkspaceLayoutShape(layout) {
+    const normalized = JSON.parse(JSON.stringify(DEFAULT_WORKSPACE_LAYOUT));
+    const source = layout && typeof layout === 'object' ? layout : {};
+    normalized.splitEnabled = source.splitEnabled === true;
+    normalized.orientation = source.orientation === 'vertical' ? 'vertical' : 'horizontal';
+    normalized.activePaneId = source.activePaneId === 'pane-2' ? 'pane-2' : 'pane-1';
+    const sourceSizes = source.paneSizes && typeof source.paneSizes === 'object' ? source.paneSizes : {};
+    const pane1Size = Number(sourceSizes['pane-1']);
+    const pane2Size = Number(sourceSizes['pane-2']);
+    if (Number.isFinite(pane1Size) && pane1Size > 0 && pane1Size < 1) normalized.paneSizes['pane-1'] = pane1Size;
+    if (Number.isFinite(pane2Size) && pane2Size > 0 && pane2Size < 1) normalized.paneSizes['pane-2'] = pane2Size;
+    const totalSize = normalized.paneSizes['pane-1'] + normalized.paneSizes['pane-2'];
+    normalized.paneSizes['pane-1'] /= totalSize;
+    normalized.paneSizes['pane-2'] /= totalSize;
+
+    const sourcePanes = Array.isArray(source.panes) ? source.panes : [];
+    const usedTabIds = new Set(['tab-main']);
+    normalized.panes.forEach(target => {
+        const pane = sourcePanes.find(item => item?.id === target.id);
+        const sourceTabIds = Array.isArray(pane?.tabIds) ? pane.tabIds : target.tabIds;
+        target.tabIds = sourceTabIds.filter(tabId => {
+            if (typeof tabId !== 'string' || !tabId || tabId === 'tab-main' || usedTabIds.has(tabId)) return false;
+            usedTabIds.add(tabId);
+            return true;
+        });
+        if (target.id === 'pane-1') target.tabIds.unshift('tab-main');
+        const activeTabId = typeof pane?.activeTabId === 'string' ? pane.activeTabId : target.activeTabId;
+        target.activeTabId = target.tabIds.includes(activeTabId) ? activeTabId : (target.tabIds[0] || null);
+    });
+    if (!normalized.panes.find(pane => pane.id === normalized.activePaneId)?.tabIds.length) {
+        normalized.activePaneId = 'pane-1';
+    }
+    if (!normalized.panes[1].tabIds.length) normalized.splitEnabled = false;
+    return normalized;
+}
+
 function createWorkspaceManager(options = {}) {
     const {
         getLayout,
@@ -89,26 +136,23 @@ function createWorkspaceManager(options = {}) {
         return getLayoutState().panes.some(pane => pane.activeTabId === tabId);
     }
 
-    function hasRenderableTab(tabId) {
+    function hasRenderableTab(paneId, tabId) {
         if (!tabId) return false;
-        const tabButton = document.querySelector(`.main-tab[data-target="${tabId}"]`);
-        const tabPane = document.getElementById(tabId);
+        const paneEl = getPaneDom(paneId);
+        if (!paneEl) return false;
+        const tabButton = paneEl.querySelector(`.main-tab[data-target="${tabId}"]`);
+        const tabPane = paneEl.querySelector(`.main-tab-pane#${tabId}`);
         return Boolean(tabButton && tabPane);
     }
 
     function findFirstRenderableTabId(paneId) {
         const pane = getPaneById(paneId);
-        return pane.tabIds.find(tabId => hasRenderableTab(tabId)) || null;
+        return pane.tabIds.find(tabId => hasRenderableTab(paneId, tabId)) || null;
     }
 
     function prunePaneTabIds(paneId) {
         const pane = getPaneById(paneId);
-        pane.tabIds = pane.tabIds.filter(tabId => {
-            if (tabId === 'tab-main') {
-                return hasRenderableTab(tabId);
-            }
-            return hasRenderableTab(tabId);
-        });
+        pane.tabIds = pane.tabIds.filter(tabId => hasRenderableTab(paneId, tabId));
     }
 
     function ensurePaneActiveTab(paneId) {
@@ -118,7 +162,7 @@ function createWorkspaceManager(options = {}) {
             pane.activeTabId = null;
             return;
         }
-        if (!pane.activeTabId || !pane.tabIds.includes(pane.activeTabId) || !hasRenderableTab(pane.activeTabId)) {
+        if (!pane.activeTabId || !pane.tabIds.includes(pane.activeTabId) || !hasRenderableTab(paneId, pane.activeTabId)) {
             pane.activeTabId = findFirstRenderableTabId(paneId) || pane.tabIds[0] || null;
         }
     }
@@ -419,5 +463,6 @@ function createWorkspaceManager(options = {}) {
 }
 
 module.exports = {
-    createWorkspaceManager
+    createWorkspaceManager,
+    normalizeWorkspaceLayoutShape
 };
