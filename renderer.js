@@ -136,6 +136,13 @@ const mainAddQuickSendBtn = document.getElementById('main-add-quick-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
 const mainActionStatus = document.getElementById('main-action-status');
 const mainInputPanel = document.getElementById('main-input-panel');
+const sidebar = document.getElementById('sidebar');
+const sidebarExpandBtn = document.getElementById('sidebar-expand-btn');
+const sidebarCollapseBtn = document.getElementById('sidebar-collapse-btn');
+const sidebarConnectBtn = document.getElementById('sidebar-connect-btn');
+const sidebarPrefsBtn = document.getElementById('sidebar-prefs-btn');
+const sidebarInputBtn = document.getElementById('sidebar-input-btn');
+const sidebarShellBtn = document.getElementById('sidebar-shell-btn');
 const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const mainInputValidation = document.getElementById('main-input-validation');
 const receiveModeSelect = document.getElementById('receive-mode-select');
@@ -1655,7 +1662,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         if (e.key === 'Enter') {
             updateRegex();
             saveFilterHistory(input.value.trim());
-            dropdownMenu.style.display = 'none';
+            dropdownMenu.classList.remove('open');
         }
     });
 
@@ -1931,6 +1938,7 @@ function setMainInputPanelVisible(visible, persist = true) {
     if (!mainInputPanel) return;
     mainInputPanel.classList.toggle('hidden', !visible);
     toggleMainInputBtn?.classList.toggle('active', visible);
+    sidebarInputBtn?.classList.toggle('active', visible);
 
     if (persist) {
         saveMainInputSettings();
@@ -1938,11 +1946,26 @@ function setMainInputPanelVisible(visible, persist = true) {
 
 }
 
+function setSidebarCollapsed(collapsed, persist = true) {
+    const isCollapsed = collapsed === true;
+    sidebar?.classList.toggle('sidebar-collapsed', isCollapsed);
+    if (sidebarExpandBtn) {
+        sidebarExpandBtn.textContent = '›';
+        sidebarExpandBtn.title = tr(isCollapsed ? 'main.expandSidebar' : 'main.collapseSidebar');
+        sidebarExpandBtn.setAttribute('aria-label', sidebarExpandBtn.title);
+    }
+    if (persist && !isApplyingConfig) {
+        ipcRenderer.send('save-config', { sidebarCollapsed: isCollapsed });
+    }
+    fitWorkspaceTerminals();
+}
+
 function toggleShellSidebar() {
     if (!shellSidebar) return;
     const isHidden = shellSidebar.classList.contains('hidden');
     shellSidebar.classList.toggle('hidden', !isHidden);
     toggleShellSidebarBtn?.classList.toggle('active', isHidden);
+    sidebarShellBtn?.classList.toggle('active', isHidden);
 }
 
 function updateShellSessionList() {
@@ -2052,6 +2075,7 @@ function bindShellSidebarEvents() {
         if (shellSidebar) {
             shellSidebar.classList.add('hidden');
             toggleShellSidebarBtn?.classList.remove('active');
+            sidebarShellBtn?.classList.remove('active');
         }
     });
 
@@ -2070,6 +2094,16 @@ function bindShellSidebarEvents() {
             clearOnRestart: shellClearOnRestartCb?.checked
         });
     });
+}
+
+function bindSidebarToolbarEvents() {
+    const toggle = () => setSidebarCollapsed(!sidebar?.classList.contains('sidebar-collapsed'));
+    sidebarExpandBtn?.addEventListener('click', toggle);
+    sidebarCollapseBtn?.addEventListener('click', toggle);
+    sidebarConnectBtn?.addEventListener('click', () => connectBtn?.click());
+    sidebarPrefsBtn?.addEventListener('click', () => document.getElementById('open-prefs')?.click());
+    sidebarInputBtn?.addEventListener('click', () => toggleMainInputBtn?.click());
+    sidebarShellBtn?.addEventListener('click', () => toggleShellSidebarBtn?.click());
 }
 
 function escapeHtml(str) {
@@ -2428,6 +2462,7 @@ bindMainInputEvents();
 bindWorkspaceSplitter();
 bindWorkspacePaneTransitionFit();
 bindShellSidebarEvents();
+bindSidebarToolbarEvents();
 
 function getSerialOptionsFromUi() {
     return {
@@ -2512,6 +2547,8 @@ function applyConfig(config) {
     isApplyingConfig = true;
     try {
     currentConfig = config;
+    setSidebarCollapsed(config.sidebarCollapsed === true, false);
+    sidebarShellBtn?.classList.toggle('active', shellSidebar && !shellSidebar.classList.contains('hidden'));
     activeShortcuts = normalizeShortcutSettings(config.shortcuts);
     let sendProfileChanged = false;
     currentLanguage = getLanguage(config.language);
@@ -2910,6 +2947,12 @@ function updateSerialConnectionState(connected) {
     }
     connectBtn.classList.toggle('connect-action', !connected);
     connectBtn.classList.toggle('disconnect-action', connected);
+    sidebarConnectBtn?.classList.toggle('connect-action', !connected);
+    sidebarConnectBtn?.classList.toggle('disconnect-action', connected);
+    if (sidebarConnectBtn) {
+        sidebarConnectBtn.title = tr(connected ? 'main.disconnect' : 'main.connect');
+        sidebarConnectBtn.setAttribute('aria-label', sidebarConnectBtn.title);
+    }
     setActionStatus(connected ? tr('main.connected') : tr('main.disconnected'));
 }
 

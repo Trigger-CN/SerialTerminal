@@ -125,6 +125,7 @@ function normalizeConfig(config, defaults) {
     sendOnEnter: normalizeBoolean(oldMainInput.sendOnEnter, true),
     historyLimit: normalizeMainInputHistoryLimit(oldMainInput.historyLimit)
   };
+  normalized.sidebarCollapsed = normalizeBoolean(source.sidebarCollapsed, false);
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
 
@@ -269,6 +270,7 @@ function loadConfig() {
       sendOnEnter: true,
       historyLimit: 20
     },
+    sidebarCollapsed: false,
     mainInputHistory: [],
     shortcuts: DEFAULT_SHORTCUTS,
     autoSendSettings: {

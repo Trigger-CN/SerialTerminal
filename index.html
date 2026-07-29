@@ -15,7 +15,14 @@
     </style>
 </head>
 <body>
-    <div class="sidebar">
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-collapsed-toolbar" aria-label="Quick tools" data-i18n-aria-label="main.sidebarQuickTools">
+            <button id="sidebar-expand-btn" class="sidebar-tool-btn" title="Expand sidebar" data-i18n-title="main.expandSidebar" aria-label="Expand sidebar">›</button>
+            <button id="sidebar-connect-btn" class="sidebar-tool-btn connect-action" title="Connect" data-i18n-title="main.connect" aria-label="Connect">⚡</button>
+            <button id="sidebar-prefs-btn" class="sidebar-tool-btn" title="Settings" data-i18n-title="main.globalSettings" aria-label="Settings">⚙️</button>
+            <button id="sidebar-input-btn" class="sidebar-tool-btn" title="Show/hide input bar" data-i18n-title="main.toggleInputHide" aria-label="Show/hide input bar">⌨</button>
+            <button id="sidebar-shell-btn" class="sidebar-tool-btn" title="Shell Panel" data-i18n-title="main.shellPanel" aria-label="Shell Panel">&gt;_</button>
+        </div>
         <!-- Persistent Header -->
         <div class="sidebar-header">
             <div style="display: flex; gap: 4px;">
@@ -204,6 +211,7 @@
 
         <div class="sidebar-footer">
             <div class="sidebar-footer-row">
+                <button id="sidebar-collapse-btn" class="footer-btn settings" title="Collapse sidebar" data-i18n-title="main.collapseSidebar" aria-label="Collapse sidebar">‹</button>
                 <div id="open-prefs" class="footer-btn settings" title="Settings" data-i18n-title="main.globalSettings">
                     ⚙️
                 </div>

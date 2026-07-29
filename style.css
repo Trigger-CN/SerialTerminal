@@ -154,6 +154,12 @@ button.success:hover {
     border-color: #91cf9d;
 }
 
+.sidebar-tool-btn.connect-action {
+    background: #b8e6c1;
+    color: #173d20;
+    border-color: #79be87;
+}
+
 #connect-btn.disconnect-action {
     background: #f2b8b5;
     color: #551b18;
@@ -163,6 +169,12 @@ button.success:hover {
 #connect-btn.disconnect-action:hover {
     background: #f7c9c6;
     border-color: #e19590;
+}
+
+.sidebar-tool-btn.disconnect-action {
+    background: #f2b8b5;
+    color: #551b18;
+    border-color: #d77d78;
 }
 
 /* Checkbox Styling */
@@ -517,6 +529,56 @@ label:hover {
     flex-shrink: 0;
     overflow: hidden;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+    transition: width 0.18s ease;
+}
+
+.sidebar-collapsed-toolbar {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    width: 48px;
+    min-width: 48px;
+    padding: 8px 6px;
+    box-sizing: border-box;
+}
+
+.sidebar-tool-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.sidebar-tool-btn:first-child {
+    order: 5;
+    margin-top: 8px;
+}
+
+.sidebar-tool-btn.active {
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    background: rgba(0, 122, 204, 0.16);
+}
+
+.sidebar.sidebar-collapsed {
+    width: 48px;
+}
+
+.sidebar.sidebar-collapsed > :not(.sidebar-collapsed-toolbar) {
+    display: none;
+}
+
+.sidebar.sidebar-collapsed .sidebar-collapsed-toolbar {
+    display: flex;
 }
 
 .sidebar-header {
@@ -1081,6 +1143,10 @@ label:hover {
     pointer-events: none;
 }
 
+#sidebar-collapse-btn {
+    margin-right: auto;
+}
+
 .main-input-row {
     display: flex;
     align-items: stretch;
@@ -1423,6 +1489,7 @@ label:hover {
 }
 
 #open-prefs.footer-btn,
+#sidebar-collapse-btn.footer-btn,
 #toggle-main-input.footer-btn,
 #toggle-shell-sidebar.footer-btn {
     flex: 0 0 32px;

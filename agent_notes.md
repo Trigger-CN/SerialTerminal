@@ -105,6 +105,7 @@ SerialTerminal/
 - `open-log-folder` IPC：在资源管理器中打开日志目录（自动创建）
 - 设置窗口默认大小：750×650
 - 设置窗口使用主窗口作为 parent，但不使用 `modal: true`；Windows 下模态子窗口关闭会重新启用父窗口，容易导致主窗口 UI 整体闪烁
+- 左侧边栏可通过 `sidebarCollapsed` 持久化为 48px 窄工具栏；窄工具栏按钮转发现有连接、设置、输入栏和 Shell 栏按钮行为，不要复制对应业务逻辑。折叠状态切换后需调用 `fitWorkspaceTerminals()`
 
 #### `renderer.js`
 负责：
