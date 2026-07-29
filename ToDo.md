@@ -69,11 +69,12 @@
   - 验收：重命名默认 profile 不改变默认选择；删除时不会静默启动其他 Shell。
   - 结果：配置版本升级到 4，旧名称引用自动迁移到 `defaultShellProfileId`；删除默认项会清空引用，侧边栏按 profile ID 精确启动。
 
-- [ ] 在主进程统一校验设置数值范围
+- [x] 在主进程统一校验设置数值范围
   - 位置：`main.js` 的 `normalizeConfig()`，`preferences.js` 的保存逻辑。
   - 问题：字体大小、scrollback、历史缓冲区和滚轮行数等字段可能保存负数、超大数或 `null`。
   - 方案：主进程统一做 finite/integer/range 校验；设置窗口用相同规则阻止无效提交。
   - 验收：手工修改配置或输入越界值后均回退到合法范围，不会传入异常 xterm options。
+  - 结果：新增共享数值规则，主进程与设置窗口统一校验字体、scrollback、历史缓冲、滚轮、输入历史、Hex flush 和日志 flush 数值。
 
 - [ ] 修复工作区布局中的重复 tab 归属
   - 位置：`renderer.js` 的 workspace 标准化，`workspace-manager.js` 的 `hasRenderableTab()` 与恢复逻辑。
@@ -87,7 +88,7 @@
   - 使用 Node 内置 `node:test` 覆盖 `serial-codec.js`、`hex-formatter.js`、配置归一化和 i18n key 完整性。
   - 增加 mock serialport 的 IPC 写入测试，以及 Shell/session 生命周期测试。
   - 发布 workflow 在打包前必须执行测试。
-  - 进度：已增加 `npm test`，覆盖 codec 行为以及 Shell profile ID 生成、旧默认项迁移和精确查找；formatter、完整配置归一化、i18n、IPC 与 CI 门禁仍待补齐。
+  - 进度：已增加 `npm test`，覆盖 codec、Shell profile ID 和设置数值边界；formatter、完整配置归一化、i18n、IPC 与 CI 门禁仍待补齐。
 
 - [ ] 发布安装改为可复现流程
   - 位置：`.github/workflows/release.yml`。

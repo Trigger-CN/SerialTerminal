@@ -1,6 +1,7 @@
 const { ipcRenderer, shell } = require('electron');
 const { randomUUID } = require('crypto');
 const { t, getLanguage } = require('./i18n');
+const { normalizeIntegerSetting } = require('./config-values');
 
 let currentLanguage = 'en';
 
@@ -114,24 +115,21 @@ const SHORTCUT_ACTIONS = [
 let shortcutValues = { ...DEFAULT_SHORTCUTS };
 
 function normalizeLogAutoFlushMB(value) {
-    const mb = Number.parseInt(value, 10);
-    return Number.isFinite(mb) ? Math.min(1024, Math.max(1, mb)) : 10;
+    return normalizeIntegerSetting(value, 'rawBufferAutoFlushMB');
 }
 
 function normalizeMainInputHistoryLimit(value) {
-    const limit = Number.parseInt(value, 10);
-    return Number.isFinite(limit) ? Math.min(200, Math.max(0, limit)) : 20;
+    return normalizeIntegerSetting(value, 'mainInputHistoryLimit');
 }
 
 function normalizeHexDisplaySettings(settings = {}) {
     const bytesPerLine = Number.parseInt(settings.bytesPerLine, 10);
-    const idleFlushMs = Number.parseInt(settings.idleFlushMs, 10);
     return {
         bytesPerLine: [8, 16, 24, 32].includes(bytesPerLine) ? bytesPerLine : DEFAULT_HEX_DISPLAY_SETTINGS.bytesPerLine,
         showOffset: typeof settings.showOffset === 'boolean' ? settings.showOffset : DEFAULT_HEX_DISPLAY_SETTINGS.showOffset,
         showAscii: typeof settings.showAscii === 'boolean' ? settings.showAscii : DEFAULT_HEX_DISPLAY_SETTINGS.showAscii,
         uppercase: typeof settings.uppercase === 'boolean' ? settings.uppercase : DEFAULT_HEX_DISPLAY_SETTINGS.uppercase,
-        idleFlushMs: Number.isFinite(idleFlushMs) ? Math.min(1000, Math.max(0, idleFlushMs)) : DEFAULT_HEX_DISPLAY_SETTINGS.idleFlushMs
+        idleFlushMs: normalizeIntegerSetting(settings.idleFlushMs, 'hexIdleFlushMs')
     };
 }
 
@@ -432,7 +430,7 @@ async function init() {
       elements.fontFamilyZh.value = config.fontFamilyZh;
   }
 
-  elements.fontSize.value = config.fontSize;
+  elements.fontSize.value = String(normalizeIntegerSetting(config.fontSize, 'fontSize'));
   elements.foreground.value = config.foreground;
   elements.background.value = config.background;
   elements.foregroundHex.textContent = config.foreground;
@@ -443,9 +441,9 @@ async function init() {
   elements.lineNoColor.value = config.lineNoColor || '#ffff00';
   elements.lineNoColorHex.textContent = config.lineNoColor || '#ffff00';
   
-  elements.scrollbackLimit.value = config.scrollbackLimit || 100000;
-  elements.historyBufferSize.value = config.historyBufferSize || 5000000;
-  elements.mouseWheelScrollLines.value = config.mouseWheelScrollLines || 3;
+  elements.scrollbackLimit.value = String(normalizeIntegerSetting(config.scrollbackLimit, 'scrollbackLimit'));
+  elements.historyBufferSize.value = String(normalizeIntegerSetting(config.historyBufferSize, 'historyBufferSize'));
+  elements.mouseWheelScrollLines.value = String(normalizeIntegerSetting(config.mouseWheelScrollLines, 'mouseWheelScrollLines'));
   elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(config.mainInputSettings?.historyLimit));
 
   const hexDisplaySettings = normalizeHexDisplaySettings(config.hexDisplaySettings);
@@ -692,6 +690,16 @@ elements.rawBufferAutoFlushMB.onchange = () => {
 elements.mainInputHistoryLimit.onchange = () => {
     elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(elements.mainInputHistoryLimit.value));
 };
+[
+    [elements.fontSize, 'fontSize'],
+    [elements.scrollbackLimit, 'scrollbackLimit'],
+    [elements.historyBufferSize, 'historyBufferSize'],
+    [elements.mouseWheelScrollLines, 'mouseWheelScrollLines']
+].forEach(([element, setting]) => {
+    element.onchange = () => {
+        element.value = String(normalizeIntegerSetting(element.value, setting));
+    };
+});
 
 elements.browseBtn.onclick = async () => {
   const path = await ipcRenderer.invoke('select-directory');
@@ -720,14 +728,14 @@ elements.saveBtn.onclick = async () => {
         language: elements.languageSelect.value,
     fontFamily: elements.fontFamily.value,
     fontFamilyZh: elements.fontFamilyZh.value,
-    fontSize: parseInt(elements.fontSize.value),
+    fontSize: normalizeIntegerSetting(elements.fontSize.value, 'fontSize'),
     foreground: elements.foreground.value,
     background: elements.background.value,
     timestampColor: elements.timestampColor.value,
     lineNoColor: elements.lineNoColor.value,
-    scrollbackLimit: parseInt(elements.scrollbackLimit.value) || 100000,
-    historyBufferSize: parseInt(elements.historyBufferSize.value) || 5000000,
-    mouseWheelScrollLines: parseInt(elements.mouseWheelScrollLines.value) || 3,
+    scrollbackLimit: normalizeIntegerSetting(elements.scrollbackLimit.value, 'scrollbackLimit'),
+    historyBufferSize: normalizeIntegerSetting(elements.historyBufferSize.value, 'historyBufferSize'),
+    mouseWheelScrollLines: normalizeIntegerSetting(elements.mouseWheelScrollLines.value, 'mouseWheelScrollLines'),
     mainInputSettings: {
         ...existingMainInputSettings,
         historyLimit: normalizeMainInputHistoryLimit(elements.mainInputHistoryLimit.value)

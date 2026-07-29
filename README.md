@@ -209,6 +209,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 ├─ index.html                 主窗口界面
 ├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、输入、Shell）
 ├─ serial-codec.js             Text/Hex 发送请求校验与字节构造
+├─ config-values.js            设置数值范围与统一归一化
 ├─ shell-profiles.js           Shell Profile 归一化、迁移与查找
 ├─ hex-formatter.js            流式 Hex dump 格式化
 ├─ workspace-manager.js       工作区 pane/tab 布局管理

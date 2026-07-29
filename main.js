@@ -9,6 +9,7 @@ const log = require('electron-log');
 const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
+const { normalizeIntegerSetting } = require('./config-values');
 const {
   findShellProfile: findConfiguredShellProfile,
   normalizeShellProfiles,
@@ -51,8 +52,7 @@ function normalizeBoolean(value, fallback) {
 }
 
 function normalizeMainInputHistoryLimit(value) {
-  const limit = Number.parseInt(value, 10);
-  return Number.isFinite(limit) ? Math.min(200, Math.max(0, limit)) : 20;
+  return normalizeIntegerSetting(value, 'mainInputHistoryLimit');
 }
 
 function normalizeMainInputHistory(history, limit) {
@@ -111,15 +111,12 @@ function normalizeConfig(config, defaults) {
   const oldHex = source.hexDisplaySettings && typeof source.hexDisplaySettings === 'object'
     ? source.hexDisplaySettings
     : {};
-  const idleFlushMs = Number(oldHex.idleFlushMs);
   normalized.hexDisplaySettings = {
     bytesPerLine: oneOf(Number(oldHex.bytesPerLine), new Set([8, 16, 24, 32]), 16),
     showOffset: normalizeBoolean(oldHex.showOffset, true),
     showAscii: normalizeBoolean(oldHex.showAscii, true),
     uppercase: normalizeBoolean(oldHex.uppercase, true),
-    idleFlushMs: Number.isFinite(idleFlushMs) && idleFlushMs >= 0 && idleFlushMs <= 1000
-      ? idleFlushMs
-      : 50
+    idleFlushMs: normalizeIntegerSetting(oldHex.idleFlushMs, 'hexIdleFlushMs')
   };
 
   const oldMainInput = source.mainInputSettings && typeof source.mainInputSettings === 'object'
@@ -133,6 +130,10 @@ function normalizeConfig(config, defaults) {
   normalized.sidebarCollapsed = normalizeBoolean(source.sidebarCollapsed, false);
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
+  normalized.fontSize = normalizeIntegerSetting(source.fontSize, 'fontSize');
+  normalized.scrollbackLimit = normalizeIntegerSetting(source.scrollbackLimit, 'scrollbackLimit');
+  normalized.historyBufferSize = normalizeIntegerSetting(source.historyBufferSize, 'historyBufferSize');
+  normalized.mouseWheelScrollLines = normalizeIntegerSetting(source.mouseWheelScrollLines, 'mouseWheelScrollLines');
 
   normalized.shellProfiles = normalizeShellProfiles(source.shellProfiles, defaults.shellProfiles);
   normalized.defaultShellProfileId = resolveDefaultShellProfileId(source, normalized.shellProfiles);
@@ -201,10 +202,7 @@ function normalizeConfig(config, defaults) {
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
   normalized.logIncludeTimestamp = normalizeBoolean(source.logIncludeTimestamp, false);
   normalized.logIncludeLineNumbers = normalizeBoolean(source.logIncludeLineNumbers, false);
-  const rawBufferAutoFlushMB = Number(source.rawBufferAutoFlushMB);
-  normalized.rawBufferAutoFlushMB = Number.isFinite(rawBufferAutoFlushMB)
-    ? Math.min(1024, Math.max(1, rawBufferAutoFlushMB))
-    : defaults.rawBufferAutoFlushMB;
+  normalized.rawBufferAutoFlushMB = normalizeIntegerSetting(source.rawBufferAutoFlushMB, 'rawBufferAutoFlushMB');
   normalized.rawLogFileNameFormat = typeof source.rawLogFileNameFormat === 'string' && source.rawLogFileNameFormat.trim()
     ? source.rawLogFileNameFormat
     : 'raw_%Y-%m-%d_%H-%M-%S.bin';

@@ -70,6 +70,7 @@ SerialTerminal/
 ├─ workspace-manager.js       主工作区 pane/tab 状态与 DOM 编排管理
 ├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、主输入框、侧边栏）
 ├─ serial-codec.js             严格 Hex 解析、Text 编码和统一发送 Buffer 构造
+├─ config-values.js            设置数值范围和主进程/设置窗口共享归一化
 ├─ shell-profiles.js           Shell Profile ID 归一化、迁移与查找
 ├─ hex-formatter.js            流式 Hex dump 行对象、偏移和空闲刷新
 ├─ main.js                    主进程逻辑（窗口、配置、串口、日志、更新）
@@ -115,6 +116,7 @@ SerialTerminal/
 - `npm test` 当前使用 Node 内置 test runner，首批测试位于 `test/serial-codec.test.js`；新增 codec 行为必须同步测试
 - Shell profile 参数在设置窗口中逐项编辑并始终以 argv 字符串数组保存；不得通过空格 join/split 往返转换
 - 配置版本为 4；Shell profile 使用稳定 `id`，默认项保存为 `defaultShellProfileId`。旧版名称引用由主进程归一化迁移，renderer 创建 profile 会话时应传 profile ID
+- 字体大小、scrollback、历史缓冲、滚轮行数、输入历史上限、Hex 空闲刷新和日志自动刷盘大小统一通过 `config-values.js` 的整数范围规则校验；主进程和设置窗口不得各自维护不同 clamp 逻辑
 
 #### `renderer.js`
 负责：
