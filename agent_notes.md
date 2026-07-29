@@ -920,11 +920,15 @@ Hex 相关配置结构：
 3. 过滤标签页逻辑和主终端逻辑共享部分状态
    - 修改时需谨慎验证对主终端渲染的影响
 
-4. 自动发送和快捷发送属于旧功能区
+4. 主界面动画与 xterm fit
+   - 可用 opacity/transform 做菜单、弹窗和 tab 的轻量过渡；影响终端容器尺寸的动画必须同步考虑 `fitWorkspaceTerminals()`
+   - 工作区 pane 的 `flex-basis` 过渡结束后需要补一次终端 fit；拖动 splitter 时复用 `.workspace-root.resizing` 禁用该过渡，避免跟随光标延迟
+
+5. 自动发送和快捷发送属于旧功能区
    - 这些功能保留在左侧“Send”标签页，状态模型独立于下方主输入框
    - 三者均经 `sendSerialRequest()` / `serial-write` 生成最终字节，不得再引入直接 `port.write()` 分支
 
-5. Hex 关键风险与既定决策
+6. Hex 关键风险与既定决策
    - 串口 `data` chunk 不是协议帧；formatter 必须持续跨 chunk 累积
    - Text 必须使用流式 decoder；禁止逐 Buffer 独立 `toString()` 解码 UTF-8/GBK
    - 禁止用 `Buffer.from(input, 'hex')` 替代严格解析器，否则非法尾部可能被静默截断

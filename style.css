@@ -379,10 +379,15 @@ label:hover {
     justify-content: center;
     padding: 20px;
     background: rgba(0, 0, 0, 0.58);
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.18s ease, visibility 0.18s ease;
 }
 
 .app-dialog-overlay.hidden {
-    display: none;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .app-dialog {
@@ -395,6 +400,12 @@ label:hover {
     border: 1px solid var(--border-color);
     border-radius: 8px;
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+    transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.app-dialog-overlay.hidden .app-dialog {
+    transform: scale(0.96);
+    opacity: 0;
 }
 
 .app-dialog-header {
@@ -738,14 +749,23 @@ label:hover {
     border-radius: 0;
     overflow: hidden;
     background: var(--bg-primary);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 #pane-1 {
     flex-basis: var(--pane-1-size, auto);
+    transition: flex-basis 0.2s ease;
 }
 
 #pane-2 {
     flex-basis: var(--pane-2-size, auto);
+    transition: flex-basis 0.2s ease;
+}
+
+/* 拖动 splitter 时禁用 flex-basis 过渡，避免跟随光标延迟（见 agent_notes 第 13 节） */
+.workspace-root.resizing #pane-1,
+.workspace-root.resizing #pane-2 {
+    transition: none;
 }
 
 .workspace-pane.active {
@@ -856,6 +876,8 @@ label:hover {
     align-items: center;
     gap: 8px;
     white-space: nowrap;
+    animation: tabFadeIn 0.18s ease;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 .main-tab:hover {
@@ -914,6 +936,7 @@ label:hover {
 
 .main-tab-pane.active {
     display: flex;
+    animation: fadeIn 0.2s ease;
 }
 
 .filter-header {
@@ -946,8 +969,19 @@ label:hover {
     max-height: 200px;
     overflow-y: auto;
     z-index: 1000;
-    display: none;
     box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    opacity: 0;
+    transform: translateY(-4px);
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+}
+
+.filter-history-dropdown.open {
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
 }
 
 .filter-history-item {
@@ -1018,6 +1052,12 @@ label:hover {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* Tab 入场：纯 opacity 淡入，避免对水平 tab 条造成垂直位移 */
+@keyframes tabFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
 /* Main Input Panel */
 .main-input-panel {
     display: flex;
@@ -1028,10 +1068,17 @@ label:hover {
     border-top: 1px solid var(--border-color);
     flex-shrink: 0;
     position: relative;
+    transition: opacity 0.18s ease, visibility 0.18s ease;
 }
 
 .main-input-panel.hidden {
-    display: none;
+    opacity: 0;
+    visibility: hidden;
+    height: 0;
+    padding: 0;
+    border-top-width: 0;
+    overflow: hidden;
+    pointer-events: none;
 }
 
 .main-input-row {
@@ -1155,10 +1202,17 @@ label:hover {
     border: 1px solid var(--border-color);
     border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
 }
 
 .main-input-history-menu.hidden {
-    display: none;
+    opacity: 0;
+    transform: translateY(4px);
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .main-input-history-item {
@@ -1340,6 +1394,11 @@ label:hover {
     border-bottom: 1px solid var(--border-color);
     align-self: center;
     box-sizing: border-box;
+}
+
+.throughput-line,
+.throughput-area {
+    transition: opacity 0.3s ease;
 }
 
 .throughput-panel.inactive .throughput-line {

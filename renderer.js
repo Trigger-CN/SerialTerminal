@@ -1160,6 +1160,21 @@ function bindWorkspaceSplitter() {
     });
 }
 
+function bindWorkspacePaneTransitionFit() {
+    if (!workspaceRootEl) return;
+
+    let fitTimer = null;
+    workspaceRootEl.addEventListener('transitionend', (event) => {
+        if (event.propertyName !== 'flex-basis' || isDraggingWorkspaceSplitter) return;
+        if (event.target?.id !== 'pane-1' && event.target?.id !== 'pane-2') return;
+        if (fitTimer !== null) clearTimeout(fitTimer);
+        fitTimer = setTimeout(() => {
+            fitTimer = null;
+            fitWorkspaceTerminals();
+        }, 0);
+    });
+}
+
 function removeTabFromWorkspace(tabId, options = {}) {
     return workspaceManager.removeTab(tabId, options);
 }
@@ -1540,7 +1555,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
             div.onclick = () => {
                 input.value = item;
                 updateRegex();
-                dropdownMenu.style.display = 'none';
+                dropdownMenu.classList.remove('open');
             };
             dropdownMenu.appendChild(div);
         });
@@ -1548,20 +1563,20 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
 
     dropdownBtn.onclick = (e) => {
         e.stopPropagation();
-        const isShowing = dropdownMenu.style.display === 'block';
-        
+        const isShowing = dropdownMenu.classList.contains('open');
+
         // Hide all other dropdowns
-        document.querySelectorAll('.filter-history-dropdown').forEach(d => d.style.display = 'none');
-        
+        document.querySelectorAll('.filter-history-dropdown').forEach(d => d.classList.remove('open'));
+
         if (!isShowing) {
             renderDropdown();
-            dropdownMenu.style.display = 'block';
+            dropdownMenu.classList.add('open');
         }
     };
-    
+
     const outsideClickListener = (e) => {
         if (!filterHeader.contains(e.target)) {
-            dropdownMenu.style.display = 'none';
+            dropdownMenu.classList.remove('open');
         }
     };
     
@@ -2411,6 +2426,7 @@ function applyMainInputConfig(config) {
 
 bindMainInputEvents();
 bindWorkspaceSplitter();
+bindWorkspacePaneTransitionFit();
 bindShellSidebarEvents();
 
 function getSerialOptionsFromUi() {
