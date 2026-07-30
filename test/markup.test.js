@@ -155,3 +155,23 @@ test('auto send exposes the interval unit and uses a compact text input', () => 
   assert.match(html, /id="auto-send-interval"[\s\S]*?<span class="auto-send-interval-unit"[^>]*>ms<\/span>/);
   assert.match(styles, /#auto-send-text\s*\{[^}]*height:\s*30px;[^}]*min-height:\s*30px;[^}]*max-height:\s*30px;/s);
 });
+
+test('update confirmation opens a non-closable download window with progress and install flow', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const progressHtml = fs.readFileSync(path.join(root, 'update-progress.html'), 'utf8');
+  const progressRenderer = fs.readFileSync(path.join(root, 'update-progress.js'), 'utf8');
+
+  assert.match(main, /createUpdateDownloadWindow\(info\);\s*autoUpdater\.downloadUpdate\(\);/s);
+  assert.match(main, /closable:\s*false/);
+  assert.match(main, /if \(status === 'error'\) updateDownloadWindow\.setClosable\(true\)/);
+  assert.match(main, /sendUpdateDownloadStatus\('progress', progressObj\)/);
+  assert.match(main, /sendUpdateDownloadStatus\('downloaded', info\)/);
+  assert.match(main, /getManualUpdateDownloadUrl\(info\)/);
+  assert.match(main, /open-update-download-url/);
+  assert.match(progressHtml, /id="progress-fill"/);
+  assert.match(progressHtml, /id="install-btn"/);
+  assert.match(progressHtml, /id="manual-download-link"/);
+  assert.match(progressRenderer, /bytesPerSecond/);
+  assert.match(progressRenderer, /open-update-download-url/);
+  assert.match(progressRenderer, /ipcRenderer\.send\('quit-and-install'\)/);
+});

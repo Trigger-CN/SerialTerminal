@@ -22,6 +22,7 @@ autoUpdater.logger = log;
 
 let mainWindow;
 let prefsWindow;
+let updateDownloadWindow;
 let updatePromptState = {
   startupCheckInProgress: false,
   manualCheckInProgress: false,
@@ -894,6 +895,72 @@ function createPrefsWindow(focusTab = null) {
   });
 }
 
+function sendUpdateDownloadStatus(status, data) {
+  if (updateDownloadWindow && !updateDownloadWindow.isDestroyed()) {
+    if (status === 'error') updateDownloadWindow.setClosable(true);
+    updateDownloadWindow.webContents.send('update-download-status', { status, data });
+  }
+}
+
+function getManualUpdateDownloadUrl(info) {
+  const exeFile = Array.isArray(info?.files)
+    ? info.files.find(file => /\.exe$/i.test(file?.name || file?.url || ''))
+    : null;
+  if (exeFile?.url) {
+    if (/^https?:\/\//i.test(exeFile.url)) return exeFile.url;
+    const repoInfo = getGithubRepoInfo();
+    if (repoInfo && info?.version && exeFile.name) {
+      return `https://github.com/${repoInfo.owner}/${repoInfo.repo}/releases/download/v${encodeURIComponent(info.version)}/${encodeURIComponent(exeFile.name)}`;
+    }
+  }
+  return getReleaseUrl();
+}
+
+function createUpdateDownloadWindow(info) {
+  if (updateDownloadWindow && !updateDownloadWindow.isDestroyed()) {
+    updateDownloadWindow.focus();
+    return;
+  }
+
+  updateDownloadWindow = new BrowserWindow({
+    width: 460,
+    height: 260,
+    minWidth: 460,
+    minHeight: 260,
+    maxWidth: 460,
+    maxHeight: 260,
+    parent: mainWindow,
+    title: tr('updateDialog.softwareUpdateTitle'),
+    backgroundColor: '#252526',
+    autoHideMenuBar: true,
+    minimizable: true,
+    closable: false,
+    resizable: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  updateDownloadWindow.loadFile('update-progress.html');
+  updateDownloadWindow.webContents.once('did-finish-load', () => {
+    updateDownloadWindow?.webContents.send('update-download-init', {
+      version: info?.version || '',
+      title: tr('updateDialog.softwareUpdateTitle'),
+      downloading: tr('prefs.downloading'),
+      downloaded: tr('updateDialog.versionDownloaded'),
+      installAndRestart: tr('updateDialog.installAndRestart'),
+      restartToInstall: tr('updateDialog.restartToInstall'),
+      manualDownloadHint: tr('updateDialog.manualDownloadHint'),
+      manualDownload: tr('updateDialog.manualDownload'),
+      manualDownloadUrl: getManualUpdateDownloadUrl(info)
+    });
+  });
+  updateDownloadWindow.on('closed', () => {
+    updateDownloadWindow = null;
+  });
+}
+
 function getReleaseUrl() {
   const pkg = require('./package.json');
   if (pkg.homepage) return pkg.homepage;
@@ -980,6 +1047,7 @@ async function promptForAvailableUpdate(info, isStartupPrompt = false) {
 
   if (result.response === 0) {
     updatePromptState.downloadInitiatedByPrompt = true;
+    createUpdateDownloadWindow(info);
     autoUpdater.downloadUpdate();
     return;
   }
@@ -1493,21 +1561,24 @@ autoUpdater.on('update-not-available', (info) => {
 
 autoUpdater.on('error', (err) => {
     sendUpdateStatusToPrefs('error', err.message);
+    sendUpdateDownloadStatus('error', err.message);
   updatePromptState.startupCheckInProgress = false;
   updatePromptState.manualCheckInProgress = false;
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
     sendUpdateStatusToPrefs('download-progress', progressObj);
+    sendUpdateDownloadStatus('progress', progressObj);
 });
 
 autoUpdater.on('update-downloaded', (info) => {
     sendUpdateStatusToPrefs('downloaded', info);
+    sendUpdateDownloadStatus('downloaded', info);
   saveConfig({ skippedUpdateVersion: '' });
   updatePromptState.startupCheckInProgress = false;
   updatePromptState.manualCheckInProgress = false;
 
-  if (updatePromptState.downloadInitiatedByPrompt) {
+  if (!updatePromptState.downloadInitiatedByPrompt) {
     promptToInstallDownloadedUpdate(info).catch(err => {
       log.error('Failed to show install prompt:', err);
     });
@@ -1520,6 +1591,11 @@ ipcMain.on('check-for-updates', () => {
 
 ipcMain.handle('open-release-page', () => {
   return shell.openExternal(getReleaseUrl());
+});
+
+ipcMain.handle('open-update-download-url', (event, url) => {
+  if (typeof url !== 'string' || !/^https:\/\//i.test(url)) return false;
+  return shell.openExternal(url);
 });
 
 ipcMain.on('quit-and-install', () => {

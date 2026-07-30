@@ -19,7 +19,9 @@ const translations = {
       later: 'Later',
       updateReadyTitle: 'Update Ready',
       versionDownloaded: 'Version {version} has been downloaded.',
-      restartToInstall: 'Restart the application now to install the update.'
+      restartToInstall: 'Restart the application now to install the update.',
+      manualDownloadHint: 'If the download fails or is slow, download it manually:',
+      manualDownload: 'Download EXE'
     },
     common: {
       none: 'None',
@@ -260,7 +262,9 @@ const translations = {
       later: '稍后',
       updateReadyTitle: '更新已就绪',
       versionDownloaded: '版本 {version} 已下载完成。',
-      restartToInstall: '现在重启应用以安装更新。'
+      restartToInstall: '现在重启应用以安装更新。',
+      manualDownloadHint: '如果下载失败或速度过慢，可以手动下载：',
+      manualDownload: '下载 EXE 安装包'
     },
     common: {
       none: '暂无',
