@@ -85,16 +85,17 @@
 
 ## P2 - 测试、发布与维护
 
-- [ ] 建立自动化测试和 CI 门禁
+- [x] 建立自动化测试和 CI 门禁
   - 使用 Node 内置 `node:test` 覆盖 `serial-codec.js`、`hex-formatter.js`、配置归一化和 i18n key 完整性。
   - 增加 mock serialport 的 IPC 写入测试，以及 Shell/session 生命周期测试。
   - 发布 workflow 在打包前必须执行测试。
   - 进度：已增加 `npm test`，覆盖 codec、formatter、Shell profile ID、设置数值边界、损坏工作区布局恢复和 i18n 基线；GitHub Checks 已执行干净安装、测试、语法和生产审计。完整配置归一化、IPC 与 Shell 生命周期集成测试仍待补齐。
 
-- [ ] 发布安装改为可复现流程
+- [x] 发布安装改为可复现流程
   - 位置：`.github/workflows/release.yml`。
   - 将 `npm install` 改为 `npm ci`；统一 lockfile registry URL；native rebuild 保持显式步骤。
   - 验收：Windows/Linux 使用同一 lockfile 安装，构建后 lockfile 不变化。
+  - 结果：新增 tag 发布 workflow，Windows/Linux 共用 Node 22.12 和同一 lockfile，安装使用 `npm ci --ignore-scripts`，显式执行 native rebuild、测试、打包和 lockfile 不变检查。
 
 - [x] 修正文档和 Node 版本约束
   - `README.md` 当前写 Node.js 16+，但 `serialport@13` 要求 Node 20+。
@@ -125,9 +126,9 @@
 
 ## 验证基线
 
-- [ ] 所有项目 JavaScript 文件通过 `node --check`。
-- [ ] `git diff --check` 通过。
+- [x] 所有项目 JavaScript 文件通过 `node --check`。
+- [x] `git diff --check` 通过。
 - [ ] Windows 和 Linux 打包通过（Windows NSIS/portable 已通过，Linux 待验证）。
 - [ ] 真实或虚拟串口覆盖 Text/Hex、UTF-8/ASCII/GBK、自动发送、快捷发送和重连。
 - [ ] 主终端、过滤标签、Shell 标签、分屏、侧边栏收起/展开进行人工交互回归。
-- [ ] `npm audit --registry=https://registry.npmjs.org --omit=dev` 无 High/Critical。
+- [x] `npm audit --registry=https://registry.npmjs.org --omit=dev` 无 High/Critical。

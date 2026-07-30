@@ -198,6 +198,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 下载完成后支持重启安装或稍后安装
 - 更新提示会尝试显示 GitHub Release 正文；获取不到时提示网络异常
 - 使用 `electron-builder` 打包 Windows 与 Linux 发布物
+- 推送 `v*` Git tag 后，GitHub Actions 会使用同一 lockfile 并行构建 Windows/Linux 发布物；构建前执行测试和 native rebuild，构建后校验 lockfile 未变化
 
 ## 项目结构
 

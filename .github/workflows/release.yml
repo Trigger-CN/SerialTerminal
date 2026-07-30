@@ -1,4 +1,4 @@
-name: Build and Release
+name: Release
 
 on:
   push:
@@ -9,161 +9,64 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ${{ matrix.os }}
-    
+  build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-latest]
-
+        include:
+          - os: windows-latest
+            target: win
+            command: npm run dist:win
+          - os: ubuntu-latest
+            target: linux
+            command: npm run dist:linux
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Check out Git repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Sync version from tag
-        shell: bash
-        run: |
-          # 提取 tag 版本号 (去掉 v 前缀)
-          VERSION=${GITHUB_REF_NAME#v}
-          echo "Syncing version to $VERSION"
-          # 更新 package.json 版本号，不产生 git tag
-          npm version $VERSION --no-git-tag-version
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Set up MSBuild
-        if: matrix.os == 'windows-2022'
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Set up Visual Studio Developer Command Prompt
-        if: matrix.os == 'windows-2022'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Install Visual Studio C++ Build Tools
-        if: matrix.os == 'windows-2022'
-        shell: powershell
-        run: |
-          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --locale en-US" -y --no-progress
-
-      - name: Remove .npmrc
+          node-version: 22.12.0
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Sync package version from tag
         shell: bash
-        run: |
-          rm -f .npmrc
-          npm config set registry https://registry.npmjs.org/
-
-      - name: Show Windows build environment
-        if: matrix.os == 'windows-2022'
-        shell: powershell
-        run: |
-          Write-Host "npm registry: $(npm config get registry)"
-          Write-Host "cl path: $((Get-Command cl.exe -ErrorAction SilentlyContinue).Source)"
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (Test-Path $vswhere) {
-            & $vswhere -all -products * -format json
-          } else {
-            Write-Host "vswhere not found"
-          }
-          npm --version
-          node --version
-
-      - name: Cache Electron binaries
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/electron
-            ~/.cache/electron-builder
-          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: electron-${{ runner.os }}-
-
-      - name: Install Dependencies
-        run: npm install
-
-      - name: Rebuild Native Dependencies for Electron
-        if: matrix.os == 'windows-2022'
-        run: npm run rebuild
-
-      - name: Install Linux Build Dependencies
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+      - name: Install Linux build dependencies
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libudev-dev libfuse2
-
-      - name: Rebuild Native Dependencies for Electron (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: npm run rebuild
-
-      - name: Build Changelog
-        if: matrix.os == 'ubuntu-latest'
-        id: build_changelog
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libfuse2
+      - run: npm ci --ignore-scripts
+      - name: Record lockfile after version sync
         shell: bash
-        run: |
-          set -euo pipefail
-
-          CURRENT_TAG="${GITHUB_REF_NAME}"
-          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep '^v' | grep -Fxv "$CURRENT_TAG" | head -n 1)
-
-          if [ -n "$PREVIOUS_TAG" ]; then
-            RANGE="${PREVIOUS_TAG}..${CURRENT_TAG}"
-            echo "Using range: $RANGE"
-            CHANGELOG=$(git log "$RANGE" --pretty=format:'- %s (%h)' --no-merges)
-          else
-            echo "No previous tag found, using full history"
-            CHANGELOG=$(git log --pretty=format:'- %s (%h)' --no-merges)
-          fi
-
-          if [ -z "$CHANGELOG" ]; then
-            CHANGELOG='- no changes'
-          fi
-
-          {
-            echo 'changelog<<EOF'
-            echo '## Changes'
-            echo
-            echo "$CHANGELOG"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Update Release Body
-        if: matrix.os == 'ubuntu-latest'
-        uses: softprops/action-gh-release@v2
+        run: sha256sum package-lock.json > lockfile.sha256
+      - run: npm test
+      - run: npm run rebuild
+      - run: ${{ matrix.command }}
+      - name: Verify lockfile is unchanged
+        shell: bash
+        run: sha256sum --check lockfile.sha256
+      - uses: actions/upload-artifact@v4
         with:
-          body: |
-            ${{ steps.build_changelog.outputs.changelog }}
+          name: serialterminal-${{ matrix.target }}
+          path: dist/**
+          if-no-files-found: error
 
-            ## 📦 Downloads / 产物下载
-            请在下方的 **Assets** 区域下载安装包：
-            - **Windows**: 使用 `.exe` (安装版) 或 `.exe` (便携版)
-            - **Linux**: 使用 `.AppImage` 或 `.deb`
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: '*'
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Unblock app-builder executable
-        if: matrix.os == 'windows-2022'
-        shell: powershell
-        run: |
-          $path = 'node_modules\app-builder-bin\win\x64\app-builder.exe'
-          if (Test-Path $path) {
-            Unblock-File $path
-            Write-Host "Unblocked $path"
-          } else {
-            Write-Host "$path not found"
-          }
-
-      - name: Build and Publish (Windows)
-        if: matrix.os == 'windows-2022'
-        run: npm run dist:win -- -p always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and Publish (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: npm run dist:linux -- -p always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
