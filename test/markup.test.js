@@ -42,6 +42,18 @@ test('tabs and footer actions expose keyboard-accessible semantics', () => {
   assert.match(styles, /button:focus-visible/);
 });
 
+test('shell profile management opens the matching preferences tab', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(renderer, /send\('open-prefs', \{ focusTab: 'shell-profiles' \}\)/);
+  assert.match(main, /createPrefsWindow\(typeof options\.focusTab === 'string' \? options\.focusTab : null\)/);
+  assert.match(main, /send\('focus-preferences-tab', focusTab\)/);
+  assert.match(preferences, /ipcRenderer\.on\('focus-preferences-tab'/);
+  assert.match(preferences, /focusPreferencesTab\(tabId\)/);
+});
+
 test('collapsed sidebar keeps tools scrollable and expand control outside the scroll area', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');

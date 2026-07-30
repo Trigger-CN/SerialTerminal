@@ -177,25 +177,25 @@
 <body>
     <div style="display: flex; flex: 1; overflow: hidden;">
         <div class="sidebar">
-            <button class="tab-btn active" onclick="showTab('appearance')">
+            <button class="tab-btn active" data-tab="appearance" onclick="showTab('appearance')">
                 <span style="font-size: 18px;">🎨</span> <span data-i18n="prefs.appearance">Appearance</span>
             </button>
-            <button class="tab-btn" onclick="showTab('terminal')">
+            <button class="tab-btn" data-tab="terminal" onclick="showTab('terminal')">
                 <span style="font-size: 18px;">💻</span> <span data-i18n="prefs.terminal">Terminal</span>
             </button>
-            <button class="tab-btn" onclick="showTab('highlighting')">
+            <button class="tab-btn" data-tab="highlighting" onclick="showTab('highlighting')">
                 <span style="font-size: 18px;">🖍️</span> <span data-i18n="prefs.highlighting">Highlighting</span>
             </button>
-            <button class="tab-btn" onclick="showTab('logging')">
+            <button class="tab-btn" data-tab="logging" onclick="showTab('logging')">
                 <span style="font-size: 18px;">📝</span> <span data-i18n="prefs.logging">Logging</span>
             </button>
-            <button class="tab-btn" onclick="showTab('shell-profiles')">
+            <button class="tab-btn" data-tab="shell-profiles" onclick="showTab('shell-profiles')">
                 <span style="font-size: 18px;">>_</span> <span data-i18n="prefs.shellProfiles">Shell Profiles</span>
             </button>
-            <button class="tab-btn" onclick="showTab('shortcuts')">
+            <button class="tab-btn" data-tab="shortcuts" onclick="showTab('shortcuts')">
                 <span style="font-size: 18px;">⌨</span> <span data-i18n="prefs.shortcuts">Shortcuts</span>
             </button>
-            <button class="tab-btn" onclick="showTab('about')">
+            <button class="tab-btn" data-tab="about" onclick="showTab('about')">
                 <span style="font-size: 18px;">ℹ️</span> <span data-i18n="prefs.about">About</span>
             </button>
         </div>

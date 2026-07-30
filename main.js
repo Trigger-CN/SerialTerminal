@@ -836,9 +836,17 @@ function createWindow() {
   });
 }
 
-function createPrefsWindow() {
+function createPrefsWindow(focusTab = null) {
   if (prefsWindow) {
     prefsWindow.focus();
+    if (focusTab) {
+      const sendFocusTab = () => prefsWindow?.webContents.send('focus-preferences-tab', focusTab);
+      if (prefsWindow.webContents.isLoading()) {
+        prefsWindow.webContents.once('did-finish-load', sendFocusTab);
+      } else {
+        sendFocusTab();
+      }
+    }
     return;
   }
 
@@ -857,6 +865,11 @@ function createPrefsWindow() {
   });
 
   prefsWindow.loadFile('preferences.html');
+  prefsWindow.webContents.once('did-finish-load', () => {
+    if (focusTab) {
+      prefsWindow.webContents.send('focus-preferences-tab', focusTab);
+    }
+  });
   prefsWindow.on('closed', () => {
     prefsWindow = null;
   });
@@ -1062,8 +1075,8 @@ ipcMain.handle('get-config', () => {
   return currentConfig;
 });
 
-ipcMain.on('open-prefs', () => {
-  createPrefsWindow();
+ipcMain.on('open-prefs', (event, options = {}) => {
+  createPrefsWindow(typeof options.focusTab === 'string' ? options.focusTab : null);
 });
 
 ipcMain.on('update-display-settings', (event, settings) => {

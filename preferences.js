@@ -9,6 +9,22 @@ function tr(key, params = {}) {
     return t(currentLanguage, key, params);
 }
 
+function focusPreferencesTab(tabId) {
+    const tabPane = document.getElementById(tabId);
+    if (!tabPane || !tabPane.classList.contains('tab-pane')) return;
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabId);
+    });
+    document.querySelectorAll('.tab-pane').forEach(pane => {
+        pane.classList.toggle('active', pane.id === tabId);
+    });
+}
+
+ipcRenderer.on('focus-preferences-tab', (_event, tabId) => {
+    focusPreferencesTab(tabId);
+});
+
 const elements = {
   fontFamily: document.getElementById('fontFamily'),
   fontFamilyZh: document.getElementById('fontFamilyZh'),
