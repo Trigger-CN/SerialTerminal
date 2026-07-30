@@ -132,6 +132,26 @@
                     <option value="cr">NL: CR / CR</option>
                 </select>
 
+                <section class="shared-send-profile" aria-labelledby="shared-send-profile-title">
+                    <div class="shared-send-profile-title" id="shared-send-profile-title" data-i18n="main.sharedSendProfile" data-i18n-fallback="Send Profile">Send Profile</div>
+                    <div class="shared-send-profile-grid">
+                        <label for="send-mode-select" data-i18n="main.sendMode" data-i18n-fallback="Mode">Mode</label>
+                        <select id="send-mode-select" title="Send mode" data-i18n-title="main.sendMode">
+                            <option value="text" data-i18n="main.textMode" data-i18n-fallback="Text">Text</option>
+                            <option value="hex" data-i18n="main.hexMode" data-i18n-fallback="Hex">Hex</option>
+                        </select>
+                        <label for="send-encoding-select" data-i18n="main.sendEncoding" data-i18n-fallback="Encoding">Encoding</label>
+                        <select id="send-encoding-select" title="Send encoding" data-i18n-title="main.sendEncoding">
+                            <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
+                        </select>
+                    </div>
+                    <label class="shared-send-append" for="send-append-crlf">
+                        <input type="checkbox" id="send-append-crlf">
+                        <span data-i18n="main.sharedAppend" data-i18n-fallback="Append CRLF / 0D 0A">Append CRLF / 0D 0A</span>
+                    </label>
+                    <div class="shared-send-profile-hint" data-i18n="main.sharedSendProfileHint" data-i18n-fallback="Used by message send actions">Used by message send actions</div>
+                </section>
+
                 <div id="display-controls" class="settings-group">
                     <label>
                         <input type="checkbox" id="show-timestamp"> 🕒 <span data-i18n="main.showTime">Show Time</span>
@@ -164,32 +184,13 @@
 
             <!-- Send Tab -->
             <div id="tab-send" class="sidebar-tab-pane" role="tabpanel">
-                <section class="shared-send-profile" aria-labelledby="shared-send-profile-title">
-                    <div class="shared-send-profile-title" id="shared-send-profile-title" data-i18n="main.sharedSendProfile" data-i18n-fallback="Send Profile">Send Profile</div>
-                    <div class="shared-send-profile-grid">
-                        <label for="send-mode-select" data-i18n="main.sendMode" data-i18n-fallback="Mode">Mode</label>
-                        <select id="send-mode-select" title="Send mode" data-i18n-title="main.sendMode">
-                            <option value="text" data-i18n="main.textMode" data-i18n-fallback="Text">Text</option>
-                            <option value="hex" data-i18n="main.hexMode" data-i18n-fallback="Hex">Hex</option>
-                        </select>
-                        <label for="send-encoding-select" data-i18n="main.sendEncoding" data-i18n-fallback="Encoding">Encoding</label>
-                        <select id="send-encoding-select" title="Send encoding" data-i18n-title="main.sendEncoding">
-                            <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
-                        </select>
-                    </div>
-                    <label class="shared-send-append" for="send-append-crlf">
-                        <input type="checkbox" id="send-append-crlf">
-                        <span data-i18n="main.sharedAppend" data-i18n-fallback="Append CRLF / 0D 0A">Append CRLF / 0D 0A</span>
-                    </label>
-                    <div class="shared-send-profile-hint" data-i18n="main.sharedSendProfileHint" data-i18n-fallback="Used by message send actions">Used by message send actions</div>
-                </section>
-
                 <!-- Auto Send -->
                 <section class="send-sidebar-section">
                     <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 4px;">
                         <input type="checkbox" id="auto-send-enable">
                         <label for="auto-send-enable" style="font-size: 13px; color: var(--text-primary); cursor: pointer; display: inline;" data-i18n="main.autoSend">Auto Send</label>
                         <input type="number" id="auto-send-interval" placeholder="ms" value="1000" style="width: 60px; padding: 4px; margin-left: auto;">
+                        <span class="auto-send-interval-unit" aria-hidden="true">ms</span>
                     </div>
                     <textarea id="auto-send-text" placeholder="Text to auto send..." data-i18n-placeholder="main.autoSendText" class="send-editor-textarea"></textarea>
                     <div id="auto-send-validation" class="input-validation" role="status" aria-live="polite"></div>

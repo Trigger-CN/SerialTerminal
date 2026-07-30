@@ -125,3 +125,33 @@ test('filter and shell tabs support persistent double-click renaming', () => {
   assert.match(renderer, /tab\.title\?\.trim\(\) \|\| defaultTitle/);
   assert.match(styles, /\.rename-tab-dialog \.form-group > label\s*\{[^}]*margin-bottom:\s*5px;/s);
 });
+
+test('shared send profile is located in the settings tab', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+  const settings = html.match(/<div id="tab-settings"[\s\S]*?<\/div>\s*<!-- Search Tab -->/)?.[0] || '';
+  const send = html.match(/<div id="tab-send"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
+
+  assert.match(settings, /class="shared-send-profile"/);
+  assert.doesNotMatch(send, /class="shared-send-profile"/);
+  assert.match(settings, /id="send-mode-select"/);
+  assert.match(settings, /id="send-encoding-select"/);
+  assert.match(settings, /id="send-append-crlf"/);
+  assert.ok(settings.indexOf('class="shared-send-profile"') < settings.indexOf('id="display-controls"'));
+  assert.match(styles, /#display-controls\s*\{[^}]*border-top:\s*none;/s);
+});
+
+test('text filter tabs do not display a TXT mode badge', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(renderer, /tab\.dataMode === 'hex' \? ' <span class="mode-badge hex">HEX<\/span>' : ''/);
+  assert.doesNotMatch(renderer, /tab\.dataMode === 'hex' \? 'HEX' : 'TXT'/);
+});
+
+test('auto send exposes the interval unit and uses a compact text input', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /id="auto-send-interval"[\s\S]*?<span class="auto-send-interval-unit"[^>]*>ms<\/span>/);
+  assert.match(styles, /#auto-send-text\s*\{[^}]*height:\s*30px;[^}]*min-height:\s*30px;[^}]*max-height:\s*30px;/s);
+});

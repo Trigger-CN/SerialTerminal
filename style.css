@@ -489,6 +489,10 @@ label:hover {
     width: 100%;
 }
 
+#display-controls {
+    border-top: none;
+}
+
 .quick-send-dialog .form-group:last-child {
     margin-bottom: 0;
 }
@@ -820,6 +824,17 @@ label:hover {
 .send-sidebar-section {
     padding-bottom: 7px;
     border-bottom: 1px solid var(--border-color);
+}
+
+.auto-send-interval-unit {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+#auto-send-text {
+    height: 30px;
+    min-height: 30px;
+    max-height: 30px;
 }
 
 .send-editor-textarea {

@@ -1212,7 +1212,7 @@ function updateTabTitles() {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
         const title = tab.title?.trim() || `${tr('main.filter')} ${displayIndex}`;
-        tab.btn.innerHTML = `<span class="main-tab-title"></span> <span class="mode-badge ${tab.dataMode}">${tab.dataMode === 'hex' ? 'HEX' : 'TXT'}</span> `;
+        tab.btn.innerHTML = `<span class="main-tab-title"></span>${tab.dataMode === 'hex' ? ' <span class="mode-badge hex">HEX</span>' : ''} `;
         tab.btn.querySelector('.main-tab-title').textContent = title;
         tab.btn.appendChild(closeBtn);
     });
