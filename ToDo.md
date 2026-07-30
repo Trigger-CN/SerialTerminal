@@ -131,7 +131,7 @@
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [ ] Windows 和 Linux 打包通过（Windows NSIS/portable 已通过，Linux 待验证）。
+- [ ] Windows 和 Linux 打包通过（Windows NSIS 已通过，Linux 待验证；不再生成 portable 版本）。
 - [ ] 真实或虚拟串口覆盖 Text/Hex、UTF-8/ASCII/GBK、自动发送、快捷发送和重连。
 - [ ] 主终端、过滤标签、Shell 标签、分屏、侧边栏收起/展开进行人工交互回归。
 - [x] `npm audit --registry=https://registry.npmjs.org --omit=dev` 无 High/Critical。
