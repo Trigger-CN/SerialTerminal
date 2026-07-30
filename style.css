@@ -535,6 +535,7 @@ label:hover {
 .sidebar-collapsed-toolbar {
     display: none;
     flex: 1;
+    min-height: 0;
     flex-direction: column;
     align-items: center;
     gap: 6px;
@@ -550,7 +551,7 @@ label:hover {
     flex-direction: column;
     gap: 8px;
     padding: 2px 0 8px;
-    margin-bottom: auto;
+    flex-shrink: 0;
 }
 
 .sidebar-throughput-item {
@@ -599,8 +600,25 @@ label:hover {
 }
 
 .sidebar-tool-btn#sidebar-expand-btn {
-    order: 5;
-    margin-top: 8px;
+    order: 3;
+    flex-shrink: 0;
+}
+
+.sidebar-tool-scroll {
+    order: 2;
+    min-height: 0;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+.sidebar-tool-scroll::-webkit-scrollbar {
+    display: none;
 }
 
 .sidebar-tool-btn.active {
