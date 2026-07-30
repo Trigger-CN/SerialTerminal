@@ -104,3 +104,24 @@ test('sidebar can export the active terminal through an independent save dialog'
   assert.match(main, /app\.getPath\('documents'\)/);
   assert.match(main, /fs\.promises\.writeFile\(result\.filePath,[\s\S]*'utf8'\)/);
 });
+
+test('filter and shell tabs support persistent double-click renaming', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /id="rename-tab-dialog"/);
+  assert.match(renderer, /tabBtn\.ondblclick/);
+  assert.match(renderer, /function openRenameTabDialog\(tabState\)/);
+  assert.match(renderer, /rename-tab-dialog-save'\)\.addEventListener\('click', saveRenamedTab\)/);
+  assert.match(renderer, /rename-tab-dialog-cancel'\)\.addEventListener\('click', closeRenameTabDialog\)/);
+  assert.match(renderer, /rename-tab-dialog-close'\)\.addEventListener\('click', closeRenameTabDialog\)/);
+  assert.doesNotMatch(renderer, /renameTabDialog\.addEventListener\('click'/);
+  assert.doesNotMatch(renderer, /quickSendDialog\.addEventListener\('click'/);
+  assert.match(renderer, /title: tab\.title \|\| ''/);
+  assert.match(renderer, /title: initialState\.title \|\| ''/);
+  assert.match(renderer, /if \(filterTabs\.includes\(renameTabState\)\) persistFilterTabs\(\)/);
+  assert.match(renderer, /if \(shellTabs\.includes\(renameTabState\)\) persistShellTabs\(\)/);
+  assert.match(renderer, /tab\.title\?\.trim\(\) \|\| defaultTitle/);
+  assert.match(styles, /\.rename-tab-dialog \.form-group > label\s*\{[^}]*margin-bottom:\s*5px;/s);
+});

@@ -359,6 +359,8 @@ Object.assign(translations['zh-CN'].main, {
 Object.assign(translations.en.main, {
   saveCurrentTab: 'Save Current Tab', currentTabSaved: 'Current tab saved: {path}', currentTabSaveFailed: 'Failed to save current tab: {error}'
 });
+Object.assign(translations['zh-CN'].main, { renameTab: '重命名标签页', tabName: '标签页名称', save: '保存' });
+Object.assign(translations.en.main, { renameTab: 'Rename Tab', tabName: 'Tab Name', save: 'Save' });
 Object.assign(translations['zh-TW'].main, { sendHistory: '傳送歷史' });
 Object.assign(translations.fr.main, { sendHistory: 'Historique d’envoi' });
 Object.assign(translations.ru.main, { sendHistory: 'История отправки' });

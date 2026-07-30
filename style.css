@@ -476,6 +476,19 @@ label:hover {
     margin-bottom: 14px;
 }
 
+.rename-tab-dialog .form-group {
+    margin-bottom: 0;
+}
+
+.rename-tab-dialog .form-group > label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.rename-tab-dialog input {
+    width: 100%;
+}
+
 .quick-send-dialog .form-group:last-child {
     margin-bottom: 0;
 }

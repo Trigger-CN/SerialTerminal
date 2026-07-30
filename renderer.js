@@ -934,6 +934,9 @@ let filterTabs = [];
 let nextFilterTabId = 1;
 let shellTabs = [];
 let nextShellTabId = 1;
+let renameTabState = null;
+const renameTabDialog = document.getElementById('rename-tab-dialog');
+const renameTabInput = document.getElementById('rename-tab-input');
 
 function getPaneDom(paneId) {
     return document.getElementById(paneId);
@@ -1208,14 +1211,18 @@ function updateTabTitles() {
     filterTabs.forEach((tab, index) => {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
-        tab.btn.innerHTML = `${tr('main.filter')} ${displayIndex} <span class="mode-badge ${tab.dataMode}">${tab.dataMode === 'hex' ? 'HEX' : 'TXT'}</span> `;
+        const title = tab.title?.trim() || `${tr('main.filter')} ${displayIndex}`;
+        tab.btn.innerHTML = `<span class="main-tab-title"></span> <span class="mode-badge ${tab.dataMode}">${tab.dataMode === 'hex' ? 'HEX' : 'TXT'}</span> `;
+        tab.btn.querySelector('.main-tab-title').textContent = title;
         tab.btn.appendChild(closeBtn);
     });
     shellTabs.forEach((tab, index) => {
         const closeBtn = tab.btn.querySelector('.main-tab-close');
         const profile = currentConfig?.shellProfiles?.find(item => item.id === tab.profileId);
-        tab.title = profile?.name?.trim() || tr('main.shellTitle', { index: index + 1 });
-        tab.btn.innerHTML = `${tab.title} `;
+        const defaultTitle = profile?.name?.trim() || tr('main.shellTitle', { index: index + 1 });
+        const title = tab.title?.trim() || defaultTitle;
+        tab.btn.innerHTML = '<span class="main-tab-title"></span> ';
+        tab.btn.querySelector('.main-tab-title').textContent = title;
         tab.btn.appendChild(closeBtn);
     });
 }
@@ -1226,12 +1233,14 @@ function getMainTabTitle() {
 
 function getFilterTabLogTitle(tabState) {
     if (!tabState) return 'Filter';
+    if (tabState.title?.trim()) return tabState.title.trim();
     const index = filterTabs.indexOf(tabState);
     return index >= 0 ? `Filter_${index + 1}` : 'Filter';
 }
 
 function getShellTabLogTitle(tabState) {
     if (!tabState) return 'Shell';
+    if (tabState.title?.trim()) return tabState.title.trim();
     const index = shellTabs.indexOf(tabState);
     return index >= 0 ? `Shell_${index + 1}` : 'Shell';
 }
@@ -1304,6 +1313,12 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     };
     tabBtn.querySelector('.main-tab-close').onclick = () => {
         closeShellTab(tabId);
+    };
+    tabBtn.ondblclick = (e) => {
+        if (!e.target.classList.contains('main-tab-close')) {
+            const tabState = shellTabs.find(tab => tab.id === tabId);
+            if (tabState) openRenameTabDialog(tabState);
+        }
     };
     tabList.appendChild(tabBtn);
 
@@ -1467,6 +1482,12 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         if (e.target.classList.contains('main-tab-close')) return;
         switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
     };
+    tabBtn.ondblclick = (e) => {
+        if (!e.target.classList.contains('main-tab-close')) {
+            const tabState = filterTabs.find(tab => tab.id === tabId);
+            if (tabState) openRenameTabDialog(tabState);
+        }
+    };
     
     tabBtn.querySelector('.main-tab-close').onclick = () => {
         closeFilterTab(tabId);
@@ -1538,6 +1559,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         fitAddon,
         searchAddon,
         filterRegex: null,
+        title: initialState.title || '',
         caseSensitive: false,
         wholeWord: false,
         useRegex: false,
@@ -1789,6 +1811,7 @@ function persistFilterTabs({ debounce = false } = {}) {
         persistFilterTabsTimer = null;
         const savedTabs = filterTabs.map(tab => ({
             id: tab.id,
+            title: tab.title || '',
             filterText: tab.filterText || '',
             caseSensitive: tab.caseSensitive,
             wholeWord: tab.wholeWord,
@@ -1809,6 +1832,37 @@ function persistFilterTabs({ debounce = false } = {}) {
     }
     save();
 }
+
+function openRenameTabDialog(tabState) {
+    if (!tabState) return;
+    renameTabState = tabState;
+    renameTabInput.value = tabState.title || '';
+    renameTabDialog.classList.remove('hidden');
+    renameTabInput.focus();
+    renameTabInput.select();
+}
+
+function closeRenameTabDialog() {
+    renameTabState = null;
+    renameTabDialog.classList.add('hidden');
+}
+
+function saveRenamedTab() {
+    if (!renameTabState) return;
+    renameTabState.title = renameTabInput.value.trim();
+    updateTabTitles();
+    if (filterTabs.includes(renameTabState)) persistFilterTabs();
+    if (shellTabs.includes(renameTabState)) persistShellTabs();
+    closeRenameTabDialog();
+}
+
+document.getElementById('rename-tab-dialog-close').addEventListener('click', closeRenameTabDialog);
+document.getElementById('rename-tab-dialog-cancel').addEventListener('click', closeRenameTabDialog);
+document.getElementById('rename-tab-dialog-save').addEventListener('click', saveRenamedTab);
+renameTabInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') saveRenamedTab();
+    if (event.key === 'Escape') closeRenameTabDialog();
+});
 
 document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-1'));
 document.getElementById('pane-2-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-2'));
@@ -4115,9 +4169,6 @@ quickSendTriggerWordInput.addEventListener('change', updateQuickSendValidation);
 openQuickSendDialogBtn.addEventListener('click', () => openQuickSendDialog());
 quickSendDialogCloseBtn.addEventListener('click', closeQuickSendDialog);
 quickSendDialogCancelBtn.addEventListener('click', closeQuickSendDialog);
-quickSendDialog.addEventListener('click', event => {
-    if (event.target === quickSendDialog) closeQuickSendDialog();
-});
 document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !quickSendDialog.classList.contains('hidden')) {
         closeQuickSendDialog();

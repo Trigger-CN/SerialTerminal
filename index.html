@@ -367,6 +367,25 @@
             </footer>
         </section>
     </div>
+
+    <div id="rename-tab-dialog" class="app-dialog-overlay hidden" role="presentation">
+        <section class="app-dialog rename-tab-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-tab-dialog-title">
+            <header class="app-dialog-header">
+                <h2 id="rename-tab-dialog-title" data-i18n="main.renameTab">Rename Tab</h2>
+                <button id="rename-tab-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close">✕</button>
+            </header>
+            <div class="app-dialog-body">
+                <div class="form-group">
+                    <label for="rename-tab-input" data-i18n="main.tabName">Tab Name</label>
+                    <input type="text" id="rename-tab-input" autocomplete="off" data-i18n-placeholder="main.tabName">
+                </div>
+            </div>
+            <footer class="app-dialog-actions">
+                <button id="rename-tab-dialog-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
+                <button id="rename-tab-dialog-save" type="button" data-i18n="main.save">Save</button>
+            </footer>
+        </section>
+    </div>
     
     <script src="renderer.js"></script>
 </body>
