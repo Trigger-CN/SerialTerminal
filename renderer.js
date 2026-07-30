@@ -563,6 +563,7 @@ function getContextMenuLabels() {
         appendSelectionToFilter: tr('main.contextAppendSelectionToFilter'),
         locateInMainTerminal: tr('main.contextLocateInMainTerminal'),
         toggleMatchCase: tr('main.contextToggleMatchCase'),
+        toggleWholeWord: tr('main.wholeWord'),
         toggleRegex: tr('main.contextToggleRegex'),
         closeFilterTab: tr('main.contextCloseFilterTab'),
         splitHorizontal: tr('main.splitHorizontal'),
@@ -618,6 +619,7 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
             filterText: tabState?.filterText || '',
             canLocateInMain: Boolean(tabState?.contextLineText),
             caseSensitive: Boolean(tabState?.caseSensitive),
+            wholeWord: Boolean(tabState?.wholeWord),
             useRegex: Boolean(tabState?.useRegex),
             receiveDisplayMode
         });
@@ -851,6 +853,14 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (filterTab) {
                 filterTab.caseSensitive = !filterTab.caseSensitive;
                 filterTab.caseBtn.classList.toggle('active', filterTab.caseSensitive);
+                filterTab.updateRegex();
+            }
+            break;
+        }
+        case 'toggle-whole-word': {
+            if (filterTab) {
+                filterTab.wholeWord = !filterTab.wholeWord;
+                filterTab.wordBtn.classList.toggle('active', filterTab.wholeWord);
                 filterTab.updateRegex();
             }
             break;
@@ -1483,6 +1493,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         </div>
         <div class="filter-toggles" style="display: flex; gap: 4px; margin-right: 8px;">
             <button class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}">Aa</button>
+            <button class="filter-toggle-btn filter-word-btn" title="${tr('main.wholeWord')}">ab</button>
             <button class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}">.*</button>
         </div>
         <span class="filter-mode-status" role="status"></span>
@@ -1528,6 +1539,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         searchAddon,
         filterRegex: null,
         caseSensitive: false,
+        wholeWord: false,
         useRegex: false,
         filterText: '',
         dataMode: initialState.dataMode === 'hex' ? 'hex' : (initialState.dataMode === 'text' ? 'text' : receiveDisplayMode),
@@ -1539,6 +1551,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     const input = filterHeader.querySelector('.filter-input');
     const dropdownBtn = filterHeader.querySelector('.filter-dropdown-btn');
     const caseBtn = filterHeader.querySelector('.filter-case-btn');
+    const wordBtn = filterHeader.querySelector('.filter-word-btn');
     const regexBtn = filterHeader.querySelector('.filter-regex-btn');
     const dropdownMenu = filterHeader.querySelector('.filter-history-dropdown');
     const modeStatus = filterHeader.querySelector('.filter-mode-status');
@@ -1614,6 +1627,13 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         updateRegex();
     };
 
+    wordBtn.onclick = (e) => {
+        e.stopPropagation();
+        tabState.wholeWord = !tabState.wholeWord;
+        wordBtn.classList.toggle('active', tabState.wholeWord);
+        updateRegex();
+    };
+
     // Regex Button Logic
     regexBtn.onclick = (e) => {
         e.stopPropagation();
@@ -1641,6 +1661,9 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
                 // Escape regex characters if regex mode is off
                 pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             }
+            if (tabState.wholeWord) {
+                pattern = `\\b(?:${pattern})\\b`;
+            }
             tabState.filterRegex = new RegExp(pattern, flags);
             input.style.borderColor = 'var(--border-color)';
         } catch (e) {
@@ -1652,6 +1675,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
 
     tabState.updateRegex = updateRegex;
     tabState.caseBtn = caseBtn;
+    tabState.wordBtn = wordBtn;
     tabState.regexBtn = regexBtn;
     
     function saveFilterHistory(val) {
@@ -1700,6 +1724,10 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     if (initialState.caseSensitive) {
         tabState.caseSensitive = true;
         caseBtn.classList.add('active');
+    }
+    if (initialState.wholeWord) {
+        tabState.wholeWord = true;
+        wordBtn.classList.add('active');
     }
     if (initialState.useRegex) {
         tabState.useRegex = true;
@@ -1763,6 +1791,7 @@ function persistFilterTabs({ debounce = false } = {}) {
             id: tab.id,
             filterText: tab.filterText || '',
             caseSensitive: tab.caseSensitive,
+            wholeWord: tab.wholeWord,
             useRegex: tab.useRegex,
             dataMode: tab.dataMode,
             paneId: tab.paneId || getTabPaneId(tab.id)

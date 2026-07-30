@@ -75,3 +75,16 @@ test('collapsed sidebar keeps tools scrollable and expand control outside the sc
   assert.match(styles, /\.sidebar-tool-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
   assert.match(styles, /#sidebar-expand-btn\s*\{[^}]*flex-shrink:\s*0;/s);
 });
+
+test('filter tabs support persistent whole-word matching', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(renderer, /class="filter-toggle-btn filter-word-btn"/);
+  assert.match(renderer, /wholeWord: false/);
+  assert.match(renderer, /pattern = `\\\\b\(\?:\$\{pattern\}\)\\\\b`/);
+  assert.match(renderer, /wholeWord: tab\.wholeWord/);
+  assert.match(renderer, /case 'toggle-whole-word'/);
+  assert.match(main, /checked: Boolean\(payload\.wholeWord\)/);
+  assert.match(main, /sendAction\('toggle-whole-word'\)/);
+});

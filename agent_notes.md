@@ -127,6 +127,7 @@ SerialTerminal/
 - 主终端 tab 不使用 inline `onclick`；所有主工作区 tab 切换统一由 renderer 绑定并调用 workspace manager，避免重复事件和持久化
 - 窄侧边栏采用顶部吞吐区、中间 `.sidebar-tool-scroll` 可滚动操作区和底部固定展开按钮；新增工具按钮必须放入中间区，不能挤出展开入口
 - sidebar/footer 和 workspace tab 的主要操作使用原生 button；tab 需保持 `role=tab`、`aria-controls`、`aria-selected` 与对应 tabpanel 同步，确保 Enter/Space 和焦点提示可用
+- 过滤标签页提供区分大小写、全字和正则三个匹配开关；三个状态均需随 `filterTabs` 持久化，并与终端右键菜单保持同步
 
 #### `renderer.js`
 负责：

@@ -1304,6 +1304,12 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         click: () => sendAction('toggle-case-sensitive')
       },
       {
+        label: withIcon('[ab]', labels.toggleWholeWord, 'Toggle Whole Word'),
+        type: 'checkbox',
+        checked: Boolean(payload.wholeWord),
+        click: () => sendAction('toggle-whole-word')
+      },
+      {
         label: withIcon('.* ', labels.toggleRegex, 'Toggle Regex'),
         type: 'checkbox',
         checked: Boolean(payload.useRegex),
