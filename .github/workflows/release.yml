@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             target: win
             command: npm run dist:win
           - os: ubuntu-latest
@@ -30,6 +30,12 @@ jobs:
           node-version: 22.12.0
           cache: npm
           registry-url: https://registry.npmjs.org
+      - name: Set up MSBuild
+        if: matrix.os == 'windows-2022'
+        uses: microsoft/setup-msbuild@v2
+      - name: Set up Visual Studio developer environment
+        if: matrix.os == 'windows-2022'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Sync package version from tag
         shell: bash
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
@@ -42,7 +48,7 @@ jobs:
         run: sha256sum package-lock.json > lockfile.sha256
       - run: npm test
       - run: npm run rebuild
-      - run: ${{ matrix.command }}
+      - run: ${{ matrix.command }} -- --publish never
       - name: Verify lockfile is unchanged
         shell: bash
         run: sha256sum --check lockfile.sha256
