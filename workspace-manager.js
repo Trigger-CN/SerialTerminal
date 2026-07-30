@@ -219,7 +219,10 @@ function createWorkspaceManager(options = {}) {
         const layout = getLayoutState();
         updatePaneVisibility();
         applyPaneSizes();
-        document.querySelectorAll('.main-tab').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.main-tab').forEach(el => {
+            el.classList.remove('active');
+            el.setAttribute?.('aria-selected', 'false');
+        });
         document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
         layout.panes.forEach(pane => {
             prunePaneTabIds(pane.id);
@@ -233,7 +236,9 @@ function createWorkspaceManager(options = {}) {
                     pane.activeTabId = findFirstRenderableTabId(pane.id) || null;
                 }
                 if (pane.activeTabId) {
-                    paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`)?.classList.add('active');
+                    const activeTab = paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
+                    activeTab?.classList.add('active');
+                    activeTab?.setAttribute?.('aria-selected', 'true');
                     paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`)?.classList.add('active');
                 }
             }

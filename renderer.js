@@ -1277,8 +1277,13 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         : (typeof initialState.shellType === 'string' ? initialState.shellType : '');
 
     const tabList = getPaneTabsList(resolvedPaneId);
-    const tabBtn = document.createElement('div');
+    const tabBtn = document.createElement('button');
     tabBtn.className = 'main-tab';
+    tabBtn.type = 'button';
+    tabBtn.setAttribute('role', 'tab');
+    tabBtn.setAttribute('aria-selected', 'false');
+    tabBtn.id = `${tabId}-button`;
+    tabBtn.setAttribute('aria-controls', tabId);
     tabBtn.dataset.target = tabId;
     tabBtn.dataset.paneId = resolvedPaneId;
     tabBtn.innerHTML = `${tr('main.shell')} <span class="main-tab-close" title="${tr('main.closeTab')}">✕</span>`;
@@ -1295,6 +1300,8 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     const tabPane = document.createElement('div');
     tabPane.className = 'main-tab-pane';
     tabPane.id = tabId;
+    tabPane.setAttribute('role', 'tabpanel');
+    tabPane.setAttribute('aria-labelledby', tabBtn.id);
     tabPane.dataset.paneId = resolvedPaneId;
 
     const terminalWrapper = document.createElement('div');
@@ -1432,8 +1439,13 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     
     // 1. Create Tab Button
     const tabList = getPaneTabsList(resolvedPaneId);
-    const tabBtn = document.createElement('div');
+    const tabBtn = document.createElement('button');
     tabBtn.className = 'main-tab';
+    tabBtn.type = 'button';
+    tabBtn.setAttribute('role', 'tab');
+    tabBtn.setAttribute('aria-selected', 'false');
+    tabBtn.id = `${tabId}-button`;
+    tabBtn.setAttribute('aria-controls', tabId);
     tabBtn.dataset.target = tabId;
     tabBtn.dataset.paneId = resolvedPaneId;
     
@@ -1456,6 +1468,8 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     const tabPane = document.createElement('div');
     tabPane.className = 'main-tab-pane';
     tabPane.id = tabId;
+    tabPane.setAttribute('role', 'tabpanel');
+    tabPane.setAttribute('aria-labelledby', tabBtn.id);
     tabPane.dataset.paneId = resolvedPaneId;
     
     const filterHeader = document.createElement('div');
@@ -1755,7 +1769,6 @@ function persistFilterTabs({ debounce = false } = {}) {
         if (currentConfig) currentConfig.filterTabs = savedTabs;
         ipcRenderer.send('save-config', { filterTabs: savedTabs });
     };
-
     if (persistFilterTabsTimer !== null) {
         clearTimeout(persistFilterTabsTimer);
         persistFilterTabsTimer = null;
@@ -2104,6 +2117,23 @@ function bindShellSidebarEvents() {
 }
 
 function bindSidebarToolbarEvents() {
+    document.querySelectorAll('.sidebar-tab').forEach(button => {
+        const activate = () => {
+            const tabId = button.dataset.target;
+            document.querySelectorAll('.sidebar-tab-pane').forEach(pane => {
+                pane.classList.toggle('active', pane.id === tabId);
+            });
+            document.querySelectorAll('.sidebar-tab').forEach(tabButton => {
+                const selected = tabButton === button;
+                tabButton.classList.toggle('active', selected);
+                tabButton.setAttribute('aria-selected', String(selected));
+            });
+        };
+        button.addEventListener('click', activate);
+    });
+    document.getElementById('open-prefs')?.addEventListener('click', () => {
+        ipcRenderer.send('open-prefs');
+    });
     const toggle = () => setSidebarCollapsed(!sidebar?.classList.contains('sidebar-collapsed'));
     sidebarExpandBtn?.addEventListener('click', toggle);
     sidebarCollapseBtn?.addEventListener('click', toggle);

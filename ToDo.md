@@ -116,8 +116,9 @@
   - 方案：将展开按钮固定在不滚动区域，或让中间工具区可滚动。
   - 结果：吞吐区固定在顶部，操作按钮放入隐藏滚动条的可滚动中间区，展开按钮固定在底部不参与滚动。
 
-- [ ] 完善键盘可访问性
+- [x] 完善键盘可访问性
   - 将可点击 `div` 改为 `button`，为 tab 增加 `role="tab"` / `aria-selected`，提供 `button:focus-visible` 焦点样式。
+  - 结果：sidebar/footer 与 workspace tab 已使用原生 button，tab/panel 建立 ARIA 关联并同步选中状态，键盘焦点清晰可见。
 
 - [ ] 完善多语言 key
   - 以 English key 集合为基准增加完整性测试；补齐简中及其他语言的新侧边栏、Shell、分屏和更新文案。

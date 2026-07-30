@@ -60,6 +60,11 @@ select:focus, input:focus, textarea:focus {
     box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.4);
 }
 
+button:focus-visible, [role="tab"]:focus-visible {
+    outline: 2px solid var(--accent-hover);
+    outline-offset: 2px;
+}
+
 /* Fix Chrome autofill / datalist background color issue */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
@@ -987,6 +992,7 @@ label:hover {
     height: 36px;
     line-height: 36px;
     cursor: pointer;
+    border: 0;
     border-right: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);

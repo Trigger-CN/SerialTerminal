@@ -81,16 +81,16 @@
         </div>
 
         <!-- Tabs Header -->
-        <div class="sidebar-tabs">
-            <button class="sidebar-tab active" onclick="showSidebarTab('tab-settings')" title="Settings" data-i18n-title="main.settingsTab">🛠️</button>
-            <button class="sidebar-tab" onclick="showSidebarTab('tab-search')" title="Search" data-i18n-title="main.searchTab">🔍</button>
-            <button class="sidebar-tab" onclick="showSidebarTab('tab-send')" title="Send" data-i18n-title="main.sendTab">📤</button>
+        <div class="sidebar-tabs" role="tablist">
+            <button class="sidebar-tab active" type="button" data-target="tab-settings" role="tab" aria-controls="tab-settings" aria-selected="true" aria-label="Settings" data-i18n-aria-label="main.settingsTab" title="Settings" data-i18n-title="main.settingsTab">🛠️</button>
+            <button class="sidebar-tab" type="button" data-target="tab-search" role="tab" aria-controls="tab-search" aria-selected="false" aria-label="Search" data-i18n-aria-label="main.searchTab" title="Search" data-i18n-title="main.searchTab">🔍</button>
+            <button class="sidebar-tab" type="button" data-target="tab-send" role="tab" aria-controls="tab-send" aria-selected="false" aria-label="Send" data-i18n-aria-label="main.sendTab" title="Send" data-i18n-title="main.sendTab">📤</button>
         </div>
 
         <!-- Tab Content -->
         <div class="sidebar-content">
             <!-- Settings Tab -->
-            <div id="tab-settings" class="sidebar-tab-pane active">
+            <div id="tab-settings" class="sidebar-tab-pane active" role="tabpanel">
                 <select id="data-bits-select" title="Data Bits" data-i18n-title="main.dataBits8">
                     <option value="8" selected>Data Bits: 8</option>
                     <option value="7">Data Bits: 7</option>
@@ -140,7 +140,7 @@
             </div>
 
             <!-- Search Tab -->
-            <div id="tab-search" class="sidebar-tab-pane">
+            <div id="tab-search" class="sidebar-tab-pane" role="tabpanel">
                 <input type="text" id="search-input" placeholder="Search..." data-i18n-placeholder="main.searchPlaceholder" style="margin-bottom: 4px;">
                 <div id="search-target-label" class="search-target-label"></div>
                 <div style="display: flex; gap: 4px;">
@@ -160,7 +160,7 @@
             </div>
 
             <!-- Send Tab -->
-            <div id="tab-send" class="sidebar-tab-pane">
+            <div id="tab-send" class="sidebar-tab-pane" role="tabpanel">
                 <section class="shared-send-profile" aria-labelledby="shared-send-profile-title">
                     <div class="shared-send-profile-title" id="shared-send-profile-title" data-i18n="main.sharedSendProfile" data-i18n-fallback="Send Profile">Send Profile</div>
                     <div class="shared-send-profile-grid">
@@ -225,15 +225,15 @@
         <div class="sidebar-footer">
             <div class="sidebar-footer-row">
                 <button id="sidebar-collapse-btn" class="footer-btn settings" title="Collapse sidebar" data-i18n-title="main.collapseSidebar" aria-label="Collapse sidebar">‹</button>
-                <div id="open-prefs" class="footer-btn settings" title="Settings" data-i18n-title="main.globalSettings">
+                <button id="open-prefs" class="footer-btn settings" type="button" aria-label="Settings" data-i18n-aria-label="main.globalSettings" title="Settings" data-i18n-title="main.globalSettings">
                     ⚙️
-                </div>
-                <div id="toggle-main-input" class="footer-btn settings" title="显示/隐藏输入框" data-i18n-title="main.toggleInputHide">
+                </button>
+                <button id="toggle-main-input" class="footer-btn settings" type="button" aria-label="Show or hide input" data-i18n-aria-label="main.toggleInputHide" title="显示/隐藏输入框" data-i18n-title="main.toggleInputHide">
                     ⌨
-                </div>
-                <div id="toggle-shell-sidebar" class="footer-btn settings" title="Shell Panel" data-i18n-title="main.shellPanel">
+                </button>
+                <button id="toggle-shell-sidebar" class="footer-btn settings" type="button" aria-label="Shell Panel" data-i18n-aria-label="main.shellPanel" title="Shell Panel" data-i18n-title="main.shellPanel">
                     >_
-                </div>
+                </button>
             </div>
         </div>
     </div>
@@ -242,8 +242,8 @@
         <div class="workspace-root" id="workspace-root">
             <div class="workspace-pane active" id="pane-1" data-pane-id="pane-1">
                 <div class="main-tabs-header pane-tabs-header">
-                    <div class="main-tabs-list pane-tabs-list" id="pane-1-tabs-list">
-                        <div class="main-tab active" data-target="tab-main" data-pane-id="pane-1" data-i18n="main.mainTerminal">Main Terminal</div>
+                    <div class="main-tabs-list pane-tabs-list" id="pane-1-tabs-list" role="tablist">
+                        <button class="main-tab active" id="tab-main-button" type="button" role="tab" aria-controls="tab-main" aria-selected="true" data-target="tab-main" data-pane-id="pane-1" data-i18n="main.mainTerminal">Main Terminal</button>
                     </div>
                     <div class="pane-tab-actions">
                         <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab">>_</button>
@@ -251,7 +251,7 @@
                     </div>
                 </div>
                 <div class="main-tabs-content pane-tabs-content" id="pane-1-tabs-content">
-                    <div class="main-tab-pane active" id="tab-main" data-pane-id="pane-1">
+                    <div class="main-tab-pane active" id="tab-main" data-pane-id="pane-1" role="tabpanel" aria-labelledby="tab-main-button">
                         <div class="terminal-wrapper" id="serial-container"></div>
                     </div>
                 </div>
@@ -259,7 +259,7 @@
             <div class="workspace-splitter" id="workspace-splitter" hidden></div>
             <div class="workspace-pane" id="pane-2" data-pane-id="pane-2" hidden>
                 <div class="main-tabs-header pane-tabs-header">
-                    <div class="main-tabs-list pane-tabs-list" id="pane-2-tabs-list"></div>
+                    <div class="main-tabs-list pane-tabs-list" id="pane-2-tabs-list" role="tablist"></div>
                     <div class="pane-tab-actions">
                         <button id="pane-2-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab">>_</button>
                         <button id="pane-2-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab">➕</button>
@@ -366,35 +366,5 @@
     </div>
     
     <script src="renderer.js"></script>
-    <script>
-        document.getElementById('open-prefs').onclick = () => {
-            const { ipcRenderer } = require('electron');
-            ipcRenderer.send('open-prefs');
-        };
-
-        function showSidebarTab(tabId) {
-            // Hide all tab panes
-            document.querySelectorAll('.sidebar-tab-pane').forEach(el => {
-                el.classList.remove('active');
-            });
-            // Deactivate all tab buttons
-            document.querySelectorAll('.sidebar-tab').forEach(el => {
-                el.classList.remove('active');
-            });
-            
-            // Show selected tab pane
-            document.getElementById(tabId).classList.add('active');
-            
-            // Activate clicked button
-            // Find the button that calls this function with this tabId
-            const buttons = document.querySelectorAll('.sidebar-tab');
-            buttons.forEach(btn => {
-                if (btn.getAttribute('onclick').includes(tabId)) {
-                    btn.classList.add('active');
-                }
-            });
-        }
-
-    </script>
 </body>
 </html>
