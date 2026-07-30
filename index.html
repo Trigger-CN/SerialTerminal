@@ -241,7 +241,7 @@
             <div class="workspace-pane active" id="pane-1" data-pane-id="pane-1">
                 <div class="main-tabs-header pane-tabs-header">
                     <div class="main-tabs-list pane-tabs-list" id="pane-1-tabs-list">
-                        <div class="main-tab active" data-target="tab-main" data-pane-id="pane-1" onclick="switchMainTab('tab-main', 'pane-1')" data-i18n="main.mainTerminal">Main Terminal</div>
+                        <div class="main-tab active" data-target="tab-main" data-pane-id="pane-1" data-i18n="main.mainTerminal">Main Terminal</div>
                     </div>
                     <div class="pane-tab-actions">
                         <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab">>_</button>
@@ -393,23 +393,6 @@
             });
         }
 
-        function switchMainTab(tabId, paneId) {
-            if (typeof window.__switchWorkspaceTab === 'function') {
-                window.__switchWorkspaceTab(tabId, paneId);
-                return;
-            }
-
-            document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.main-tab').forEach(el => el.classList.remove('active'));
-
-            const targetPane = document.getElementById(tabId);
-            if (targetPane) targetPane.classList.add('active');
-
-            const targetTab = document.querySelector(`.main-tab[data-target="${tabId}"]`);
-            if (targetTab) targetTab.classList.add('active');
-
-            window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId, paneId: paneId || 'pane-1' } }));
-        }
     </script>
 </body>
 </html>

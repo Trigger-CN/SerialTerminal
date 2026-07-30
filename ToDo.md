@@ -106,9 +106,10 @@
   - 位置：`renderer.js` 的搜索计数扫描。
   - 分批扫描并支持取消旧 generation；限制正则长度、匹配数和高风险表达式；避免一次同步扫描 100000 行。
 
-- [ ] 移除主终端 tab 的重复点击绑定
+- [x] 移除主终端 tab 的重复点击绑定
   - 位置：`index.html` 的 inline `onclick` 和 renderer 中的 listener。
   - 保留 renderer 的统一事件绑定，避免一次点击重复持久化、事件派发和 fit。
+  - 结果：主终端 tab 仅保留 renderer listener；删除 inline 切换函数，定位搜索也直接调用 workspace manager。
 
 - [ ] 提升窄工具栏在低高度窗口中的可达性
   - 工具栏加入 RX/TX 和多个按钮后，低高度窗口可能裁掉最底部展开按钮。

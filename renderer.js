@@ -645,9 +645,7 @@ function extractDisplayedLineNumber(text) {
 function locateInMainTerminalByLineNumber(lineNo) {
     if (!lineNo) return false;
     const searchText = `[${String(lineNo).padStart(4, '0')}]`;
-    if (typeof switchMainTab === 'function') {
-        switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
-    }
+    switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
     if (typeof showSidebarTab === 'function') {
         showSidebarTab('tab-search');
     }
