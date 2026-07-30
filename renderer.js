@@ -1203,7 +1203,8 @@ function updateTabTitles() {
     });
     shellTabs.forEach((tab, index) => {
         const closeBtn = tab.btn.querySelector('.main-tab-close');
-        tab.title = tr('main.shellTitle', { index: index + 1 });
+        const profile = currentConfig?.shellProfiles?.find(item => item.id === tab.profileId);
+        tab.title = profile?.name?.trim() || tr('main.shellTitle', { index: index + 1 });
         tab.btn.innerHTML = `${tab.title} `;
         tab.btn.appendChild(closeBtn);
     });
@@ -2074,7 +2075,7 @@ async function loadShellProfiles() {
             btn.title = `${profile.name} (${profile.executable})${isDefault ? ' — ' + (tr('main.defaultProfile') || 'Default') : ''}`;
             btn.innerHTML = `<span>${escapeHtml(profile.name)}</span>${isDefault ? ' <span style="font-size:10px;opacity:0.7;">⬤</span>' : ''}`;
             btn.addEventListener('click', () => {
-                createShellTab({ profileId: profile.id }, getActivePane()?.id || 'pane-1');
+                createShellTab({ profileId: profile.id, title: profile.name }, getActivePane()?.id || 'pane-1');
             });
             shellProfileBtns.appendChild(btn);
         });

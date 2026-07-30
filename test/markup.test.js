@@ -54,6 +54,13 @@ test('shell profile management opens the matching preferences tab', () => {
   assert.match(preferences, /focusPreferencesTab\(tabId\)/);
 });
 
+test('shell profile buttons pass the configured name to new shell tabs', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(renderer, /createShellTab\(\{ profileId: profile\.id, title: profile\.name \}/);
+  assert.match(renderer, /profile\?\.name\?\.trim\(\) \|\| tr\('main\.shellTitle'/);
+});
+
 test('collapsed sidebar keeps tools scrollable and expand control outside the scroll area', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
