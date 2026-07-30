@@ -7,9 +7,9 @@
     "start": "electron .",
     "test": "node --test",
     "rebuild": "electron-rebuild -f -w serialport,node-pty",
-    "dist": "electron-builder -c.npmRebuild=false",
-    "dist:win": "electron-builder --win -c.npmRebuild=false",
-    "dist:linux": "electron-builder --linux -c.npmRebuild=false",
+    "dist": "electron-builder -c.npmRebuild=false --publish never",
+    "dist:win": "electron-builder --win -c.npmRebuild=false --publish never",
+    "dist:linux": "electron-builder --linux -c.npmRebuild=false --publish never",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {

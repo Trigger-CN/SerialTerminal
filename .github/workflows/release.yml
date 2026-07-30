@@ -48,7 +48,7 @@ jobs:
         run: sha256sum package-lock.json > lockfile.sha256
       - run: npm test
       - run: npm run rebuild
-      - run: ${{ matrix.command }} -- --publish never
+      - run: ${{ matrix.command }}
       - name: Verify lockfile is unchanged
         shell: bash
         run: sha256sum --check lockfile.sha256
