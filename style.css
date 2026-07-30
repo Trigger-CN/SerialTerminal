@@ -130,6 +130,20 @@ button.secondary:hover {
     color: #fff;
 }
 
+.sidebar-log-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 34px;
+    gap: 4px;
+}
+
+.sidebar-log-actions button {
+    min-width: 0;
+}
+
+#save-current-tab-btn {
+    padding: 5px;
+}
+
 button.danger {
     background: var(--danger-color);
     color: white;

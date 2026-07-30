@@ -77,7 +77,10 @@
 
             <button id="connect-btn" class="connect-action" style="width: 100%;">⚡ <span id="connect-btn-label" data-i18n="main.connect">Connect</span></button>
             <button id="clear-btn" class="secondary" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" style="width: 100%;">🗑️ <span data-i18n="main.clearLog">Clear Log</span></button>
-            <button id="open-log-folder-btn" class="secondary" style="width: 100%;">📂 <span data-i18n="main.openLogFolder">Open Log Folder</span></button>
+            <div class="sidebar-log-actions">
+                <button id="open-log-folder-btn" class="secondary" type="button">📂 <span data-i18n="main.openLogFolder">Open Log Folder</span></button>
+                <button id="save-current-tab-btn" class="secondary" type="button" title="Save Current Tab" data-i18n-title="main.saveCurrentTab" aria-label="Save Current Tab" data-i18n-aria-label="main.saveCurrentTab">💾</button>
+            </div>
         </div>
 
         <!-- Tabs Header -->

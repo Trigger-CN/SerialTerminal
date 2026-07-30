@@ -88,3 +88,19 @@ test('filter tabs support persistent whole-word matching', () => {
   assert.match(main, /checked: Boolean\(payload\.wholeWord\)/);
   assert.match(main, /sendAction\('toggle-whole-word'\)/);
 });
+
+test('sidebar can export the active terminal through an independent save dialog', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /id="open-log-folder-btn"[\s\S]*id="save-current-tab-btn"/);
+  assert.match(styles, /\.sidebar-log-actions\s*\{[^}]*grid-template-columns:/s);
+  assert.match(renderer, /function getActiveTerminalExport\(\)/);
+  assert.match(renderer, /invoke\('save-current-tab-log', getActiveTerminalExport\(\)\)/);
+  assert.match(main, /ipcMain\.handle\('save-current-tab-log'/);
+  assert.match(main, /dialog\.showSaveDialog\(owner/);
+  assert.match(main, /app\.getPath\('documents'\)/);
+  assert.match(main, /fs\.promises\.writeFile\(result\.filePath,[\s\S]*'utf8'\)/);
+});

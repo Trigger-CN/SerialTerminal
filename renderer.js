@@ -3206,6 +3206,35 @@ openLogFolderBtn.addEventListener('click', () => {
     setActionStatus('已打开日志文件夹');
 });
 
+function getActiveTerminalExport() {
+    const activeTabId = getActiveTabId();
+    if (activeTabId === 'tab-main') {
+        return { title: getMainTabTitle(), content: getTerminalPlainText(serialTerm) };
+    }
+    const filterTab = filterTabs.find(tab => tab.id === activeTabId);
+    if (filterTab) {
+        return { title: getFilterTabLogTitle(filterTab), content: getTerminalPlainText(filterTab.term) };
+    }
+    const shellTab = getShellTabState(activeTabId);
+    if (shellTab) {
+        return { title: shellTab.title || getShellTabLogTitle(shellTab), content: getTerminalPlainText(shellTab.term) };
+    }
+    return { title: getMainTabTitle(), content: getTerminalPlainText(serialTerm) };
+}
+
+document.getElementById('save-current-tab-btn').addEventListener('click', async () => {
+    try {
+        const result = await ipcRenderer.invoke('save-current-tab-log', getActiveTerminalExport());
+        if (result?.filePath) {
+            setActionStatus(trFallback('main.currentTabSaved', 'Current tab saved: {path}', { path: result.filePath }));
+        }
+    } catch (error) {
+        setActionStatus(trFallback('main.currentTabSaveFailed', 'Failed to save current tab: {error}', {
+            error: error?.message || String(error)
+        }));
+    }
+});
+
 async function connectSerialFromUi({ reconnecting = false } = {}) {
     if (serialConnectInProgress) return;
     const path = portSelect.value;

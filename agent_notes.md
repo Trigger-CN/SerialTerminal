@@ -128,6 +128,8 @@ SerialTerminal/
 - 窄侧边栏采用顶部吞吐区、中间 `.sidebar-tool-scroll` 可滚动操作区和底部固定展开按钮；新增工具按钮必须放入中间区，不能挤出展开入口
 - sidebar/footer 和 workspace tab 的主要操作使用原生 button；tab 需保持 `role=tab`、`aria-controls`、`aria-selected` 与对应 tabpanel 同步，确保 Enter/Space 和焦点提示可用
 - 过滤标签页提供区分大小写、全字和正则三个匹配开关；三个状态均需随 `filterTabs` 持久化，并与终端右键菜单保持同步
+- 未启用全标签页日志时，每次串口连接使用独立的主日志会话；断开通知后由 renderer 刷新尾部数据并发送 `flush-tab-logs`，主进程随后清空 `mainLogFilePath`，切换到全标签页日志时也需结束主日志会话；写入失败时保留路径以便重试
+- 左侧手动保存按钮导出当前活动 pane 的活动标签页 xterm 缓冲区，通过系统另存为对话框选择路径和文件名，默认名称包含标签名与日期时间并使用 UTF-8；成功保存后以独立的 `manualExportDirectory` 记住目录，取消或失败不更新；该流程不得读取或修改自动日志配置
 
 #### `renderer.js`
 负责：

@@ -200,6 +200,9 @@ function normalizeConfig(config, defaults) {
       }))
     : [];
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
+  normalized.manualExportDirectory = typeof source.manualExportDirectory === 'string' && source.manualExportDirectory.trim()
+    ? source.manualExportDirectory
+    : defaults.manualExportDirectory;
   normalized.logIncludeTimestamp = normalizeBoolean(source.logIncludeTimestamp, false);
   normalized.logIncludeLineNumbers = normalizeBoolean(source.logIncludeLineNumbers, false);
   normalized.rawBufferAutoFlushMB = normalizeIntegerSetting(source.rawBufferAutoFlushMB, 'rawBufferAutoFlushMB');
@@ -234,6 +237,7 @@ function loadConfig() {
     rawLogFileNameFormat: 'raw_%Y-%m-%d_%H-%M-%S.bin',
     stripAnsiInLog: true,
     logPath: path.join(app.getPath('documents'), 'SerialTerminalLogs'),
+    manualExportDirectory: app.getPath('documents'),
     logFileNameFormat: 'log_%Y-%m-%d_%H-%M-%S.txt',
     logFileSuffix: '.txt',
     logEncoding: 'utf8',
@@ -443,7 +447,15 @@ function buildRawLogFileName() {
 function ensureMainLogFilePath() {
   if (mainLogFilePath) return mainLogFilePath;
   ensureLogDirectory();
-  mainLogFilePath = path.join(currentConfig.logPath, buildLogFileName({}));
+  const fileName = buildLogFileName({});
+  const extension = path.extname(fileName);
+  const baseName = path.basename(fileName, extension);
+  mainLogFilePath = path.join(currentConfig.logPath, fileName);
+  let suffix = 2;
+  while (fs.existsSync(mainLogFilePath)) {
+    mainLogFilePath = path.join(currentConfig.logPath, `${baseName}_${suffix}${extension}`);
+    suffix++;
+  }
   return mainLogFilePath;
 }
 
@@ -574,6 +586,13 @@ function saveLog({ notify = true } = {}) {
   }
 }
 
+function closeMainLogSession({ notify = true } = {}) {
+  saveLog({ notify });
+  if (logBuffer.length === 0) {
+    mainLogFilePath = '';
+  }
+}
+
 function saveAllTabLogs({ notify = true, closeEntries = true } = {}) {
   if (!currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return;
   const savedPaths = [];
@@ -692,7 +711,7 @@ function saveConfig(config) {
   if (currentConfig.saveAllTabsLogToFiles && !normalized.saveAllTabsLogToFiles) {
     saveAllTabLogs();
   } else if (!currentConfig.saveAllTabsLogToFiles && normalized.saveAllTabsLogToFiles) {
-    saveLog();
+    closeMainLogSession();
   }
   currentConfig = normalized;
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
@@ -1122,6 +1141,35 @@ ipcMain.on('open-log-folder', () => {
     shell.openPath(logDir);
 });
 
+ipcMain.handle('save-current-tab-log', async (event, payload = {}) => {
+  const now = new Date();
+  const timestamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0')
+  ].join('-') + '_' + [
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0')
+  ].join('-');
+  const title = sanitizeFileNamePart(payload.title) || 'Terminal';
+  const exportDirectory = currentConfig.manualExportDirectory || app.getPath('documents');
+  const defaultPath = path.join(exportDirectory, `${title}_${timestamp}.txt`);
+  const owner = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const result = await dialog.showSaveDialog(owner, {
+    title: tr('main.saveCurrentTab'),
+    defaultPath,
+    filters: [
+      { name: 'Text Files', extensions: ['txt', 'log'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await fs.promises.writeFile(result.filePath, typeof payload.content === 'string' ? payload.content : '', 'utf8');
+  saveConfig({ manualExportDirectory: path.dirname(result.filePath) });
+  return { canceled: false, filePath: result.filePath };
+});
+
 ipcMain.on('save-config', (event, config) => {
   try {
     saveConfig(config);
@@ -1149,7 +1197,7 @@ ipcMain.on('flush-tab-logs', () => {
   if (currentConfig.saveAllTabsLogToFiles) {
     saveAllTabLogs();
   } else {
-    saveLog();
+    closeMainLogSession();
   }
 });
 
@@ -1747,7 +1795,6 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
     port.on('close', () => {
       if (currentSerialPort !== port || serialCleanupComplete) return;
       writeLog('\r\n[SERIAL DISCONNECTED]\r\n');
-      saveLog();
       cleanupSerialConnection('Serial port disconnected', port);
     });
     });

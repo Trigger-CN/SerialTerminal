@@ -353,7 +353,11 @@ for (const [language, sections] of Object.entries(hexTranslations)) {
 }
 
 Object.assign(translations['zh-CN'].main, {
-  sendHistory: '发送历史', sidebarQuickTools: '快捷工具', expandSidebar: '展开侧边栏', collapseSidebar: '收起侧边栏'
+  sendHistory: '发送历史', sidebarQuickTools: '快捷工具', expandSidebar: '展开侧边栏', collapseSidebar: '收起侧边栏',
+  saveCurrentTab: '保存当前标签页', currentTabSaved: '当前标签页已保存：{path}', currentTabSaveFailed: '保存当前标签页失败：{error}'
+});
+Object.assign(translations.en.main, {
+  saveCurrentTab: 'Save Current Tab', currentTabSaved: 'Current tab saved: {path}', currentTabSaveFailed: 'Failed to save current tab: {error}'
 });
 Object.assign(translations['zh-TW'].main, { sendHistory: '傳送歷史' });
 Object.assign(translations.fr.main, { sendHistory: 'Historique d’envoi' });
