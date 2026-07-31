@@ -83,7 +83,12 @@ const translations = {
       contentMultiLine: 'Content (multi-line)',
       addToList: '+ Add to List',
       globalSettings: 'Settings',
-      sidebarQuickTools: 'Quick tools',
+       sidebarQuickTools: 'Quick tools',
+       quickSendShortcuts: 'Quick send shortcuts',
+       quickSidebarSettings: 'Sidebar shortcut settings',
+       addToSidebar: 'Add to collapsed sidebar',
+       sidebarShortcutText: 'Shortcut text',
+       sidebarShortcutColor: 'Background color',
       expandSidebar: 'Expand sidebar',
       collapseSidebar: 'Collapse sidebar',
       toggleInput: 'Input',
@@ -358,6 +363,7 @@ for (const [language, sections] of Object.entries(hexTranslations)) {
 
 Object.assign(translations['zh-CN'].main, {
   sendHistory: '发送历史', sidebarQuickTools: '快捷工具', expandSidebar: '展开侧边栏', collapseSidebar: '收起侧边栏',
+  quickSendShortcuts: '快捷发送按钮', quickSidebarSettings: '侧边栏快捷方式设置', addToSidebar: '加入收起侧边栏', sidebarShortcutText: '快捷按钮文本', sidebarShortcutColor: '背景色',
   saveCurrentTab: '保存当前标签页', currentTabSaved: '当前标签页已保存：{path}', currentTabSaveFailed: '保存当前标签页失败：{error}'
 });
 Object.assign(translations.en.main, {

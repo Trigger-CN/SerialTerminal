@@ -194,6 +194,14 @@ function normalizeConfig(config, defaults) {
             && /\r\n$/.test(item.content)
             ? item.content.slice(0, -2)
             : (typeof item.content === 'string' ? item.content : ''),
+          sidebarShortcut: {
+            enabled: normalizeBoolean(item.sidebarShortcut?.enabled, false),
+            text: typeof item.sidebarShortcut?.text === 'string' ? item.sidebarShortcut.text : '',
+            backgroundColor: typeof item.sidebarShortcut?.backgroundColor === 'string'
+              && /^#[0-9a-f]{6}$/i.test(item.sidebarShortcut.backgroundColor)
+              ? item.sidebarShortcut.backgroundColor
+              : ''
+          },
           autoTrigger: {
             enabled: normalizeBoolean(trigger.enabled, false),
             text: typeof trigger.text === 'string' ? trigger.text : '',
@@ -203,6 +211,10 @@ function normalizeConfig(config, defaults) {
           }
         };
       })
+    : [];
+  const quickSendIds = new Set(normalized.quickSendList.map(item => item.id));
+  normalized.sidebarQuickSendOrder = Array.isArray(source.sidebarQuickSendOrder)
+    ? [...new Set(source.sidebarQuickSendOrder.filter(id => typeof id === 'string' && quickSendIds.has(id)))]
     : [];
 
   normalized.filterTabs = Array.isArray(source.filterTabs)
@@ -313,6 +325,7 @@ function loadConfig() {
       content: ''
     },
     quickSendList: [],
+    sidebarQuickSendOrder: [],
     hexDisplaySettings: {
       bytesPerLine: 16,
       showOffset: true,

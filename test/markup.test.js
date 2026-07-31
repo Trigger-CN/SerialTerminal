@@ -69,24 +69,64 @@ test('shell profile buttons pass the configured name to new shell tabs', () => {
   assert.match(renderer, /profile\?\.name\?\.trim\(\) \|\| tr\('main\.shellTitle'/);
 });
 
-test('collapsed sidebar keeps tools scrollable and expand control outside the scroll area', () => {
+test('collapsed sidebar scrolls only quick sends above fixed serial tools', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
   const toolbar = html.match(/<div class="sidebar-collapsed-toolbar"[\s\S]*?<\/div>\s*<!-- Persistent Header -->/)?.[0] || '';
-  const scrollStart = toolbar.indexOf('class="sidebar-tool-scroll"');
-  const scrollEnd = toolbar.lastIndexOf('</div>');
+  const scrollStart = toolbar.indexOf('class="sidebar-quick-send-scroll"');
+  const quickListIndex = toolbar.indexOf('id="sidebar-quick-send-list"');
+  const fixedToolsIndex = toolbar.indexOf('class="sidebar-fixed-tools"');
+  const connectIndex = toolbar.indexOf('id="sidebar-connect-btn"');
   const expandIndex = toolbar.indexOf('id="sidebar-expand-btn"');
 
-  assert.ok(scrollStart >= 0, 'scrollable sidebar tool group was not found');
-  assert.ok(expandIndex >= 0 && expandIndex < scrollStart, 'expand button must remain outside the scrollable tool group');
-  assert.ok(scrollEnd > scrollStart);
-  assert.match(styles, /\.sidebar-tool-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
-  assert.match(styles, /\.sidebar-tool-scroll\s*\{[^}]*justify-content:\s*flex-end;/s);
+  assert.ok(scrollStart >= 0 && quickListIndex > scrollStart, 'quick-send scroll region was not found');
+  assert.ok(fixedToolsIndex > quickListIndex && connectIndex > fixedToolsIndex, 'fixed serial tools must follow quick sends');
+  assert.ok(expandIndex > connectIndex, 'expand button must remain outside both tool regions');
+  assert.match(styles, /\.sidebar-quick-send-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
+  assert.doesNotMatch(styles, /\.sidebar-fixed-tools\s*\{[^}]*overflow-y:/s);
   assert.match(styles, /\.sidebar-tool-btn#sidebar-expand-btn\s*\{[^}]*flex-shrink:\s*0;[^}]*margin-top:\s*8px;/s);
-  assert.match(styles, /#sidebar-connect-btn\s*\{[^}]*margin-bottom:\s*8px;/s);
   assert.equal((toolbar.match(/data-material-icon=/g) || []).length, 6);
   assert.doesNotMatch(toolbar, /<svg\b/);
   assert.match(styles, /\.sidebar-tool-icon\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;[^}]*fill:\s*currentColor;/s);
+});
+
+test('collapsed quick-send shortcuts persist an independent order', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /id="sidebar-quick-send-list"[^>]*role="list"/);
+  assert.match(html, /id="quick-send-sidebar-enable"/);
+  assert.match(html, /id="quick-send-sidebar-text"/);
+  assert.match(html, /id="quick-send-sidebar-color"/);
+  assert.match(main, /sidebarShortcut: \{[\s\S]*enabled: normalizeBoolean\(item\.sidebarShortcut\?\.enabled/);
+  assert.match(main, /normalized\.sidebarQuickSendOrder = Array\.isArray\(source\.sidebarQuickSendOrder\)/);
+  assert.match(renderer, /function renderQuickSendLists\(\)/);
+  assert.match(renderer, /renderQuickSendContainer\(quickSendListEl\)/);
+  assert.match(renderer, /renderQuickSendContainer\(sidebarQuickSendListEl, true\)/);
+  assert.match(renderer, /function moveQuickSendItem\(itemId, targetId, compact = false\)/);
+  assert.match(renderer, /const list = compact \? sidebarQuickSendOrder : quickSendList/);
+  assert.match(renderer, /moveQuickSendItem\(draggedQuickSendId, item\.id, compact\)/);
+  assert.match(renderer, /draggedQuickSendCompact !== compact/);
+  assert.match(renderer, /quickSendList: quickSendList\.map\(normalizeQuickSendItem\),\s*sidebarQuickSendOrder/s);
+  assert.match(renderer, /element\.animate\(\[\{ transform: `translateY\(\$\{offset\}px\)` \}/);
+  assert.match(styles, /\.quick-send-item-compact\s*\{[^}]*width:\s*36px;[^}]*min-height:\s*36px;/s);
+  assert.match(styles, /\.quick-send-item-compact \.quick-send-label\s*\{[^}]*display:\s*block;[^}]*max-height:\s*32px;/s);
+  assert.doesNotMatch(styles, /\.quick-send-item-compact \.quick-send-label\s*\{[^}]*-webkit-line-clamp:/s);
+  assert.match(renderer, /compact \? 'quick-send-main-btn sidebar-tool-btn' : 'quick-send-main-btn'/);
+  assert.match(styles, /\.quick-send-item-compact\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;[^}]*flex:\s*0 0 36px;/s);
+  assert.match(styles, /\.quick-send-item:not\(\.quick-send-item-compact\):hover \.quick-send-main-btn/);
+  assert.match(styles, /\.quick-send-item:not\(\.quick-send-item-compact\) \.quick-send-main-btn:hover/);
+  assert.doesNotMatch(styles, /(?:^|\n)\.quick-send-main-btn:hover\s*\{/);
+  assert.doesNotMatch(styles, /\.quick-send-item-compact \.quick-send-main-btn:hover/);
+  assert.match(styles, /\.quick-send-label\s*\{[^}]*white-space:\s*nowrap;/s);
+  assert.match(styles, /\.quick-send-main-btn\s*\{[^}]*justify-content:\s*center;[^}]*text-align:\s*center;/s);
+  assert.match(styles, /\.quick-send-item:not\(\.quick-send-item-compact\):hover \.quick-send-main-btn,[\s\S]*?padding-right:\s*30px;[\s\S]*?padding-left:\s*30px;/);
+  assert.match(styles, /\.quick-send-label\s*\{[^}]*line-height:\s*16px;/s);
+  assert.match(styles, /\.quick-send-item-compact \.quick-send-label\s*\{[^}]*line-height:\s*16px;/s);
+  assert.match(styles, /\.quick-sidebar-controls\s*\{[^}]*grid-template-columns:/s);
+  assert.match(renderer, /function updateQuickSidebarEditorState\(\)/);
 });
 
 test('filter tabs support persistent whole-word matching', () => {

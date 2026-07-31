@@ -28,14 +28,17 @@
                     <span class="sidebar-throughput-value" id="sidebar-throughput-tx">0 B/s</span>
                 </div>
             </div>
-            <button id="sidebar-expand-btn" class="sidebar-tool-btn" title="Expand sidebar" data-i18n-title="main.expandSidebar" aria-label="Expand sidebar"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="double_arrow"></span></button>
-            <div class="sidebar-tool-scroll">
+            <div class="sidebar-quick-send-scroll">
+                <div id="sidebar-quick-send-list" class="sidebar-quick-send-list" role="list" aria-label="Quick send shortcuts" data-i18n-aria-label="main.quickSendShortcuts"></div>
+            </div>
+            <div class="sidebar-fixed-tools">
                 <button id="sidebar-connect-btn" class="sidebar-tool-btn connect-action" title="Connect" data-i18n-title="main.connect" aria-label="Connect"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="power"></span></button>
                 <button id="sidebar-clear-btn" class="sidebar-tool-btn" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" aria-label="Clear Terminal Output"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="delete_sweep"></span></button>
                 <button id="sidebar-prefs-btn" class="sidebar-tool-btn" title="Settings" data-i18n-title="main.globalSettings" aria-label="Settings"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="settings"></span></button>
                 <button id="sidebar-input-btn" class="sidebar-tool-btn" title="Show/hide input bar" data-i18n-title="main.toggleInputHide" aria-label="Show/hide input bar"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="keyboard"></span></button>
                 <button id="sidebar-shell-btn" class="sidebar-tool-btn" title="Shell Panel" data-i18n-title="main.shellPanel" aria-label="Shell Panel"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="terminal"></span></button>
             </div>
+            <button id="sidebar-expand-btn" class="sidebar-tool-btn" title="Expand sidebar" data-i18n-title="main.expandSidebar" aria-label="Expand sidebar"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="double_arrow"></span></button>
         </div>
         <!-- Persistent Header -->
         <div class="sidebar-header">
@@ -342,11 +345,27 @@
                     <label for="quick-send-label" data-i18n="main.label">Label</label>
                     <input type="text" id="quick-send-label" placeholder="Label" data-i18n-placeholder="main.label">
                 </div>
-                <div class="form-group">
-                    <label for="quick-send-content" data-i18n="main.content">Content</label>
-                    <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
-                </div>
-                <section class="form-group quick-trigger-settings" aria-label="Auto trigger settings" data-i18n-aria-label="main.quickTriggerSettings">
+                 <div class="form-group">
+                     <label for="quick-send-content" data-i18n="main.content">Content</label>
+                     <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
+                 </div>
+                 <section class="form-group quick-sidebar-settings" aria-label="Sidebar shortcut settings" data-i18n-aria-label="main.quickSidebarSettings">
+                     <label class="quick-sidebar-toggle" for="quick-send-sidebar-enable">
+                         <input type="checkbox" id="quick-send-sidebar-enable">
+                         <span data-i18n="main.addToSidebar">Add to collapsed sidebar</span>
+                     </label>
+                     <div id="quick-send-sidebar-controls" class="quick-sidebar-controls">
+                         <label class="quick-sidebar-text-field" for="quick-send-sidebar-text">
+                             <span data-i18n="main.sidebarShortcutText">Shortcut text</span>
+                             <input type="text" id="quick-send-sidebar-text" placeholder="Shortcut text" data-i18n-placeholder="main.sidebarShortcutText">
+                         </label>
+                         <label class="quick-sidebar-color-field" for="quick-send-sidebar-color">
+                             <span data-i18n="main.sidebarShortcutColor">Background color</span>
+                             <input type="color" id="quick-send-sidebar-color" value="#333333">
+                         </label>
+                     </div>
+                 </section>
+                 <section class="form-group quick-trigger-settings" aria-label="Auto trigger settings" data-i18n-aria-label="main.quickTriggerSettings">
                     <label class="quick-trigger-check" for="quick-send-trigger-enable">
                         <input type="checkbox" id="quick-send-trigger-enable">
                         <span data-i18n="main.quickSendAutoTrigger">Auto Trigger</span>

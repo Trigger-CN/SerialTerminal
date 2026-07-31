@@ -2537,6 +2537,11 @@ function addMainInputToQuickSend() {
         id: createQuickSendId(),
         label: buildQuickSendLabel(content),
         content,
+        sidebarShortcut: {
+            enabled: false,
+            text: '',
+            backgroundColor: ''
+        },
         autoTrigger: {
             enabled: false,
             text: '',
@@ -2545,7 +2550,7 @@ function addMainInputToQuickSend() {
             wholeWord: false
         }
     });
-    renderQuickSendList();
+    renderQuickSendLists();
     saveQuickSendList();
     setActionStatus('已将当前输入加入快捷发送');
     focusMainInput();
@@ -2678,7 +2683,7 @@ function refreshSharedSendConsumers() {
         updateAutoSendState();
     }
     if (typeof updateQuickSendValidation === 'function') updateQuickSendValidation();
-    if (typeof renderQuickSendList === 'function') renderQuickSendList();
+    if (typeof renderQuickSendLists === 'function') renderQuickSendLists();
 }
 
 function saveSharedSendProfile() {
@@ -2832,7 +2837,11 @@ function applyConfig(config) {
     appliedHexSettingsKey = hexSettingsKey;
     const autoSendChanged = applyAutoSendConfig(config.autoSendSettings || {});
     quickSendList = Array.isArray(config.quickSendList) ? config.quickSendList.map(normalizeQuickSendItem) : [];
-    renderQuickSendList();
+    sidebarQuickSendOrder = Array.isArray(config.sidebarQuickSendOrder)
+        ? config.sidebarQuickSendOrder.filter(id => typeof id === 'string')
+        : [];
+    normalizeSidebarQuickSendOrder();
+    renderQuickSendLists();
     updateQuickSendValidation();
     if (sendProfileChanged || autoSendChanged) {
         updateAutoSendValidation();
@@ -3757,6 +3766,7 @@ const autoSendTextInput = document.getElementById('auto-send-text');
 const autoSendValidation = document.getElementById('auto-send-validation');
 
 const quickSendListEl = document.getElementById('quick-send-list');
+const sidebarQuickSendListEl = document.getElementById('sidebar-quick-send-list');
 const openQuickSendDialogBtn = document.getElementById('open-quick-send-dialog-btn');
 const quickSendDialog = document.getElementById('quick-send-dialog');
 const quickSendDialogTitle = document.getElementById('quick-send-dialog-title');
@@ -3769,10 +3779,15 @@ const quickSendTriggerTextInput = document.getElementById('quick-send-trigger-te
 const quickSendTriggerRegexInput = document.getElementById('quick-send-trigger-regex');
 const quickSendTriggerCaseInput = document.getElementById('quick-send-trigger-case');
 const quickSendTriggerWordInput = document.getElementById('quick-send-trigger-word');
+const quickSendSidebarEnableInput = document.getElementById('quick-send-sidebar-enable');
+const quickSendSidebarTextInput = document.getElementById('quick-send-sidebar-text');
+const quickSendSidebarColorInput = document.getElementById('quick-send-sidebar-color');
+const quickSendSidebarControls = document.getElementById('quick-send-sidebar-controls');
 const addQuickSendBtn = document.getElementById('add-quick-send-btn');
 const quickSendValidation = document.getElementById('quick-send-validation');
 
 let quickSendList = [];
+let sidebarQuickSendOrder = [];
 const quickSendTriggerInFlight = new Set();
 const quickSendFlashTimers = new WeakMap();
 
@@ -3889,8 +3904,9 @@ autoSendIntervalInput.addEventListener('change', () => {
 });
 autoSendTextInput.addEventListener('input', updateAutoSendValidation);
 autoSendTextInput.addEventListener('blur', saveAutoSendSettings);
-let editingIndex = -1;
-let draggedQuickSendIndex = -1;
+let editingQuickSendId = '';
+let draggedQuickSendId = '';
+let draggedQuickSendCompact = false;
 
 function createQuickSendId() {
     return `quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -3902,6 +3918,13 @@ function normalizeQuickSendItem(item = {}) {
         id: typeof item.id === 'string' && item.id ? item.id : createQuickSendId(),
         label: typeof item.label === 'string' ? item.label : '',
         content: typeof item.content === 'string' ? item.content : '',
+        sidebarShortcut: {
+            enabled: item.sidebarShortcut?.enabled === true,
+            text: typeof item.sidebarShortcut?.text === 'string' ? item.sidebarShortcut.text : '',
+            backgroundColor: /^#[0-9a-f]{6}$/i.test(item.sidebarShortcut?.backgroundColor || '')
+                ? item.sidebarShortcut.backgroundColor
+                : ''
+        },
         autoTrigger: {
             enabled: trigger.enabled === true,
             text: typeof trigger.text === 'string' ? trigger.text : '',
@@ -3931,9 +3954,14 @@ function buildQuickTriggerRegex(trigger = {}) {
 
 function getQuickEditorItem() {
     return normalizeQuickSendItem({
-        id: editingIndex >= 0 ? quickSendList[editingIndex]?.id : createQuickSendId(),
+        id: editingQuickSendId || createQuickSendId(),
         label: quickSendLabelInput.value.trim(),
         content: quickSendContentInput.value,
+        sidebarShortcut: {
+            enabled: quickSendSidebarEnableInput.checked,
+            text: quickSendSidebarTextInput.value.trim(),
+            backgroundColor: quickSendSidebarColorInput.value
+        },
         autoTrigger: {
             enabled: quickSendTriggerEnableInput.checked,
             text: quickSendTriggerTextInput.value,
@@ -3946,7 +3974,7 @@ function getQuickEditorItem() {
 
 function closeQuickSendDialog() {
     quickSendDialog.classList.add('hidden');
-    editingIndex = -1;
+    editingQuickSendId = '';
     quickSendLabelInput.value = '';
     quickSendContentInput.value = '';
     quickSendTriggerEnableInput.checked = false;
@@ -3954,12 +3982,23 @@ function closeQuickSendDialog() {
     quickSendTriggerRegexInput.checked = false;
     quickSendTriggerCaseInput.checked = false;
     quickSendTriggerWordInput.checked = false;
-    renderQuickSendList();
+    quickSendSidebarEnableInput.checked = false;
+    quickSendSidebarTextInput.value = '';
+    quickSendSidebarColorInput.value = '#333333';
+    updateQuickSidebarEditorState();
+    renderQuickSendLists();
 }
 
-function openQuickSendDialog(index = -1) {
-    editingIndex = index;
-    const item = index >= 0 ? quickSendList[index] : null;
+function updateQuickSidebarEditorState() {
+    const enabled = quickSendSidebarEnableInput.checked;
+    quickSendSidebarTextInput.disabled = !enabled;
+    quickSendSidebarColorInput.disabled = !enabled;
+    quickSendSidebarControls.classList.toggle('controls-disabled', !enabled);
+}
+
+function openQuickSendDialog(itemId = '') {
+    editingQuickSendId = itemId;
+    const item = quickSendList.find(entry => entry.id === itemId) || null;
     quickSendLabelInput.value = item?.label || '';
     quickSendContentInput.value = item?.content || '';
     quickSendTriggerEnableInput.checked = item?.autoTrigger?.enabled === true;
@@ -3967,6 +4006,10 @@ function openQuickSendDialog(index = -1) {
     quickSendTriggerRegexInput.checked = item?.autoTrigger?.useRegex === true;
     quickSendTriggerCaseInput.checked = item?.autoTrigger?.caseSensitive === true;
     quickSendTriggerWordInput.checked = item?.autoTrigger?.wholeWord === true;
+    quickSendSidebarEnableInput.checked = item?.sidebarShortcut?.enabled === true;
+    quickSendSidebarTextInput.value = item?.sidebarShortcut?.text || '';
+    quickSendSidebarColorInput.value = item?.sidebarShortcut?.backgroundColor || '#333333';
+    updateQuickSidebarEditorState();
     const editing = Boolean(item);
     quickSendDialogTitle.textContent = editing
         ? trFallback('main.editQuickSend', 'Edit Quick Send')
@@ -3975,7 +4018,7 @@ function openQuickSendDialog(index = -1) {
         ? trFallback('main.updateItem', 'Update Item')
         : tr('main.addToList');
     updateQuickSendValidation();
-    renderQuickSendList();
+    renderQuickSendLists();
     quickSendDialog.classList.remove('hidden');
     requestAnimationFrame(() => (editing ? quickSendContentInput : quickSendLabelInput).focus());
 }
@@ -4015,20 +4058,18 @@ async function triggerQuickSendItem(item) {
 
 function flashQuickSendItem(itemId) {
     if (!itemId) return;
-    const itemEl = Array.from(quickSendListEl.querySelectorAll('.quick-send-item'))
-        .find(element => element.dataset.quickId === itemId);
-    const button = itemEl?.querySelector('.quick-send-main-btn');
-    if (!button) return;
-    button.classList.remove('auto-trigger-flash');
-    void button.offsetWidth;
-    button.classList.add('auto-trigger-flash');
-    const previousTimer = quickSendFlashTimers.get(button);
-    if (previousTimer) clearTimeout(previousTimer);
-    const timer = setTimeout(() => {
+    document.querySelectorAll(`.quick-send-item[data-quick-id="${CSS.escape(itemId)}"] .quick-send-main-btn`).forEach(button => {
         button.classList.remove('auto-trigger-flash');
-        quickSendFlashTimers.delete(button);
-    }, 1300);
-    quickSendFlashTimers.set(button, timer);
+        void button.offsetWidth;
+        button.classList.add('auto-trigger-flash');
+        const previousTimer = quickSendFlashTimers.get(button);
+        if (previousTimer) clearTimeout(previousTimer);
+        const timer = setTimeout(() => {
+            button.classList.remove('auto-trigger-flash');
+            quickSendFlashTimers.delete(button);
+        }, 1300);
+        quickSendFlashTimers.set(button, timer);
+    });
 }
 
 function processQuickSendAutoTriggers(bytes) {
@@ -4050,60 +4091,70 @@ function processQuickSendAutoTriggers(bytes) {
     matchedItems.forEach(triggerQuickSendItem);
 }
 
-function moveQuickSendItem(fromIndex, toIndex) {
-    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= quickSendList.length || toIndex >= quickSendList.length) {
+function normalizeSidebarQuickSendOrder() {
+    const enabledIds = quickSendList
+        .filter(item => item.sidebarShortcut?.enabled === true)
+        .map(item => item.id);
+    const enabledIdSet = new Set(enabledIds);
+    const orderedIds = [...new Set(sidebarQuickSendOrder.filter(id => enabledIdSet.has(id)))];
+    sidebarQuickSendOrder = [...orderedIds, ...enabledIds.filter(id => !orderedIds.includes(id))];
+}
+
+function moveQuickSendItem(itemId, targetId, compact = false) {
+    const list = compact ? sidebarQuickSendOrder : quickSendList;
+    const fromIndex = compact ? list.indexOf(itemId) : list.findIndex(item => item.id === itemId);
+    const toIndex = compact ? list.indexOf(targetId) : list.findIndex(item => item.id === targetId);
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= list.length || toIndex >= list.length) {
         return;
     }
 
-    const [movedItem] = quickSendList.splice(fromIndex, 1);
-    quickSendList.splice(toIndex, 0, movedItem);
-
-    if (editingIndex === fromIndex) {
-        editingIndex = toIndex;
-    } else if (editingIndex > fromIndex && editingIndex <= toIndex) {
-        editingIndex--;
-    } else if (editingIndex < fromIndex && editingIndex >= toIndex) {
-        editingIndex++;
-    }
+    const [movedItem] = list.splice(fromIndex, 1);
+    list.splice(toIndex, 0, movedItem);
 
     saveQuickSendList();
-    renderQuickSendList();
+    renderQuickSendLists();
 }
 
-function renderQuickSendList() {
-    quickSendListEl.innerHTML = '';
-    
-    quickSendList.forEach((item, index) => {
+function renderQuickSendContainer(container, compact = false) {
+    if (!container) return;
+    const previousRects = new Map(Array.from(container.children).map(element => [element.dataset.quickId, element.getBoundingClientRect()]));
+    container.innerHTML = '';
+    const items = compact
+        ? sidebarQuickSendOrder.map(id => quickSendList.find(item => item.id === id)).filter(Boolean)
+        : quickSendList;
+    items.forEach((item, index) => {
         const div = document.createElement('div');
-        div.className = 'quick-send-item';
+        div.className = `quick-send-item${compact ? ' quick-send-item-compact' : ''}`;
         div.draggable = true;
         div.dataset.index = String(index);
         div.dataset.quickId = item.id;
         
         // If this item is being edited, highlight it
-        if (index === editingIndex) {
+        if (item.id === editingQuickSendId) {
             div.classList.add('editing');
         }
 
         div.addEventListener('dragstart', (event) => {
-            draggedQuickSendIndex = index;
+            draggedQuickSendId = item.id;
+            draggedQuickSendCompact = compact;
             div.classList.add('dragging');
             if (event.dataTransfer) {
                 event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData('text/plain', String(index));
+                event.dataTransfer.setData('text/plain', item.id);
             }
         });
 
         div.addEventListener('dragend', () => {
-            draggedQuickSendIndex = -1;
-            quickSendListEl.querySelectorAll('.quick-send-item').forEach(itemEl => {
+            draggedQuickSendId = '';
+            draggedQuickSendCompact = false;
+            document.querySelectorAll('.quick-send-item').forEach(itemEl => {
                 itemEl.classList.remove('dragging', 'drag-over');
             });
         });
 
         div.addEventListener('dragover', (event) => {
             event.preventDefault();
-            if (draggedQuickSendIndex === -1 || draggedQuickSendIndex === index) {
+            if (!draggedQuickSendId || draggedQuickSendCompact !== compact || draggedQuickSendId === item.id) {
                 return;
             }
             event.dataTransfer.dropEffect = 'move';
@@ -4117,17 +4168,24 @@ function renderQuickSendList() {
         div.addEventListener('drop', (event) => {
             event.preventDefault();
             div.classList.remove('drag-over');
-            moveQuickSendItem(draggedQuickSendIndex, index);
+            if (draggedQuickSendCompact !== compact) return;
+            moveQuickSendItem(draggedQuickSendId, item.id, compact);
         });
 
         const btn = document.createElement('button');
         const label = document.createElement('span');
-        label.textContent = item.label || item.content;
-        label.style.overflow = 'hidden';
-        label.style.textOverflow = 'ellipsis';
+        label.className = 'quick-send-label';
+        label.textContent = compact ? (item.sidebarShortcut?.text || item.label || item.content) : (item.label || item.content);
         const validation = validateSendContent(sendMode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
         btn.title = validation.ok ? `${validation.normalized} (${validation.byteCount + (sendAppendCrLf ? 2 : 0)} B)` : validation.message;
-        btn.className = 'quick-send-main-btn';
+        btn.className = compact ? 'quick-send-main-btn sidebar-tool-btn' : 'quick-send-main-btn';
+        if (compact) {
+            btn.style.backgroundColor = item.sidebarShortcut?.backgroundColor || 'var(--bg-tertiary)';
+            btn.style.color = 'var(--text-primary)';
+            const textLength = [...label.textContent].length;
+            btn.style.fontSize = `${Math.max(8, Math.min(13, 15 - textLength * 0.35))}px`;
+        }
+        btn.title = item.label || item.content;
         btn.append(label);
         
         btn.addEventListener('click', async () => {
@@ -4151,7 +4209,7 @@ function renderQuickSendList() {
         editBtn.title = 'Edit';
         editBtn.appendChild(createMaterialIcon('edit'));
         editBtn.addEventListener('click', () => {
-            openQuickSendDialog(index);
+            openQuickSendDialog(item.id);
             setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
         });
 
@@ -4160,17 +4218,14 @@ function renderQuickSendList() {
         delBtn.title = 'Remove';
         delBtn.appendChild(createMaterialIcon('delete'));
         delBtn.addEventListener('click', () => {
-            // If deleting the item currently being edited, cancel edit mode
-            if (editingIndex === index) {
+            if (editingQuickSendId === item.id) {
                 closeQuickSendDialog();
-            } else if (editingIndex > index) {
-                // Adjust index if deleting an item above the edited one
-                editingIndex--;
             }
             
-            quickSendList.splice(index, 1);
+            const itemIndex = quickSendList.findIndex(entry => entry.id === item.id);
+            if (itemIndex > -1) quickSendList.splice(itemIndex, 1);
             saveQuickSendList();
-            renderQuickSendList();
+            renderQuickSendLists();
             setActionStatus(`已删除快捷指令：${item.label || item.content}`);
         });
 
@@ -4180,20 +4235,42 @@ function renderQuickSendList() {
         div.appendChild(btn);
         div.appendChild(actionDiv);
         
-        quickSendListEl.appendChild(div);
+        if (!compact || item.sidebarShortcut?.enabled === true) container.appendChild(div);
     });
+    requestAnimationFrame(() => {
+        Array.from(container.children).forEach(element => {
+            const previous = previousRects.get(element.dataset.quickId);
+            if (!previous) return;
+            const current = element.getBoundingClientRect();
+            const offset = previous.top - current.top;
+            if (Math.abs(offset) < 1) return;
+            element.animate([{ transform: `translateY(${offset}px)` }, { transform: 'translateY(0)' }], {
+                duration: compact ? 220 : 280,
+                easing: 'cubic-bezier(.2,.8,.2,1)'
+            });
+        });
+    });
+}
+
+function renderQuickSendLists() {
+    normalizeSidebarQuickSendOrder();
+    renderQuickSendContainer(quickSendListEl);
+    renderQuickSendContainer(sidebarQuickSendListEl, true);
 }
 
 function saveQuickSendList() {
     if (isApplyingConfig) return;
+    normalizeSidebarQuickSendOrder();
     ipcRenderer.send('save-config', {
-        quickSendList: quickSendList.map(normalizeQuickSendItem)
+        quickSendList: quickSendList.map(normalizeQuickSendItem),
+        sidebarQuickSendOrder
     });
 }
 
 addQuickSendBtn.addEventListener('click', () => {
     const item = getQuickEditorItem();
     if (updateQuickSendValidation().ok) {
+        const editingIndex = quickSendList.findIndex(entry => entry.id === editingQuickSendId);
         if (editingIndex > -1) {
             quickSendList[editingIndex] = item;
         } else {
@@ -4209,6 +4286,12 @@ quickSendTriggerTextInput.addEventListener('input', updateQuickSendValidation);
 quickSendTriggerRegexInput.addEventListener('change', updateQuickSendValidation);
 quickSendTriggerCaseInput.addEventListener('change', updateQuickSendValidation);
 quickSendTriggerWordInput.addEventListener('change', updateQuickSendValidation);
+quickSendSidebarEnableInput.addEventListener('change', () => {
+    updateQuickSidebarEditorState();
+    updateQuickSendValidation();
+});
+quickSendSidebarTextInput.addEventListener('input', updateQuickSendValidation);
+quickSendSidebarColorInput.addEventListener('input', updateQuickSendValidation);
 openQuickSendDialogBtn.addEventListener('click', () => openQuickSendDialog());
 quickSendDialogCloseBtn.addEventListener('click', closeQuickSendDialog);
 quickSendDialogCancelBtn.addEventListener('click', closeQuickSendDialog);
