@@ -24,12 +24,13 @@
       "!**/*.ts",
       "!**/*.map",
       "!assets/NotoColorEmoji-Regular.ttf",
+      "!scripts/publish-update-mirror.sh",
       "package.json",
       "**/*"
     ],
     "publish": {
-      "provider": "github",
-      "releaseType": "release"
+      "provider": "generic",
+      "url": "https://trigger-cn.top/serialterminal/"
     },
     "win": {
       "target": [

@@ -19,6 +19,8 @@ const {
 // Configure logging
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
+const UPDATE_FEED_URL = 'https://trigger-cn.top/serialterminal/';
+autoUpdater.setFeedURL({ provider: 'generic', url: UPDATE_FEED_URL });
 
 let mainWindow;
 let prefsWindow;
@@ -913,12 +915,13 @@ function getManualUpdateDownloadUrl(info) {
     ? info.files.find(file => /\.exe$/i.test(file?.name || file?.url || ''))
     : null;
   if (exeFile?.url) {
-    if (/^https?:\/\//i.test(exeFile.url)) return exeFile.url;
-    const repoInfo = getGithubRepoInfo();
-    if (repoInfo && info?.version && exeFile.name) {
-      return `https://github.com/${repoInfo.owner}/${repoInfo.repo}/releases/download/v${encodeURIComponent(info.version)}/${encodeURIComponent(exeFile.name)}`;
+    try {
+      return new URL(String(exeFile.url), UPDATE_FEED_URL).toString();
+    } catch (error) {
+      log.warn('Failed to resolve mirrored update URL:', error);
     }
   }
+  if (exeFile?.name) return new URL(encodeURIComponent(exeFile.name), UPDATE_FEED_URL).toString();
   return getReleaseUrl();
 }
 

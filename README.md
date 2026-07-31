@@ -196,9 +196,14 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
   - 暂不更新
   - 跳过此版本
 - 下载完成后支持重启安装或稍后安装
+- 自动更新元数据、安装包和差分文件优先从 `https://trigger-cn.top/serialterminal/` 下载，GitHub Release 保留为公开发布和备用入口
 - 更新提示会尝试显示 GitHub Release 正文；获取不到时提示网络异常
 - 使用 `electron-builder` 打包 Windows 与 Linux 发布物
 - 推送 `v*` Git tag 后，GitHub Actions 会使用同一 lockfile 并行构建 Windows/Linux 发布物；构建前执行测试和 native rebuild，构建后校验 lockfile 未变化
+- 发布任务先创建 GitHub Release，再将 Windows 的 `latest.yml`、NSIS 安装包和 blockmap 上传到自建镜像；镜像发布需要仓库 Secret `MIRROR_SSH_PRIVATE_KEY`
+- 镜像发布脚本位于 `scripts/publish-update-mirror.sh`，CI 会先更新服务器脚本，再归档安装包并最后原子切换 `latest.yml`
+
+首次启用镜像发布时，需要在 GitHub 仓库 `Settings > Secrets and variables > Actions` 新增 Repository Secret `MIRROR_SSH_PRIVATE_KEY`，内容为镜像专用 Ed25519 私钥全文。服务器只授权无 sudo 的 `serialterminal-deploy` 账户写入安装包工作目录；不要使用 `ubuntu` 管理账户的私钥。
 
 ## 项目结构
 

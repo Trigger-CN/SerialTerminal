@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+const mirrorPublisher = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'publish-update-mirror.sh'), 'utf8');
 
 test('release builds use a supported Windows toolchain', () => {
   assert.match(workflow, /uses: actions\/checkout@v6/);
@@ -34,4 +35,26 @@ test('release uploads exclude unpacked application directories', () => {
   assert.match(workflow, /dist\/latest\.yml/);
   assert.match(workflow, /dist\/latest-linux\.yml/);
   assert.match(workflow, /fail_on_unmatched_files: true/);
+});
+
+test('release publishes Windows updater files to the self-hosted mirror', () => {
+  assert.deepEqual(packageJson.build.publish, {
+    provider: 'generic',
+    url: 'https://trigger-cn.top/serialterminal/'
+  });
+  assert.ok(packageJson.build.files.includes('!scripts/publish-update-mirror.sh'));
+  assert.match(workflow, /MIRROR_SSH_PRIVATE_KEY: \$\{\{ secrets\.MIRROR_SSH_PRIVATE_KEY \}\}/);
+  assert.match(workflow, /scp dist\/latest\.yml dist\/\*\.exe dist\/\*\.exe\.blockmap/);
+  assert.match(workflow, /serialterminal-deploy@43\.157\.13\.24/);
+  assert.match(workflow, /43\.157\.13\.24 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJGra2UcB4l6SAhzwZkrR6uNEF6h7729fQa7JRXaHrnc/);
+  assert.doesNotMatch(workflow, /ssh-keyscan/);
+  assert.match(workflow, /scp scripts\/publish-update-mirror\.sh/);
+  assert.match(workflow, /Invalid release version/);
+  assert.match(workflow, /SerialTerminalPackages\/bin\/publish/);
+  assert.match(mirrorPublisher, /public_installer=.*latest\.yml/);
+  assert.match(mirrorPublisher, /mv -Tf "\$PUBLIC\/latest\.yml\.new" "\$PUBLIC\/latest\.yml"/);
+  assert.ok(
+    workflow.indexOf('uses: softprops/action-gh-release@v3') < workflow.indexOf('name: Publish Windows update mirror'),
+    'GitHub Release should be published before the mirror'
+  );
 });
