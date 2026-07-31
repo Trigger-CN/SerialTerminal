@@ -21,15 +21,17 @@ log.transports.file.level = 'info';
 autoUpdater.logger = log;
 const UPDATE_FEED_URL = 'https://trigger-cn.top/serialterminal/';
 autoUpdater.setFeedURL({ provider: 'generic', url: UPDATE_FEED_URL });
+autoUpdater.autoDownload = false;
 
 let mainWindow;
 let prefsWindow;
 let updateDownloadWindow;
 let updatePromptState = {
-  startupCheckInProgress: false,
-  manualCheckInProgress: false,
-  downloadInitiatedByPrompt: false,
-  latestInfo: null
+  phase: 'idle',
+  checkSource: null,
+  latestInfo: null,
+  latestProgress: null,
+  promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
 const CONFIG_VERSION = 4;
@@ -964,6 +966,11 @@ function createUpdateDownloadWindow(info) {
       manualDownload: tr('updateDialog.manualDownload'),
       manualDownloadUrl: getManualUpdateDownloadUrl(info)
     });
+    if (updatePromptState.phase === 'downloaded') {
+      sendUpdateDownloadStatus('downloaded', updatePromptState.latestInfo);
+    } else if (updatePromptState.latestProgress) {
+      sendUpdateDownloadStatus('progress', updatePromptState.latestProgress);
+    }
   });
   updateDownloadWindow.on('closed', () => {
     updateDownloadWindow = null;
@@ -1055,9 +1062,7 @@ async function promptForAvailableUpdate(info, isStartupPrompt = false) {
   });
 
   if (result.response === 0) {
-    updatePromptState.downloadInitiatedByPrompt = true;
-    createUpdateDownloadWindow(info);
-    autoUpdater.downloadUpdate();
+    startUpdateDownload(info);
     return;
   }
 
@@ -1066,23 +1071,43 @@ async function promptForAvailableUpdate(info, isStartupPrompt = false) {
   }
 }
 
-async function promptToInstallDownloadedUpdate(info) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+function startUpdateDownload(info) {
+  if (updatePromptState.phase === 'downloading' || updatePromptState.phase === 'downloaded') {
+    createUpdateDownloadWindow(updatePromptState.latestInfo || info);
+    return;
+  }
 
-  const version = info?.version || tr('updateDialog.newVersionFallback');
-  const result = await dialog.showMessageBox(mainWindow, {
-    type: 'question',
-    buttons: [tr('updateDialog.installAndRestart'), tr('updateDialog.later')],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-    title: tr('updateDialog.updateReadyTitle'),
-    message: tr('updateDialog.versionDownloaded', { version }),
-    detail: tr('updateDialog.restartToInstall')
+  updatePromptState.phase = 'downloading';
+  updatePromptState.latestInfo = info;
+  updatePromptState.latestProgress = null;
+  createUpdateDownloadWindow(info);
+  autoUpdater.downloadUpdate().catch(error => {
+    log.error('Failed to start update download:', error);
   });
+}
 
-  if (result.response === 0) {
-    autoUpdater.quitAndInstall();
+function offerAvailableUpdate(info, isStartupPrompt) {
+  if (updatePromptState.promptPromise) return updatePromptState.promptPromise;
+  updatePromptState.phase = 'prompting';
+  updatePromptState.promptPromise = promptForAvailableUpdate(info, isStartupPrompt)
+    .catch(error => {
+      log.error('Failed to show update prompt:', error);
+    })
+    .finally(() => {
+      updatePromptState.promptPromise = null;
+      updatePromptState.checkSource = null;
+      if (updatePromptState.phase === 'prompting') updatePromptState.phase = 'available';
+    });
+  return updatePromptState.promptPromise;
+}
+
+function sendCurrentUpdateStatusToPrefs() {
+  if (updatePromptState.phase === 'downloaded') {
+    sendUpdateStatusToPrefs('downloaded', updatePromptState.latestInfo);
+  } else if (updatePromptState.phase === 'downloading' && updatePromptState.latestProgress) {
+    sendUpdateStatusToPrefs('download-progress', updatePromptState.latestProgress);
+  } else if (updatePromptState.latestInfo) {
+    sendUpdateStatusToPrefs('available', updatePromptState.latestInfo);
   }
 }
 
@@ -1096,10 +1121,30 @@ function checkForAppUpdates({ manual = false } = {}) {
     return;
   }
 
-  updatePromptState.manualCheckInProgress = manual;
-  updatePromptState.startupCheckInProgress = !manual;
-  updatePromptState.downloadInitiatedByPrompt = false;
-  autoUpdater.checkForUpdates();
+  if (updatePromptState.phase === 'downloading' || updatePromptState.phase === 'downloaded') {
+    sendCurrentUpdateStatusToPrefs();
+    createUpdateDownloadWindow(updatePromptState.latestInfo);
+    return;
+  }
+  if (updatePromptState.phase === 'checking') {
+    if (manual) updatePromptState.checkSource = 'manual';
+    return;
+  }
+  if (updatePromptState.phase === 'prompting') {
+    sendCurrentUpdateStatusToPrefs();
+    return;
+  }
+  if (updatePromptState.phase === 'available' && updatePromptState.latestInfo) {
+    sendCurrentUpdateStatusToPrefs();
+    offerAvailableUpdate(updatePromptState.latestInfo, false);
+    return;
+  }
+
+  updatePromptState.phase = 'checking';
+  updatePromptState.checkSource = manual ? 'manual' : 'startup';
+  autoUpdater.checkForUpdates().catch(error => {
+    log.error('Failed to check for updates:', error);
+  });
 }
 
 app.whenReady().then(() => {
@@ -1582,49 +1627,44 @@ autoUpdater.on('checking-for-update', () => {
 
 autoUpdater.on('update-available', (info) => {
   updatePromptState.latestInfo = info;
-    sendUpdateStatusToPrefs('available', info);
+  sendUpdateStatusToPrefs('available', info);
 
-  if (currentConfig.skippedUpdateVersion && currentConfig.skippedUpdateVersion === info.version) {
-    updatePromptState.startupCheckInProgress = false;
-    updatePromptState.manualCheckInProgress = false;
+  const isStartupPrompt = updatePromptState.checkSource === 'startup';
+  if (isStartupPrompt && currentConfig.skippedUpdateVersion === info.version) {
+    updatePromptState.phase = 'available';
+    updatePromptState.checkSource = null;
     return;
   }
 
-  promptForAvailableUpdate(info, updatePromptState.startupCheckInProgress).catch(err => {
-    log.error('Failed to show update prompt:', err);
-  });
+  offerAvailableUpdate(info, isStartupPrompt);
 });
 
 autoUpdater.on('update-not-available', (info) => {
-    sendUpdateStatusToPrefs('not-available', info);
-  updatePromptState.startupCheckInProgress = false;
-  updatePromptState.manualCheckInProgress = false;
+  sendUpdateStatusToPrefs('not-available', info);
+  updatePromptState.phase = 'idle';
+  updatePromptState.checkSource = null;
 });
 
 autoUpdater.on('error', (err) => {
-    sendUpdateStatusToPrefs('error', err.message);
-    sendUpdateDownloadStatus('error', err.message);
-  updatePromptState.startupCheckInProgress = false;
-  updatePromptState.manualCheckInProgress = false;
+  sendUpdateStatusToPrefs('error', err.message);
+  sendUpdateDownloadStatus('error', err.message);
+  updatePromptState.phase = updatePromptState.latestInfo ? 'available' : 'idle';
+  updatePromptState.checkSource = null;
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
-    sendUpdateStatusToPrefs('download-progress', progressObj);
-    sendUpdateDownloadStatus('progress', progressObj);
+  updatePromptState.latestProgress = progressObj;
+  sendUpdateStatusToPrefs('download-progress', progressObj);
+  sendUpdateDownloadStatus('progress', progressObj);
 });
 
 autoUpdater.on('update-downloaded', (info) => {
-    sendUpdateStatusToPrefs('downloaded', info);
-    sendUpdateDownloadStatus('downloaded', info);
+  updatePromptState.phase = 'downloaded';
+  updatePromptState.latestInfo = info;
+  updatePromptState.latestProgress = null;
+  sendUpdateStatusToPrefs('downloaded', info);
+  sendUpdateDownloadStatus('downloaded', info);
   saveConfig({ skippedUpdateVersion: '' });
-  updatePromptState.startupCheckInProgress = false;
-  updatePromptState.manualCheckInProgress = false;
-
-  if (!updatePromptState.downloadInitiatedByPrompt) {
-    promptToInstallDownloadedUpdate(info).catch(err => {
-      log.error('Failed to show install prompt:', err);
-    });
-  }
 });
 
 ipcMain.on('check-for-updates', () => {

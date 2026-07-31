@@ -233,7 +233,15 @@ test('update confirmation opens a non-closable download window with progress and
   const progressHtml = fs.readFileSync(path.join(root, 'update-progress.html'), 'utf8');
   const progressRenderer = fs.readFileSync(path.join(root, 'update-progress.js'), 'utf8');
 
-  assert.match(main, /createUpdateDownloadWindow\(info\);\s*autoUpdater\.downloadUpdate\(\);/s);
+  assert.match(main, /autoUpdater\.autoDownload = false/);
+  assert.match(main, /function startUpdateDownload\(info\)/);
+  assert.equal((main.match(/autoUpdater\.downloadUpdate\(\)/g) || []).length, 1);
+  assert.match(main, /phase === 'downloading' \|\| updatePromptState\.phase === 'downloaded'/);
+  assert.match(main, /if \(updatePromptState\.promptPromise\) return updatePromptState\.promptPromise/);
+  assert.match(main, /function sendCurrentUpdateStatusToPrefs\(\)/);
+  assert.match(main, /if \(updatePromptState\.phase === 'checking'\) \{\s*if \(manual\) updatePromptState\.checkSource = 'manual';/s);
+  assert.match(main, /if \(updatePromptState\.phase === 'prompting'\) \{\s*sendCurrentUpdateStatusToPrefs\(\);/s);
+  assert.doesNotMatch(main, /promptToInstallDownloadedUpdate/);
   assert.match(main, /closable:\s*false/);
   assert.match(main, /if \(status === 'error'\) updateDownloadWindow\.setClosable\(true\)/);
   assert.match(main, /sendUpdateDownloadStatus\('progress', progressObj\)/);
