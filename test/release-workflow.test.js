@@ -16,6 +16,10 @@ test('release builds use a supported Windows toolchain', () => {
   assert.match(workflow, /os: windows-2022/);
   assert.match(workflow, /uses: microsoft\/setup-msbuild@v2/);
   assert.match(workflow, /uses: ilammy\/msvc-dev-cmd@v1/);
+  assert.equal(packageJson.build.nsis.artifactName, '${productName}-Setup-${version}.${ext}');
+  assert.match(workflow, /name: Verify Windows release artifact names/);
+  assert.match(workflow, /dist\/SerialTerminal-Setup-\$VERSION\.exe\.blockmap/);
+  assert.match(workflow, /path: SerialTerminal-Setup-\$VERSION\.exe/);
 });
 
 test('release build jobs never publish directly through electron-builder', () => {

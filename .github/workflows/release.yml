@@ -49,6 +49,15 @@ jobs:
       - run: npm test
       - run: npm run rebuild
       - run: ${{ matrix.command }}
+      - name: Verify Windows release artifact names
+        if: matrix.target == 'win'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          test -f "dist/SerialTerminal-Setup-$VERSION.exe"
+          test -f "dist/SerialTerminal-Setup-$VERSION.exe.blockmap"
+          grep -F "url: SerialTerminal-Setup-$VERSION.exe" dist/latest.yml
+          grep -F "path: SerialTerminal-Setup-$VERSION.exe" dist/latest.yml
       - name: Verify lockfile is unchanged
         shell: bash
         run: sha256sum --check lockfile.sha256
