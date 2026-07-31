@@ -73,7 +73,12 @@ test('collapsed sidebar keeps tools scrollable and expand control outside the sc
   assert.ok(expandIndex >= 0 && expandIndex < scrollStart, 'expand button must remain outside the scrollable tool group');
   assert.ok(scrollEnd > scrollStart);
   assert.match(styles, /\.sidebar-tool-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
-  assert.match(styles, /#sidebar-expand-btn\s*\{[^}]*flex-shrink:\s*0;/s);
+  assert.match(styles, /\.sidebar-tool-scroll\s*\{[^}]*justify-content:\s*flex-end;/s);
+  assert.match(styles, /\.sidebar-tool-btn#sidebar-expand-btn\s*\{[^}]*flex-shrink:\s*0;[^}]*margin-top:\s*8px;/s);
+  assert.match(styles, /#sidebar-connect-btn\s*\{[^}]*margin-bottom:\s*8px;/s);
+  assert.equal((toolbar.match(/data-material-icon=/g) || []).length, 6);
+  assert.doesNotMatch(toolbar, /<svg\b/);
+  assert.match(styles, /\.sidebar-tool-icon\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;[^}]*fill:\s*currentColor;/s);
 });
 
 test('filter tabs support persistent whole-word matching', () => {
@@ -144,8 +149,67 @@ test('shared send profile is located in the settings tab', () => {
 test('text filter tabs do not display a TXT mode badge', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
 
-  assert.match(renderer, /tab\.dataMode === 'hex' \? ' <span class="mode-badge hex">HEX<\/span>' : ''/);
+  assert.match(renderer, /if \(tab\.dataMode === 'hex'\)/);
+  assert.match(renderer, /badge\.className = 'mode-badge hex'/);
   assert.doesNotMatch(renderer, /tab\.dataMode === 'hex' \? 'HEX' : 'TXT'/);
+});
+
+test('DOM command icons use shared local Material Symbols paths', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const icons = fs.readFileSync(path.join(root, 'material-icons.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /<script src="material-icons\.js"><\/script>/);
+  assert.match(preferencesHtml, /<script src="material-icons\.js"><\/script>/);
+  assert.match(preferencesHtml, /onclick="showTab\('appearance', this\)"/);
+  assert.match(preferencesHtml, /function showTab\(tabId, trigger\)/);
+  assert.match(icons, /Official Material Symbols Outlined paths/);
+  assert.match(icons, /function createIcon\(name/);
+  assert.match(icons, /function upgrade\(root = document\)/);
+  assert.match(icons, /document\.createElementNS\(SVG_NS, 'path'\)/);
+  assert.match(icons, /path\.setAttribute\('d', paths\[name\]\)/);
+  assert.doesNotMatch(icons, /document\.createElementNS\(SVG_NS, 'use'\)/);
+  assert.match(styles, /svg\[data-material-icon\]\s*\{[^}]*fill:\s*currentColor;/s);
+  assert.match(styles, /background-image:\s*url\("data:image\/svg\+xml,[^\n]*M480-360 280-559h400L480-360Z/);
+  assert.match(styles, /input\[type="checkbox"\]:checked::after\s*\{[^}]*mask:[^;}]*M382-240 154-468/s);
+  assert.doesNotMatch(styles, /content:\s*['"]✓['"]/);
+
+  [
+    'refresh', 'close', 'power', 'delete_sweep', 'folder_open', 'save', 'tune', 'search',
+    'send', 'schedule', 'format_list_numbered', 'regular_expression', 'match_case',
+    'match_word', 'add', 'chevron_left', 'settings', 'keyboard', 'terminal', 'filter_alt',
+    'history', 'keyboard_return'
+  ].forEach(name => assert.match(html, new RegExp(`data-material-icon="${name}"`)));
+
+  [
+    'palette', 'terminal', 'ink_highlighter', 'description', 'keyboard', 'info',
+    'font_download', 'format_size', 'receipt_long', 'history', 'mouse', 'folder_open',
+    'draft', 'translate', 'add'
+  ].forEach(name => assert.match(preferencesHtml, new RegExp(`data-material-icon="${name}"`)));
+
+  const iconGlyphs = /🔄|✕|⚡|🗑|📂|💾|🛠|🔍|📤|🕒|🔢|🔠|⚙|⌨|ℹ|🎨|💻|🖍|📝|📜|🖱|📄|🔡|➕|⏎/;
+  assert.doesNotMatch(html, iconGlyphs);
+  assert.doesNotMatch(preferencesHtml, iconGlyphs);
+  assert.doesNotMatch(html, /<option[^>]*>\s*✎/);
+  const packageJson = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
+  assert.match(packageJson, /!assets\/NotoColorEmoji-Regular\.ttf/);
+});
+
+test('dynamic DOM controls create Material SVG icons without replacing icon-bearing button content', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+
+  ['close', 'arrow_drop_down', 'match_case', 'match_word', 'regular_expression', 'check_circle', 'edit', 'delete']
+    .forEach(name => assert.match(renderer, new RegExp(`(?:createMaterialIcon\\('${name}'\\)|data-material-icon="${name}")`)));
+  ['match_case', 'regular_expression', 'delete', 'folder_open', 'add']
+    .forEach(name => assert.match(preferences, new RegExp(`createMaterialIcon\\('${name}'\\)`)));
+
+  assert.doesNotMatch(renderer, /textContent\s*=\s*['"](?:✕|✎|▼|⬤|Aa|\.\*)/);
+  assert.doesNotMatch(preferences, /textContent\s*=\s*['"](?:✕|…|\+|Aa|\.\*)/);
+  assert.match(renderer, /translated = translated\.replace\(\/\^\\s\*\\\+\\s\*\//);
+  assert.match(preferences, /translatedActionLabel/);
+  assert.doesNotMatch(preferences, /elements\.addRuleBtn\.textContent/);
 });
 
 test('auto send exposes the interval unit and uses a compact text input', () => {

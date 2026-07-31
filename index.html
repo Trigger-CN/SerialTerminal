@@ -5,6 +5,7 @@
     <title data-i18n="appTitle">Serial Terminal</title>
     <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="style.css" />
+    <script src="material-icons.js"></script>
     <style>
         body {
             height: 100vh;
@@ -27,13 +28,13 @@
                     <span class="sidebar-throughput-value" id="sidebar-throughput-tx">0 B/s</span>
                 </div>
             </div>
-            <button id="sidebar-expand-btn" class="sidebar-tool-btn" title="Expand sidebar" data-i18n-title="main.expandSidebar" aria-label="Expand sidebar">›</button>
+            <button id="sidebar-expand-btn" class="sidebar-tool-btn" title="Expand sidebar" data-i18n-title="main.expandSidebar" aria-label="Expand sidebar"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="double_arrow"></span></button>
             <div class="sidebar-tool-scroll">
-                <button id="sidebar-connect-btn" class="sidebar-tool-btn connect-action" title="Connect" data-i18n-title="main.connect" aria-label="Connect">⚡</button>
-                <button id="sidebar-clear-btn" class="sidebar-tool-btn" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" aria-label="Clear Terminal Output">🗑️</button>
-                <button id="sidebar-prefs-btn" class="sidebar-tool-btn" title="Settings" data-i18n-title="main.globalSettings" aria-label="Settings">⚙️</button>
-                <button id="sidebar-input-btn" class="sidebar-tool-btn" title="Show/hide input bar" data-i18n-title="main.toggleInputHide" aria-label="Show/hide input bar">⌨</button>
-                <button id="sidebar-shell-btn" class="sidebar-tool-btn" title="Shell Panel" data-i18n-title="main.shellPanel" aria-label="Shell Panel">&gt;_</button>
+                <button id="sidebar-connect-btn" class="sidebar-tool-btn connect-action" title="Connect" data-i18n-title="main.connect" aria-label="Connect"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="power"></span></button>
+                <button id="sidebar-clear-btn" class="sidebar-tool-btn" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" aria-label="Clear Terminal Output"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="delete_sweep"></span></button>
+                <button id="sidebar-prefs-btn" class="sidebar-tool-btn" title="Settings" data-i18n-title="main.globalSettings" aria-label="Settings"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="settings"></span></button>
+                <button id="sidebar-input-btn" class="sidebar-tool-btn" title="Show/hide input bar" data-i18n-title="main.toggleInputHide" aria-label="Show/hide input bar"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="keyboard"></span></button>
+                <button id="sidebar-shell-btn" class="sidebar-tool-btn" title="Shell Panel" data-i18n-title="main.shellPanel" aria-label="Shell Panel"><span class="material-icon-placeholder sidebar-tool-icon" data-material-icon="terminal"></span></button>
             </div>
         </div>
         <!-- Persistent Header -->
@@ -42,7 +43,7 @@
                 <select id='port-select' title='Select Serial Port' data-i18n-title='main.selectSerialPort' style='flex: 1; width: 0;'>
                     <option value='' data-i18n='main.selectPort'>Select Port</option>
                 </select>
-                <button class="secondary" id="refresh-btn" style="flex: 0 0 auto; padding: 0 8px;" title="Refresh Ports" data-i18n-title="main.refreshPorts">🔄</button>
+                <button class="secondary" id="refresh-btn" style="flex: 0 0 auto; padding: 0 8px;" title="Refresh Ports" data-i18n-title="main.refreshPorts"><span class="material-icon-placeholder" data-material-icon="refresh"></span></button>
             </div>
 
             <div id="baud-container" style="position: relative;">
@@ -67,27 +68,27 @@
                     <option value="921600">921600</option>
                     <option value="1000000">1000000</option>
                     <option value="2000000">2000000</option>
-                    <option value="custom">✎ Custom...</option>
+                    <option value="custom">Custom...</option>
                 </select>
                 <div id="baud-custom-wrapper" style="display: none; display: flex; gap: 4px;">
                     <input type="number" id="baud-custom-input" placeholder="Baud Rate" data-i18n-placeholder="main.customBaudRate" style="flex: 1; width: 0;">
-                    <button id="baud-custom-cancel" class="secondary" style="width: auto; padding: 0 6px;" title="Back to list" data-i18n-title="main.backToList">✕</button>
+                    <button id="baud-custom-cancel" class="secondary" style="width: auto; padding: 0 6px;" title="Back to list" data-i18n-title="main.backToList"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
                 </div>
             </div>
 
-            <button id="connect-btn" class="connect-action" style="width: 100%;">⚡ <span id="connect-btn-label" data-i18n="main.connect">Connect</span></button>
-            <button id="clear-btn" class="secondary" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" style="width: 100%;">🗑️ <span data-i18n="main.clearLog">Clear Log</span></button>
+            <button id="connect-btn" class="connect-action" style="width: 100%;"><span class="material-icon-placeholder" data-material-icon="power"></span><span id="connect-btn-label" data-i18n="main.connect">Connect</span></button>
+            <button id="clear-btn" class="secondary" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" style="width: 100%;"><span class="material-icon-placeholder" data-material-icon="delete_sweep"></span><span data-i18n="main.clearLog">Clear Log</span></button>
             <div class="sidebar-log-actions">
-                <button id="open-log-folder-btn" class="secondary" type="button">📂 <span data-i18n="main.openLogFolder">Open Log Folder</span></button>
-                <button id="save-current-tab-btn" class="secondary" type="button" title="Save Current Tab" data-i18n-title="main.saveCurrentTab" aria-label="Save Current Tab" data-i18n-aria-label="main.saveCurrentTab">💾</button>
+                <button id="open-log-folder-btn" class="secondary" type="button"><span class="material-icon-placeholder" data-material-icon="folder_open"></span><span data-i18n="main.openLogFolder">Open Log Folder</span></button>
+                <button id="save-current-tab-btn" class="secondary" type="button" title="Save Current Tab" data-i18n-title="main.saveCurrentTab" aria-label="Save Current Tab" data-i18n-aria-label="main.saveCurrentTab"><span class="material-icon-placeholder" data-material-icon="save"></span></button>
             </div>
         </div>
 
         <!-- Tabs Header -->
         <div class="sidebar-tabs" role="tablist">
-            <button class="sidebar-tab active" type="button" data-target="tab-settings" role="tab" aria-controls="tab-settings" aria-selected="true" aria-label="Settings" data-i18n-aria-label="main.settingsTab" title="Settings" data-i18n-title="main.settingsTab">🛠️</button>
-            <button class="sidebar-tab" type="button" data-target="tab-search" role="tab" aria-controls="tab-search" aria-selected="false" aria-label="Search" data-i18n-aria-label="main.searchTab" title="Search" data-i18n-title="main.searchTab">🔍</button>
-            <button class="sidebar-tab" type="button" data-target="tab-send" role="tab" aria-controls="tab-send" aria-selected="false" aria-label="Send" data-i18n-aria-label="main.sendTab" title="Send" data-i18n-title="main.sendTab">📤</button>
+            <button class="sidebar-tab active" type="button" data-target="tab-settings" role="tab" aria-controls="tab-settings" aria-selected="true" aria-label="Settings" data-i18n-aria-label="main.settingsTab" title="Settings" data-i18n-title="main.settingsTab"><span class="material-icon-placeholder" data-material-icon="tune"></span></button>
+            <button class="sidebar-tab" type="button" data-target="tab-search" role="tab" aria-controls="tab-search" aria-selected="false" aria-label="Search" data-i18n-aria-label="main.searchTab" title="Search" data-i18n-title="main.searchTab"><span class="material-icon-placeholder" data-material-icon="search"></span></button>
+            <button class="sidebar-tab" type="button" data-target="tab-send" role="tab" aria-controls="tab-send" aria-selected="false" aria-label="Send" data-i18n-aria-label="main.sendTab" title="Send" data-i18n-title="main.sendTab"><span class="material-icon-placeholder" data-material-icon="send"></span></button>
         </div>
 
         <!-- Tab Content -->
@@ -154,10 +155,10 @@
 
                 <div id="display-controls" class="settings-group">
                     <label>
-                        <input type="checkbox" id="show-timestamp"> 🕒 <span data-i18n="main.showTime">Show Time</span>
+                        <input type="checkbox" id="show-timestamp"> <span class="material-icon-placeholder" data-material-icon="schedule"></span><span data-i18n="main.showTime">Show Time</span>
                     </label>
                     <label>
-                        <input type="checkbox" id="show-lineno"> 🔢 <span data-i18n="main.showLineNo">Show Line #</span>
+                        <input type="checkbox" id="show-lineno"> <span class="material-icon-placeholder" data-material-icon="format_list_numbered"></span><span data-i18n="main.showLineNo">Show Line #</span>
                     </label>
                 </div>
             </div>
@@ -172,13 +173,13 @@
                 </div>
                 <div id="search-result-count" class="search-result-count" data-i18n="main.searchResultEmpty">No results</div>
                 <label style="margin-top: 4px;">
-                    <input type="checkbox" id="search-regex"> .* <span data-i18n="main.regex">Regex</span>
+                    <input type="checkbox" id="search-regex"> <span class="material-icon-placeholder" data-material-icon="regular_expression"></span><span data-i18n="main.regex">Regex</span>
                 </label>
                 <label>
-                    <input type="checkbox" id="search-case"> Aa <span data-i18n="main.caseSensitive">Case Sensitive</span>
+                    <input type="checkbox" id="search-case"> <span class="material-icon-placeholder" data-material-icon="match_case"></span><span data-i18n="main.caseSensitive">Case Sensitive</span>
                 </label>
                 <label>
-                    <input type="checkbox" id="search-word"> 🔠 <span data-i18n="main.wholeWord">Whole Word</span>
+                    <input type="checkbox" id="search-word"> <span class="material-icon-placeholder" data-material-icon="match_word"></span><span data-i18n="main.wholeWord">Whole Word</span>
                 </label>
             </div>
 
@@ -203,7 +204,7 @@
                 <div id="quick-send-list" class="quick-send-list-container">
                     <!-- Items will be added here -->
                 </div>
-                <button id="open-quick-send-dialog-btn" class="secondary quick-send-add-btn" data-i18n="main.addToList">+ Add to List</button>
+                <button id="open-quick-send-dialog-btn" class="secondary quick-send-add-btn"><span class="material-icon-placeholder" data-material-icon="add"></span><span data-i18n="main.addToList">Add to List</span></button>
             </div>
         </div>
 
@@ -228,15 +229,15 @@
 
         <div class="sidebar-footer">
             <div class="sidebar-footer-row">
-                <button id="sidebar-collapse-btn" class="footer-btn settings" title="Collapse sidebar" data-i18n-title="main.collapseSidebar" aria-label="Collapse sidebar">‹</button>
+                <button id="sidebar-collapse-btn" class="footer-btn settings" title="Collapse sidebar" data-i18n-title="main.collapseSidebar" aria-label="Collapse sidebar"><span class="material-icon-placeholder" data-material-icon="chevron_left"></span></button>
                 <button id="open-prefs" class="footer-btn settings" type="button" aria-label="Settings" data-i18n-aria-label="main.globalSettings" title="Settings" data-i18n-title="main.globalSettings">
-                    ⚙️
+                    <span class="material-icon-placeholder" data-material-icon="settings"></span>
                 </button>
                 <button id="toggle-main-input" class="footer-btn settings" type="button" aria-label="Show or hide input" data-i18n-aria-label="main.toggleInputHide" title="显示/隐藏输入框" data-i18n-title="main.toggleInputHide">
-                    ⌨
+                    <span class="material-icon-placeholder" data-material-icon="keyboard"></span>
                 </button>
                 <button id="toggle-shell-sidebar" class="footer-btn settings" type="button" aria-label="Shell Panel" data-i18n-aria-label="main.shellPanel" title="Shell Panel" data-i18n-title="main.shellPanel">
-                    >_
+                    <span class="material-icon-placeholder" data-material-icon="terminal"></span>
                 </button>
             </div>
         </div>
@@ -250,8 +251,8 @@
                         <button class="main-tab active" id="tab-main-button" type="button" role="tab" aria-controls="tab-main" aria-selected="true" data-target="tab-main" data-pane-id="pane-1" data-i18n="main.mainTerminal">Main Terminal</button>
                     </div>
                     <div class="pane-tab-actions">
-                        <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab">>_</button>
-                        <button id="pane-1-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab">➕</button>
+                        <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
+                        <button id="pane-1-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
                     </div>
                 </div>
                 <div class="main-tabs-content pane-tabs-content" id="pane-1-tabs-content">
@@ -265,8 +266,8 @@
                 <div class="main-tabs-header pane-tabs-header">
                     <div class="main-tabs-list pane-tabs-list" id="pane-2-tabs-list" role="tablist"></div>
                     <div class="pane-tab-actions">
-                        <button id="pane-2-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab">>_</button>
-                        <button id="pane-2-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab">➕</button>
+                        <button id="pane-2-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
+                        <button id="pane-2-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
                     </div>
                 </div>
                 <div class="main-tabs-content pane-tabs-content" id="pane-2-tabs-content"></div>
@@ -274,13 +275,13 @@
         </div>
         <div class="main-input-panel" id="main-input-panel">
             <div class="main-input-row">
-                <button id="main-input-history-btn" class="secondary main-input-history-btn" title="发送历史" data-i18n-title="main.sendHistory">⌄</button>
+                <button id="main-input-history-btn" class="secondary main-input-history-btn" title="发送历史" data-i18n-title="main.sendHistory"><span class="material-icon-placeholder" data-material-icon="history"></span></button>
                 <textarea id="main-send-input" placeholder="输入要发送的内容..." data-i18n-placeholder="main.sendInputPlaceholder" rows="1"></textarea>
                 <button id="main-send-btn" title="发送" data-i18n-title="main.send"><span data-i18n="main.send">Send</span></button>
-                <button id="main-add-quick-send-btn" class="secondary" title="加入快捷发送" data-i18n-title="main.addToQuickSend"><span data-i18n="main.addQuickSendShort">+快捷</span></button>
+                <button id="main-add-quick-send-btn" class="secondary" title="加入快捷发送" data-i18n-title="main.addToQuickSend"><span class="material-icon-placeholder" data-material-icon="add"></span><span data-i18n="main.addQuickSendShort">Quick</span></button>
                 <label class="main-input-icon-toggle" for="main-send-on-enter" title="按回车发送" data-i18n-title="main.sendOnEnterToggle" aria-label="Input settings">
                     <input type="checkbox" id="main-send-on-enter" checked>
-                    <span>⏎</span>
+                    <span class="material-icon-placeholder" data-material-icon="keyboard_return"></span>
                 </label>
             </div>
             <div class="main-input-meta-row">
@@ -296,7 +297,7 @@
     <div class="shell-sidebar hidden" id="shell-sidebar">
         <div class="shell-sidebar-header">
             <span class="shell-sidebar-title" data-i18n="main.shellPanel">Shell Panel</span>
-            <button class="shell-sidebar-close-btn" id="shell-sidebar-close-btn" title="Close Shell Panel" data-i18n-title="main.closeShellPanel">✕</button>
+            <button class="shell-sidebar-close-btn" id="shell-sidebar-close-btn" title="Close Shell Panel" data-i18n-title="main.closeShellPanel"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
         </div>
         <div class="shell-sidebar-content">
             <div class="shell-sidebar-section">
@@ -334,7 +335,7 @@
         <section class="app-dialog quick-send-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-send-dialog-title">
             <header class="app-dialog-header">
                 <h2 id="quick-send-dialog-title" data-i18n="main.addQuickSend">Add Quick Send</h2>
-                <button id="quick-send-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close">✕</button>
+                <button id="quick-send-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
             </header>
             <div class="app-dialog-body">
                 <div class="form-group">
@@ -364,7 +365,7 @@
             </div>
             <footer class="app-dialog-actions">
                 <button id="quick-send-dialog-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
-                <button id="add-quick-send-btn" type="button" data-i18n="main.addToList">Add to List</button>
+                <button id="add-quick-send-btn" type="button"><span class="material-icon-placeholder" data-material-icon="add"></span><span data-i18n="main.addToList">Add to List</span></button>
             </footer>
         </section>
     </div>
@@ -373,7 +374,7 @@
         <section class="app-dialog rename-tab-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-tab-dialog-title">
             <header class="app-dialog-header">
                 <h2 id="rename-tab-dialog-title" data-i18n="main.renameTab">Rename Tab</h2>
-                <button id="rename-tab-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close">✕</button>
+                <button id="rename-tab-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
             </header>
             <div class="app-dialog-body">
                 <div class="form-group">

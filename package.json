@@ -23,6 +23,7 @@
       "!**/.idea/*",
       "!**/*.ts",
       "!**/*.map",
+      "!assets/NotoColorEmoji-Regular.ttf",
       "package.json",
       "**/*"
     ],

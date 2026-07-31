@@ -8,6 +8,8 @@ const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./wor
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 
+const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
+
 const SEND_LIMITS = Object.freeze({ main: 1024 * 1024, quick: 1024 * 1024, auto: 64 * 1024, paste: 1024 * 1024, terminal: 1024 * 1024 });
 const SUPPORTED_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 
@@ -1212,8 +1214,16 @@ function updateTabTitles() {
         const displayIndex = index + 1;
         const closeBtn = tab.btn.querySelector('.main-tab-close');
         const title = tab.title?.trim() || `${tr('main.filter')} ${displayIndex}`;
-        tab.btn.innerHTML = `<span class="main-tab-title"></span>${tab.dataMode === 'hex' ? ' <span class="mode-badge hex">HEX</span>' : ''} `;
-        tab.btn.querySelector('.main-tab-title').textContent = title;
+        const titleEl = document.createElement('span');
+        titleEl.className = 'main-tab-title';
+        titleEl.textContent = title;
+        tab.btn.replaceChildren(titleEl);
+        if (tab.dataMode === 'hex') {
+            const badge = document.createElement('span');
+            badge.className = 'mode-badge hex';
+            badge.textContent = 'HEX';
+            tab.btn.appendChild(badge);
+        }
         tab.btn.appendChild(closeBtn);
     });
     shellTabs.forEach((tab, index) => {
@@ -1221,8 +1231,10 @@ function updateTabTitles() {
         const profile = currentConfig?.shellProfiles?.find(item => item.id === tab.profileId);
         const defaultTitle = profile?.name?.trim() || tr('main.shellTitle', { index: index + 1 });
         const title = tab.title?.trim() || defaultTitle;
-        tab.btn.innerHTML = '<span class="main-tab-title"></span> ';
-        tab.btn.querySelector('.main-tab-title').textContent = title;
+        const titleEl = document.createElement('span');
+        titleEl.className = 'main-tab-title';
+        titleEl.textContent = title;
+        tab.btn.replaceChildren(titleEl);
         tab.btn.appendChild(closeBtn);
     });
 }
@@ -1306,16 +1318,23 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     tabBtn.setAttribute('aria-controls', tabId);
     tabBtn.dataset.target = tabId;
     tabBtn.dataset.paneId = resolvedPaneId;
-    tabBtn.innerHTML = `${tr('main.shell')} <span class="main-tab-close" title="${tr('main.closeTab')}">✕</span>`;
+    const shellTitle = document.createElement('span');
+    shellTitle.className = 'main-tab-title';
+    shellTitle.textContent = tr('main.shell');
+    const shellClose = document.createElement('span');
+    shellClose.className = 'main-tab-close';
+    shellClose.title = tr('main.closeTab');
+    shellClose.appendChild(createMaterialIcon('close'));
+    tabBtn.append(shellTitle, shellClose);
     tabBtn.onclick = (e) => {
-        if (e.target.classList.contains('main-tab-close')) return;
+        if (e.target.closest('.main-tab-close')) return;
         switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
     };
     tabBtn.querySelector('.main-tab-close').onclick = () => {
         closeShellTab(tabId);
     };
     tabBtn.ondblclick = (e) => {
-        if (!e.target.classList.contains('main-tab-close')) {
+        if (!e.target.closest('.main-tab-close')) {
             const tabState = shellTabs.find(tab => tab.id === tabId);
             if (tabState) openRenameTabDialog(tabState);
         }
@@ -1476,14 +1495,21 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     tabBtn.dataset.paneId = resolvedPaneId;
     
     // The initial title will be updated by updateTabTitles() right after
-    tabBtn.innerHTML = `${tr('main.filter')} <span class="main-tab-close" title="${tr('main.closeTab')}">✕</span>`;
+    const filterTitle = document.createElement('span');
+    filterTitle.className = 'main-tab-title';
+    filterTitle.textContent = tr('main.filter');
+    const filterClose = document.createElement('span');
+    filterClose.className = 'main-tab-close';
+    filterClose.title = tr('main.closeTab');
+    filterClose.appendChild(createMaterialIcon('close'));
+    tabBtn.append(filterTitle, filterClose);
     
     tabBtn.onclick = (e) => {
-        if (e.target.classList.contains('main-tab-close')) return;
+        if (e.target.closest('.main-tab-close')) return;
         switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
     };
     tabBtn.ondblclick = (e) => {
-        if (!e.target.classList.contains('main-tab-close')) {
+        if (!e.target.closest('.main-tab-close')) {
             const tabState = filterTabs.find(tab => tab.id === tabId);
             if (tabState) openRenameTabDialog(tabState);
         }
@@ -1509,16 +1535,17 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     filterHeader.innerHTML = `
         <div class="filter-input-wrapper">
             <input type="text" class="filter-input" placeholder="${tr('main.filterText')}" style="width: 100%; padding-right: 24px;">
-            <div class="filter-dropdown-btn">▼</div>
+            <button type="button" class="filter-dropdown-btn" title="${tr('main.sendHistory')}"><span class="material-icon-placeholder" data-material-icon="arrow_drop_down"></span></button>
             <div class="filter-history-dropdown"></div>
         </div>
         <div class="filter-toggles" style="display: flex; gap: 4px; margin-right: 8px;">
-            <button class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}">Aa</button>
-            <button class="filter-toggle-btn filter-word-btn" title="${tr('main.wholeWord')}">ab</button>
-            <button class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}">.*</button>
+            <button type="button" class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}"><span class="material-icon-placeholder" data-material-icon="match_case"></span></button>
+            <button type="button" class="filter-toggle-btn filter-word-btn" title="${tr('main.wholeWord')}"><span class="material-icon-placeholder" data-material-icon="match_word"></span></button>
+            <button type="button" class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}"><span class="material-icon-placeholder" data-material-icon="regular_expression"></span></button>
         </div>
         <span class="filter-mode-status" role="status"></span>
     `;
+    window.MaterialIcons.upgrade(filterHeader);
     
     const terminalWrapper = document.createElement('div');
     terminalWrapper.className = 'terminal-wrapper';
@@ -2055,7 +2082,6 @@ function setSidebarCollapsed(collapsed, persist = true) {
     const isCollapsed = collapsed === true;
     sidebar?.classList.toggle('sidebar-collapsed', isCollapsed);
     if (sidebarExpandBtn) {
-        sidebarExpandBtn.textContent = '›';
         sidebarExpandBtn.title = tr(isCollapsed ? 'main.expandSidebar' : 'main.collapseSidebar');
         sidebarExpandBtn.setAttribute('aria-label', sidebarExpandBtn.title);
     }
@@ -2099,10 +2125,15 @@ function addShellSessionItem(tabId, title, paneId) {
     item.className = 'shell-session-item';
     item.dataset.tabId = tabId;
     item.dataset.paneId = paneId;
-    item.innerHTML = `
-        <span class="shell-session-item-name" title="${title}">${title}</span>
-        <button class="shell-session-item-close" title="Close session">✕</button>
-    `;
+    const itemName = document.createElement('span');
+    itemName.className = 'shell-session-item-name';
+    itemName.title = title;
+    itemName.textContent = title;
+    const itemClose = document.createElement('button');
+    itemClose.className = 'shell-session-item-close';
+    itemClose.title = tr('main.closeTab');
+    itemClose.appendChild(createMaterialIcon('close'));
+    item.append(itemName, itemClose);
     item.querySelector('.shell-session-item-name').addEventListener('click', () => {
         if (typeof window.__switchWorkspaceTab === 'function') {
             window.__switchWorkspaceTab(tabId, paneId);
@@ -2156,7 +2187,15 @@ async function loadShellProfiles() {
             const btn = document.createElement('button');
             btn.className = 'secondary shell-new-btn';
             btn.title = `${profile.name} (${profile.executable})${isDefault ? ' — ' + (tr('main.defaultProfile') || 'Default') : ''}`;
-            btn.innerHTML = `<span>${escapeHtml(profile.name)}</span>${isDefault ? ' <span style="font-size:10px;opacity:0.7;">⬤</span>' : ''}`;
+            const profileName = document.createElement('span');
+            profileName.textContent = profile.name;
+            btn.appendChild(profileName);
+            if (isDefault) {
+                const defaultIcon = createMaterialIcon('check_circle');
+                defaultIcon.classList.add('default-profile-icon');
+                defaultIcon.title = tr('main.defaultProfile') || 'Default';
+                btn.appendChild(defaultIcon);
+            }
             btn.addEventListener('click', () => {
                 createShellTab({ profileId: profile.id, title: profile.name }, getActivePane()?.id || 'pane-1');
             });
@@ -2717,7 +2756,10 @@ function applyConfig(config) {
 
     document.title = tr('appTitle');
     document.querySelectorAll('[data-i18n]').forEach(el => {
-        const translated = tr(el.dataset.i18n);
+        let translated = tr(el.dataset.i18n);
+        if (el.closest('button')?.querySelector('svg[data-material-icon="add"]')) {
+            translated = translated.replace(/^\s*\+\s*/, '');
+        }
         el.textContent = translated === el.dataset.i18n && el.dataset.i18nFallback
             ? el.dataset.i18nFallback
             : translated;
@@ -4104,18 +4146,18 @@ function renderQuickSendList() {
         });
 
         const editBtn = document.createElement('button');
-        editBtn.textContent = '✎';
         editBtn.className = 'quick-send-action-btn';
         editBtn.title = 'Edit';
+        editBtn.appendChild(createMaterialIcon('edit'));
         editBtn.addEventListener('click', () => {
             openQuickSendDialog(index);
             setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
         });
 
         const delBtn = document.createElement('button');
-        delBtn.textContent = '✕';
         delBtn.className = 'quick-send-action-btn delete';
         delBtn.title = 'Remove';
+        delBtn.appendChild(createMaterialIcon('delete'));
         delBtn.addEventListener('click', () => {
             // If deleting the item currently being edited, cancel edit mode
             if (editingIndex === index) {

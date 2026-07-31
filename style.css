@@ -80,7 +80,7 @@ select {
     appearance: none;
     -webkit-appearance: none;
     padding-right: 30px;
-    background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23cccccc%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath fill='%23cccccc' d='M480-360 280-559h400L480-360Z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 10px top 50%;
     background-size: 10px auto;
@@ -102,6 +102,20 @@ button {
     justify-content: center;
     gap: 8px;
     line-height: 1.5;
+}
+
+.material-icon,
+svg[data-material-icon] {
+    width: 18px;
+    height: 18px;
+    display: inline-block;
+    flex: 0 0 auto;
+    fill: currentColor;
+    pointer-events: none;
+}
+
+label > svg[data-material-icon] {
+    margin-right: 6px;
 }
 
 button:hover {
@@ -217,13 +231,12 @@ input[type="checkbox"]:checked {
 }
 
 input[type="checkbox"]:checked::after {
-    content: '✓';
-    color: white;
+    content: '';
     position: absolute;
-    font-size: 10px;
-    left: 3px;
-    top: 0;
-    line-height: 16px;
+    inset: 2px;
+    background: white;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 label {
@@ -383,6 +396,11 @@ label:hover {
     border: 1px solid var(--border-color);
     border-radius: 3px;
     color: var(--text-secondary);
+}
+
+.quick-send-action-btn svg[data-material-icon] {
+    width: 10px;
+    height: 10px;
 }
 
 .quick-send-action-btn:hover {
@@ -635,9 +653,17 @@ label:hover {
     line-height: 1;
 }
 
+.sidebar-tool-icon {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+    flex-shrink: 0;
+}
+
 .sidebar-tool-btn#sidebar-expand-btn {
     order: 3;
     flex-shrink: 0;
+    margin-top: 8px;
 }
 
 .sidebar-tool-scroll {
@@ -647,6 +673,7 @@ label:hover {
     flex: 1;
     flex-direction: column;
     align-items: center;
+    justify-content: flex-end;
     gap: 6px;
     overflow-x: hidden;
     overflow-y: auto;
@@ -657,8 +684,11 @@ label:hover {
     display: none;
 }
 
+#sidebar-connect-btn {
+    margin-bottom: 8px;
+}
+
 .sidebar-tool-btn.active {
-    color: var(--accent-color);
     border-color: var(--accent-color);
     background: rgba(0, 122, 204, 0.16);
 }
@@ -1076,6 +1106,11 @@ label:hover {
     opacity: 0.6;
 }
 
+.main-tab-close svg[data-material-icon] {
+    width: 14px;
+    height: 14px;
+}
+
 .main-tab-close:hover {
     background: rgba(255, 255, 255, 0.2);
     opacity: 1;
@@ -1176,11 +1211,18 @@ label:hover {
     border: none;
     color: var(--text-secondary);
     cursor: pointer;
-    padding: 0 4px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
     font-size: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.filter-dropdown-btn svg[data-material-icon] {
+    width: 18px;
+    height: 18px;
 }
 
 .filter-dropdown-btn:hover {
@@ -1202,6 +1244,11 @@ label:hover {
     border-radius: 4px;
     height: 28px;
     transition: all 0.2s;
+}
+
+.filter-toggle-btn svg[data-material-icon] {
+    width: 18px;
+    height: 18px;
 }
 
 .filter-toggle-btn:hover {
@@ -1317,6 +1364,11 @@ label:hover {
 .main-input-icon-toggle span {
     font-size: 15px;
     line-height: 1;
+}
+
+.main-input-icon-toggle svg[data-material-icon] {
+    width: 20px;
+    height: 20px;
 }
 
 .main-input-last {

@@ -43,6 +43,12 @@ const DEFAULT_SHORTCUTS = {
   refreshPorts: 'Ctrl+R',
   toggleSerialConnection: 'Ctrl+Shift+D'
 };
+const MENU_ICON_DIRECTORY = path.join(__dirname, 'assets', 'menu-icons');
+
+function menuIcon(name) {
+  const icon = path.join(MENU_ICON_DIRECTORY, `${name}.png`);
+  return fs.existsSync(icon) ? { icon } : {};
+}
 
 function oneOf(value, allowed, fallback) {
   return allowed.has(value) ? value : fallback;
@@ -1309,29 +1315,32 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     });
   };
 
-  const withIcon = (icon, label, fallback) => `${String(icon || '').padEnd(5, ' ')} ${label || fallback}`;
-
   const template = [
     {
-      label: withIcon('[+]', labels.newFilterTab, 'New Filter Tab'),
+      label: labels.newFilterTab || 'New Filter Tab',
+      ...menuIcon('filter_alt'),
       click: () => sendAction('new-filter-tab')
     },
     {
-      label: withIcon('[>]', labels.newShellTab, 'New Shell Tab'),
+      label: labels.newShellTab || 'New Shell Tab',
+      ...menuIcon('terminal'),
       click: () => sendAction('new-shell-tab')
     },
     {
-      label: withIcon('[H]', labels.splitHorizontal, 'Move Tab to Right Split'),
+      label: labels.splitHorizontal || 'Move Tab to Right Split',
+      ...menuIcon('vertical_split'),
       enabled: terminalType !== 'main' && Boolean(payload.tabId),
       click: () => sendAction('split-horizontal')
     },
     {
-      label: withIcon('[V]', labels.splitVertical, 'Move Tab to Bottom Split'),
+      label: labels.splitVertical || 'Move Tab to Bottom Split',
+      ...menuIcon('horizontal_split'),
       enabled: terminalType !== 'main' && Boolean(payload.tabId),
       click: () => sendAction('split-vertical')
     },
     {
-      label: withIcon('[x]', labels.closeSplit, 'Close Split'),
+      label: labels.closeSplit || 'Close Split',
+      ...menuIcon('close_fullscreen'),
       enabled: Boolean(payload.splitEnabled),
       click: () => sendAction('close-split')
     }
@@ -1341,23 +1350,27 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: withIcon('[P]', labels.pasteAndSend, 'Paste and Send'),
+        label: labels.pasteAndSend || 'Paste and Send',
+        ...menuIcon('content_paste_go'),
         enabled: isConnected,
         click: () => sendAction('paste-send')
       },
       {
-        label: withIcon('[S]', labels.sendSelection, 'Send Selection'),
+        label: labels.sendSelection || 'Send Selection',
+        ...menuIcon('send'),
         enabled: hasSelection && isConnected,
         click: () => sendAction('send-selection')
       },
       {
-        label: withIcon('[F]', labels.createFilterFromSelection, 'Create Filter Tab from Selection'),
+        label: labels.createFilterFromSelection || 'Create Filter Tab from Selection',
+        ...menuIcon('filter_alt'),
         enabled: hasSelection,
         click: () => sendAction('create-filter-from-selection')
       },
       { type: 'separator' },
       {
-        label: withIcon('[C]', labels.copy, 'Copy'),
+        label: labels.copy || 'Copy',
+        ...menuIcon('content_copy'),
         enabled: hasSelection,
         click: () => {
           if (payload.selectedText) {
@@ -1366,22 +1379,26 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         }
       },
       {
-        label: withIcon('[A]', labels.copyAll, 'Copy All'),
+        label: labels.copyAll || 'Copy All',
+        ...menuIcon('copy_all'),
         click: () => sendAction('copy-all')
       },
       {
-        label: withIcon('[?]', labels.findSelection, 'Find Selection'),
+        label: labels.findSelection || 'Find Selection',
+        ...menuIcon('search'),
         enabled: hasSelection,
         click: () => sendAction('find-selection')
       },
       {
-        label: withIcon('[!]', labels.clearTerminal, 'Clear Terminal'),
+        label: labels.clearTerminal || 'Clear Terminal',
+        ...menuIcon('delete_sweep'),
         click: () => sendAction('clear-terminal')
       }
     );
     if (payload.receiveDisplayMode === 'hex') {
       template.push({
-        label: withIcon('[0]', labels.clearAndResetHex, 'Clear and Reset Hex Offset'),
+        label: labels.clearAndResetHex || 'Clear and Reset Hex Offset',
+        ...menuIcon('restart_alt'),
         click: () => sendAction('clear-and-reset-hex')
       });
     }
@@ -1389,50 +1406,59 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: withIcon('[M]', labels.moveToOtherPane, 'Move to Other Pane'),
+        label: labels.moveToOtherPane || 'Move to Other Pane',
+        ...menuIcon('swap_horiz'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('move-to-other-pane')
       },
       {
-        label: withIcon('[X]', labels.closeFilterTab, 'Close Filter Tab'),
+        label: labels.closeFilterTab || 'Close Filter Tab',
+        ...menuIcon('close'),
         click: () => sendAction('close-filter-tab')
       },
       { type: 'separator' },
       {
-        label: withIcon('[=]', labels.useSelectionAsFilter, 'Use Selection as Filter'),
+        label: labels.useSelectionAsFilter || 'Use Selection as Filter',
+        ...menuIcon('filter_alt'),
         enabled: hasSelection,
         click: () => sendAction('use-selection-as-filter')
       },
       {
-        label: withIcon('[+]', labels.appendSelectionToFilter, 'Append Selection to Filter'),
+        label: labels.appendSelectionToFilter || 'Append Selection to Filter',
+        ...menuIcon('playlist_add'),
         enabled: hasSelection,
         click: () => sendAction('append-selection-to-filter')
       },
       {
-        label: withIcon('[L]', labels.locateInMainTerminal, 'Locate in Main Terminal'),
+        label: labels.locateInMainTerminal || 'Locate in Main Terminal',
+        ...menuIcon('my_location'),
         enabled: canLocateInMain,
         click: () => sendAction('locate-in-main-terminal')
       },
       {
-        label: withIcon('[Aa]', labels.toggleMatchCase, 'Toggle Match Case'),
+        label: labels.toggleMatchCase || 'Toggle Match Case',
+        ...menuIcon('match_case'),
         type: 'checkbox',
         checked: Boolean(payload.caseSensitive),
         click: () => sendAction('toggle-case-sensitive')
       },
       {
-        label: withIcon('[ab]', labels.toggleWholeWord, 'Toggle Whole Word'),
+        label: labels.toggleWholeWord || 'Toggle Whole Word',
+        ...menuIcon('match_word'),
         type: 'checkbox',
         checked: Boolean(payload.wholeWord),
         click: () => sendAction('toggle-whole-word')
       },
       {
-        label: withIcon('.* ', labels.toggleRegex, 'Toggle Regex'),
+        label: labels.toggleRegex || 'Toggle Regex',
+        ...menuIcon('regular_expression'),
         type: 'checkbox',
         checked: Boolean(payload.useRegex),
         click: () => sendAction('toggle-regex')
       },
       {
-        label: withIcon('[C]', labels.copy, 'Copy'),
+        label: labels.copy || 'Copy',
+        ...menuIcon('content_copy'),
         enabled: hasSelection,
         click: () => {
           if (payload.selectedText) {
@@ -1441,16 +1467,19 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         }
       },
       {
-        label: withIcon('[A]', labels.copyAll, 'Copy All'),
+        label: labels.copyAll || 'Copy All',
+        ...menuIcon('copy_all'),
         click: () => sendAction('copy-all')
       },
       {
-        label: withIcon('[?]', labels.findSelection, 'Find Selection'),
+        label: labels.findSelection || 'Find Selection',
+        ...menuIcon('search'),
         enabled: hasSelection,
         click: () => sendAction('find-selection')
       },
       {
-        label: withIcon('[!]', labels.clearTerminal, 'Clear Terminal'),
+        label: labels.clearTerminal || 'Clear Terminal',
+        ...menuIcon('delete_sweep'),
         click: () => sendAction('clear-terminal')
       }
     );
@@ -1458,37 +1487,44 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     template.push(
       { type: 'separator' },
       {
-        label: withIcon('[M]', labels.moveToOtherPane, 'Move to Other Pane'),
+        label: labels.moveToOtherPane || 'Move to Other Pane',
+        ...menuIcon('swap_horiz'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('move-to-other-pane')
       },
       {
-        label: withIcon('[R]', labels.restartShell, 'Restart Shell'),
+        label: labels.restartShell || 'Restart Shell',
+        ...menuIcon('restart_alt'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('restart-shell')
       },
       {
-        label: withIcon('[X]', labels.closeShellTab, 'Close Shell Tab'),
+        label: labels.closeShellTab || 'Close Shell Tab',
+        ...menuIcon('close'),
         enabled: Boolean(payload.tabId),
         click: () => sendAction('close-shell-tab')
       },
       { type: 'separator' },
       {
-        label: withIcon('[>]', labels.newShellTab, 'New Shell Tab'),
+        label: labels.newShellTab || 'New Shell Tab',
+        ...menuIcon('terminal'),
         click: () => sendAction('new-shell-tab')
       },
       { type: 'separator' },
       {
-        label: withIcon('[P]', labels.pasteAndSend, 'Paste and Send'),
+        label: labels.pasteAndSend || 'Paste and Send',
+        ...menuIcon('content_paste_go'),
         click: () => sendAction('paste-send')
       },
       {
-        label: withIcon('[S]', labels.sendSelection, 'Send Selection'),
+        label: labels.sendSelection || 'Send Selection',
+        ...menuIcon('send'),
         enabled: hasSelection,
         click: () => sendAction('send-selection')
       },
       {
-        label: withIcon('[C]', labels.copy, 'Copy'),
+        label: labels.copy || 'Copy',
+        ...menuIcon('content_copy'),
         enabled: hasSelection,
         click: () => {
           if (payload.selectedText) {
@@ -1497,16 +1533,19 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         }
       },
       {
-        label: withIcon('[A]', labels.copyAll, 'Copy All'),
+        label: labels.copyAll || 'Copy All',
+        ...menuIcon('copy_all'),
         click: () => sendAction('copy-all')
       },
       {
-        label: withIcon('[?]', labels.findSelection, 'Find Selection'),
+        label: labels.findSelection || 'Find Selection',
+        ...menuIcon('search'),
         enabled: hasSelection,
         click: () => sendAction('find-selection')
       },
       {
-        label: withIcon('[!]', labels.clearTerminal, 'Clear Terminal'),
+        label: labels.clearTerminal || 'Clear Terminal',
+        ...menuIcon('delete_sweep'),
         click: () => sendAction('clear-terminal')
       }
     );

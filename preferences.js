@@ -3,6 +3,12 @@ const { randomUUID } = require('crypto');
 const { t, getLanguage } = require('./i18n');
 const { normalizeIntegerSetting } = require('./config-values');
 
+const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
+
+function translatedActionLabel(key) {
+    return tr(key).replace(/^\s*\+\s*/, '');
+}
+
 let currentLanguage = 'en';
 
 function tr(key, params = {}) {
@@ -162,7 +168,7 @@ function applyPrefsI18n() {
     document.title = tr('prefsTitle');
 
     document.querySelectorAll('[data-i18n]').forEach(el => {
-        el.textContent = tr(el.dataset.i18n);
+        el.textContent = el.closest('button') ? translatedActionLabel(el.dataset.i18n) : tr(el.dataset.i18n);
     });
 
     document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
@@ -173,15 +179,6 @@ function applyPrefsI18n() {
         el.alt = tr(el.dataset.i18nAlt);
     });
 
-    if (elements.addRuleBtn) elements.addRuleBtn.textContent = tr('prefs.addRule');
-    if (elements.resetHighlightRulesBtn) elements.resetHighlightRulesBtn.textContent = tr('prefs.resetHighlightDefaults');
-    if (elements.checkUpdateBtn) elements.checkUpdateBtn.textContent = tr('prefs.checkForUpdates');
-    if (elements.restartInstallBtn) elements.restartInstallBtn.textContent = tr('prefs.restartInstall');
-    if (elements.saveBtn) elements.saveBtn.textContent = tr('prefs.saveApply');
-    if (elements.cancelBtn) elements.cancelBtn.textContent = tr('prefs.cancel');
-    if (elements.resetBtn) elements.resetBtn.textContent = tr('prefs.resetDefaults');
-    if (elements.openConfigBtn) elements.openConfigBtn.textContent = tr('prefs.openConfigFolder');
-    if (elements.resetShortcutsBtn) elements.resetShortcutsBtn.textContent = tr('prefs.resetShortcutDefaults');
     renderShortcuts();
 }
 
@@ -314,7 +311,7 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     const caseBtn = document.createElement('button');
     caseBtn.className = `filter-toggle-btn ${isCaseSensitive ? 'active' : ''}`;
     caseBtn.title = tr('main.matchCase');
-    caseBtn.textContent = 'Aa';
+    caseBtn.appendChild(createMaterialIcon('match_case'));
     caseBtn.style.height = '22px';
     caseBtn.style.padding = '0 4px';
     caseBtn.style.fontSize = '11px';
@@ -327,7 +324,7 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     const regexBtn = document.createElement('button');
     regexBtn.className = `filter-toggle-btn ${isUseRegex ? 'active' : ''}`;
     regexBtn.title = tr('main.useRegex');
-    regexBtn.textContent = '.*';
+    regexBtn.appendChild(createMaterialIcon('regular_expression'));
     regexBtn.style.height = '22px';
     regexBtn.style.padding = '0 4px';
     regexBtn.style.fontSize = '11px';
@@ -353,8 +350,8 @@ function createRuleElement(rule = { enabled: true, regex: '', color: '#ff0000', 
     colorInput.style.cursor = 'pointer';
 
     const deleteBtn = document.createElement('button');
-    deleteBtn.textContent = '✕';
     deleteBtn.className = 'secondary';
+    deleteBtn.appendChild(createMaterialIcon('delete'));
     deleteBtn.style.padding = '4px 8px';
     deleteBtn.title = tr('prefs.removeRule');
     deleteBtn.onclick = () => div.remove();
@@ -545,7 +542,7 @@ function createShellProfileCard(profile, index) {
     nameInput.onchange = () => { shellProfiles[index].name = nameInput.value; };
     const removeBtn = document.createElement('button');
     removeBtn.className = 'secondary danger';
-    removeBtn.textContent = '✕';
+    removeBtn.appendChild(createMaterialIcon('delete'));
     removeBtn.style.cssText = 'width: 28px; padding: 0 6px;';
     removeBtn.title = tr('prefs.removeRule');
     removeBtn.onclick = () => {
@@ -568,8 +565,8 @@ function createShellProfileCard(profile, index) {
     execInput.onchange = () => { shellProfiles[index].executable = execInput.value; };
     const browseBtn = document.createElement('button');
     browseBtn.className = 'secondary';
-    browseBtn.textContent = '…';
-    browseBtn.style.cssText = 'width: 28px; padding: 0 6px; font-weight: bold;';
+    browseBtn.appendChild(createMaterialIcon('folder_open'));
+    browseBtn.style.cssText = 'width: 28px; padding: 0 6px;';
     browseBtn.title = tr('prefs.browse');
     browseBtn.onclick = async () => {
         const result = await ipcRenderer.invoke('select-shell-executable');
@@ -603,7 +600,7 @@ function createShellProfileCard(profile, index) {
             argsInput.oninput = () => { args[argIndex] = argsInput.value; };
             const removeArgBtn = document.createElement('button');
             removeArgBtn.className = 'secondary danger';
-            removeArgBtn.textContent = '✕';
+            removeArgBtn.appendChild(createMaterialIcon('delete'));
             removeArgBtn.style.cssText = 'width: 28px; padding: 0 6px;';
             removeArgBtn.title = tr('prefs.removeRule');
             removeArgBtn.onclick = () => {
@@ -617,7 +614,7 @@ function createShellProfileCard(profile, index) {
 
         const addArgBtn = document.createElement('button');
         addArgBtn.className = 'secondary';
-        addArgBtn.textContent = '+';
+        addArgBtn.appendChild(createMaterialIcon('add'));
         addArgBtn.style.cssText = 'width: 100%; padding: 2px 8px;';
         addArgBtn.title = tr('prefs.shellProfileArgsPlaceholder') || 'Add argument';
         addArgBtn.onclick = () => {

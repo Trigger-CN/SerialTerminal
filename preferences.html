@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title data-i18n="prefsTitle">Preferences</title>
     <link rel="stylesheet" href="style.css" />
+    <script src="material-icons.js"></script>
     <style>
         body {
             height: 100vh;
@@ -177,26 +178,26 @@
 <body>
     <div style="display: flex; flex: 1; overflow: hidden;">
         <div class="sidebar">
-            <button class="tab-btn active" data-tab="appearance" onclick="showTab('appearance')">
-                <span style="font-size: 18px;">🎨</span> <span data-i18n="prefs.appearance">Appearance</span>
+            <button class="tab-btn active" data-tab="appearance" onclick="showTab('appearance', this)">
+                <span class="material-icon-placeholder" data-material-icon="palette"></span> <span data-i18n="prefs.appearance">Appearance</span>
             </button>
-            <button class="tab-btn" data-tab="terminal" onclick="showTab('terminal')">
-                <span style="font-size: 18px;">💻</span> <span data-i18n="prefs.terminal">Terminal</span>
+            <button class="tab-btn" data-tab="terminal" onclick="showTab('terminal', this)">
+                <span class="material-icon-placeholder" data-material-icon="terminal"></span> <span data-i18n="prefs.terminal">Terminal</span>
             </button>
-            <button class="tab-btn" data-tab="highlighting" onclick="showTab('highlighting')">
-                <span style="font-size: 18px;">🖍️</span> <span data-i18n="prefs.highlighting">Highlighting</span>
+            <button class="tab-btn" data-tab="highlighting" onclick="showTab('highlighting', this)">
+                <span class="material-icon-placeholder" data-material-icon="ink_highlighter"></span> <span data-i18n="prefs.highlighting">Highlighting</span>
             </button>
-            <button class="tab-btn" data-tab="logging" onclick="showTab('logging')">
-                <span style="font-size: 18px;">📝</span> <span data-i18n="prefs.logging">Logging</span>
+            <button class="tab-btn" data-tab="logging" onclick="showTab('logging', this)">
+                <span class="material-icon-placeholder" data-material-icon="description"></span> <span data-i18n="prefs.logging">Logging</span>
             </button>
-            <button class="tab-btn" data-tab="shell-profiles" onclick="showTab('shell-profiles')">
-                <span style="font-size: 18px;">>_</span> <span data-i18n="prefs.shellProfiles">Shell Profiles</span>
+            <button class="tab-btn" data-tab="shell-profiles" onclick="showTab('shell-profiles', this)">
+                <span class="material-icon-placeholder" data-material-icon="terminal"></span> <span data-i18n="prefs.shellProfiles">Shell Profiles</span>
             </button>
-            <button class="tab-btn" data-tab="shortcuts" onclick="showTab('shortcuts')">
-                <span style="font-size: 18px;">⌨</span> <span data-i18n="prefs.shortcuts">Shortcuts</span>
+            <button class="tab-btn" data-tab="shortcuts" onclick="showTab('shortcuts', this)">
+                <span class="material-icon-placeholder" data-material-icon="keyboard"></span> <span data-i18n="prefs.shortcuts">Shortcuts</span>
             </button>
-            <button class="tab-btn" data-tab="about" onclick="showTab('about')">
-                <span style="font-size: 18px;">ℹ️</span> <span data-i18n="prefs.about">About</span>
+            <button class="tab-btn" data-tab="about" onclick="showTab('about', this)">
+                <span class="material-icon-placeholder" data-material-icon="info"></span> <span data-i18n="prefs.about">About</span>
             </button>
         </div>
         <div class="content">
@@ -208,7 +209,7 @@
                     <select id="language-select"></select>
                 </div>
                 <div class="form-group">
-                    <label data-i18n="prefs.englishFontFamily">🔤 English Font Family</label>
+                    <label><span class="material-icon-placeholder" data-material-icon="font_download"></span><span data-i18n="prefs.englishFontFamily">English Font Family</span></label>
                     <select id="fontFamily">
                         <option value='Consolas'>Consolas</option>
                         <option value='"Fira Code"'>Fira Code</option>
@@ -217,7 +218,7 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label data-i18n="prefs.chineseFallbackFontFamily">🔤 Chinese/Fallback Font Family</label>
+                    <label><span class="material-icon-placeholder" data-material-icon="font_download"></span><span data-i18n="prefs.chineseFallbackFontFamily">Chinese/Fallback Font Family</span></label>
                     <select id="fontFamilyZh">
                         <option value='"Microsoft YaHei"'>Microsoft YaHei</option>
                         <option value='"SimHei"'>SimHei</option>
@@ -226,7 +227,7 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label data-i18n="prefs.fontSize">📏 Font Size (px)</label>
+                    <label><span class="material-icon-placeholder" data-material-icon="format_size"></span><span data-i18n="prefs.fontSize">Font Size (px)</span></label>
                     <input type="number" id="fontSize" min="8" max="72" style="width: 100px;">
                 </div>
                 
@@ -266,21 +267,21 @@
             <div id="terminal" class="tab-pane">
                 <h2 data-i18n="prefs.terminalSettings">Terminal Settings</h2>
                 <div class="form-group">
-                    <label data-i18n="prefs.scrollbackLimit">📜 Scrollback Limit (lines)</label>
+                    <label><span class="material-icon-placeholder" data-material-icon="receipt_long"></span><span data-i18n="prefs.scrollbackLimit">Scrollback Limit (lines)</span></label>
                     <input type="number" id="scrollbackLimit" min="1000" max="1000000" step="1000" style="width: 150px; padding: 6px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px;">
                     <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;" data-i18n="prefs.scrollbackHelp">
                         Maximum number of lines to keep in the terminal buffer. Higher values use more memory.
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 20px;">
-                    <label data-i18n="prefs.historyBufferSize">💾 History Buffer Size (characters)</label>
+                    <label><span class="material-icon-placeholder" data-material-icon="history"></span><span data-i18n="prefs.historyBufferSize">History Buffer Size (characters)</span></label>
                     <input type="number" id="historyBufferSize" min="10000" max="100000000" step="10000" style="width: 150px; padding: 6px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px;">
                     <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;" data-i18n="prefs.historyBufferHelp">
                         Size of the history buffer for new windows (in characters). Approx 1MB = 1,000,000 chars.
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 20px;">
-                    <label data-i18n="prefs.mouseWheelScrollLines">🖱️ Mouse Wheel Scroll Lines</label>
+                    <label><span class="material-icon-placeholder" data-material-icon="mouse"></span><span data-i18n="prefs.mouseWheelScrollLines">Mouse Wheel Scroll Lines</span></label>
                     <input type="number" id="mouseWheelScrollLines" min="1" max="50" step="1" style="width: 150px; padding: 6px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px;">
                     <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;" data-i18n="prefs.mouseWheelScrollHelp">
                         Number of lines to scroll per mouse wheel tick in the terminal display.
@@ -332,7 +333,7 @@
                 <h2 data-i18n="prefs.keywordHighlighting">Keyword Highlighting</h2>
                 <div class="form-group">
                     <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-                        <button class="secondary" id="add-rule-btn" data-i18n="prefs.addRule">+ Add New Rule</button>
+                        <button class="secondary" id="add-rule-btn"><span class="material-icon-placeholder" data-material-icon="add"></span><span data-i18n="prefs.addRule">Add New Rule</span></button>
                         <button class="secondary" id="reset-highlight-rules-btn" data-i18n="prefs.resetHighlightDefaults">Reset Highlight Defaults</button>
                     </div>
                     <div id="highlight-rules-list" style="display: flex; flex-direction: column; gap: 8px;">
@@ -351,10 +352,10 @@
                 </div>
 
                 <div class="form-group">
-                    <label data-i18n="prefs.logSavePath">📂 Log Save Path</label>
+                    <label><span class="material-icon-placeholder" data-material-icon="folder_open"></span><span data-i18n="prefs.logSavePath">Log Save Path</span></label>
                     <div style="display: flex; gap: 8px;">
                         <input type="text" id="logPath" readonly style="flex: 1;">
-                        <button class="secondary" id="browse-btn" style="white-space: nowrap;" data-i18n="prefs.browse">Browse...</button>
+                        <button class="secondary" id="browse-btn" style="white-space: nowrap;"><span class="material-icon-placeholder" data-material-icon="folder_open"></span><span data-i18n="prefs.browse">Browse...</span></button>
                     </div>
                 </div>
 
@@ -399,13 +400,13 @@
                         </label>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="prefs.fileNameFormat">📄 File Name Format</label>
+                        <label><span class="material-icon-placeholder" data-material-icon="draft"></span><span data-i18n="prefs.fileNameFormat">File Name Format</span></label>
                         <input type="text" id="logFileNameFormat" placeholder="log_%Y-%m-%d_%H-%M-%S.txt" data-i18n-placeholder="prefs.fileNamePlaceholder" style="width: 100%; max-width: 480px;">
                         <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.supportedTags">Supported tags: %Y, %m, %d, %H, %M, %S</small>
                         <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.tabLogTagsHelp">When enabled for all tabs, supports %tab for tab title.</small>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="prefs.textEncoding">🔡 Text Encoding</label>
+                        <label><span class="material-icon-placeholder" data-material-icon="translate"></span><span data-i18n="prefs.textEncoding">Text Encoding</span></label>
                         <select id="logEncoding" style="width: 200px;">
                             <option value="utf8">UTF-8</option>
                             <option value="gbk">GBK (Windows)</option>
@@ -424,7 +425,7 @@
                 <div id="shell-profiles-list" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
                     <!-- Profiles loaded dynamically -->
                 </div>
-                <button id="add-shell-profile-btn" class="secondary" style="width: 100%;" data-i18n="prefs.addShellProfile">+ Add Shell Profile</button>
+                <button id="add-shell-profile-btn" class="secondary" style="width: 100%;"><span class="material-icon-placeholder" data-material-icon="add"></span><span data-i18n="prefs.addShellProfile">Add Shell Profile</span></button>
             </div>
 
             <!-- Shortcuts Tab -->
@@ -488,10 +489,10 @@
     </div>
 
     <script>
-        function showTab(tabId) {
+        function showTab(tabId, trigger) {
             // Update Tab Buttons
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
+            trigger.classList.add('active');
             
             // Update Tab Panes
             document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
