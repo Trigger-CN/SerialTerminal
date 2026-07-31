@@ -42,6 +42,14 @@ test('tabs and footer actions expose keyboard-accessible semantics', () => {
   assert.match(styles, /button:focus-visible/);
 });
 
+test('toggling the main input panel refits workspace terminals', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const setVisibility = renderer.match(/function setMainInputPanelVisible\(visible, persist = true\) \{[\s\S]*?\n\}/)?.[0] || '';
+
+  assert.match(setVisibility, /mainInputPanel\.classList\.toggle\('hidden', !visible\)/);
+  assert.match(setVisibility, /fitWorkspaceTerminals\(\)/);
+});
+
 test('shell profile management opens the matching preferences tab', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');

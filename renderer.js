@@ -2071,6 +2071,7 @@ function setMainInputPanelVisible(visible, persist = true) {
     mainInputPanel.classList.toggle('hidden', !visible);
     toggleMainInputBtn?.classList.toggle('active', visible);
     sidebarInputBtn?.classList.toggle('active', visible);
+    fitWorkspaceTerminals();
 
     if (persist) {
         saveMainInputSettings();
