@@ -22,6 +22,7 @@ autoUpdater.logger = log;
 const UPDATE_FEED_URL = 'https://trigger-cn.top/serialterminal/';
 autoUpdater.setFeedURL({ provider: 'generic', url: UPDATE_FEED_URL });
 autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
 
 let mainWindow;
 let prefsWindow;
@@ -1680,8 +1681,11 @@ ipcMain.handle('open-update-download-url', (event, url) => {
   return shell.openExternal(url);
 });
 
-ipcMain.on('quit-and-install', () => {
-    autoUpdater.quitAndInstall();
+ipcMain.on('quit-and-install', event => {
+  const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+  const isTrustedSource = sourceWindow === updateDownloadWindow || sourceWindow === prefsWindow;
+  if (updatePromptState.phase !== 'downloaded' || !isTrustedSource) return;
+  autoUpdater.quitAndInstall();
 });
 
 ipcMain.handle('create-shell-tab-session', async (event, payload = {}) => {

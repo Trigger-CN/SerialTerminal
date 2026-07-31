@@ -234,6 +234,7 @@ test('update confirmation opens a non-closable download window with progress and
   const progressRenderer = fs.readFileSync(path.join(root, 'update-progress.js'), 'utf8');
 
   assert.match(main, /autoUpdater\.autoDownload = false/);
+  assert.match(main, /autoUpdater\.autoInstallOnAppQuit = false/);
   assert.match(main, /function startUpdateDownload\(info\)/);
   assert.equal((main.match(/autoUpdater\.downloadUpdate\(\)/g) || []).length, 1);
   assert.match(main, /phase === 'downloading' \|\| updatePromptState\.phase === 'downloaded'/);
@@ -242,6 +243,8 @@ test('update confirmation opens a non-closable download window with progress and
   assert.match(main, /if \(updatePromptState\.phase === 'checking'\) \{\s*if \(manual\) updatePromptState\.checkSource = 'manual';/s);
   assert.match(main, /if \(updatePromptState\.phase === 'prompting'\) \{\s*sendCurrentUpdateStatusToPrefs\(\);/s);
   assert.doesNotMatch(main, /promptToInstallDownloadedUpdate/);
+  assert.match(main, /const isTrustedSource = sourceWindow === updateDownloadWindow \|\| sourceWindow === prefsWindow/);
+  assert.match(main, /if \(updatePromptState\.phase !== 'downloaded' \|\| !isTrustedSource\) return;\s*autoUpdater\.quitAndInstall\(\);/s);
   assert.match(main, /closable:\s*false/);
   assert.match(main, /if \(status === 'error'\) updateDownloadWindow\.setClosable\(true\)/);
   assert.match(main, /sendUpdateDownloadStatus\('progress', progressObj\)/);
