@@ -94,6 +94,56 @@ jobs:
           path: dist
           pattern: '*'
           merge-multiple: true
+      - name: Generate release notes
+        shell: bash
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)"
+          VERSION="${CURRENT_TAG#v}"
+          {
+            printf '# SerialTerminal %s\n\n' "$VERSION"
+            printf '## Changes\n\n'
+            if [ -n "$PREVIOUS_TAG" ]; then
+              printf 'Changes since `%s`:\n\n' "$PREVIOUS_TAG"
+              RANGE="${PREVIOUS_TAG}..${GITHUB_SHA}"
+            else
+              printf 'Changes included in this release:\n\n'
+              RANGE="${GITHUB_SHA}"
+            fi
+
+            for CATEGORY in Features Fixes Improvements Documentation Tests Build; do
+              case "$CATEGORY" in
+                Features) PATTERN='feat' ;;
+                Fixes) PATTERN='fix' ;;
+                Improvements) PATTERN='refactor|perf|style|ui' ;;
+                Documentation) PATTERN='docs' ;;
+                Tests) PATTERN='test' ;;
+                Build) PATTERN='build|ci|release|chore' ;;
+              esac
+              COMMITS="$(git log "$RANGE" --pretty=format:'%h%x09%s' --extended-regexp --regexp-ignore-case --grep="^([^ ]+[[:space:]]+)?(${PATTERN})(\\([^)]*\\))?:")"
+              if [ -n "$COMMITS" ]; then
+                printf '### %s\n\n' "$CATEGORY"
+                while IFS=$'\t' read -r HASH SUBJECT; do
+                  [ -n "$HASH" ] && printf -- '- %s (%s)\n' "$SUBJECT" "$HASH"
+                done <<< "$COMMITS"
+                printf '\n'
+              fi
+            done
+
+            OTHER="$(git log "$RANGE" --pretty=format:'%h%x09%s' --extended-regexp --regexp-ignore-case --invert-grep --grep='^([^ ]+[[:space:]]+)?(feat|fix|refactor|perf|style|ui|docs|test|build|ci|release|chore)(\\([^)]*\\))?:')"
+            if [ -n "$OTHER" ]; then
+              printf '### Other Changes\n\n'
+              while IFS=$'\t' read -r HASH SUBJECT; do
+                [ -n "$HASH" ] && printf -- '- %s (%s)\n' "$SUBJECT" "$HASH"
+              done <<< "$OTHER"
+              printf '\n'
+            fi
+
+            printf '## Downloads\n\n'
+            printf '%s\n' '- Windows: installer, blockmap, and update metadata are attached below.'
+            printf '%s\n' '- Linux: AppImage, deb package, and update metadata are attached below.'
+          } > release-notes.md
+          cat release-notes.md
       - uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -104,7 +154,7 @@ jobs:
             dist/latest.yml
             dist/latest-linux.yml
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body_path: release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Configure mirror SSH

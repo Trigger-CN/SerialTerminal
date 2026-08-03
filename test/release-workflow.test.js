@@ -41,6 +41,17 @@ test('release uploads exclude unpacked application directories', () => {
   assert.match(workflow, /fail_on_unmatched_files: true/);
 });
 
+test('release notes summarize commits since the previous tag', () => {
+  assert.match(workflow, /name: Generate release notes/);
+  assert.match(workflow, /git describe --tags --abbrev=0/);
+  assert.match(workflow, /Features/);
+  assert.match(workflow, /Fixes/);
+  assert.match(workflow, /Other Changes/);
+  assert.match(workflow, /\(\[\^ \]\+\[\[:space:\]\]\+\)\?/);
+  assert.match(workflow, /body_path: release-notes\.md/);
+  assert.doesNotMatch(workflow, /generate_release_notes:\s*true/);
+});
+
 test('release publishes Windows updater files to the self-hosted mirror', () => {
   assert.deepEqual(packageJson.build.publish, {
     provider: 'generic',
