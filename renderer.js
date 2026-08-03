@@ -2003,7 +2003,7 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
     }
     const profileRequest = {
         ...request,
-        mode: sendMode,
+        mode: request.mode === 'hex' || request.mode === 'text' ? request.mode : sendMode,
         encoding: sendEncoding,
         appendCrLf: request.source === 'terminal' ? false : sendAppendCrLf
     };
@@ -2536,6 +2536,7 @@ function addMainInputToQuickSend() {
     quickSendList.push({
         id: createQuickSendId(),
         label: buildQuickSendLabel(content),
+        mode: mainInputMode,
         content,
         sidebarShortcut: {
             enabled: false,
@@ -3774,6 +3775,7 @@ const quickSendDialogCloseBtn = document.getElementById('quick-send-dialog-close
 const quickSendDialogCancelBtn = document.getElementById('quick-send-dialog-cancel');
 const quickSendLabelInput = document.getElementById('quick-send-label');
 const quickSendContentInput = document.getElementById('quick-send-content');
+const quickSendModeInputs = Array.from(document.querySelectorAll('input[name="quick-send-mode"]'));
 const quickSendTriggerEnableInput = document.getElementById('quick-send-trigger-enable');
 const quickSendTriggerTextInput = document.getElementById('quick-send-trigger-text');
 const quickSendTriggerRegexInput = document.getElementById('quick-send-trigger-regex');
@@ -3917,6 +3919,7 @@ function normalizeQuickSendItem(item = {}) {
     return {
         id: typeof item.id === 'string' && item.id ? item.id : createQuickSendId(),
         label: typeof item.label === 'string' ? item.label : '',
+        mode: item.mode === 'hex' ? 'hex' : 'text',
         content: typeof item.content === 'string' ? item.content : '',
         sidebarShortcut: {
             enabled: item.sidebarShortcut?.enabled === true,
@@ -3956,6 +3959,7 @@ function getQuickEditorItem() {
     return normalizeQuickSendItem({
         id: editingQuickSendId || createQuickSendId(),
         label: quickSendLabelInput.value.trim(),
+        mode: quickSendModeInputs.find(input => input.checked)?.value === 'hex' ? 'hex' : 'text',
         content: quickSendContentInput.value,
         sidebarShortcut: {
             enabled: quickSendSidebarEnableInput.checked,
@@ -3977,6 +3981,7 @@ function closeQuickSendDialog() {
     editingQuickSendId = '';
     quickSendLabelInput.value = '';
     quickSendContentInput.value = '';
+    quickSendModeInputs.forEach(input => { input.checked = input.value === 'text'; });
     quickSendTriggerEnableInput.checked = false;
     quickSendTriggerTextInput.value = '';
     quickSendTriggerRegexInput.checked = false;
@@ -4001,6 +4006,7 @@ function openQuickSendDialog(itemId = '') {
     const item = quickSendList.find(entry => entry.id === itemId) || null;
     quickSendLabelInput.value = item?.label || '';
     quickSendContentInput.value = item?.content || '';
+    quickSendModeInputs.forEach(input => { input.checked = input.value === (item?.mode || sendMode); });
     quickSendTriggerEnableInput.checked = item?.autoTrigger?.enabled === true;
     quickSendTriggerTextInput.value = item?.autoTrigger?.text || '';
     quickSendTriggerRegexInput.checked = item?.autoTrigger?.useRegex === true;
@@ -4025,19 +4031,19 @@ function openQuickSendDialog(itemId = '') {
 
 function updateQuickSendValidation() {
     const item = getQuickEditorItem();
-    const result = validateSendContent(sendMode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
+    const result = validateSendContent(item.mode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
     const triggerResult = !item.autoTrigger.enabled
         ? { ok: true, regex: null }
         : (!item.autoTrigger.text
             ? { ok: false, message: trFallback('main.quickTriggerTextRequired', 'Auto trigger needs match text') }
             : buildQuickTriggerRegex(item.autoTrigger));
     quickSendValidation.textContent = triggerResult.ok
-        ? formatValidation(result, sendMode, sendAppendCrLf)
+        ? formatValidation(result, item.mode, sendAppendCrLf)
         : triggerResult.message;
     quickSendValidation.classList.toggle('valid', result.ok && triggerResult.ok);
     quickSendValidation.classList.toggle('invalid', (!result.ok && item.content.length > 0) || !triggerResult.ok);
     addQuickSendBtn.disabled = !result.ok || !triggerResult.ok;
-    quickSendContentInput.placeholder = sendMode === 'hex' ? 'AA 55 01 FF' : tr('main.contentMultiLine');
+    quickSendContentInput.placeholder = item.mode === 'hex' ? 'AA 55 01 FF' : tr('main.contentMultiLine');
     return { ...result, ok: result.ok && triggerResult.ok };
 }
 
@@ -4046,7 +4052,7 @@ async function triggerQuickSendItem(item) {
     quickSendTriggerInFlight.add(item.id);
     try {
         flashQuickSendItem(item.id);
-        const result = await sendSerialRequest({ content: item.content, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
+        const result = await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
         const label = item.label || item.content;
         setActionStatus(result.ok
             ? trFallback('main.quickTriggerSent', 'Auto-trigger sent: {label}', { label })
@@ -4176,7 +4182,7 @@ function renderQuickSendContainer(container, compact = false) {
         const label = document.createElement('span');
         label.className = 'quick-send-label';
         label.textContent = compact ? (item.sidebarShortcut?.text || item.label || item.content) : (item.label || item.content);
-        const validation = validateSendContent(sendMode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
+        const validation = validateSendContent(item.mode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
         btn.title = validation.ok ? `${validation.normalized} (${validation.byteCount + (sendAppendCrLf ? 2 : 0)} B)` : validation.message;
         btn.className = compact ? 'quick-send-main-btn sidebar-tool-btn' : 'quick-send-main-btn';
         if (compact) {
@@ -4189,7 +4195,7 @@ function renderQuickSendContainer(container, compact = false) {
         btn.append(label);
         
         btn.addEventListener('click', async () => {
-            await sendSerialRequest({ content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
+            await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
         });
         
         // Actions are overlaid on the left and revealed on hover/focus.
@@ -4281,6 +4287,7 @@ addQuickSendBtn.addEventListener('click', () => {
     }
 });
 quickSendContentInput.addEventListener('input', updateQuickSendValidation);
+quickSendModeInputs.forEach(input => input.addEventListener('change', updateQuickSendValidation));
 quickSendTriggerEnableInput.addEventListener('change', updateQuickSendValidation);
 quickSendTriggerTextInput.addEventListener('input', updateQuickSendValidation);
 quickSendTriggerRegexInput.addEventListener('change', updateQuickSendValidation);

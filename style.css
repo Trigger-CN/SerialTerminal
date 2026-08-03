@@ -582,6 +582,39 @@ label:hover {
     max-height: 280px;
 }
 
+.quick-send-field-label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.quick-send-mode-control {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+}
+
+.quick-send-mode-control label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.quick-send-mode-control input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    padding: 0;
+    accent-color: var(--accent-color);
+}
+
 .quick-trigger-settings {
     padding: 10px;
     border: 1px solid var(--border-color);

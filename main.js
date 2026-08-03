@@ -188,6 +188,7 @@ function normalizeConfig(config, defaults) {
         return {
           id,
           label: typeof item.label === 'string' ? item.label : '',
+          mode: oneOf(item.mode, SERIAL_MODES, normalized.lastSerialOptions.sendMode),
           content: typeof item.content === 'string'
             && Number(source.configVersion || 0) < 3
             && normalized.lastSerialOptions.appendCrLf

@@ -129,6 +129,25 @@ test('collapsed quick-send shortcuts persist an independent order', () => {
   assert.match(renderer, /function updateQuickSidebarEditorState\(\)/);
 });
 
+test('each quick-send item persists and uses its own text or hex mode', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /name="quick-send-mode" value="text" checked/);
+  assert.match(html, /name="quick-send-mode" value="hex"/);
+  assert.match(main, /mode: oneOf\(item\.mode, SERIAL_MODES, normalized\.lastSerialOptions\.sendMode\)/);
+  assert.match(renderer, /mode: item\.mode === 'hex' \? 'hex' : 'text'/);
+  assert.match(renderer, /mode: request\.mode === 'hex' \|\| request\.mode === 'text' \? request\.mode : sendMode/);
+  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, source: 'quick-send' \}/);
+  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, source: 'quick-send-trigger' \}/);
+  assert.match(renderer, /validateSendContent\(item\.mode, item\.content, sendEncoding/);
+  assert.match(styles, /\.quick-send-mode-control\s*\{[^}]*display:\s*flex;[^}]*gap:\s*8px 18px;/s);
+  assert.match(styles, /\.quick-send-mode-control input\s*\{[^}]*accent-color:\s*var\(--accent-color\);/s);
+  assert.doesNotMatch(styles, /\.quick-send-mode-control input\s*\{[^}]*opacity:\s*0;/s);
+});
+
 test('filter tabs support persistent whole-word matching', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');

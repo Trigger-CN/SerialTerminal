@@ -349,6 +349,13 @@
                      <label for="quick-send-content" data-i18n="main.content">Content</label>
                      <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
                  </div>
+                 <div class="form-group quick-send-mode-field">
+                     <span class="quick-send-field-label" data-i18n="main.quickSendMode">Quick send mode</span>
+                     <div class="quick-send-mode-control" role="radiogroup" aria-label="Quick send mode" data-i18n-aria-label="main.quickSendMode">
+                         <label><input type="radio" name="quick-send-mode" value="text" checked><span data-i18n="main.textMode">Text</span></label>
+                         <label><input type="radio" name="quick-send-mode" value="hex"><span data-i18n="main.hexMode">Hex</span></label>
+                     </div>
+                 </div>
                  <section class="form-group quick-sidebar-settings" aria-label="Sidebar shortcut settings" data-i18n-aria-label="main.quickSidebarSettings">
                      <label class="quick-sidebar-toggle" for="quick-send-sidebar-enable">
                          <input type="checkbox" id="quick-send-sidebar-enable">
