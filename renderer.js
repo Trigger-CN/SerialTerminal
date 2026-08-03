@@ -410,6 +410,65 @@ let serialOutputFlushTimer = null;
 let lastSerialOutputFlushAt = 0;
 const SERIAL_OUTPUT_MAX_FPS = 30;
 const SERIAL_OUTPUT_FRAME_MS = 1000 / SERIAL_OUTPUT_MAX_FPS;
+const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 * 1024;
+const TERMINAL_PENDING_OUTPUT_LIMIT = 2 * 1024 * 1024;
+const terminalWriteStates = new WeakMap();
+
+function drainTerminalOutput(term, state) {
+    if (state.writing || !state.pending.length) return;
+    const chunks = state.pending;
+    state.pending = [];
+    state.pendingLength = 0;
+    const skipped = state.skipped;
+    state.skipped = false;
+    state.writing = true;
+    const output = `${skipped ? '\r\n[Display output skipped to limit memory usage]\r\n' : ''}${chunks.join('')}`;
+    try {
+        term.write(output, () => {
+            state.writing = false;
+            if (state.resetAfterWrite) {
+                state.resetAfterWrite = false;
+                term.reset();
+            }
+            drainTerminalOutput(term, state);
+        });
+    } catch (error) {
+        state.writing = false;
+        state.pending = [];
+        state.pendingLength = 0;
+    }
+}
+
+function writeTerminalOutput(term, output) {
+    if (!term || !output) return;
+    let state = terminalWriteStates.get(term);
+    if (!state) {
+        state = { writing: false, pending: [], pendingLength: 0, skipped: false, resetAfterWrite: false };
+        terminalWriteStates.set(term, state);
+    }
+    const displayOutput = output.length > TERMINAL_PENDING_OUTPUT_LIMIT
+        ? output.slice(-TERMINAL_PENDING_OUTPUT_LIMIT)
+        : output;
+    if (displayOutput.length !== output.length) state.skipped = true;
+    state.pending.push(displayOutput);
+    state.pendingLength += displayOutput.length;
+    while (state.pendingLength > TERMINAL_PENDING_OUTPUT_LIMIT && state.pending.length > 1) {
+        state.pendingLength -= state.pending.shift().length;
+        state.skipped = true;
+    }
+    drainTerminalOutput(term, state);
+}
+
+function clearTerminalOutput(term) {
+    const state = terminalWriteStates.get(term);
+    if (state) {
+        state.pending = [];
+        state.pendingLength = 0;
+        state.skipped = false;
+        state.resetAfterWrite = state.writing;
+    }
+    term.reset();
+}
 
 function scheduleSerialOutputFlush() {
     if (serialOutputFlushScheduled) return;
@@ -454,6 +513,10 @@ function flushPendingSerialOutput() {
 function queueSerialOutput(bytes) {
     serialOutputQueue.push(bytes);
     serialOutputQueuedBytes += bytes.length;
+    if (serialOutputQueuedBytes >= SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES) {
+        flushPendingSerialOutput();
+        return;
+    }
     scheduleSerialOutputFlush();
 }
 
@@ -470,7 +533,7 @@ function writeTextLines(lines) {
     });
     const mainOutput = formattedLines.map(line => `${line.prefix}${line.highlighted}${line.delimiter ? '\r\n' : ''}`).join('');
     if (mainOutput) {
-        serialTerm.write(mainOutput);
+        writeTerminalOutput(serialTerm, mainOutput);
         writeMainTabLog(formattedLines.map(line => `${line.logPrefix}${line.highlighted}${line.delimiter}`).join(''));
     }
     filterTabs.forEach(tab => {
@@ -485,7 +548,7 @@ function writeTextLines(lines) {
         }).filter(Boolean);
         const output = formatted.map(line => line.terminal).join('');
         if (output) {
-            tab.term.write(output);
+            writeTerminalOutput(tab.term, output);
             writeFilterTabLog(tab, formatted.map(line => line.log).join(''));
         }
     });
@@ -505,7 +568,7 @@ function writeHexLines(lines) {
         line.highlighted = applyHighlighting(line.text, null, line.globalMatches);
     });
     const mainOutput = formattedLines.map(({ text, prefix }) => `${prefix}${text}\r\n`).join('');
-    serialTerm.write(mainOutput);
+    writeTerminalOutput(serialTerm, mainOutput);
     writeMainTabLog(formattedLines.map(({ text, logPrefix }) => `${logPrefix}${text}\r\n`).join(''));
     filterTabs.forEach(tab => {
         if (tab.dataMode !== 'hex') return;
@@ -519,7 +582,7 @@ function writeHexLines(lines) {
         }).filter(Boolean);
         const output = matched.map(line => line.terminal).join('');
         if (output) {
-            tab.term.write(output);
+            writeTerminalOutput(tab.term, output);
             writeFilterTabLog(tab, matched.map(line => line.log).join(''));
         }
     });
@@ -768,20 +831,20 @@ function clearTerminalByTabId(tabId) {
     if (!tabId || tabId === 'tab-main') {
         if (receiveDisplayMode === 'hex') hexFormatter.reset({ resetOffset: false });
         else resetTextReceive();
-        serialTerm.clear();
+        clearTerminalOutput(serialTerm);
         serialLineCounter = 1;
         logLineCounter = 1;
         return;
     }
     const filterTab = filterTabs.find(t => t.id === tabId);
     if (filterTab) {
-        filterTab.term.clear();
+        clearTerminalOutput(filterTab.term);
         filterTab.contextLineText = '';
         return;
     }
     const shellTab = getShellTabState(tabId);
     if (shellTab) {
-        shellTab.term.clear();
+        shellTab.term.reset();
     }
 }
 
@@ -789,7 +852,7 @@ function restartShellTab(tabId) {
     const shellTab = getShellTabState(tabId);
     if (!shellTab) return;
     ipcRenderer.send('close-shell-tab-session', { tabId });
-    shellTab.term.clear();
+    shellTab.term.reset();
     shellTab.btn?.classList.remove('exited');
     shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
     ipcRenderer.invoke('create-shell-tab-session', { tabId, cols: shellTab.term.cols, rows: shellTab.term.rows, profileId: shellTab.profileId || '' })
@@ -990,7 +1053,7 @@ term.open(document.getElementById('terminal-container'));
 
 const serialTerm = new Terminal({ 
     cursorBlink: true,
-    scrollback: 100000 // Increase scrollback limit
+    scrollback: 20000
 });
 const serialFitAddon = new FitAddon();
 const serialSearchAddon = new SearchAddon();
@@ -1436,7 +1499,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
 
     const term = new Terminal({
         cursorBlink: true,
-        scrollback: currentConfig ? (currentConfig.scrollbackLimit || 100000) : 100000
+        scrollback: currentConfig ? (currentConfig.scrollbackLimit || 20000) : 20000
     });
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon();
@@ -1543,7 +1606,7 @@ function closeShellTab(tabId) {
 
 function restoreShellSessions() {
     shellTabs.forEach(tab => {
-        tab.term.clear();
+        tab.term.reset();
         tab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
         ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows, profileId: tab.profileId || '' })
             .then(() => {
@@ -1637,7 +1700,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     // 3. Initialize Terminal
     const term = new Terminal({ 
         cursorBlink: true,
-        scrollback: currentConfig ? (currentConfig.scrollbackLimit || 100000) : 100000
+        scrollback: currentConfig ? (currentConfig.scrollbackLimit || 20000) : 20000
     });
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon();
@@ -2819,7 +2882,7 @@ function applyConfig(config) {
     const options = {
         fontSize: config.fontSize,
         fontFamily: `${config.fontFamily}, ${config.fontFamilyZh}, "Courier New", monospace`,
-        scrollback: config.scrollbackLimit || 100000,
+        scrollback: config.scrollbackLimit || 20000,
         theme: {
             background: config.background,
             foreground: config.foreground,

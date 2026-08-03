@@ -2,7 +2,7 @@
 
 const INTEGER_SETTINGS = Object.freeze({
   fontSize: Object.freeze({ min: 8, max: 72, fallback: 14 }),
-  scrollbackLimit: Object.freeze({ min: 1000, max: 1000000, fallback: 100000 }),
+  scrollbackLimit: Object.freeze({ min: 1000, max: 100000, fallback: 20000 }),
   historyBufferSize: Object.freeze({ min: 10000, max: 100000000, fallback: 5000000 }),
   mouseWheelScrollLines: Object.freeze({ min: 1, max: 50, fallback: 3 }),
   mainInputHistoryLimit: Object.freeze({ min: 0, max: 200, fallback: 20 }),

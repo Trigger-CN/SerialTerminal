@@ -114,6 +114,31 @@ test('serial output is batched per animation frame before terminal rendering', (
   assert.doesNotMatch(renderer, /matched\.map\(\(\{ text, logPrefix \}\) => `\$\{logPrefix\}\$\{applyHighlighting/);
 });
 
+test('terminal buffers use bounded defaults and reset fully when cleared', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  assert.match(main, /const CONFIG_VERSION = 5/);
+  assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
+  assert.doesNotMatch(renderer, /scrollback:\s*100000/);
+  assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
+  assert.match(renderer, /function clearTerminalByTabId[\s\S]*clearTerminalOutput\(serialTerm\)/);
+  assert.match(renderer, /clearTerminalOutput\(filterTab\.term\)/);
+  assert.match(renderer, /const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 \* 1024/);
+  assert.match(renderer, /serialOutputQueuedBytes >= SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES[\s\S]*flushPendingSerialOutput\(\)/);
+  assert.match(preferencesHtml, /id="scrollbackLimit" min="1000" max="100000"/);
+  assert.match(renderer, /const TERMINAL_PENDING_OUTPUT_LIMIT = 2 \* 1024 \* 1024/);
+  assert.match(renderer, /function writeTerminalOutput\(term, output\)/);
+  assert.match(renderer, /term\.write\(output, \(\) => \{/);
+  assert.match(renderer, /while \(state\.pendingLength > TERMINAL_PENDING_OUTPUT_LIMIT/);
+  assert.match(renderer, /output\.slice\(-TERMINAL_PENDING_OUTPUT_LIMIT\)/);
+  assert.match(renderer, /Display output skipped to limit memory usage/);
+  assert.match(renderer, /state\.resetAfterWrite = state\.writing/);
+  assert.match(renderer, /if \(state\.resetAfterWrite\) \{[\s\S]*term\.reset\(\)/);
+  assert.match(renderer, /writeTerminalOutput\(serialTerm, mainOutput\)/);
+  assert.match(renderer, /writeTerminalOutput\(tab\.term, output\)/);
+});
+
 test('collapsed quick-send shortcuts persist an independent order', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');

@@ -35,7 +35,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 4;
+const CONFIG_VERSION = 5;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const DEFAULT_SHORTCUTS = {
@@ -174,7 +174,10 @@ function normalizeConfig(config, defaults) {
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
   normalized.fontSize = normalizeIntegerSetting(source.fontSize, 'fontSize');
-  normalized.scrollbackLimit = normalizeIntegerSetting(source.scrollbackLimit, 'scrollbackLimit');
+  const legacyScrollbackLimit = Number(source.configVersion || 0) < 5 && source.scrollbackLimit === 100000
+    ? 20000
+    : source.scrollbackLimit;
+  normalized.scrollbackLimit = normalizeIntegerSetting(legacyScrollbackLimit, 'scrollbackLimit');
   normalized.historyBufferSize = normalizeIntegerSetting(source.historyBufferSize, 'historyBufferSize');
   normalized.mouseWheelScrollLines = normalizeIntegerSetting(source.mouseWheelScrollLines, 'mouseWheelScrollLines');
 
@@ -307,7 +310,7 @@ function loadConfig() {
     ],
     showTimestamp: false,
     showLineNumbers: false,
-    scrollbackLimit: 100000,
+    scrollbackLimit: 20000,
     historyBufferSize: 5000000,
     mouseWheelScrollLines: 3,
     filterHistory: [],
