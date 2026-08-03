@@ -90,6 +90,30 @@ test('collapsed sidebar scrolls only quick sends above fixed serial tools', () =
   assert.match(styles, /\.sidebar-tool-icon\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;[^}]*fill:\s*currentColor;/s);
 });
 
+test('serial output is batched per animation frame before terminal rendering', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  assert.match(renderer, /function queueSerialOutput\(bytes\)/);
+  assert.match(renderer, /const SERIAL_OUTPUT_MAX_FPS = 30/);
+  assert.match(renderer, /SERIAL_OUTPUT_FRAME_MS - \(performance\.now\(\) - lastSerialOutputFlushAt\)/);
+  assert.match(renderer, /setTimeout\(\(\) => \{[\s\S]*requestAnimationFrame\(flushSerialOutputQueue\)/);
+  assert.match(renderer, /const bytes = Buffer\.concat\(queued\)/);
+  assert.match(renderer, /queueSerialOutput\(Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)\)/);
+  assert.match(main, /function queueSerialOutput\(data, sessionId\)/);
+  assert.match(main, /setImmediate\(flushSerialOutputQueue\)/);
+  assert.match(main, /Buffer\.concat\(queued\.map\(entry => entry\.data\), byteCount\)/);
+  assert.match(main, /queueSerialOutput\(data, connectionSessionId\)/);
+  assert.match(renderer, /function flushPendingSerialOutput\(\)/);
+  assert.match(renderer, /flushPendingSerialOutput\(\);\s*if \(normalized !== receiveDisplayMode\)/);
+  assert.match(renderer, /const highlighted = applyHighlighting\(text, tab\.filterRegex, globalMatches\);[\s\S]*terminal:[\s\S]*log:/);
+  assert.match(renderer, /function collectGlobalHighlightMatches\(text\)/);
+  assert.match(renderer, /applyHighlighting\(text, tab\.filterRegex, globalMatches\)/);
+  assert.match(renderer, /applyHighlighting\(line\.text, null, globalMatches\)/);
+  assert.doesNotMatch(renderer, /formatLineForTerminal\(line, tab\.filterRegex\)/);
+  assert.doesNotMatch(renderer, /formatLineForLog\(line, prefix, tab\.filterRegex\)/);
+  assert.doesNotMatch(renderer, /matched\.map\(\(\{ text, logPrefix \}\) => `\$\{logPrefix\}\$\{applyHighlighting/);
+});
+
 test('collapsed quick-send shortcuts persist an independent order', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');

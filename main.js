@@ -1828,6 +1828,8 @@ let serialConnectInProgress = false;
 const THROUGHPUT_SAMPLE_MS = 1000;
 const THROUGHPUT_HISTORY_LENGTH = 30;
 let throughputTimer = null;
+let serialOutputQueue = [];
+let serialOutputFlushScheduled = false;
 let throughputState = {
   connected: false,
   rxCurrentBytes: 0,
@@ -1893,6 +1895,34 @@ function initializeThroughputState() {
 function notifySerialDisconnected(message = null) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('serial-disconnected', message);
+  }
+}
+
+function flushSerialOutputQueue() {
+  serialOutputFlushScheduled = false;
+  if (!serialOutputQueue.length || !mainWindow || mainWindow.isDestroyed()) {
+    serialOutputQueue = [];
+    return;
+  }
+  const queued = serialOutputQueue;
+  serialOutputQueue = [];
+  const sessionId = queued[0].sessionId;
+  const byteCount = queued.reduce((total, entry) => total + entry.data.length, 0);
+  const bytes = Buffer.concat(queued.map(entry => entry.data), byteCount);
+  mainWindow.webContents.send('serial-output-bytes', {
+    bytes: new Uint8Array(bytes),
+    sessionId
+  });
+}
+
+function queueSerialOutput(data, sessionId) {
+  if (serialOutputQueue.length && serialOutputQueue[0].sessionId !== sessionId) {
+    flushSerialOutputQueue();
+  }
+  serialOutputQueue.push({ data: Buffer.from(data), sessionId });
+  if (!serialOutputFlushScheduled) {
+    serialOutputFlushScheduled = true;
+    setImmediate(flushSerialOutputQueue);
   }
 }
 
@@ -2001,17 +2031,11 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
         resolve({ ok: true, sessionId: connectionSessionId });
     });
 
-    port.on('data', (data) => {
+        port.on('data', (data) => {
       if (currentSerialPort !== port || serialCleanupComplete) return;
       throughputState.rxCurrentBytes += data.length;
       bufferRawSerialBytes(data);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('serial-output-bytes', {
-          bytes: new Uint8Array(data),
-          receivedAt: Date.now(),
-          sessionId: connectionSessionId
-        });
-      }
+          queueSerialOutput(data, connectionSessionId);
     });
 
     port.on('error', (err) => {

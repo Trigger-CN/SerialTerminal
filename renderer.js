@@ -223,12 +223,8 @@ function getLogPrefix() {
     return s;
 }
 
-function applyHighlighting(text, filterRegex = null) {
-    if (!text) return text;
-    
-    let matches = [];
-
-    // Apply global highlight rules
+function collectGlobalHighlightMatches(text) {
+    const matches = [];
     if (highlightRules && highlightRules.length > 0) {
         highlightRules.forEach(rule => {
             if (!rule.enabled || !rule.regex) return;
@@ -270,6 +266,12 @@ function applyHighlighting(text, filterRegex = null) {
             }
         });
     }
+    return matches;
+}
+
+function applyHighlighting(text, filterRegex = null, globalMatches = null) {
+    if (!text) return text;
+    const matches = (globalMatches || collectGlobalHighlightMatches(text)).map(match => ({ ...match }));
 
     // Apply filter regex highlight
     if (filterRegex) {
@@ -401,21 +403,90 @@ class SerialDataParser {
 }
 
 const dataParser = new SerialDataParser();
+let serialOutputQueue = [];
+let serialOutputQueuedBytes = 0;
+let serialOutputFlushScheduled = false;
+let serialOutputFlushTimer = null;
+let lastSerialOutputFlushAt = 0;
+const SERIAL_OUTPUT_MAX_FPS = 30;
+const SERIAL_OUTPUT_FRAME_MS = 1000 / SERIAL_OUTPUT_MAX_FPS;
+
+function scheduleSerialOutputFlush() {
+    if (serialOutputFlushScheduled) return;
+    serialOutputFlushScheduled = true;
+    const delay = Math.max(0, SERIAL_OUTPUT_FRAME_MS - (performance.now() - lastSerialOutputFlushAt));
+    serialOutputFlushTimer = setTimeout(() => {
+        serialOutputFlushTimer = null;
+        requestAnimationFrame(flushSerialOutputQueue);
+    }, delay);
+}
+
+function flushSerialOutputQueue() {
+    serialOutputFlushScheduled = false;
+    lastSerialOutputFlushAt = performance.now();
+    if (!serialOutputQueue.length) return;
+    const queued = serialOutputQueue;
+    serialOutputQueue = [];
+    serialOutputQueuedBytes = 0;
+    const bytes = Buffer.concat(queued);
+    processQuickSendAutoTriggers(bytes);
+    if (receiveDisplayMode === 'hex') {
+        hexFormatter.push(bytes);
+    } else {
+        if (!textDecoder) createTextDecoder();
+        const text = textDecoder.write(bytes);
+        if (text) writeTextLines(dataParser.parse(text));
+    }
+    if (serialOutputQueue.length && !serialOutputFlushScheduled) {
+        scheduleSerialOutputFlush();
+    }
+}
+
+function flushPendingSerialOutput() {
+    if (serialOutputFlushScheduled) {
+        if (serialOutputFlushTimer) clearTimeout(serialOutputFlushTimer);
+        serialOutputFlushTimer = null;
+        serialOutputFlushScheduled = false;
+        flushSerialOutputQueue();
+    }
+}
+
+function queueSerialOutput(bytes) {
+    serialOutputQueue.push(bytes);
+    serialOutputQueuedBytes += bytes.length;
+    scheduleSerialOutputFlush();
+}
 
 function writeTextLines(lines) {
     if (!lines.length) return;
-    const logLines = lines.map(line => ({ line, prefix: getLogPrefix() }));
-    const mainOutput = lines.map(line => formatLineForTerminal(line)).join('');
+    const formattedLines = lines.map(line => {
+        const globalMatches = collectGlobalHighlightMatches(line.text);
+        return {
+            ...line,
+            logPrefix: getLogPrefix(),
+            globalMatches,
+            highlighted: applyHighlighting(line.text, null, globalMatches)
+        };
+    });
+    const mainOutput = formattedLines.map(line => `${line.prefix}${line.highlighted}${line.delimiter ? '\r\n' : ''}`).join('');
     if (mainOutput) {
         serialTerm.write(mainOutput);
-        writeMainTabLog(logLines.map(({ line, prefix }) => formatLineForLog(line, prefix)).join(''));
+        writeMainTabLog(formattedLines.map(line => `${line.logPrefix}${line.highlighted}${line.delimiter}`).join(''));
     }
     filterTabs.forEach(tab => {
         if (tab.dataMode !== 'text') return;
-        const output = lines.map(line => formatLineForTerminal(line, tab.filterRegex)).join('');
+        const formatted = formattedLines.map(({ text, delimiter, prefix, logPrefix, globalMatches }) => {
+            if (tab.filterRegex && !tab.filterRegex.test(text)) return null;
+            const highlighted = applyHighlighting(text, tab.filterRegex, globalMatches);
+            return {
+                terminal: `${prefix}${highlighted}${delimiter ? '\r\n' : ''}`,
+                log: `${logPrefix}${highlighted}${delimiter}`
+            };
+        }).filter(Boolean);
+        const output = formatted.map(line => line.terminal).join('');
         if (output) {
             tab.term.write(output);
-            writeFilterTabLog(tab, logLines.map(({ line, prefix }) => formatLineForLog(line, prefix, tab.filterRegex)).join(''));
+            writeFilterTabLog(tab, formatted.map(line => line.log).join(''));
         }
     });
 }
@@ -425,18 +496,31 @@ function writeHexLines(lines) {
     const formattedLines = lines.map(line => ({
         text: line.output.replace(/\r?\n$/, ''),
         prefix: getPrefix(),
-        logPrefix: getLogPrefix()
+        logPrefix: getLogPrefix(),
+        globalMatches: null,
+        highlighted: ''
     }));
+    formattedLines.forEach(line => {
+        line.globalMatches = collectGlobalHighlightMatches(line.text);
+        line.highlighted = applyHighlighting(line.text, null, line.globalMatches);
+    });
     const mainOutput = formattedLines.map(({ text, prefix }) => `${prefix}${text}\r\n`).join('');
     serialTerm.write(mainOutput);
     writeMainTabLog(formattedLines.map(({ text, logPrefix }) => `${logPrefix}${text}\r\n`).join(''));
     filterTabs.forEach(tab => {
         if (tab.dataMode !== 'hex') return;
-        const matched = formattedLines.filter(({ text }) => !tab.filterRegex || tab.filterRegex.test(text));
-        const output = matched.map(({ text, prefix }) => `${prefix}${applyHighlighting(text, tab.filterRegex)}\r\n`).join('');
+        const matched = formattedLines.map(({ text, prefix, logPrefix, globalMatches }) => {
+            if (tab.filterRegex && !tab.filterRegex.test(text)) return null;
+            const highlighted = applyHighlighting(text, tab.filterRegex, globalMatches);
+            return {
+                terminal: `${prefix}${highlighted}\r\n`,
+                log: `${logPrefix}${highlighted}\r\n`
+            };
+        }).filter(Boolean);
+        const output = matched.map(line => line.terminal).join('');
         if (output) {
             tab.term.write(output);
-            writeFilterTabLog(tab, matched.map(({ text, logPrefix }) => `${logPrefix}${applyHighlighting(text, tab.filterRegex)}\r\n`).join(''));
+            writeFilterTabLog(tab, matched.map(line => line.log).join(''));
         }
     });
 }
@@ -486,6 +570,7 @@ function updateFilterModeStatuses() {
 
 function switchReceiveMode(nextMode, { persist = true } = {}) {
     const normalized = nextMode === 'hex' ? 'hex' : 'text';
+    flushPendingSerialOutput();
     if (normalized !== receiveDisplayMode) {
         if (receiveDisplayMode === 'text') flushTextReceive();
         else hexFormatter.flush();
@@ -511,29 +596,6 @@ function switchReceiveEncoding(nextEncoding, { persist = true } = {}) {
     }
     if (receiveEncodingSelect) receiveEncodingSelect.value = normalized;
     if (persist && !isApplyingConfig) saveSerialModeConfig();
-}
-
-function formatLineForTerminal(lineObj, filterRegex = null) {
-    if (filterRegex && !filterRegex.test(lineObj.text)) {
-        return '';
-    }
-    
-    let output = lineObj.prefix + applyHighlighting(lineObj.text, filterRegex);
-    if (lineObj.delimiter) {
-        output += '\r\n'; // Normalize to xterm newline
-    }
-    return output;
-}
-
-function formatLineForLog(lineObj, prefix = '', filterRegex = null) {
-    if (filterRegex && !filterRegex.test(lineObj.text)) {
-        return '';
-    }
-    let output = prefix + applyHighlighting(lineObj.text, filterRegex);
-    if (lineObj.delimiter) {
-        output += '\r\n';
-    }
-    return output;
 }
 
 function getTerminalPlainText(targetTerm) {
@@ -3014,14 +3076,7 @@ ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     if (payload.sessionId !== undefined && payload.sessionId !== serialSessionId) return;
     const bytes = payload.bytes instanceof Uint8Array ? payload.bytes : Uint8Array.from(payload.bytes || []);
     if (!bytes.length) return;
-    processQuickSendAutoTriggers(bytes);
-    if (receiveDisplayMode === 'hex') {
-        hexFormatter.push(bytes);
-    } else {
-        if (!textDecoder) createTextDecoder();
-        const text = textDecoder.write(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
-        if (text) writeTextLines(dataParser.parse(text));
-    }
+    queueSerialOutput(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
 });
 ipcRenderer.on('serial-error', (event, err) => {
     const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
