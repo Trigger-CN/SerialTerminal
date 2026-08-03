@@ -1,4 +1,21 @@
 const { ipcRenderer } = require('electron');
+
+window.addEventListener('error', (event) => {
+    ipcRenderer.send('renderer-diagnostic-log', {
+        source: 'window.error',
+        message: event.message || 'Unknown renderer error',
+        stack: event.error?.stack || `${event.filename || ''}:${event.lineno || 0}:${event.colno || 0}`
+    });
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    ipcRenderer.send('renderer-diagnostic-log', {
+        source: 'unhandledrejection',
+        message: reason?.message || String(reason || 'Unknown renderer rejection'),
+        stack: reason?.stack || ''
+    });
+});
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
@@ -4193,6 +4210,13 @@ function renderQuickSendContainer(container, compact = false) {
         }
         btn.title = item.label || item.content;
         btn.append(label);
+        if (!compact && item.mode === 'hex') {
+            btn.classList.add('has-mode-badge');
+            const modeBadge = document.createElement('span');
+            modeBadge.className = 'mode-badge hex quick-send-mode-badge';
+            modeBadge.textContent = 'HEX';
+            btn.append(modeBadge);
+        }
         
         btn.addEventListener('click', async () => {
             await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);

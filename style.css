@@ -307,6 +307,7 @@ label:hover {
 }
 
 .quick-send-main-btn {
+    position: relative;
     flex: 1;
     min-width: 0;
     justify-content: center;
@@ -332,6 +333,16 @@ label:hover {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.quick-send-mode-badge {
+    position: absolute;
+    right: 5px;
+    top: 50%;
+    min-width: 25px;
+    padding: 2px 3px;
+    transform: translateY(-50%);
+    pointer-events: none;
 }
 
 .quick-send-item-compact {
@@ -421,6 +432,14 @@ label:hover {
 .quick-send-item:not(.quick-send-item-compact).editing .quick-send-main-btn {
     padding-right: 30px;
     padding-left: 30px;
+}
+
+.quick-send-main-btn.has-mode-badge,
+.quick-send-item:not(.quick-send-item-compact):hover .quick-send-main-btn.has-mode-badge,
+.quick-send-item:not(.quick-send-item-compact).actions-focused .quick-send-main-btn.has-mode-badge,
+.quick-send-item:not(.quick-send-item-compact).editing .quick-send-main-btn.has-mode-badge {
+    padding-right: 36px;
+    padding-left: 36px;
 }
 
 .quick-send-item:not(.quick-send-item-compact):hover .quick-send-actions,

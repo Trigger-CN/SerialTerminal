@@ -25,3 +25,18 @@ test('manual tab exports remember their last successful directory independently'
   assert.match(main, /await fs\.promises\.writeFile\([\s\S]*?saveConfig\(\{ manualExportDirectory: path\.dirname\(result\.filePath\) \}\)/);
   assert.doesNotMatch(main, /defaultPath = path\.join\(currentConfig\.logPath/);
 });
+
+test('application diagnostics capture main and renderer process failures', () => {
+  assert.match(main, /process\.on\('uncaughtException'/);
+  assert.match(main, /process\.on\('unhandledRejection'/);
+  assert.match(main, /render-process-gone/);
+  assert.match(main, /renderer-diagnostic-log/);
+  assert.match(main, /log\.transports\.file\.getFile\(\)\.path/);
+});
+
+test('local Electron crash dumps are enabled without uploading data', () => {
+  assert.match(main, /const \{ app,[\s\S]*crashReporter \} = require\('electron'\)/);
+  assert.match(main, /app\.setPath\('crashDumps', crashDumpsPath\)/);
+  assert.match(main, /crashReporter\.start\(\{[\s\S]*uploadToServer: false,[\s\S]*compress: true/);
+  assert.match(main, /crashDumpsPath/);
+});

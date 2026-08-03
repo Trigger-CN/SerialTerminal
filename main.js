@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, crashReporter } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const pty = require('node-pty');
@@ -49,6 +49,37 @@ const DEFAULT_SHORTCUTS = {
   toggleSerialConnection: 'Ctrl+Shift+D'
 };
 const MENU_ICON_DIRECTORY = path.join(__dirname, 'assets', 'menu-icons');
+
+const crashDumpsPath = path.join(app.getPath('userData'), 'crash-dumps');
+app.setPath('crashDumps', crashDumpsPath);
+crashReporter.start({
+  companyName: 'Trigger-CN',
+  productName: 'SerialTerminal',
+  uploadToServer: false,
+  compress: true,
+  extra: {
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch
+  }
+});
+
+process.on('uncaughtException', (error) => {
+  log.error('Uncaught main-process exception:', error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  log.error('Unhandled main-process rejection:', reason);
+});
+
+log.info('Application starting', {
+  version: app.getVersion(),
+  platform: process.platform,
+  arch: process.arch,
+  electron: process.versions.electron,
+  logFile: log.transports.file.getFile().path,
+  crashDumpsPath
+});
 
 function menuIcon(name) {
   const icon = path.join(MENU_ICON_DIRECTORY, `${name}.png`);
@@ -359,7 +390,7 @@ function loadConfig() {
       }
       return normalized;
     } catch (e) {
-      console.error('Failed to load config:', e);
+      log.error('Failed to load config:', e);
     }
   }
   return normalizeConfig(defaults, defaults);
@@ -866,8 +897,31 @@ function createWindow() {
   // mainWindow.webContents.openDevTools();
 
   mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      console.log(`[RENDERER] ${message} (${sourceId}:${line})`);
-  });
+      const details = `(${sourceId}:${line})`;
+      if (level >= 2) log.error(`[RENDERER] ${message} ${details}`);
+      else log.info(`[RENDERER] ${message} ${details}`);
+    });
+
+    mainWindow.webContents.on('render-process-gone', (event, details) => {
+      log.error('Renderer process exited:', details);
+    });
+
+    mainWindow.webContents.on('unresponsive', () => {
+      log.warn('Renderer became unresponsive');
+    });
+
+    mainWindow.webContents.on('responsive', () => {
+      log.info('Renderer became responsive');
+    });
+
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      log.error('Renderer failed to load:', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame
+      });
+    });
 
   mainWindow.on('resize', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -1990,6 +2044,15 @@ ipcMain.on('disconnect-serial', () => {
   }
 });
 
-ipcMain.on('renderer-log', (event, msg) => {
-    console.log('[RENDERER]', msg);
-});
+    ipcMain.on('renderer-log', (event, msg) => {
+        log.info('[RENDERER]', msg);
+    });
+
+    ipcMain.on('renderer-diagnostic-log', (event, payload = {}) => {
+      const message = typeof payload.message === 'string' ? payload.message : 'Unknown renderer diagnostic';
+      log.error('[RENDERER DIAGNOSTIC]', {
+        message,
+        stack: typeof payload.stack === 'string' ? payload.stack : '',
+        source: typeof payload.source === 'string' ? payload.source : ''
+      });
+    });

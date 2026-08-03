@@ -143,6 +143,12 @@ test('each quick-send item persists and uses its own text or hex mode', () => {
   assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, source: 'quick-send' \}/);
   assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, source: 'quick-send-trigger' \}/);
   assert.match(renderer, /validateSendContent\(item\.mode, item\.content, sendEncoding/);
+  assert.match(renderer, /if \(!compact && item\.mode === 'hex'\) \{[\s\S]*modeBadge\.textContent = 'HEX'/);
+  assert.match(renderer, /mode-badge hex quick-send-mode-badge/);
+  assert.match(renderer, /btn\.classList\.add\('has-mode-badge'\)/);
+  assert.doesNotMatch(renderer, /if \(compact && item\.mode === 'hex'\)/);
+  assert.match(styles, /\.quick-send-mode-badge\s*\{[^}]*position:\s*absolute;[^}]*right:\s*5px;/s);
+  assert.match(styles, /\.quick-send-main-btn\.has-mode-badge,[\s\S]*?padding-right:\s*36px;[\s\S]*?padding-left:\s*36px;/);
   assert.match(styles, /\.quick-send-mode-control\s*\{[^}]*display:\s*flex;[^}]*gap:\s*8px 18px;/s);
   assert.match(styles, /\.quick-send-mode-control input\s*\{[^}]*accent-color:\s*var\(--accent-color\);/s);
   assert.doesNotMatch(styles, /\.quick-send-mode-control input\s*\{[^}]*opacity:\s*0;/s);
