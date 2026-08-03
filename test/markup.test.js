@@ -139,6 +139,20 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   assert.match(renderer, /writeTerminalOutput\(tab\.term, output\)/);
 });
 
+test('filter tabs locate exact logical lines in the main terminal', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(renderer, /function getLogicalTerminalBufferLine\(buffer, lineIndex\)/);
+  assert.match(renderer, /while \(start > 0 && buffer\.getLine\(start\)\?\.isWrapped\) start--/);
+  assert.match(renderer, /line\.translateToString\(index === end\)/);
+  assert.match(renderer, /occurrenceFromEnd: countLogicalLineOccurrencesAfter\(buffer, line\)/);
+  assert.match(renderer, /function locateInMainTerminal\(context\)/);
+  assert.match(renderer, /line\.text === context\.text && --remainingOccurrence === 0/);
+  assert.match(renderer, /serialTerm\.scrollToLine\(match\.start\)/);
+  assert.match(renderer, /serialTerm\.selectLines\(match\.start, match\.end\)/);
+  assert.doesNotMatch(renderer, /locateInMainTerminalByLineNumber/);
+});
+
 test('collapsed quick-send shortcuts persist an independent order', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');

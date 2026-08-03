@@ -731,17 +731,51 @@ function requestTerminalContextMenu(payload) {
     });
 }
 
-function getTerminalBufferLineTextByEvent(term, element, event) {
-    if (!term?.buffer?.active || !element) return '';
+function getLogicalTerminalBufferLine(buffer, lineIndex) {
+    if (!buffer || lineIndex < 0 || lineIndex >= buffer.length) return null;
+
+    let start = lineIndex;
+    while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+
+    let end = lineIndex;
+    while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped) end++;
+
+    let text = '';
+    for (let index = start; index <= end; index++) {
+        const line = buffer.getLine(index);
+        if (!line) continue;
+        text += line.translateToString(index === end);
+    }
+    return { text, start, end };
+}
+
+function countLogicalLineOccurrencesAfter(buffer, target) {
+    let occurrenceFromEnd = 1;
+    for (let index = target.end + 1; index < buffer.length;) {
+        const line = getLogicalTerminalBufferLine(buffer, index);
+        if (!line) break;
+        if (line.text === target.text) occurrenceFromEnd++;
+        index = line.end + 1;
+    }
+    return occurrenceFromEnd;
+}
+
+function getTerminalBufferLineContextByEvent(term, element, event) {
+    if (!term?.buffer?.active || !element) return null;
 
     const rect = element.getBoundingClientRect();
     const relativeY = event.clientY - rect.top;
     const rowHeight = rect.height / Math.max(1, term.rows || 1);
     const viewportRow = Math.max(0, Math.min((term.rows || 1) - 1, Math.floor(relativeY / Math.max(1, rowHeight))));
-    const bufferBaseY = term.buffer.active.viewportY || 0;
+    const buffer = term.buffer.active;
+    const bufferBaseY = buffer.viewportY || 0;
     const bufferLineIndex = bufferBaseY + viewportRow;
-    const line = term.buffer.active.getLine(bufferLineIndex);
-    return line ? line.translateToString(true) : '';
+    const line = getLogicalTerminalBufferLine(buffer, bufferLineIndex);
+    if (!line) return null;
+    return {
+        text: line.text,
+        occurrenceFromEnd: countLogicalLineOccurrencesAfter(buffer, line)
+    };
 }
 
 function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
@@ -750,7 +784,7 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
         event.preventDefault();
         const tabState = typeof getTabState === 'function' ? getTabState() : null;
         if (tabState && terminalType === 'filter') {
-            tabState.contextLineText = getTerminalBufferLineTextByEvent(term, element, event);
+            tabState.contextLine = getTerminalBufferLineContextByEvent(term, element, event);
         }
         requestTerminalContextMenu({
             terminalType,
@@ -761,7 +795,7 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
             isConnected,
             splitEnabled: isSplitEnabled(),
             filterText: tabState?.filterText || '',
-            canLocateInMain: Boolean(tabState?.contextLineText),
+            canLocateInMain: Boolean(tabState?.contextLine?.text),
             caseSensitive: Boolean(tabState?.caseSensitive),
             wholeWord: Boolean(tabState?.wholeWord),
             useRegex: Boolean(tabState?.useRegex),
@@ -783,24 +817,27 @@ function bindTerminalWheel(term, element) {
     }, { passive: false, capture: true });
 }
 
-function extractDisplayedLineNumber(text) {
-    const match = String(text || '').match(/\[(\d{4,})\]/);
-    return match ? Number(match[1]) : null;
-}
-
-function locateInMainTerminalByLineNumber(lineNo) {
-    if (!lineNo) return false;
-    const searchText = `[${String(lineNo).padStart(4, '0')}]`;
-    switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
-    if (typeof showSidebarTab === 'function') {
-        showSidebarTab('tab-search');
+function locateInMainTerminal(context) {
+    if (!context?.text || !serialTerm?.buffer?.active) return false;
+    const buffer = serialTerm.buffer.active;
+    let remainingOccurrence = Math.max(1, Number(context.occurrenceFromEnd) || 1);
+    let match = null;
+    for (let index = buffer.length - 1; index >= 0;) {
+        const line = getLogicalTerminalBufferLine(buffer, index);
+        if (!line) break;
+        if (line.text === context.text && --remainingOccurrence === 0) {
+            match = line;
+            break;
+        }
+        index = line.start - 1;
     }
-    searchInput.value = searchText;
-    searchRegex.checked = false;
-    searchCase.checked = true;
-    searchWord.checked = false;
-    resetSearchState();
-    selectFirstSearchResult({ force: true });
+    if (!match) return false;
+
+    switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
+    requestAnimationFrame(() => {
+        serialTerm.scrollToLine(match.start);
+        serialTerm.selectLines(match.start, match.end);
+    });
     return true;
 }
 
@@ -839,7 +876,7 @@ function clearTerminalByTabId(tabId) {
     const filterTab = filterTabs.find(t => t.id === tabId);
     if (filterTab) {
         clearTerminalOutput(filterTab.term);
-        filterTab.contextLineText = '';
+        filterTab.contextLine = null;
         return;
     }
     const shellTab = getShellTabState(tabId);
@@ -989,8 +1026,9 @@ async function handleTerminalContextMenuAction(payload = {}) {
         }
         case 'locate-in-main-terminal': {
             if (!filterTab) break;
-            const lineNo = extractDisplayedLineNumber(filterTab.contextLineText || '');
-            locateInMainTerminalByLineNumber(lineNo);
+            if (!locateInMainTerminal(filterTab.contextLine)) {
+                setActionStatus(tr('main.searchResultZero'));
+            }
             break;
         }
         case 'toggle-case-sensitive': {
@@ -1734,7 +1772,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         useRegex: false,
         filterText: '',
         dataMode: initialState.dataMode === 'hex' ? 'hex' : (initialState.dataMode === 'text' ? 'text' : receiveDisplayMode),
-        contextLineText: '',
+        contextLine: null,
         element: tabPane,
         btn: tabBtn
     };
