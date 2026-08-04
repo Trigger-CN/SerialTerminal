@@ -74,7 +74,7 @@ test('about tab opens the relay recommendation externally with amber styling', (
   const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
 
-  assert.match(html, /class="about-label relay-recommendation-label">中转站优选<\/span>/);
+  assert.match(html, /class="about-label relay-recommendation-label">高性价比中转站优选<\/span>/);
   assert.match(html, /id="relay-recommendation">https:\/\/lowapi\.asdb\.top\/<\/a>/);
   assert.match(html, /\.relay-recommendation-label\s*\{[^}]*color:\s*#f5b942;/s);
   assert.match(preferences, /shell\.openExternal\('https:\/\/lowapi\.asdb\.top\/'\)/);
