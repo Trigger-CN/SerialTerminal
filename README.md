@@ -2,7 +2,7 @@
 
 一个基于 Electron 的桌面串口终端工具，面向嵌入式开发、串口调试、设备联调、日志查看与关键字过滤场景。当前版本已支持主串口终端、过滤标签页、分屏工作区、Shell 标签页、多标签独立日志、多语言和在线更新。
 
-[下载最新版本](https://github.com/Trigger-CN/SerialTerminal/releases/latest)
+[服务器下载最新版（Windows 0.3.5）](https://trigger-cn.top/serialterminal/SerialTerminal-Setup-0.3.5.exe) · [GitHub Releases](https://github.com/Trigger-CN/SerialTerminal/releases/latest)
 
 ![Serial Terminal Screenshot](assets/Snipaste_2026-04-18_22-22-44.png)
 
