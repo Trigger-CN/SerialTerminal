@@ -118,7 +118,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 5/);
+  assert.match(main, /const CONFIG_VERSION = 6/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
@@ -137,6 +137,19 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   assert.match(renderer, /if \(state\.resetAfterWrite\) \{[\s\S]*term\.reset\(\)/);
   assert.match(renderer, /writeTerminalOutput\(serialTerm, mainOutput\)/);
   assert.match(renderer, /writeTerminalOutput\(tab\.term, output\)/);
+});
+
+test('anonymous activity statistics require explicit consent and exclude server code from builds', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+  assert.match(main, /telemetryEnabled: false/);
+  assert.match(main, /normalized\.telemetryEnabled = normalizeBoolean\(source\.telemetryEnabled, false\)/);
+  assert.match(main, /telemetryReporter\.configure\(currentConfig\)/);
+  assert.match(main, /telemetryReporter\.stop\(\)/);
+  assert.match(preferences, /id="telemetryEnabled"/);
+  assert.ok(packageJson.build.files.includes('!telemetry-server/**'));
 });
 
 test('filter tabs locate exact logical lines in the main terminal', () => {

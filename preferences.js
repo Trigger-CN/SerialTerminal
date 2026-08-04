@@ -78,6 +78,7 @@ const elements = {
   cancelBtn: document.getElementById('cancel-btn'),
   resetBtn: document.getElementById('reset-btn'),
   openConfigBtn: document.getElementById('open-config-btn'),
+  telemetryEnabled: document.getElementById('telemetryEnabled'),
 
   // Update elements
   updateStatusContainer: document.getElementById('update-status-container'),
@@ -477,6 +478,7 @@ async function init() {
   elements.rawBufferAutoFlushMB.value = String(normalizeLogAutoFlushMB(config.rawBufferAutoFlushMB));
   elements.saveRawSerialToFile.checked = config.saveRawSerialToFile === true;
   elements.rawLogFileNameFormat.value = normalizeRawLogFileNameFormat(config.rawLogFileNameFormat);
+  elements.telemetryEnabled.checked = config.telemetryEnabled === true;
   
   toggleLogSettings(config.logEnabled);
 
@@ -765,6 +767,7 @@ elements.saveBtn.onclick = async () => {
     rawBufferAutoFlushMB: normalizeLogAutoFlushMB(elements.rawBufferAutoFlushMB.value),
     saveRawSerialToFile: elements.saveRawSerialToFile.checked,
     rawLogFileNameFormat,
+    telemetryEnabled: elements.telemetryEnabled.checked,
     highlightRules: rules,
     shortcuts: normalizeShortcuts(shortcutValues),
     shellProfiles,

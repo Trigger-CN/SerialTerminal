@@ -1,0 +1,20 @@
+[Unit]
+Description=SerialTerminal anonymous activity metrics
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=serialterminal-telemetry
+Group=serialterminal-telemetry
+WorkingDirectory=/home/ubuntu/ws/SerialTerminalTelemetry
+EnvironmentFile=/etc/serialterminal-telemetry.env
+ExecStart=/home/ubuntu/ws/SerialTerminalTelemetry/runtime/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

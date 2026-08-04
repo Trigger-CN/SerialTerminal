@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SerialTerminal 活跃度统计</title>
+  <link rel="stylesheet" href="/serialterminal/admin/dashboard.css">
+  <script src="/serialterminal/admin/dashboard.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">SerialTerminal</p>
+      <h1>活跃设备</h1>
+    </div>
+    <div class="toolbar">
+      <div class="period" role="group" aria-label="统计周期">
+        <button data-days="7">7 天</button>
+        <button class="active" data-days="30">30 天</button>
+        <button data-days="90">90 天</button>
+      </div>
+      <button id="logout" class="secondary">退出</button>
+    </div>
+  </header>
+  <main>
+    <section class="metrics" aria-label="核心指标">
+      <article><span>今日活跃</span><strong id="dau">-</strong><small>DAU</small></article>
+      <article><span>最近 7 日</span><strong id="wau">-</strong><small>WAU</small></article>
+      <article><span>最近 30 日</span><strong id="mau">-</strong><small>MAU</small></article>
+      <article><span>累计设备</span><strong id="total">-</strong><small>安装实例</small></article>
+      <article><span>今日新增</span><strong id="new-today">-</strong><small>首次上报</small></article>
+    </section>
+    <section class="trend-section">
+      <div class="section-heading">
+        <div><p class="eyebrow">Activity</p><h2>每日活跃趋势</h2></div>
+        <span id="updated-at">正在加载</span>
+      </div>
+      <svg id="activity-chart" viewBox="0 0 1000 320" role="img" aria-label="每日活跃设备趋势图"></svg>
+    </section>
+    <section class="breakdowns">
+      <div><p class="eyebrow">Versions</p><h2>版本分布</h2><div id="versions" class="bars"></div></div>
+      <div><p class="eyebrow">Platforms</p><h2>平台分布</h2><div id="platforms" class="bars"></div></div>
+      <div><p class="eyebrow">Architecture</p><h2>架构分布</h2><div id="architectures" class="bars"></div></div>
+    </section>
+    <p id="error" class="error" hidden></p>
+  </main>
+</body>
+</html>

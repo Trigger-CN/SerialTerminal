@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily SerialTerminal activity retention cleanup
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

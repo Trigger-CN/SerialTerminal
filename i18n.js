@@ -401,6 +401,36 @@ Object.assign(translations.de.prefs, {
   shortcuts: 'Tastenkürzel', shortcutsSettings: 'Tastenkürzel-Einstellungen', shortcutsHelp: 'In ein Feld klicken und eine Tastenkombination drücken. Backspace löscht das Kürzel.', resetShortcutDefaults: 'Tastenkürzel zurücksetzen', shortcutDisabled: 'Deaktiviert',
   shortcutSendMainInput: 'Unteres Eingabefeld senden', shortcutToggleSendHistory: 'Sendungsverlauf öffnen', shortcutHistoryPrevious: 'Vorheriger Sendungsverlauf', shortcutHistoryNext: 'Nächster Sendungsverlauf', shortcutFocusSearch: 'Suche fokussieren', shortcutClearActiveTerminal: 'Aktives Terminal leeren', shortcutRefreshPorts: 'Serielle Ports aktualisieren', shortcutToggleSerialConnection: 'Seriell verbinden / trennen'
 });
+Object.assign(translations.en.prefs, {
+  anonymousUsageStatistics: 'Pseudonymous Usage Statistics',
+  telemetryEnabled: 'Send anonymous active installation statistics',
+  telemetryDescription: 'Sends a random installation ID, app version, operating system, and architecture at most once per day. Serial ports, serial data, files, usernames, and hardware identifiers are never collected.'
+});
+Object.assign(translations['zh-CN'].prefs, {
+  anonymousUsageStatistics: '匿名安装标识统计',
+  telemetryEnabled: '发送匿名活跃安装统计',
+  telemetryDescription: '每天最多发送一次随机安装标识、应用版本、操作系统和处理器架构。不会收集串口、串口数据、文件、用户名或硬件标识。'
+});
+Object.assign(translations['zh-TW'].prefs, {
+  anonymousUsageStatistics: '匿名安裝識別統計',
+  telemetryEnabled: '傳送匿名活躍安裝統計',
+  telemetryDescription: '每天最多傳送一次隨機安裝識別碼、應用程式版本、作業系統和處理器架構。不會收集串口、串口資料、檔案、使用者名稱或硬體識別碼。'
+});
+Object.assign(translations.fr.prefs, {
+  anonymousUsageStatistics: 'Statistiques anonymes',
+  telemetryEnabled: 'Envoyer des statistiques anonymes d’installation active',
+  telemetryDescription: 'Envoie au maximum une fois par jour un identifiant aléatoire, la version, le système et l’architecture. Aucun port série, contenu, fichier, nom d’utilisateur ou identifiant matériel n’est collecté.'
+});
+Object.assign(translations.ru.prefs, {
+  anonymousUsageStatistics: 'Анонимная статистика',
+  telemetryEnabled: 'Отправлять анонимную статистику активных установок',
+  telemetryDescription: 'Не чаще раза в день отправляются случайный ID установки, версия, ОС и архитектура. Последовательные порты, данные, файлы, имена пользователей и аппаратные ID не собираются.'
+});
+Object.assign(translations.de.prefs, {
+  anonymousUsageStatistics: 'Anonyme Nutzungsstatistik',
+  telemetryEnabled: 'Anonyme Statistik aktiver Installationen senden',
+  telemetryDescription: 'Höchstens einmal täglich werden eine zufällige Installations-ID, Version, Betriebssystem und Architektur gesendet. Serielle Ports, Daten, Dateien, Benutzernamen und Hardwarekennungen werden nicht erfasst.'
+});
 function getLanguage(configLanguage) {
   return translations[configLanguage] ? configLanguage : 'en';
 }

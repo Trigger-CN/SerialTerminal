@@ -25,3 +25,20 @@ jobs:
           find . -path ./node_modules -prune -o -path ./dist -prune -o -name '*.js' -print0 |
             xargs -0 -n1 node --check
       - run: npm audit --package-lock-only --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+
+  telemetry-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: telemetry-server
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: telemetry-server/package-lock.json
+          registry-url: https://registry.npmjs.org
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm audit --package-lock-only --omit=dev --audit-level=high --registry=https://registry.npmjs.org

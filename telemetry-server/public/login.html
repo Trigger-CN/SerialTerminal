@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SerialTerminal 活跃度统计</title>
+  <link rel="stylesheet" href="/serialterminal/admin/dashboard.css">
+</head>
+<body class="login-page">
+  <main class="login-panel">
+    <div class="product-mark">ST</div>
+    <p class="eyebrow">SerialTerminal</p>
+    <h1>活跃度统计后台</h1>
+    <form method="post" action="/serialterminal/admin/login">
+      <input type="hidden" name="csrf" value="{{LOGIN_CSRF}}">
+      <label for="username">管理员账号</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">管理员密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">登录</button>
+    </form>
+  </main>
+</body>
+</html>

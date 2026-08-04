@@ -465,6 +465,15 @@
                 </div>
 
                 <div style="margin-top: 20px; padding: 15px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);">
+                    <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;" data-i18n="prefs.anonymousUsageStatistics">Pseudonymous Usage Statistics</h3>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="telemetryEnabled">
+                        <span data-i18n="prefs.telemetryEnabled">Send anonymous active installation statistics</span>
+                    </label>
+                    <p style="margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary);" data-i18n="prefs.telemetryDescription">Sends a random installation ID, app version, operating system, and architecture at most once per day. Serial ports, serial data, files, usernames, and hardware identifiers are never collected.</p>
+                </div>
+
+                <div style="margin-top: 20px; padding: 15px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);">
                     <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 16px;" data-i18n="prefs.softwareUpdate">Software Update</h3>
                     <div id="update-status-container" style="margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);" data-i18n="prefs.currentVersionUpToDate">
                         Current version is up to date.

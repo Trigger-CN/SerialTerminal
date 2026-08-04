@@ -1,0 +1,19 @@
+{
+  "name": "serialterminal-telemetry-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Anonymous active installation metrics for SerialTerminal",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "password": "node scripts/hash-password.js",
+    "prune": "node scripts/prune-activity.js"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "pg": "8.16.3"
+  }
+}

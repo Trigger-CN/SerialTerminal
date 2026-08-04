@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, crashReporter } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { createTelemetryReporter, UUID_PATTERN } = require('./telemetry-reporter');
 const pty = require('node-pty');
 const { SerialPort } = require('serialport');
 const iconv = require('iconv-lite');
@@ -35,7 +36,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 5;
+const CONFIG_VERSION = 6;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const DEFAULT_SHORTCUTS = {
@@ -180,6 +181,13 @@ function normalizeConfig(config, defaults) {
   normalized.scrollbackLimit = normalizeIntegerSetting(legacyScrollbackLimit, 'scrollbackLimit');
   normalized.historyBufferSize = normalizeIntegerSetting(source.historyBufferSize, 'historyBufferSize');
   normalized.mouseWheelScrollLines = normalizeIntegerSetting(source.mouseWheelScrollLines, 'mouseWheelScrollLines');
+  normalized.telemetryEnabled = normalizeBoolean(source.telemetryEnabled, false);
+  normalized.telemetryInstallationId = UUID_PATTERN.test(source.telemetryInstallationId || '')
+    ? source.telemetryInstallationId
+    : '';
+  normalized.telemetryLastReportedDate = /^\d{4}-\d{2}-\d{2}$/.test(source.telemetryLastReportedDate || '')
+    ? source.telemetryLastReportedDate
+    : '';
 
   normalized.shellProfiles = normalizeShellProfiles(source.shellProfiles, defaults.shellProfiles);
   normalized.defaultShellProfileId = resolveDefaultShellProfileId(source, normalized.shellProfiles);
@@ -313,6 +321,9 @@ function loadConfig() {
     scrollbackLimit: 20000,
     historyBufferSize: 5000000,
     mouseWheelScrollLines: 3,
+    telemetryEnabled: false,
+    telemetryInstallationId: '',
+    telemetryLastReportedDate: '',
     filterHistory: [],
     windowBounds: {
       width: 1000,
@@ -400,6 +411,7 @@ function loadConfig() {
 }
 
 let currentConfig = loadConfig();
+let telemetryReporter;
 let terminalContextMenuState = null;
 const shellSessions = new Map();
 
@@ -775,7 +787,19 @@ function saveConfig(config) {
   }
   currentConfig = normalized;
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
+  telemetryReporter?.configure(currentConfig);
 }
+
+function persistTelemetryState(state) {
+  currentConfig = normalizeConfig({ ...currentConfig, ...state }, currentConfig);
+  fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
+}
+
+telemetryReporter = createTelemetryReporter({
+  getAppVersion: () => app.getVersion(),
+  onStateChange: persistTelemetryState,
+  logger: log
+});
 
 function findShellProfile(shellTypeOrName) {
   const profiles = Array.isArray(currentConfig.shellProfiles) ? currentConfig.shellProfiles : [];
@@ -1222,6 +1246,7 @@ function checkForAppUpdates({ manual = false } = {}) {
 app.whenReady().then(() => {
   createWindow();
   startLogAutoFlushTimer();
+  telemetryReporter.configure(currentConfig);
   checkForAppUpdates();
 
   app.on('activate', () => {
@@ -1250,6 +1275,7 @@ ipcMain.handle('get-about-info', () => {
 });
 
 app.on('before-quit', () => {
+  telemetryReporter.stop();
   if (logFlushTimer) clearInterval(logFlushTimer);
   Array.from(shellSessions.keys()).forEach(tabId => closeShellSession(tabId));
   flushRawBinaryLogSync();
