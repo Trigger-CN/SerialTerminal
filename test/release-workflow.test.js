@@ -44,10 +44,9 @@ test('release uploads exclude unpacked application directories', () => {
 test('release notes summarize commits since the previous tag', () => {
   assert.match(workflow, /name: Generate release notes/);
   assert.match(workflow, /git describe --tags --abbrev=0/);
-  assert.match(workflow, /Features/);
-  assert.match(workflow, /Fixes/);
-  assert.match(workflow, /Other Changes/);
-  assert.match(workflow, /\(\[\^ \]\+\[\[:space:\]\]\+\)\?/);
+  assert.match(workflow, /git log "\$RANGE" --pretty=format:'- %s \(%h\)'/);
+  assert.equal((workflow.match(/git log "\$RANGE"/g) || []).length, 1);
+  assert.doesNotMatch(workflow, /### (?:Features|Fixes|Improvements|Documentation|Tests|Build|Other Changes)/);
   assert.match(workflow, /body_path: release-notes\.md/);
   assert.doesNotMatch(workflow, /generate_release_notes:\s*true/);
 });

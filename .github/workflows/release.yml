@@ -111,33 +111,8 @@ jobs:
               RANGE="${GITHUB_SHA}"
             fi
 
-            for CATEGORY in Features Fixes Improvements Documentation Tests Build; do
-              case "$CATEGORY" in
-                Features) PATTERN='feat' ;;
-                Fixes) PATTERN='fix' ;;
-                Improvements) PATTERN='refactor|perf|style|ui' ;;
-                Documentation) PATTERN='docs' ;;
-                Tests) PATTERN='test' ;;
-                Build) PATTERN='build|ci|release|chore' ;;
-              esac
-              COMMITS="$(git log "$RANGE" --pretty=format:'%h%x09%s' --extended-regexp --regexp-ignore-case --grep="^([^ ]+[[:space:]]+)?(${PATTERN})(\\([^)]*\\))?:")"
-              if [ -n "$COMMITS" ]; then
-                printf '### %s\n\n' "$CATEGORY"
-                while IFS=$'\t' read -r HASH SUBJECT; do
-                  [ -n "$HASH" ] && printf -- '- %s (%s)\n' "$SUBJECT" "$HASH"
-                done <<< "$COMMITS"
-                printf '\n'
-              fi
-            done
-
-            OTHER="$(git log "$RANGE" --pretty=format:'%h%x09%s' --extended-regexp --regexp-ignore-case --invert-grep --grep='^([^ ]+[[:space:]]+)?(feat|fix|refactor|perf|style|ui|docs|test|build|ci|release|chore)(\\([^)]*\\))?:')"
-            if [ -n "$OTHER" ]; then
-              printf '### Other Changes\n\n'
-              while IFS=$'\t' read -r HASH SUBJECT; do
-                [ -n "$HASH" ] && printf -- '- %s (%s)\n' "$SUBJECT" "$HASH"
-              done <<< "$OTHER"
-              printf '\n'
-            fi
+            git log "$RANGE" --pretty=format:'- %s (%h)'
+            printf '\n\n'
 
             printf '## Downloads\n\n'
             printf '%s\n' '- Windows: installer, blockmap, and update metadata are attached below.'
