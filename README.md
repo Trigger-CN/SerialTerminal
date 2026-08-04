@@ -2,6 +2,8 @@
 
 一个基于 Electron 的桌面串口终端工具，面向嵌入式开发、串口调试、设备联调、日志查看与关键字过滤场景。当前版本已支持主串口终端、过滤标签页、分屏工作区、Shell 标签页、多标签独立日志、多语言和在线更新。
 
+[下载最新版本](https://github.com/Trigger-CN/SerialTerminal/releases/latest)
+
 ![Serial Terminal Screenshot](assets/Snipaste_2026-04-18_22-22-44.png)
 
 ## 简介
@@ -42,6 +44,8 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 支持在 pane 之间移动过滤标签页与 Shell 标签页
 - 支持拖动 pane 分隔条调整区域比例
 - 工作区布局会自动持久化，并在下次启动时恢复
+- 串口输出在主进程和渲染进程中批量处理，终端显示刷新率最高为 30 FPS，降低高吞吐场景的 CPU 占用
+- 默认保留 20,000 行滚动缓冲，可在设置中调整，最大 100,000 行；显示队列过载时优先丢弃旧的待显示内容，不影响日志保存和快捷指令自动触发
 
 ### 过滤标签页
 
@@ -53,8 +57,9 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
   - 终端显示区
 - 支持过滤历史下拉复用
 - 支持关闭应用后恢复已打开的过滤标签页
-- 支持恢复过滤条件、大小写、正则状态和所属 pane
+- 支持恢复过滤条件、大小写、整词、正则状态和所属 pane
 - 过滤结果会对命中文本进行高亮显示
+- 可从过滤结果右键定位到主终端；定位使用完整逻辑行精确匹配，并处理终端自动折行和重复内容，不依赖行号搜索
 
 ### 搜索
 
@@ -76,14 +81,14 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
   - 按回车发送开关
 - 发送后输入框内容不会自动清空
 - 底部输入框会保存最近发送历史，默认 20 条；历史菜单可点击条目替换当前输入内容，保存数量可在设置窗口调整，达到上限时自动删除最老条目
-- 左侧“发送”页顶部提供统一发送配置；底部输入、自动发送、全部快捷发送和右键整段发送使用当前统一模式、文本编码和追加选项。主终端 Text 逐键输入不应用“追加 CRLF”，Enter 只服从换行模式
+- 左侧“发送”页顶部提供统一发送配置；底部输入、自动发送和右键整段发送使用当前统一模式、文本编码和追加选项。主终端 Text 逐键输入不应用“追加 CRLF”，Enter 只服从换行模式
 - Text/Hex 切换时底部输入分别保留当前会话内的草稿
 - 保留左侧自动发送能力，可配置内容和时间间隔；全局发送配置变化时会重新校验并安全重启
 - 支持快捷发送列表
-- 快捷发送项保存稳定 ID、标签、内容和可选自动触发设置，支持新增、编辑、删除、拖动排序；发送语义由当前统一发送配置决定
+- 每条快捷发送保存稳定 ID、标签、内容、独立的 `Text / Hex` 模式和可选自动触发设置，支持新增、编辑、删除、拖动排序；手动发送和自动触发都使用该指令自身的模式
 - 每条快捷发送可在编辑窗口单独启用自动触发，匹配文本支持正则、大小写匹配和全字匹配；默认关闭，开启后串口新接收内容按接收编码解码并匹配，命中后自动发送对应快捷指令
 - 自动触发命中时，对应快捷发送按钮会以绿色闪烁提示
-- 快捷发送顺序会自动持久化
+- 展开和收起侧栏共享快捷发送内容，但分别保存各自的排列顺序；收起侧栏可为快捷按钮配置文字和颜色
 
 ### 快捷键
 
@@ -171,6 +176,8 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 主终端、过滤标签页、Shell 标签页都可分别写入独立日志文件
 - 可另行启用 RX 原始二进制日志；它逐字节保存串口接收数据，不包含 TX、连接提示或格式化文本，并使用 `.bin` 文件
 - 原始日志文件名支持 `%Y %m %d %H %M %S`，同名时自动添加序号；数据按缓冲阈值、断开和退出时追加落盘
+- 使用 `electron-log` 保存应用运行日志，并记录主进程和渲染进程异常、未处理的 Promise 拒绝、加载失败、无响应和渲染进程退出等诊断信息
+- Electron Crashpad 在用户数据目录的 `crash-dumps` 中保存本地崩溃转储，不自动上传
 - 所有全局配置保存在用户目录下的 `config.json`
 
 ### 多语言
@@ -191,6 +198,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 集成 `electron-updater`
 - 应用启动时自动检查更新
 - 支持手动检查更新
+- 更新不会静默下载或在退出时自动安装，下载和安装都需要用户明确确认
 - 发现新版本时支持：
   - 立即更新
   - 暂不更新
@@ -200,10 +208,13 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 更新提示会尝试显示 GitHub Release 正文；获取不到时提示网络异常
 - 使用 `electron-builder` 打包 Windows 与 Linux 发布物
 - 推送 `v*` Git tag 后，GitHub Actions 会使用同一 lockfile 并行构建 Windows/Linux 发布物；构建前执行测试和 native rebuild，构建后校验 lockfile 未变化
+- GitHub Release 正文会自动列出上一个 tag 到当前 tag 之间的提交，每个提交只出现一次，不按提交类型分类
 - 发布任务先创建 GitHub Release，再将 Windows 的 `latest.yml`、NSIS 安装包和 blockmap 上传到自建镜像；镜像发布需要仓库 Secret `MIRROR_SSH_PRIVATE_KEY`
 - 镜像发布脚本位于 `scripts/publish-update-mirror.sh`，CI 会先更新服务器脚本，再归档安装包并最后原子切换 `latest.yml`
 
 首次启用镜像发布时，需要在 GitHub 仓库 `Settings > Secrets and variables > Actions` 新增 Repository Secret `MIRROR_SSH_PRIVATE_KEY`，内容为镜像专用 Ed25519 私钥全文。服务器只授权无 sudo 的 `serialterminal-deploy` 账户写入安装包工作目录；不要使用 `ubuntu` 管理账户的私钥。
+
+工作流中的 `known_hosts` 条目是镜像服务器的公开 SSH 主机密钥，用于固定服务器身份并防止中间人攻击，不是敏感私钥。服务器重装或轮换主机密钥后，应通过可信渠道核对新指纹再更新该条目，不要改用 `StrictHostKeyChecking=no` 或运行时 `ssh-keyscan` 绕过校验。
 
 ## 项目结构
 
@@ -298,7 +309,7 @@ npm run dist:win
 npm run dist:linux
 ```
 
-建议正式发版时在 GitHub Release 中填写版本说明。应用更新提示优先读取线上 Release 正文。
+正式发版时推送 `v*` tag，GitHub Actions 会自动生成版本说明并创建 GitHub Release。应用更新提示优先读取线上 Release 正文。
 
 ## 配置说明
 
@@ -306,6 +317,8 @@ npm run dist:linux
 
 - 配置文件：`config.json`
 - 默认日志目录：用户文档目录下的 `SerialTerminalLogs`
+- 应用诊断日志：用户数据目录下的 `logs`
+- 本地崩溃转储：用户数据目录下的 `crash-dumps`
 
 当前配置主要包括：
 
@@ -337,7 +350,7 @@ npm run dist:linux
 - `test/serial_test.py`
 - `test/serial_tester.py`
 
-这些脚本更适合作为联调辅助工具，当前项目本身没有完整的前端自动化测试体系。
+这些 Python 脚本更适合作为联调辅助工具。项目同时使用 Node.js 内置测试运行器覆盖配置归一化、编码与 Hex 格式化、工作区状态、日志生命周期、关键界面结构和发布工作流，可运行 `npm test` 执行。
 
 ## 已知实现特点
 
