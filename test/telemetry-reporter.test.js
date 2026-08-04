@@ -28,7 +28,7 @@ function createHarness(fetchImpl) {
   return { reporter, timers, stateChanges };
 }
 
-test('anonymous activity reporting stays disabled until explicit opt-in', async () => {
+test('anonymous activity reporting stays disabled after explicit opt-out', async () => {
   let calls = 0;
   const { reporter, timers } = createHarness(async () => {
     calls++;

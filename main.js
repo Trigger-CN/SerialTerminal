@@ -181,7 +181,7 @@ function normalizeConfig(config, defaults) {
   normalized.scrollbackLimit = normalizeIntegerSetting(legacyScrollbackLimit, 'scrollbackLimit');
   normalized.historyBufferSize = normalizeIntegerSetting(source.historyBufferSize, 'historyBufferSize');
   normalized.mouseWheelScrollLines = normalizeIntegerSetting(source.mouseWheelScrollLines, 'mouseWheelScrollLines');
-  normalized.telemetryEnabled = normalizeBoolean(source.telemetryEnabled, false);
+  normalized.telemetryEnabled = normalizeBoolean(source.telemetryEnabled, true);
   normalized.telemetryInstallationId = UUID_PATTERN.test(source.telemetryInstallationId || '')
     ? source.telemetryInstallationId
     : '';
@@ -321,7 +321,7 @@ function loadConfig() {
     scrollbackLimit: 20000,
     historyBufferSize: 5000000,
     mouseWheelScrollLines: 3,
-    telemetryEnabled: false,
+    telemetryEnabled: true,
     telemetryInstallationId: '',
     telemetryLastReportedDate: '',
     filterHistory: [],

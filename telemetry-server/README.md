@@ -4,7 +4,7 @@ Private active-installation dashboard and pseudonymous daily activity endpoint.
 
 ## Data collected
 
-- Random installation UUID generated after explicit opt-in
+- Random installation UUID generated while activity statistics are enabled; users can disable reporting in settings
 - SerialTerminal version
 - Operating system family
 - Processor architecture

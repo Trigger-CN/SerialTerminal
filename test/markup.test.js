@@ -139,13 +139,13 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   assert.match(renderer, /writeTerminalOutput\(tab\.term, output\)/);
 });
 
-test('anonymous activity statistics require explicit consent and exclude server code from builds', () => {
+test('anonymous activity statistics default to enabled and exclude server code from builds', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
-  assert.match(main, /telemetryEnabled: false/);
-  assert.match(main, /normalized\.telemetryEnabled = normalizeBoolean\(source\.telemetryEnabled, false\)/);
+  assert.match(main, /telemetryEnabled: true/);
+  assert.match(main, /normalized\.telemetryEnabled = normalizeBoolean\(source\.telemetryEnabled, true\)/);
   assert.match(main, /telemetryReporter\.configure\(currentConfig\)/);
   assert.match(main, /telemetryReporter\.stop\(\)/);
   assert.match(preferences, /id="telemetryEnabled"/);
