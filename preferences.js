@@ -498,6 +498,7 @@ async function init() {
       const versionEl = document.getElementById('app-version');
       const authorEl = document.getElementById('app-author');
       const githubLink = document.getElementById('app-github');
+      const relayRecommendationLink = document.getElementById('relay-recommendation');
 
       if (versionEl) versionEl.textContent = aboutInfo.version;
       if (authorEl) authorEl.textContent = aboutInfo.author;
@@ -506,6 +507,12 @@ async function init() {
           githubLink.onclick = (e) => {
               e.preventDefault();
               shell.openExternal(aboutInfo.github);
+          };
+      }
+      if (relayRecommendationLink) {
+          relayRecommendationLink.onclick = (e) => {
+              e.preventDefault();
+              shell.openExternal('https://lowapi.asdb.top/');
           };
       }
   } catch (err) {

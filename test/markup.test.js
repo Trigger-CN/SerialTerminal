@@ -58,6 +58,7 @@ test('shell profile management opens the matching preferences tab', () => {
   assert.match(renderer, /send\('open-prefs', \{ focusTab: 'shell-profiles' \}\)/);
   assert.match(main, /createPrefsWindow\(typeof options\.focusTab === 'string' \? options\.focusTab : null\)/);
   assert.match(main, /send\('focus-preferences-tab', focusTab\)/);
+  assert.match(main, /prefsWindow = new BrowserWindow\(\{\s*width: 750,\s*height: 680,/);
   assert.match(preferences, /ipcRenderer\.on\('focus-preferences-tab'/);
   assert.match(preferences, /focusPreferencesTab\(tabId\)/);
 });
@@ -67,6 +68,16 @@ test('shell profile buttons pass the configured name to new shell tabs', () => {
 
   assert.match(renderer, /createShellTab\(\{ profileId: profile\.id, title: profile\.name \}/);
   assert.match(renderer, /profile\?\.name\?\.trim\(\) \|\| tr\('main\.shellTitle'/);
+});
+
+test('about tab opens the relay recommendation externally with amber styling', () => {
+  const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+
+  assert.match(html, /class="about-label relay-recommendation-label">中转站优选<\/span>/);
+  assert.match(html, /id="relay-recommendation">https:\/\/lowapi\.asdb\.top\/<\/a>/);
+  assert.match(html, /\.relay-recommendation-label\s*\{[^}]*color:\s*#f5b942;/s);
+  assert.match(preferences, /shell\.openExternal\('https:\/\/lowapi\.asdb\.top\/'\)/);
 });
 
 test('collapsed sidebar scrolls only quick sends above fixed serial tools', () => {

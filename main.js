@@ -978,7 +978,7 @@ function createPrefsWindow(focusTab = null) {
 
   prefsWindow = new BrowserWindow({
     width: 750,
-    height: 650,
+    height: 680,
     parent: mainWindow,
     modal: false,
     title: 'Preferences',
