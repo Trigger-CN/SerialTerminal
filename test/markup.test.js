@@ -18,14 +18,17 @@ test('main terminal tab uses only the renderer click binding', () => {
   assert.equal((renderer.match(/mainTabButton\.addEventListener\('click'/g) || []).length, 1);
 });
 
-test('main window keeps the Trigger-CN product title across language changes', () => {
+test('main window title shows the installed version and available update', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
 
   assert.match(html, /<title>SerialTerminal by Trigger-CN<\/title>/);
-  assert.match(main, /title: 'SerialTerminal by Trigger-CN'/);
-  assert.match(renderer, /document\.title = 'SerialTerminal by Trigger-CN'/);
+  assert.match(main, /MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN'/);
+  assert.match(main, /return `\$\{MAIN_WINDOW_TITLE\} \$\{currentVersion\}\$\{updateSuffix\}`/);
+  assert.match(main, /` 有新版本：\$\{latestVersion\}`/);
+  assert.match(main, /title: getMainWindowTitle\(\)/);
+  assert.doesNotMatch(renderer, /document\.title\s*=/);
   assert.doesNotMatch(html, /<title[^>]*data-i18n=/);
 });
 
@@ -436,4 +439,13 @@ test('update confirmation opens a non-closable download window with progress and
   assert.match(progressRenderer, /bytesPerSecond/);
   assert.match(progressRenderer, /open-update-download-url/);
   assert.match(progressRenderer, /ipcRenderer\.send\('quit-and-install'\)/);
+});
+
+test('automatic update checks repeat every two hours without prompting', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+
+  assert.match(main, /UPDATE_CHECK_INTERVAL_MS = 2 \* 60 \* 60 \* 1000/);
+  assert.match(main, /setInterval\(\(\) => \{\s*checkForAppUpdates\(\{ scheduled: true \}\);\s*\}, UPDATE_CHECK_INTERVAL_MS\)/s);
+  assert.match(main, /if \(updatePromptState\.checkSource === 'scheduled'\) \{\s*updatePromptState\.phase = 'available';\s*updatePromptState\.checkSource = null;\s*return;/s);
+  assert.match(main, /if \(updateCheckTimer\) clearInterval\(updateCheckTimer\)/);
 });

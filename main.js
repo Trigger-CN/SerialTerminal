@@ -21,6 +21,8 @@ const {
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
 const UPDATE_FEED_URL = 'https://trigger-cn.top/serialterminal/';
+const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN';
 autoUpdater.setFeedURL({ provider: 'generic', url: UPDATE_FEED_URL });
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
@@ -28,6 +30,7 @@ autoUpdater.autoInstallOnAppQuit = false;
 let mainWindow;
 let prefsWindow;
 let updateDownloadWindow;
+let updateCheckTimer;
 let updatePromptState = {
   phase: 'idle',
   checkSource: null,
@@ -910,12 +913,30 @@ function tr(key, params = {}) {
   return t(getLanguage(currentConfig.language), key, params);
 }
 
+function formatAppVersion(version) {
+  const normalizedVersion = String(version || '').replace(/^v/i, '');
+  return normalizedVersion ? `v${normalizedVersion}` : '';
+}
+
+function getMainWindowTitle() {
+  const currentVersion = formatAppVersion(app.getVersion());
+  const latestVersion = formatAppVersion(updatePromptState.latestInfo?.version);
+  const updateSuffix = latestVersion ? ` 有新版本：${latestVersion}` : '';
+  return `${MAIN_WINDOW_TITLE} ${currentVersion}${updateSuffix}`;
+}
+
+function updateMainWindowTitle() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setTitle(getMainWindowTitle());
+  }
+}
+
 function createWindow() {
   const windowBounds = currentConfig.windowBounds || {};
   mainWindow = new BrowserWindow({
     width: windowBounds.width || 1000,
     height: windowBounds.height || 700,
-    title: 'SerialTerminal by Trigger-CN',
+    title: getMainWindowTitle(),
     icon: APP_ICON_PATH,
     backgroundColor: '#1e1e1e',
     autoHideMenuBar: true, // Hide the menu bar
@@ -926,6 +947,10 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
+  mainWindow.on('page-title-updated', event => {
+    event.preventDefault();
+    updateMainWindowTitle();
+  });
 
   // Open DevTools automatically for debugging
   // mainWindow.webContents.openDevTools();
@@ -1216,7 +1241,7 @@ function sendCurrentUpdateStatusToPrefs() {
   }
 }
 
-function checkForAppUpdates({ manual = false } = {}) {
+function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
   if (!app.isPackaged || process.env.NODE_ENV === 'development') {
     if (manual) {
       setTimeout(() => {
@@ -1227,6 +1252,7 @@ function checkForAppUpdates({ manual = false } = {}) {
   }
 
   if (updatePromptState.phase === 'downloading' || updatePromptState.phase === 'downloaded') {
+    if (scheduled) return;
     sendCurrentUpdateStatusToPrefs();
     createUpdateDownloadWindow(updatePromptState.latestInfo);
     return;
@@ -1240,13 +1266,21 @@ function checkForAppUpdates({ manual = false } = {}) {
     return;
   }
   if (updatePromptState.phase === 'available' && updatePromptState.latestInfo) {
+    if (scheduled) {
+      updatePromptState.phase = 'checking';
+      updatePromptState.checkSource = 'scheduled';
+      autoUpdater.checkForUpdates().catch(error => {
+        log.error('Failed to check for updates:', error);
+      });
+      return;
+    }
     sendCurrentUpdateStatusToPrefs();
     offerAvailableUpdate(updatePromptState.latestInfo, false);
     return;
   }
 
   updatePromptState.phase = 'checking';
-  updatePromptState.checkSource = manual ? 'manual' : 'startup';
+  updatePromptState.checkSource = manual ? 'manual' : scheduled ? 'scheduled' : 'startup';
   autoUpdater.checkForUpdates().catch(error => {
     log.error('Failed to check for updates:', error);
   });
@@ -1257,6 +1291,9 @@ app.whenReady().then(() => {
   startLogAutoFlushTimer();
   telemetryReporter.configure(currentConfig);
   checkForAppUpdates();
+  updateCheckTimer = setInterval(() => {
+    checkForAppUpdates({ scheduled: true });
+  }, UPDATE_CHECK_INTERVAL_MS);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1285,6 +1322,7 @@ ipcMain.handle('get-about-info', () => {
 
 app.on('before-quit', () => {
   telemetryReporter.stop();
+  if (updateCheckTimer) clearInterval(updateCheckTimer);
   if (logFlushTimer) clearInterval(logFlushTimer);
   Array.from(shellSessions.keys()).forEach(tabId => closeShellSession(tabId));
   flushRawBinaryLogSync();
@@ -1734,7 +1772,14 @@ autoUpdater.on('checking-for-update', () => {
 
 autoUpdater.on('update-available', (info) => {
   updatePromptState.latestInfo = info;
+  updateMainWindowTitle();
   sendUpdateStatusToPrefs('available', info);
+
+  if (updatePromptState.checkSource === 'scheduled') {
+    updatePromptState.phase = 'available';
+    updatePromptState.checkSource = null;
+    return;
+  }
 
   const isStartupPrompt = updatePromptState.checkSource === 'startup';
   if (isStartupPrompt && currentConfig.skippedUpdateVersion === info.version) {
@@ -1748,8 +1793,10 @@ autoUpdater.on('update-available', (info) => {
 
 autoUpdater.on('update-not-available', (info) => {
   sendUpdateStatusToPrefs('not-available', info);
+  updatePromptState.latestInfo = null;
   updatePromptState.phase = 'idle';
   updatePromptState.checkSource = null;
+  updateMainWindowTitle();
 });
 
 autoUpdater.on('error', (err) => {
