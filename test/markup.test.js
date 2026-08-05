@@ -18,6 +18,30 @@ test('main terminal tab uses only the renderer click binding', () => {
   assert.equal((renderer.match(/mainTabButton\.addEventListener\('click'/g) || []).length, 1);
 });
 
+test('main window keeps the Trigger-CN product title across language changes', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(html, /<title>SerialTerminal by Trigger-CN<\/title>/);
+  assert.match(main, /title: 'SerialTerminal by Trigger-CN'/);
+  assert.match(renderer, /document\.title = 'SerialTerminal by Trigger-CN'/);
+  assert.doesNotMatch(html, /<title[^>]*data-i18n=/);
+});
+
+test('Windows windows and installers use the multi-size application icon', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+  assert.match(main, /APP_ICON_PATH = path\.join\(__dirname, 'assets', process\.platform === 'win32' \? 'app\.ico' : 'icon-512x512\.png'\)/);
+  assert.match(main, /app\.setAppUserModelId\('com\.serialterminal\.app'\)/);
+  assert.equal((main.match(/icon: APP_ICON_PATH/g) || []).length, 3);
+  assert.equal(packageJson.build.win.icon, 'assets/app.ico');
+  assert.equal(packageJson.build.nsis.installerIcon, 'assets/app.ico');
+  assert.equal(packageJson.build.nsis.uninstallerIcon, 'assets/app.ico');
+  assert.equal(packageJson.build.nsis.installerHeaderIcon, 'assets/app.ico');
+});
+
 test('tabs and footer actions expose keyboard-accessible semantics', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');

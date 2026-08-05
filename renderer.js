@@ -2941,7 +2941,7 @@ function applyConfig(config) {
     
     document.body.style.background = config.background;
 
-    document.title = tr('appTitle');
+    document.title = 'SerialTerminal by Trigger-CN';
     document.querySelectorAll('[data-i18n]').forEach(el => {
         let translated = tr(el.dataset.i18n);
         if (el.closest('button')?.querySelector('svg[data-material-icon="add"]')) {

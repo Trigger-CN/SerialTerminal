@@ -37,11 +37,14 @@
       "target": [
         "nsis"
       ],
-      "icon": "assets/favicon.ico",
+      "icon": "assets/app.ico",
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
       "artifactName": "${productName}-Setup-${version}.${ext}",
+      "installerIcon": "assets/app.ico",
+      "uninstallerIcon": "assets/app.ico",
+      "installerHeaderIcon": "assets/app.ico",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,

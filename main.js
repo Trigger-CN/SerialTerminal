@@ -50,6 +50,11 @@ const DEFAULT_SHORTCUTS = {
   toggleSerialConnection: 'Ctrl+Shift+D'
 };
 const MENU_ICON_DIRECTORY = path.join(__dirname, 'assets', 'menu-icons');
+const APP_ICON_PATH = path.join(__dirname, 'assets', process.platform === 'win32' ? 'app.ico' : 'icon-512x512.png');
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.serialterminal.app');
+}
 
 const crashDumpsPath = path.join(app.getPath('userData'), 'crash-dumps');
 app.setPath('crashDumps', crashDumpsPath);
@@ -910,6 +915,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: windowBounds.width || 1000,
     height: windowBounds.height || 700,
+    title: 'SerialTerminal by Trigger-CN',
+    icon: APP_ICON_PATH,
     backgroundColor: '#1e1e1e',
     autoHideMenuBar: true, // Hide the menu bar
     webPreferences: {
@@ -982,6 +989,7 @@ function createPrefsWindow(focusTab = null) {
     parent: mainWindow,
     modal: false,
     title: 'Preferences',
+    icon: APP_ICON_PATH,
     backgroundColor: '#252526',
     autoHideMenuBar: true, // Hide the menu bar
     webPreferences: {
@@ -1038,6 +1046,7 @@ function createUpdateDownloadWindow(info) {
     maxHeight: 260,
     parent: mainWindow,
     title: tr('updateDialog.softwareUpdateTitle'),
+    icon: APP_ICON_PATH,
     backgroundColor: '#252526',
     autoHideMenuBar: true,
     minimizable: true,
