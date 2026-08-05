@@ -22,6 +22,14 @@ test('release builds use a supported Windows toolchain', () => {
   assert.match(workflow, /path: SerialTerminal-Setup-\$VERSION\.exe/);
 });
 
+test('test script discovers files consistently across platforms', () => {
+  const testRunner = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'run-tests.js'), 'utf8');
+
+  assert.equal(packageJson.scripts.test, 'node scripts/run-tests.js');
+  assert.match(testRunner, /file\.endsWith\('\.test\.js'\)/);
+  assert.match(testRunner, /spawnSync\(process\.execPath, \['--test', \.\.\.testFiles\]/);
+});
+
 test('release build jobs never publish directly through electron-builder', () => {
   assert.equal(packageJson.scripts['dist:win'], 'electron-builder --win -c.npmRebuild=false --publish never');
   assert.equal(packageJson.scripts['dist:linux'], 'electron-builder --linux -c.npmRebuild=false --publish never');
