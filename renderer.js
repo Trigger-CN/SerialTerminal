@@ -4651,11 +4651,99 @@ function normalizeSidebarQuickSendOrder() {
     sidebarQuickSendOrder = [...orderedIds, ...enabledIds.filter(id => !orderedIds.includes(id))];
 }
 
+function createQuickSendShatterFragment(element, rect, clipPath, motion, showDeleteButton) {
+    const fragment = element.cloneNode(true);
+    fragment.classList.remove('quick-send-removing', 'dragging', 'quick-send-drag-placeholder');
+    fragment.classList.add('quick-send-shard');
+    fragment.classList.toggle('quick-send-shard-show-delete', showDeleteButton);
+    fragment.removeAttribute('id');
+    fragment.removeAttribute('role');
+    fragment.removeAttribute('aria-grabbed');
+    fragment.removeAttribute('data-quick-id');
+    fragment.setAttribute('aria-hidden', 'true');
+    fragment.querySelectorAll('[id]').forEach(child => child.removeAttribute('id'));
+    fragment.querySelectorAll('button, [tabindex]').forEach(child => { child.tabIndex = -1; });
+    Object.assign(fragment.style, {
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+        clipPath
+    });
+    document.body.appendChild(fragment);
+
+    const animation = fragment.animate([
+        {
+            opacity: 1,
+            transform: 'translate3d(0, 0, 0) rotate(0deg) scale(1)',
+            filter: 'brightness(1) saturate(1)'
+        },
+        {
+            offset: 0.18,
+            opacity: 1,
+            transform: `translate3d(${motion.x * 0.16}px, ${motion.y * 0.08 - 2}px, 0) rotate(${motion.rotation * 0.12}deg) scale(1.025)`,
+            filter: 'brightness(1.38) saturate(1.18)'
+        },
+        {
+            offset: 0.7,
+            opacity: 0.78,
+            transform: `translate3d(${motion.x * 0.78}px, ${motion.y * 0.62 + 4}px, 0) rotate(${motion.rotation * 0.72}deg) scale(0.86)`,
+            filter: 'brightness(1.05) saturate(0.92)'
+        },
+        {
+            opacity: 0,
+            transform: `translate3d(${motion.x}px, ${motion.y + 14}px, 0) rotate(${motion.rotation}deg) scale(0.58)`,
+            filter: 'brightness(0.72) saturate(0.72) blur(0.6px)'
+        }
+    ], {
+        duration: motion.duration,
+        delay: motion.delay,
+        easing: 'cubic-bezier(.18, .72, .22, 1)',
+        fill: 'forwards'
+    });
+    return { element: fragment, animation };
+}
+
+function createQuickSendShatterDust(rect, colors) {
+    return Array.from({ length: 11 }, (_, index) => {
+        const xRatio = ((index * 37 + 11) % 97) / 100;
+        const yRatio = ((index * 53 + 17) % 89) / 100;
+        const size = 2 + (index % 3);
+        const particle = document.createElement('span');
+        particle.className = 'quick-send-shatter-dust';
+        particle.setAttribute('aria-hidden', 'true');
+        Object.assign(particle.style, {
+            left: `${rect.left + rect.width * xRatio}px`,
+            top: `${rect.top + rect.height * yRatio}px`,
+            width: `${size}px`,
+            height: `${size}px`,
+            backgroundColor: colors[index % colors.length]
+        });
+        document.body.appendChild(particle);
+
+        const horizontal = (xRatio - 0.5) * Math.min(54, rect.width * 0.45) + ((index % 3) - 1) * 5;
+        const vertical = (yRatio - 0.5) * 18 - 9;
+        const animation = particle.animate([
+            { opacity: 0, transform: 'translate3d(0, 0, 0) rotate(0deg) scale(0.25)' },
+            { offset: 0.16, opacity: 0.95, transform: 'translate3d(0, -2px, 0) rotate(20deg) scale(1)' },
+            { opacity: 0, transform: `translate3d(${horizontal}px, ${vertical + 22}px, 0) rotate(${90 + index * 27}deg) scale(0.15)` }
+        ], {
+            duration: 360 + (index % 4) * 34,
+            delay: 28 + (index % 5) * 13,
+            easing: 'cubic-bezier(.16, .76, .28, 1)',
+            fill: 'forwards'
+        });
+        return { element: particle, animation };
+    });
+}
+
 function animateQuickSendRemoval(element, onComplete) {
     let completed = false;
+    const debris = [];
     const complete = () => {
         if (completed) return;
         completed = true;
+        debris.forEach(piece => piece.element.remove());
         onComplete();
     };
 
@@ -4673,25 +4761,52 @@ function animateQuickSendRemoval(element, onComplete) {
     }
 
     const rect = element.getBoundingClientRect();
-    const animation = element.animate([
+    const deleteButton = element.querySelector('.quick-send-edit-delete-btn');
+    const showDeleteButton = deleteButton && Number.parseFloat(getComputedStyle(deleteButton).opacity) > 0.5;
+    const buttonStyle = getComputedStyle(element.querySelector('.quick-send-main-btn') || element);
+    const deleteStyle = deleteButton ? getComputedStyle(deleteButton) : null;
+    const dustColors = [
+        buttonStyle.backgroundColor,
+        buttonStyle.borderColor,
+        showDeleteButton ? deleteStyle.backgroundColor : 'rgb(0, 152, 255)',
+        'rgba(255, 255, 255, 0.88)'
+    ];
+
+    for (let row = 0; row < 2; row++) {
+        for (let column = 0; column < 3; column++) {
+            const x0 = column * 100 / 3;
+            const x1 = (column + 1) * 100 / 3;
+            const y0 = row * 50;
+            const y1 = (row + 1) * 50;
+            const triangles = [
+                { clipPath: `polygon(${x0}% ${y0}%, ${x1}% ${y0}%, ${x1}% ${y1}%)`, centerX: (x0 + x1 + x1) / 3, centerY: (y0 + y0 + y1) / 3 },
+                { clipPath: `polygon(${x0}% ${y0}%, ${x1}% ${y1}%, ${x0}% ${y1}%)`, centerX: (x0 + x1 + x0) / 3, centerY: (y0 + y1 + y1) / 3 }
+            ];
+            triangles.forEach((triangle, triangleIndex) => {
+                const directionX = triangle.centerX / 100 - 0.5;
+                const directionY = triangle.centerY / 100 - 0.5;
+                const alternate = triangleIndex === 0 ? 1 : -1;
+                debris.push(createQuickSendShatterFragment(element, rect, triangle.clipPath, {
+                    x: directionX * Math.min(74, rect.width * 0.58) + alternate * (4 + column * 1.5),
+                    y: directionY * 38 - 5 + alternate * 3,
+                    rotation: (18 + column * 7 + row * 9) * alternate * (directionX < 0 ? -1 : 1),
+                    duration: 440 + row * 35 + column * 10 + triangleIndex * 18,
+                    delay: row * 14 + column * 8 + triangleIndex * 6
+                }, showDeleteButton));
+            });
+        }
+    }
+    debris.push(...createQuickSendShatterDust(rect, dustColors));
+
+    element.animate([
         {
-            opacity: 1,
-            transform: 'translate3d(0, 0, 0) scale(1)',
-            height: `${rect.height}px`,
-            minHeight: `${rect.height}px`,
-            flexBasis: `${rect.height}px`
-        },
-        {
-            offset: 0.42,
-            opacity: 0.82,
-            transform: 'translate3d(5px, -1px, 0) scale(0.92)',
+            opacity: 0,
             height: `${rect.height}px`,
             minHeight: `${rect.height}px`,
             flexBasis: `${rect.height}px`
         },
         {
             opacity: 0,
-            transform: 'translate3d(18px, -2px, 0) scale(0.68)',
             height: '0px',
             minHeight: '0px',
             flexBasis: '0px',
@@ -4699,13 +4814,11 @@ function animateQuickSendRemoval(element, onComplete) {
             paddingBottom: '0px'
         }
     ], {
-        duration: 260,
-        easing: 'cubic-bezier(.22, .8, .24, 1)',
+        duration: 350,
+        easing: 'cubic-bezier(.28, .7, .26, 1)',
         fill: 'forwards'
     });
-    animation.addEventListener('finish', complete, { once: true });
-    animation.addEventListener('cancel', complete, { once: true });
-    setTimeout(complete, 340);
+    setTimeout(complete, 580);
 }
 
 function removeSidebarQuickSendShortcut(item, element) {
