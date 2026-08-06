@@ -30,3 +30,17 @@ test('translation interpolation replaces known parameters', () => {
   assert.equal(t('zh-CN', 'main.bytesSent', { count: 12 }), '已发送 12 字节');
   assert.equal(t('unknown', 'updateDialog.versionAvailable', { version: '1.2.3' }), 'Version 1.2.3 is available.');
 });
+
+test('quick-send disconnected toast is translated for every configured language', () => {
+  const expected = {
+    en: 'Hold on, did you forget to open the serial port?',
+    'zh-CN': '且慢，你是不是忘记打开串口了？',
+    'zh-TW': '且慢，你是不是忘記開啟串口了？',
+    fr: 'Un instant, avez-vous oublié d’ouvrir le port série ?',
+    ru: 'Постойте, вы не забыли открыть последовательный порт?',
+    de: 'Moment, haben Sie vergessen, den seriellen Port zu öffnen?'
+  };
+  Object.entries(expected).forEach(([language, text]) => {
+    assert.equal(t(language, 'main.quickSendDisconnectedToast'), text);
+  });
+});

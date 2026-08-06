@@ -375,6 +375,12 @@ Object.assign(translations['zh-TW'].main, { sendHistory: '傳送歷史' });
 Object.assign(translations.fr.main, { sendHistory: 'Historique d’envoi' });
 Object.assign(translations.ru.main, { sendHistory: 'История отправки' });
 Object.assign(translations.de.main, { sendHistory: 'Sendungsverlauf' });
+Object.assign(translations.en.main, { quickSendDisconnectedToast: 'Hold on, did you forget to open the serial port?' });
+Object.assign(translations['zh-CN'].main, { quickSendDisconnectedToast: '且慢，你是不是忘记打开串口了？' });
+Object.assign(translations['zh-TW'].main, { quickSendDisconnectedToast: '且慢，你是不是忘記開啟串口了？' });
+Object.assign(translations.fr.main, { quickSendDisconnectedToast: 'Un instant, avez-vous oublié d’ouvrir le port série ?' });
+Object.assign(translations.ru.main, { quickSendDisconnectedToast: 'Постойте, вы не забыли открыть последовательный порт?' });
+Object.assign(translations.de.main, { quickSendDisconnectedToast: 'Moment, haben Sie vergessen, den seriellen Port zu öffnen?' });
 
 Object.assign(translations.en.prefs, {
   shortcuts: 'Shortcuts', shortcutsSettings: 'Shortcut Settings', shortcutsHelp: 'Click a shortcut field and press a key combination. Backspace clears a shortcut.', resetShortcutDefaults: 'Reset Shortcut Defaults', shortcutDisabled: 'Disabled',

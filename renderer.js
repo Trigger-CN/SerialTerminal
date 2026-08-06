@@ -2266,6 +2266,7 @@ function setMainInputPanelVisible(visible, persist = true) {
 }
 
 function setSidebarCollapsed(collapsed, persist = true) {
+    hideQuickSendDisconnectedToast();
     const isCollapsed = collapsed === true;
     sidebar?.classList.toggle('sidebar-collapsed', isCollapsed);
     if (sidebarExpandBtn) {
@@ -3295,6 +3296,10 @@ ipcRenderer.on('serial-throughput-update', (event, payload) => {
 
 function updateSerialConnectionState(connected) {
     isConnected = connected;
+    if (connected) {
+        quickSendDisconnectedClicks = new WeakMap();
+        hideQuickSendDisconnectedToast();
+    }
     const label = document.getElementById('connect-btn-label');
     if (label) {
         const translationKey = connected ? 'main.disconnect' : 'main.connect';
@@ -3607,6 +3612,7 @@ async function reconnectSerialFromUi() {
 
 async function toggleSerialConnection() {
     if (serialConnectInProgress) return;
+    hideQuickSendDisconnectedToast();
     if (isConnected) {
         disconnectSerial();
     } else {
@@ -3961,6 +3967,10 @@ let sidebarQuickSendOrder = [];
 const quickSendTriggerInFlight = new Set();
 const quickSendFlashTimers = new WeakMap();
 const quickSendClickTimers = new WeakMap();
+let quickSendDisconnectedClicks = new WeakMap();
+let quickSendDisconnectedToast = null;
+let quickSendDisconnectedToastTimer = null;
+let quickSendDisconnectedToastRemoveTimer = null;
 
 function stopAutoSendRuntime() {
     autoSendGeneration++;
@@ -4593,6 +4603,62 @@ function showQuickSendClickResult(button, ok) {
     quickSendClickTimers.set(button, timer);
 }
 
+function hideQuickSendDisconnectedToast(animate = true) {
+    if (quickSendDisconnectedToastTimer) clearTimeout(quickSendDisconnectedToastTimer);
+    quickSendDisconnectedToastTimer = null;
+    const toast = quickSendDisconnectedToast;
+    if (!toast) return;
+    if (quickSendDisconnectedToastRemoveTimer) clearTimeout(quickSendDisconnectedToastRemoveTimer);
+    quickSendDisconnectedToastRemoveTimer = null;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    if (!animate || reduceMotion) {
+        toast.remove();
+        quickSendDisconnectedToast = null;
+        return;
+    }
+    toast.classList.add('quick-send-toast-hiding');
+    quickSendDisconnectedToastRemoveTimer = setTimeout(() => {
+        toast.remove();
+        if (quickSendDisconnectedToast === toast) quickSendDisconnectedToast = null;
+        quickSendDisconnectedToastRemoveTimer = null;
+    }, 180);
+}
+
+function showQuickSendDisconnectedToast(button) {
+    if (!button?.isConnected) return;
+    hideQuickSendDisconnectedToast(false);
+
+    const toast = document.createElement('div');
+    toast.className = 'quick-send-disconnected-toast';
+    toast.setAttribute('role', 'status');
+    toast.textContent = trFallback('main.quickSendDisconnectedToast', 'Hold on, did you forget to open the serial port?');
+    document.body.appendChild(toast);
+
+    const buttonRect = button.getBoundingClientRect();
+    const toastRect = toast.getBoundingClientRect();
+    const gap = 8;
+    const edge = 8;
+    const fitsRight = buttonRect.right + gap + toastRect.width <= window.innerWidth - edge;
+    const left = fitsRight
+        ? buttonRect.right + gap
+        : buttonRect.left - gap - toastRect.width;
+    toast.style.left = `${Math.max(edge, Math.min(left, window.innerWidth - toastRect.width - edge))}px`;
+    toast.style.top = `${Math.max(edge, Math.min(
+        buttonRect.top + (buttonRect.height - toastRect.height) / 2,
+        window.innerHeight - toastRect.height - edge
+    ))}px`;
+    quickSendDisconnectedToast = toast;
+    quickSendDisconnectedToastTimer = setTimeout(hideQuickSendDisconnectedToast, 3000);
+}
+
+function recordQuickSendDisconnectedClick(button) {
+    const now = performance.now();
+    const previous = quickSendDisconnectedClicks.get(button);
+    const count = previous && now - previous.lastClick <= 2000 ? previous.count + 1 : 1;
+    quickSendDisconnectedClicks.set(button, { count, lastClick: now });
+    if (count >= 3) showQuickSendDisconnectedToast(button);
+}
+
 function flashQuickSendItem(itemId, className = 'auto-trigger-flash', duration = 1300) {
     if (!itemId) return;
     document.querySelectorAll(`.quick-send-item[data-quick-id="${CSS.escape(itemId)}"] .quick-send-main-btn`).forEach(button => {
@@ -4752,6 +4818,7 @@ function renderQuickSendContainer(container, compact = false) {
             }
             const result = await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
             showQuickSendClickResult(btn, result?.ok === true);
+            if (result?.code === 'SERIAL_NOT_OPEN') recordQuickSendDisconnectedClick(btn);
         });
 
         div.appendChild(btn);

@@ -296,6 +296,24 @@ test('full and compact quick-send clicks share one lightweight result pulse', ()
   assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
 });
 
+test('repeated disconnected quick-send clicks show a localized nearby toast', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(renderer, /result\?\.code === 'SERIAL_NOT_OPEN'/);
+  assert.match(renderer, /now - previous\.lastClick <= 2000/);
+  assert.match(renderer, /if \(count >= 3\) showQuickSendDisconnectedToast\(button\)/);
+  assert.match(renderer, /trFallback\('main\.quickSendDisconnectedToast'/);
+  assert.match(renderer, /setTimeout\(hideQuickSendDisconnectedToast, 3000\)/);
+  assert.match(renderer, /function setSidebarCollapsed\(collapsed, persist = true\)\s*\{\s*hideQuickSendDisconnectedToast\(\)/);
+  assert.match(renderer, /async function toggleSerialConnection\(\)\s*\{[\s\S]*?hideQuickSendDisconnectedToast\(\)/);
+  assert.match(renderer, /button\.getBoundingClientRect\(\)/);
+  assert.match(styles, /\.quick-send-disconnected-toast\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*1600;/s);
+  assert.match(styles, /\.quick-send-disconnected-toast\.quick-send-toast-hiding\s*\{[^}]*quick-send-toast-out 160ms ease-in forwards;/s);
+  assert.match(styles, /@keyframes quick-send-toast-in/);
+  assert.match(styles, /@keyframes quick-send-toast-out/);
+});
+
 test('each quick-send item persists and uses its own text or hex mode', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
