@@ -24,6 +24,12 @@ const { t, getLanguage } = require('./i18n');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./workspace-manager');
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
+const {
+    getVerticalInsertionIndex,
+    reorderQuickSendItems,
+    disableSidebarQuickSend,
+    deleteQuickSendById
+} = require('./quick-send-reorder');
 
 const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
 
@@ -3954,6 +3960,7 @@ let quickSendList = [];
 let sidebarQuickSendOrder = [];
 const quickSendTriggerInFlight = new Set();
 const quickSendFlashTimers = new WeakMap();
+const quickSendPressTimers = new WeakMap();
 
 function stopAutoSendRuntime() {
     autoSendGeneration++;
@@ -4069,8 +4076,355 @@ autoSendIntervalInput.addEventListener('change', () => {
 autoSendTextInput.addEventListener('input', updateAutoSendValidation);
 autoSendTextInput.addEventListener('blur', saveAutoSendSettings);
 let editingQuickSendId = '';
-let draggedQuickSendId = '';
-let draggedQuickSendCompact = false;
+const QUICK_SEND_HOLD_MS = 420;
+const QUICK_SEND_MOVE_THRESHOLD = 8;
+const quickSendReorderContexts = [
+    {
+        container: quickSendListEl,
+        compact: false,
+        editMode: false,
+        dragState: null,
+        holdTimer: null,
+        suppressClickUntil: 0
+    },
+    {
+        container: sidebarQuickSendListEl,
+        compact: true,
+        editMode: false,
+        dragState: null,
+        holdTimer: null,
+        suppressClickUntil: 0
+    }
+];
+
+function getQuickSendReorderContext(compact) {
+    return quickSendReorderContexts.find(context => context.compact === compact);
+}
+
+function getQuickSendReorderElements(context) {
+    if (!context?.container) return [];
+    return Array.from(context.container.children)
+        .filter(element => element.classList.contains('quick-send-item'));
+}
+
+function clearQuickSendHoldTimer(context) {
+    if (context?.holdTimer !== null) {
+        clearTimeout(context.holdTimer);
+        context.holdTimer = null;
+    }
+}
+
+function syncQuickSendEditMode(context) {
+    if (!context) return;
+    context.container?.classList.toggle('quick-send-reorder-mode', context.editMode);
+    getQuickSendReorderElements(context).forEach(element => {
+        const isDragged = context.dragState?.element === element && context.dragState.dragging;
+        element.setAttribute('aria-grabbed', isDragged ? 'true' : 'false');
+        const deleteButton = element.querySelector('.quick-send-edit-delete-btn');
+        if (deleteButton) {
+            deleteButton.tabIndex = context.editMode ? 0 : -1;
+            deleteButton.setAttribute('aria-hidden', context.editMode ? 'false' : 'true');
+        }
+    });
+}
+
+function applyQuickSendElementOrder(context, orderedIds) {
+    if (context.compact) {
+        sidebarQuickSendOrder = [...orderedIds];
+        normalizeSidebarQuickSendOrder();
+        return;
+    }
+    quickSendList = reorderQuickSendItems(quickSendList, orderedIds);
+}
+
+function cleanUpQuickSendDrag(context, state) {
+    if (!context || !state || state.cleanedUp) return;
+    state.cleanedUp = true;
+    state.snapFallbackTimer && clearTimeout(state.snapFallbackTimer);
+    state.indicator?.remove();
+    state.preview?.remove();
+    state.element?.classList.remove('dragging', 'quick-send-drag-placeholder');
+    try {
+        if (state.element?.hasPointerCapture?.(state.pointerId)) {
+            state.element.releasePointerCapture(state.pointerId);
+        }
+    } catch {
+        // Pointer capture may already be released after pointerup/cancel.
+    }
+    if (context.dragState === state) context.dragState = null;
+    syncQuickSendEditMode(context);
+}
+
+function cancelQuickSendDrag(context, { restoreOrder = true } = {}) {
+    if (!context) return;
+    clearQuickSendHoldTimer(context);
+    const state = context.dragState;
+    if (!state) return;
+    const originalOrder = !state.committed && Array.isArray(state.originalOrder) ? state.originalOrder : null;
+    cleanUpQuickSendDrag(context, state);
+    if (restoreOrder && originalOrder) {
+        applyQuickSendElementOrder(context, originalOrder);
+        renderQuickSendLists();
+    }
+}
+
+function setQuickSendEditMode(context, enabled) {
+    if (!context) return;
+    const nextMode = enabled === true;
+    if (!nextMode && context.dragState) {
+        cancelQuickSendDrag(context, { restoreOrder: true });
+    }
+    context.editMode = nextMode;
+    syncQuickSendEditMode(context);
+}
+
+function animateQuickSendReflow(previousRects, elements) {
+    requestAnimationFrame(() => {
+        elements.forEach(element => {
+            const previous = previousRects.get(element.dataset.quickId);
+            if (!previous || !element.isConnected) return;
+            const current = element.getBoundingClientRect();
+            const offset = previous.top - current.top;
+            if (Math.abs(offset) < 1) return;
+            element.animate([
+                { transform: `translateY(${offset}px)` },
+                { transform: 'translateY(0)' }
+            ], {
+                duration: 180,
+                easing: 'cubic-bezier(.2,.8,.2,1)'
+            });
+        });
+    });
+}
+
+function positionQuickSendIndicator(context, state) {
+    if (!context?.container || !state.indicator?.isConnected) return;
+    const listRect = context.container.getBoundingClientRect();
+    const targetRect = state.element.getBoundingClientRect();
+    const scrollOffset = context.compact ? 0 : context.container.scrollTop;
+    state.indicator.style.top = `${targetRect.top - listRect.top + scrollOffset - 3}px`;
+}
+
+function updateQuickSendDropTarget(context, state, pointerY) {
+    if (!context?.container || !state.dragging) return;
+    const otherElements = getQuickSendReorderElements(context).filter(element => element !== state.element);
+    const rects = otherElements.map(element => element.getBoundingClientRect());
+    const insertionIndex = getVerticalInsertionIndex(rects, pointerY);
+    const currentIndex = getQuickSendReorderElements(context).indexOf(state.element);
+
+    if (insertionIndex !== currentIndex) {
+        const previousRects = new Map(otherElements.map(element => [element.dataset.quickId, element.getBoundingClientRect()]));
+        const beforeElement = otherElements[insertionIndex] || state.indicator || null;
+        if (beforeElement) {
+            context.container.insertBefore(state.element, beforeElement);
+        } else {
+            context.container.appendChild(state.element);
+        }
+        animateQuickSendReflow(previousRects, otherElements);
+    }
+
+    state.insertionIndex = insertionIndex;
+    requestAnimationFrame(() => positionQuickSendIndicator(context, state));
+}
+
+function scrollQuickSendDuringDrag(context, pointerY) {
+    const scroller = context?.compact ? context.container?.parentElement : context?.container;
+    if (!scroller) return;
+    const rect = scroller.getBoundingClientRect();
+    const edgeSize = Math.min(42, rect.height / 4);
+    if (pointerY < rect.top + edgeSize) {
+        scroller.scrollTop -= Math.ceil((rect.top + edgeSize - pointerY) / 5);
+    } else if (pointerY > rect.bottom - edgeSize) {
+        scroller.scrollTop += Math.ceil((pointerY - (rect.bottom - edgeSize)) / 5);
+    }
+}
+
+function updateQuickSendDragPosition(context, state, clientX, clientY) {
+    if (!state.preview || !state.dragging) return;
+    const maxLeft = Math.max(4, window.innerWidth - state.previewRect.width - 4);
+    const maxTop = Math.max(4, window.innerHeight - state.previewRect.height - 4);
+    const left = Math.max(4, Math.min(clientX - state.pointerOffsetX, maxLeft));
+    const top = Math.max(4, Math.min(clientY - state.pointerOffsetY, maxTop));
+    const tilt = Math.max(-4, Math.min(4, (clientX - state.startX) / 12));
+    state.preview.style.left = `${left}px`;
+    state.preview.style.top = `${top}px`;
+    state.preview.style.setProperty('--quick-send-drag-tilt', `${tilt}deg`);
+    scrollQuickSendDuringDrag(context, clientY);
+    updateQuickSendDropTarget(context, state, clientY);
+}
+
+function startQuickSendDrag(context, state) {
+    if (!context || !state || state !== context.dragState || state.dragging || !state.element?.isConnected) return;
+    clearQuickSendHoldTimer(context);
+    setQuickSendEditMode(context, true);
+
+    const rect = state.element.getBoundingClientRect();
+    state.dragging = true;
+    state.originalOrder = getQuickSendReorderElements(context).map(element => element.dataset.quickId);
+    state.pointerOffsetX = Math.max(0, Math.min(rect.width, state.lastX - rect.left));
+    state.pointerOffsetY = Math.max(0, Math.min(rect.height, state.lastY - rect.top));
+    state.previewRect = rect;
+    state.element.classList.add('dragging', 'quick-send-drag-placeholder');
+
+    const preview = state.element.cloneNode(true);
+    preview.classList.remove('dragging', 'quick-send-drag-placeholder');
+    preview.classList.add('quick-send-drag-preview');
+    preview.setAttribute('aria-hidden', 'true');
+    preview.removeAttribute('draggable');
+    preview.removeAttribute('aria-grabbed');
+    preview.querySelectorAll('button, [tabindex]').forEach(element => { element.tabIndex = -1; });
+    preview.style.width = `${rect.width}px`;
+    preview.style.height = `${rect.height}px`;
+    preview.style.left = `${rect.left}px`;
+    preview.style.top = `${rect.top}px`;
+    document.body.appendChild(preview);
+    state.preview = preview;
+
+    const indicator = document.createElement('div');
+    indicator.className = 'quick-send-drop-indicator';
+    indicator.setAttribute('aria-hidden', 'true');
+    context.container.appendChild(indicator);
+    state.indicator = indicator;
+
+    try {
+        state.element.setPointerCapture?.(state.pointerId);
+    } catch {
+        // Pointer capture is optional; document listeners keep the drag working.
+    }
+    context.suppressClickUntil = performance.now() + 600;
+    navigator.vibrate?.(12);
+    syncQuickSendEditMode(context);
+    updateQuickSendDragPosition(context, state, state.lastX, state.lastY);
+}
+
+function finishQuickSendDrag(context, state) {
+    if (!context || !state || state !== context.dragState || !state.dragging || state.finishing) return;
+    state.finishing = true;
+    clearQuickSendHoldTimer(context);
+    context.suppressClickUntil = performance.now() + 600;
+
+    const orderedElements = getQuickSendReorderElements(context);
+    orderedElements.forEach((element, index) => { element.dataset.index = String(index); });
+    applyQuickSendElementOrder(context, orderedElements.map(element => element.dataset.quickId));
+    state.committed = true;
+    saveQuickSendList();
+    state.indicator?.remove();
+    state.indicator = null;
+
+    const targetRect = state.element?.getBoundingClientRect();
+    const previewRect = state.preview?.getBoundingClientRect();
+    if (!targetRect || !previewRect || typeof state.preview.animate !== 'function') {
+        cleanUpQuickSendDrag(context, state);
+        return;
+    }
+
+    let cleanedUp = false;
+    const finishVisuals = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        cleanUpQuickSendDrag(context, state);
+    };
+    const animation = state.preview.animate([
+        {
+            left: `${previewRect.left}px`,
+            top: `${previewRect.top}px`,
+            transform: getComputedStyle(state.preview).transform,
+            opacity: 1
+        },
+        {
+            left: `${targetRect.left}px`,
+            top: `${targetRect.top}px`,
+            transform: 'rotate(0deg) scale(1)',
+            opacity: 0.45
+        }
+    ], {
+        duration: 190,
+        easing: 'cubic-bezier(.2,.85,.25,1)',
+        fill: 'forwards'
+    });
+    animation.addEventListener('finish', finishVisuals, { once: true });
+    animation.addEventListener('cancel', finishVisuals, { once: true });
+    state.snapFallbackTimer = setTimeout(finishVisuals, 260);
+}
+
+function beginQuickSendPointer(context, event, element) {
+    if (!context || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    if (context.dragState?.finishing) return;
+    quickSendReorderContexts.forEach(otherContext => {
+        if (otherContext !== context && otherContext.dragState) {
+            cancelQuickSendDrag(otherContext, { restoreOrder: true });
+        }
+    });
+    cancelQuickSendDrag(context, { restoreOrder: true });
+
+    const state = {
+        pointerId: event.pointerId,
+        element,
+        itemId: element.dataset.quickId,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        dragging: false,
+        finishing: false
+    };
+    context.dragState = state;
+
+    if (!context.editMode) {
+        context.holdTimer = setTimeout(() => {
+            if (context.dragState !== state) return;
+            startQuickSendDrag(context, state);
+        }, QUICK_SEND_HOLD_MS);
+    }
+}
+
+function getQuickSendPointerContext(event) {
+    return quickSendReorderContexts.find(context => {
+        const state = context.dragState;
+        return state && !state.finishing && event.pointerId === state.pointerId;
+    });
+}
+
+function handleQuickSendPointerMove(event) {
+    const context = getQuickSendPointerContext(event);
+    const state = context?.dragState;
+    if (!context || !state) return;
+    state.lastX = event.clientX;
+    state.lastY = event.clientY;
+
+    if (!state.dragging) {
+        const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
+        if (context.editMode && distance >= QUICK_SEND_MOVE_THRESHOLD) {
+            startQuickSendDrag(context, state);
+        } else if (!context.editMode && distance >= QUICK_SEND_MOVE_THRESHOLD) {
+            clearQuickSendHoldTimer(context);
+            context.dragState = null;
+        }
+    }
+
+    if (state.dragging) {
+        event.preventDefault();
+        updateQuickSendDragPosition(context, state, event.clientX, event.clientY);
+    }
+}
+
+function handleQuickSendPointerUp(event) {
+    const context = getQuickSendPointerContext(event);
+    const state = context?.dragState;
+    if (!context || !state) return;
+    clearQuickSendHoldTimer(context);
+    if (state.dragging) {
+        event.preventDefault();
+        finishQuickSendDrag(context, state);
+    } else {
+        context.dragState = null;
+    }
+}
+
+function handleQuickSendPointerCancel(event) {
+    const context = getQuickSendPointerContext(event);
+    if (context) cancelQuickSendDrag(context, { restoreOrder: true });
+}
 
 function createQuickSendId() {
     return `quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -4224,18 +4578,36 @@ async function triggerQuickSendItem(item) {
     }
 }
 
-function flashQuickSendItem(itemId) {
+function restartQuickSendButtonAnimation(button, className, duration, timers) {
+    if (!button || !className) return;
+    const previousTimer = timers.get(button);
+    if (previousTimer) clearTimeout(previousTimer);
+    button.classList.remove(className);
+    void button.offsetWidth;
+    button.classList.add(className);
+    const timer = setTimeout(() => {
+        button.classList.remove(className);
+        timers.delete(button);
+    }, duration);
+    timers.set(button, timer);
+}
+
+function animateQuickSendPress(button) {
+    restartQuickSendButtonAnimation(button, 'quick-send-press', 240, quickSendPressTimers);
+}
+
+function flashQuickSendItem(itemId, className = 'auto-trigger-flash', duration = 1300) {
     if (!itemId) return;
     document.querySelectorAll(`.quick-send-item[data-quick-id="${CSS.escape(itemId)}"] .quick-send-main-btn`).forEach(button => {
-        button.classList.remove('auto-trigger-flash');
+        button.classList.remove('auto-trigger-flash', 'quick-send-send-flash', 'quick-send-send-failed');
         void button.offsetWidth;
-        button.classList.add('auto-trigger-flash');
+        button.classList.add(className);
         const previousTimer = quickSendFlashTimers.get(button);
         if (previousTimer) clearTimeout(previousTimer);
         const timer = setTimeout(() => {
-            button.classList.remove('auto-trigger-flash');
+            button.classList.remove(className);
             quickSendFlashTimers.delete(button);
-        }, 1300);
+        }, duration);
         quickSendFlashTimers.set(button, timer);
     });
 }
@@ -4268,24 +4640,96 @@ function normalizeSidebarQuickSendOrder() {
     sidebarQuickSendOrder = [...orderedIds, ...enabledIds.filter(id => !orderedIds.includes(id))];
 }
 
-function moveQuickSendItem(itemId, targetId, compact = false) {
-    const list = compact ? sidebarQuickSendOrder : quickSendList;
-    const fromIndex = compact ? list.indexOf(itemId) : list.findIndex(item => item.id === itemId);
-    const toIndex = compact ? list.indexOf(targetId) : list.findIndex(item => item.id === targetId);
-    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= list.length || toIndex >= list.length) {
+function animateQuickSendRemoval(element, onComplete) {
+    let completed = false;
+    const complete = () => {
+        if (completed) return;
+        completed = true;
+        onComplete();
+    };
+
+    if (!element?.isConnected) {
+        complete();
+        return;
+    }
+    if (element.classList.contains('quick-send-removing')) return;
+    element.classList.add('quick-send-removing');
+
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    if (reduceMotion || typeof element.animate !== 'function') {
+        complete();
         return;
     }
 
-    const [movedItem] = list.splice(fromIndex, 1);
-    list.splice(toIndex, 0, movedItem);
+    const rect = element.getBoundingClientRect();
+    const animation = element.animate([
+        {
+            opacity: 1,
+            transform: 'translate3d(0, 0, 0) scale(1)',
+            height: `${rect.height}px`,
+            minHeight: `${rect.height}px`,
+            flexBasis: `${rect.height}px`
+        },
+        {
+            offset: 0.42,
+            opacity: 0.82,
+            transform: 'translate3d(5px, -1px, 0) scale(0.92)',
+            height: `${rect.height}px`,
+            minHeight: `${rect.height}px`,
+            flexBasis: `${rect.height}px`
+        },
+        {
+            opacity: 0,
+            transform: 'translate3d(18px, -2px, 0) scale(0.68)',
+            height: '0px',
+            minHeight: '0px',
+            flexBasis: '0px',
+            paddingTop: '0px',
+            paddingBottom: '0px'
+        }
+    ], {
+        duration: 260,
+        easing: 'cubic-bezier(.22, .8, .24, 1)',
+        fill: 'forwards'
+    });
+    animation.addEventListener('finish', complete, { once: true });
+    animation.addEventListener('cancel', complete, { once: true });
+    setTimeout(complete, 340);
+}
 
-    saveQuickSendList();
-    renderQuickSendLists();
+function removeSidebarQuickSendShortcut(item, element) {
+    if (!item?.id) return;
+    animateQuickSendRemoval(element, () => {
+        const result = disableSidebarQuickSend(quickSendList, sidebarQuickSendOrder, item.id);
+        if (!result.changed) return;
+        quickSendList = result.quickSendList;
+        sidebarQuickSendOrder = result.sidebarQuickSendOrder;
+        saveQuickSendList();
+        renderQuickSendLists();
+        setActionStatus(`已从侧边栏移除快捷方式：${item.label || item.content}`);
+    });
+}
+
+function deleteQuickSendItem(item, element) {
+    if (!item?.id) return;
+    animateQuickSendRemoval(element, () => {
+        const result = deleteQuickSendById(quickSendList, sidebarQuickSendOrder, item.id);
+        if (!result.changed) return;
+        if (editingQuickSendId === item.id) closeQuickSendDialog();
+        quickSendList = result.quickSendList;
+        sidebarQuickSendOrder = result.sidebarQuickSendOrder;
+        saveQuickSendList();
+        renderQuickSendLists();
+        setActionStatus(`已删除快捷指令：${item.label || item.content}`);
+    });
 }
 
 function renderQuickSendContainer(container, compact = false) {
     if (!container) return;
-    const previousRects = new Map(Array.from(container.children).map(element => [element.dataset.quickId, element.getBoundingClientRect()]));
+    const context = getQuickSendReorderContext(compact);
+    if (context?.dragState) cancelQuickSendDrag(context, { restoreOrder: false });
+    const previousRects = new Map(getQuickSendReorderElements(context)
+        .map(element => [element.dataset.quickId, element.getBoundingClientRect()]));
     container.innerHTML = '';
     const items = compact
         ? sidebarQuickSendOrder.map(id => quickSendList.find(item => item.id === id)).filter(Boolean)
@@ -4293,52 +4737,16 @@ function renderQuickSendContainer(container, compact = false) {
     items.forEach((item, index) => {
         const div = document.createElement('div');
         div.className = `quick-send-item${compact ? ' quick-send-item-compact' : ''}`;
-        div.draggable = true;
+        div.setAttribute('role', 'listitem');
+        div.setAttribute('aria-grabbed', 'false');
         div.dataset.index = String(index);
         div.dataset.quickId = item.id;
+        div.addEventListener('pointerdown', event => beginQuickSendPointer(context, event, div));
         
         // If this item is being edited, highlight it
         if (item.id === editingQuickSendId) {
             div.classList.add('editing');
         }
-
-        div.addEventListener('dragstart', (event) => {
-            draggedQuickSendId = item.id;
-            draggedQuickSendCompact = compact;
-            div.classList.add('dragging');
-            if (event.dataTransfer) {
-                event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData('text/plain', item.id);
-            }
-        });
-
-        div.addEventListener('dragend', () => {
-            draggedQuickSendId = '';
-            draggedQuickSendCompact = false;
-            document.querySelectorAll('.quick-send-item').forEach(itemEl => {
-                itemEl.classList.remove('dragging', 'drag-over');
-            });
-        });
-
-        div.addEventListener('dragover', (event) => {
-            event.preventDefault();
-            if (!draggedQuickSendId || draggedQuickSendCompact !== compact || draggedQuickSendId === item.id) {
-                return;
-            }
-            event.dataTransfer.dropEffect = 'move';
-            div.classList.add('drag-over');
-        });
-
-        div.addEventListener('dragleave', () => {
-            div.classList.remove('drag-over');
-        });
-
-        div.addEventListener('drop', (event) => {
-            event.preventDefault();
-            div.classList.remove('drag-over');
-            if (draggedQuickSendCompact !== compact) return;
-            moveQuickSendItem(draggedQuickSendId, item.id, compact);
-        });
 
         const btn = document.createElement('button');
         const label = document.createElement('span');
@@ -4363,52 +4771,79 @@ function renderQuickSendContainer(container, compact = false) {
             btn.append(modeBadge);
         }
         
-        btn.addEventListener('click', async () => {
-            await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
-        });
-        
-        // Actions are overlaid on the left and revealed on hover/focus.
-        const actionDiv = document.createElement('div');
-        actionDiv.className = 'quick-send-actions';
-        actionDiv.addEventListener('focusin', () => {
-            div.classList.add('actions-focused');
-        });
-        actionDiv.addEventListener('focusout', (event) => {
-            if (!actionDiv.contains(event.relatedTarget)) {
-                div.classList.remove('actions-focused');
+        btn.addEventListener('click', async event => {
+            if (performance.now() < context.suppressClickUntil) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
             }
+            animateQuickSendPress(btn);
+            const pressFeedbackReady = new Promise(resolve => setTimeout(resolve, 150));
+            const result = await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
+            await pressFeedbackReady;
+            flashQuickSendItem(
+                item.id,
+                result?.ok ? 'quick-send-send-flash' : 'quick-send-send-failed',
+                result?.ok ? 760 : 560
+            );
         });
 
-        const editBtn = document.createElement('button');
-        editBtn.className = 'quick-send-action-btn';
-        editBtn.title = 'Edit';
-        editBtn.appendChild(createMaterialIcon('edit'));
-        editBtn.addEventListener('click', () => {
-            openQuickSendDialog(item.id);
-            setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
-        });
-
-        const delBtn = document.createElement('button');
-        delBtn.className = 'quick-send-action-btn delete';
-        delBtn.title = 'Remove';
-        delBtn.appendChild(createMaterialIcon('delete'));
-        delBtn.addEventListener('click', () => {
-            if (editingQuickSendId === item.id) {
-                closeQuickSendDialog();
-            }
-            
-            const itemIndex = quickSendList.findIndex(entry => entry.id === item.id);
-            if (itemIndex > -1) quickSendList.splice(itemIndex, 1);
-            saveQuickSendList();
-            renderQuickSendLists();
-            setActionStatus(`已删除快捷指令：${item.label || item.content}`);
-        });
-
-        actionDiv.appendChild(delBtn);
-        actionDiv.appendChild(editBtn);
-        
         div.appendChild(btn);
-        div.appendChild(actionDiv);
+
+        const editDeleteBtn = document.createElement('button');
+        editDeleteBtn.type = 'button';
+        editDeleteBtn.className = `quick-send-edit-delete-btn ${compact ? 'compact' : 'full'}`;
+        editDeleteBtn.title = compact ? '从侧边栏移除' : '删除快捷指令';
+        editDeleteBtn.tabIndex = -1;
+        editDeleteBtn.setAttribute('aria-hidden', 'true');
+        editDeleteBtn.setAttribute('aria-label', compact
+            ? `从侧边栏移除快捷方式：${item.label || item.content}`
+            : `删除快捷指令：${item.label || item.content}`);
+        editDeleteBtn.appendChild(createMaterialIcon('close'));
+        editDeleteBtn.addEventListener('pointerdown', event => event.stopPropagation());
+        editDeleteBtn.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (compact) removeSidebarQuickSendShortcut(item, div);
+            else deleteQuickSendItem(item, div);
+        });
+        div.appendChild(editDeleteBtn);
+
+        if (!compact) {
+            // Actions are overlaid on the left and revealed on hover/focus.
+            const actionDiv = document.createElement('div');
+            actionDiv.className = 'quick-send-actions';
+            actionDiv.addEventListener('pointerdown', event => event.stopPropagation());
+            actionDiv.addEventListener('focusin', () => {
+                div.classList.add('actions-focused');
+            });
+            actionDiv.addEventListener('focusout', event => {
+                if (!actionDiv.contains(event.relatedTarget)) div.classList.remove('actions-focused');
+            });
+
+            const editBtn = document.createElement('button');
+            editBtn.className = 'quick-send-action-btn';
+            editBtn.title = 'Edit';
+            editBtn.appendChild(createMaterialIcon('edit'));
+            editBtn.addEventListener('click', event => {
+                event.stopPropagation();
+                openQuickSendDialog(item.id);
+                setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'quick-send-action-btn delete';
+            delBtn.title = 'Remove';
+            delBtn.appendChild(createMaterialIcon('delete'));
+            delBtn.addEventListener('click', event => {
+                event.stopPropagation();
+                deleteQuickSendItem(item, div);
+            });
+
+            actionDiv.appendChild(delBtn);
+            actionDiv.appendChild(editBtn);
+            div.appendChild(actionDiv);
+        }
         
         if (!compact || item.sidebarShortcut?.enabled === true) container.appendChild(div);
     });
@@ -4425,6 +4860,7 @@ function renderQuickSendContainer(container, compact = false) {
             });
         });
     });
+    syncQuickSendEditMode(context);
 }
 
 function renderQuickSendLists() {
@@ -4441,6 +4877,25 @@ function saveQuickSendList() {
         sidebarQuickSendOrder
     });
 }
+
+document.addEventListener('pointermove', handleQuickSendPointerMove, { passive: false });
+document.addEventListener('pointerup', handleQuickSendPointerUp);
+document.addEventListener('pointercancel', handleQuickSendPointerCancel);
+document.addEventListener('pointerdown', event => {
+    quickSendReorderContexts.forEach(context => {
+        if (context.editMode && !context.container?.contains(event.target)) setQuickSendEditMode(context, false);
+    });
+}, true);
+quickSendReorderContexts.forEach(context => {
+    context.container?.addEventListener('contextmenu', event => {
+        if (context.editMode || context.dragState) event.preventDefault();
+    });
+});
+window.addEventListener('blur', () => {
+    quickSendReorderContexts.forEach(context => {
+        if (context.dragState) cancelQuickSendDrag(context, { restoreOrder: true });
+    });
+});
 
 addQuickSendBtn.addEventListener('click', () => {
     const item = getQuickEditorItem();
@@ -4474,5 +4929,7 @@ quickSendDialogCancelBtn.addEventListener('click', closeQuickSendDialog);
 document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !quickSendDialog.classList.contains('hidden')) {
         closeQuickSendDialog();
+    } else if (event.key === 'Escape' && quickSendReorderContexts.some(context => context.editMode)) {
+        quickSendReorderContexts.forEach(context => setQuickSendEditMode(context, false));
     }
 });
