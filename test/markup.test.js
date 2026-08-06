@@ -314,6 +314,24 @@ test('repeated disconnected quick-send clicks show a localized nearby toast', ()
   assert.match(styles, /@keyframes quick-send-toast-out/);
 });
 
+test('workspace tabs support pointer reordering across panes', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(renderer, /getHorizontalInsertionIndex/);
+  assert.match(renderer, /function bindWorkspaceTabDragging\(\)/);
+  assert.match(renderer, /moveTabToPane\(state\.tabId, state\.targetPaneId, \{ insertionIndex: state\.insertionIndex \}\)/);
+  assert.match(renderer, /target\.list\.scrollLeft [+-]=/);
+  assert.match(renderer, /switchPaneTab\(getPaneIdForTabId\('tab-main'\), 'tab-main'\)/);
+  assert.match(renderer, /tabId: tabState\?\.id \|\| \(terminalType === 'main' \? 'tab-main' : ''\)/);
+  assert.doesNotMatch(renderer, /tabId === 'tab-main'\) break/);
+  assert.doesNotMatch(main, /enabled: terminalType !== 'main' && Boolean\(payload\.tabId\)/);
+  assert.match(styles, /\.workspace-tab-drag-preview\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*1700;/s);
+  assert.match(styles, /\.workspace-tab-drop-indicator\s*\{[^}]*flex:\s*0 0 3px;/s);
+  assert.match(styles, /\.main-tab\s*\{[^}]*touch-action:\s*none;/s);
+});
+
 test('each quick-send item persists and uses its own text or hex mode', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');

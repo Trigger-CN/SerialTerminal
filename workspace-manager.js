@@ -25,24 +25,42 @@ function normalizeWorkspaceLayoutShape(layout) {
     normalized.paneSizes['pane-2'] /= totalSize;
 
     const sourcePanes = Array.isArray(source.panes) ? source.panes : [];
-    const usedTabIds = new Set(['tab-main']);
+    const usedTabIds = new Set();
     normalized.panes.forEach(target => {
         const pane = sourcePanes.find(item => item?.id === target.id);
         const sourceTabIds = Array.isArray(pane?.tabIds) ? pane.tabIds : target.tabIds;
         target.tabIds = sourceTabIds.filter(tabId => {
-            if (typeof tabId !== 'string' || !tabId || tabId === 'tab-main' || usedTabIds.has(tabId)) return false;
+            if (typeof tabId !== 'string' || !tabId || usedTabIds.has(tabId)) return false;
             usedTabIds.add(tabId);
             return true;
         });
-        if (target.id === 'pane-1') target.tabIds.unshift('tab-main');
         const activeTabId = typeof pane?.activeTabId === 'string' ? pane.activeTabId : target.activeTabId;
         target.activeTabId = target.tabIds.includes(activeTabId) ? activeTabId : (target.tabIds[0] || null);
     });
+    if (!usedTabIds.has('tab-main')) {
+        normalized.panes[0].tabIds.unshift('tab-main');
+        normalized.panes[0].activeTabId ||= 'tab-main';
+    }
     if (!normalized.panes.find(pane => pane.id === normalized.activePaneId)?.tabIds.length) {
-        normalized.activePaneId = 'pane-1';
+        normalized.activePaneId = normalized.panes.find(pane => pane.tabIds.length)?.id || 'pane-1';
     }
     if (!normalized.panes[1].tabIds.length) normalized.splitEnabled = false;
     return normalized;
+}
+
+function moveWorkspaceTab(layout, tabId, targetPaneId, insertionIndex = null) {
+    const sourcePane = layout.panes.find(pane => pane.tabIds.includes(tabId));
+    const targetPane = layout.panes.find(pane => pane.id === targetPaneId);
+    if (!sourcePane || !targetPane) return null;
+    const sourcePaneId = sourcePane.id;
+    sourcePane.tabIds = sourcePane.tabIds.filter(id => id !== tabId);
+    const targetIds = targetPane.tabIds.filter(id => id !== tabId);
+    const targetIndex = insertionIndex === null
+        ? targetIds.length
+        : Math.max(0, Math.min(Number(insertionIndex) || 0, targetIds.length));
+    targetIds.splice(targetIndex, 0, tabId);
+    targetPane.tabIds = targetIds;
+    return { sourcePaneId, targetPaneId, insertionIndex: targetIndex };
 }
 
 function createWorkspaceManager(options = {}) {
@@ -225,6 +243,20 @@ function createWorkspaceManager(options = {}) {
         });
         document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
         layout.panes.forEach(pane => {
+            const tabsList = getPaneTabsList(pane.id);
+            const tabsContent = getPaneTabsContent(pane.id);
+            pane.tabIds.forEach(tabId => {
+                const tabButton = document.querySelector(`.main-tab[data-target="${tabId}"]`);
+                const tabPane = document.getElementById(tabId);
+                if (tabButton && tabsList) {
+                    tabsList.appendChild(tabButton);
+                    tabButton.dataset.paneId = pane.id;
+                }
+                if (tabPane && tabsContent) {
+                    tabsContent.appendChild(tabPane);
+                    tabPane.dataset.paneId = pane.id;
+                }
+            });
             prunePaneTabIds(pane.id);
             ensurePaneActiveTab(pane.id);
             const paneEl = getPaneDom(pane.id);
@@ -282,18 +314,9 @@ function createWorkspaceManager(options = {}) {
         fitWorkspace?.();
     }
 
-    function moveTabToPane(tabId, targetPaneId, { preserveSplit = false } = {}) {
-        if (tabId === 'tab-main' && targetPaneId !== 'pane-1') {
-            return;
-        }
-
+    function moveTabToPane(tabId, targetPaneId, { preserveSplit = false, insertionIndex = null } = {}) {
         const layout = getLayoutState();
         const sourcePaneId = getPaneIdForTabId(tabId);
-        if (sourcePaneId === targetPaneId) {
-            switchPaneTab(targetPaneId, tabId);
-            return;
-        }
-
         const sourcePane = getPaneById(sourcePaneId);
         const targetPane = getPaneById(targetPaneId);
         const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
@@ -304,8 +327,7 @@ function createWorkspaceManager(options = {}) {
             layout.splitEnabled = true;
         }
 
-        sourcePane.tabIds = sourcePane.tabIds.filter(id => id !== tabId);
-        ensurePaneTabMembership(targetPaneId, tabId);
+        moveWorkspaceTab(layout, tabId, targetPaneId, insertionIndex);
         ensurePaneActiveTab(sourcePaneId);
         targetPane.activeTabId = tabId;
 
@@ -314,12 +336,11 @@ function createWorkspaceManager(options = {}) {
         tabBtn.dataset.paneId = targetPaneId;
         tabPane.dataset.paneId = targetPaneId;
 
-        if (!sourcePane.tabIds.length && sourcePane.id === 'pane-2') {
+        if (!sourcePane.tabIds.length && sourcePane.id === 'pane-2' && targetPaneId === 'pane-1') {
             layout.splitEnabled = false;
             layout.activePaneId = 'pane-1';
-            targetPaneId = 'pane-1';
         } else if (!preserveSplit) {
-            layout.splitEnabled = true;
+            layout.splitEnabled = targetPaneId === 'pane-2' || layout.panes[1].tabIds.length > 0;
         }
 
         if (typeof onTabMoved === 'function') {
@@ -377,19 +398,23 @@ function createWorkspaceManager(options = {}) {
 
     function collapseSplit() {
         const layout = getLayoutState();
+        const pane1 = getPaneById('pane-1');
         const pane2 = getPaneById('pane-2');
-        if (getPaneIdForTabId('tab-main') !== 'pane-1') {
-            moveTabToPane('tab-main', 'pane-1', { preserveSplit: true });
-        }
-        pane2.tabIds.filter(tabId => tabId !== 'tab-main').forEach(tabId => {
-            moveTabToPane(tabId, 'pane-1', { preserveSplit: true });
+        const movedTabIds = [...pane2.tabIds];
+        movedTabIds.forEach(tabId => {
+            const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
+            const tabPane = document.getElementById(tabId);
+            getPaneTabsList('pane-1')?.appendChild(tabBtn);
+            getPaneTabsContent('pane-1')?.appendChild(tabPane);
+            if (tabBtn) tabBtn.dataset.paneId = 'pane-1';
+            if (tabPane) tabPane.dataset.paneId = 'pane-1';
+            onTabMoved?.({ tabId, sourcePaneId: 'pane-2', targetPaneId: 'pane-1' });
         });
-        getPaneTabsContent('pane-1')?.appendChild(document.getElementById('tab-main'));
-        getPaneTabsList('pane-1')?.appendChild(document.querySelector('.main-tab[data-target="tab-main"]'));
-        ensurePaneTabMembership('pane-1', 'tab-main');
+        pane1.tabIds = [...pane1.tabIds, ...movedTabIds];
+        if (layout.activePaneId === 'pane-2' && pane2.activeTabId) pane1.activeTabId = pane2.activeTabId;
         pane2.tabIds = [];
         pane2.activeTabId = null;
-        getPaneById('pane-1').activeTabId = getPaneById('pane-1').activeTabId || 'tab-main';
+        pane1.activeTabId = pane1.activeTabId || pane1.tabIds[0] || null;
         layout.splitEnabled = false;
         layout.activePaneId = 'pane-1';
         ensurePaneActiveTab('pane-1');
@@ -469,5 +494,6 @@ function createWorkspaceManager(options = {}) {
 
 module.exports = {
     createWorkspaceManager,
-    normalizeWorkspaceLayoutShape
+    normalizeWorkspaceLayoutShape,
+    moveWorkspaceTab
 };

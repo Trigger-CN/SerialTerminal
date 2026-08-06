@@ -1531,13 +1531,13 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     {
       label: labels.splitHorizontal || 'Move Tab to Right Split',
       ...menuIcon('vertical_split'),
-      enabled: terminalType !== 'main' && Boolean(payload.tabId),
+      enabled: Boolean(payload.tabId),
       click: () => sendAction('split-horizontal')
     },
     {
       label: labels.splitVertical || 'Move Tab to Bottom Split',
       ...menuIcon('horizontal_split'),
-      enabled: terminalType !== 'main' && Boolean(payload.tabId),
+      enabled: Boolean(payload.tabId),
       click: () => sendAction('split-vertical')
     },
     {

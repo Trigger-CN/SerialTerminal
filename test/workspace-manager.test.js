@@ -2,9 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('../workspace-manager');
+const { createWorkspaceManager, normalizeWorkspaceLayoutShape, moveWorkspaceTab } = require('../workspace-manager');
 
-test('deduplicates tab ownership and keeps the main tab in pane 1', () => {
+test('deduplicates tab ownership while preserving the main tab position', () => {
   const layout = normalizeWorkspaceLayoutShape({
     splitEnabled: true,
     activePaneId: 'pane-2',
@@ -14,13 +14,13 @@ test('deduplicates tab ownership and keeps the main tab in pane 1', () => {
     ]
   });
 
-  assert.deepEqual(layout.panes[0].tabIds, ['tab-main', 'tab-filter-1']);
+  assert.deepEqual(layout.panes[0].tabIds, ['tab-filter-1', 'tab-main']);
   assert.deepEqual(layout.panes[1].tabIds, ['tab-shell-1']);
   assert.equal(layout.panes[0].activeTabId, 'tab-filter-1');
   assert.equal(layout.panes[1].activeTabId, 'tab-shell-1');
 });
 
-test('collapses an empty second pane and restores a valid active pane', () => {
+test('allows the main tab to live in the second pane', () => {
   const layout = normalizeWorkspaceLayoutShape({
     splitEnabled: true,
     activePaneId: 'pane-2',
@@ -30,11 +30,11 @@ test('collapses an empty second pane and restores a valid active pane', () => {
     ]
   });
 
-  assert.deepEqual(layout.panes[0].tabIds, ['tab-main']);
-  assert.deepEqual(layout.panes[1].tabIds, []);
-  assert.equal(layout.panes[0].activeTabId, 'tab-main');
-  assert.equal(layout.activePaneId, 'pane-1');
-  assert.equal(layout.splitEnabled, false);
+  assert.deepEqual(layout.panes[0].tabIds, []);
+  assert.deepEqual(layout.panes[1].tabIds, ['tab-main']);
+  assert.equal(layout.panes[1].activeTabId, 'tab-main');
+  assert.equal(layout.activePaneId, 'pane-2');
+  assert.equal(layout.splitEnabled, true);
 });
 
 test('prunes tabs that are rendered in a different pane', () => {
@@ -67,6 +67,7 @@ test('prunes tabs that are rendered in a different pane', () => {
   const previousDocument = global.document;
   global.document = {
     getElementById: id => id === 'workspace-root' ? root : null,
+    querySelector: () => null,
     querySelectorAll: () => []
   };
 
@@ -88,4 +89,29 @@ test('prunes tabs that are rendered in a different pane', () => {
   assert.deepEqual(layout.panes[0].tabIds, ['tab-main']);
   assert.deepEqual(layout.panes[1].tabIds, []);
   assert.equal(layout.panes[1].activeTabId, null);
+});
+
+test('normalizes a missing main tab back into pane 1', () => {
+  const layout = normalizeWorkspaceLayoutShape({
+    panes: [
+      { id: 'pane-1', activeTabId: 'tab-filter-1', tabIds: ['tab-filter-1'] },
+      { id: 'pane-2', activeTabId: null, tabIds: [] }
+    ]
+  });
+  assert.deepEqual(layout.panes[0].tabIds, ['tab-main', 'tab-filter-1']);
+});
+
+test('moves tabs to indexed positions within and across panes', () => {
+  const layout = {
+    panes: [
+      { id: 'pane-1', tabIds: ['tab-main', 'tab-filter-1', 'tab-filter-2'] },
+      { id: 'pane-2', tabIds: ['tab-shell-1'] }
+    ]
+  };
+  moveWorkspaceTab(layout, 'tab-filter-2', 'pane-1', 0);
+  assert.deepEqual(layout.panes[0].tabIds, ['tab-filter-2', 'tab-main', 'tab-filter-1']);
+
+  moveWorkspaceTab(layout, 'tab-main', 'pane-2', 0);
+  assert.deepEqual(layout.panes[0].tabIds, ['tab-filter-2', 'tab-filter-1']);
+  assert.deepEqual(layout.panes[1].tabIds, ['tab-main', 'tab-shell-1']);
 });

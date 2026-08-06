@@ -22,6 +22,7 @@ const { SearchAddon } = require('@xterm/addon-search');
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./i18n');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./workspace-manager');
+const { getHorizontalInsertionIndex } = require('./tab-reorder');
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 const {
@@ -795,7 +796,7 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
         requestTerminalContextMenu({
             terminalType,
             paneId: resolvePaneId(tabState?.paneId, tabState?.id, 'tab-main'),
-            tabId: tabState?.id || '',
+            tabId: tabState?.id || (terminalType === 'main' ? 'tab-main' : ''),
             hasSelection: term.hasSelection(),
             selectedText: term.hasSelection() ? term.getSelection() : '',
             isConnected,
@@ -982,7 +983,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'split-horizontal': {
-            if (!tabId || tabId === 'tab-main') break;
+            if (!tabId) break;
             const sourcePaneId = resolvePaneId(paneId, tabId);
             workspaceLayout.orientation = 'horizontal';
             moveTabToPane(tabId, getOtherPaneId(sourcePaneId));
@@ -990,7 +991,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'split-vertical': {
-            if (!tabId || tabId === 'tab-main') break;
+            if (!tabId) break;
             const sourcePaneId = resolvePaneId(paneId, tabId);
             workspaceLayout.orientation = 'vertical';
             moveTabToPane(tabId, getOtherPaneId(sourcePaneId));
@@ -998,7 +999,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'move-to-other-pane': {
-            if (!tabId || tabId === 'tab-main') break;
+            if (!tabId) break;
             const sourcePaneId = resolvePaneId(paneId, tabId);
             const targetPaneId = getOtherPaneId(sourcePaneId);
             moveTabToPane(tabId, targetPaneId);
@@ -1107,7 +1108,7 @@ serialTerm.open(document.getElementById('serial-container'));
 const mainTabButton = document.querySelector('.main-tab[data-target="tab-main"]');
 if (mainTabButton) {
     mainTabButton.addEventListener('click', () => {
-        switchPaneTab('pane-1', 'tab-main');
+        switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
     });
 }
 bindTerminalContextMenu({
@@ -1283,6 +1284,119 @@ function enableSplit(orientation) {
 function moveTabToPane(tabId, targetPaneId, options = {}) {
     return workspaceManager.moveTabToPane(tabId, targetPaneId, options);
 }
+
+let workspaceTabDragState = null;
+
+function getWorkspaceTabDropTarget(clientX, clientY) {
+    return ['pane-1', 'pane-2'].map(paneId => ({ paneId, list: getPaneTabsList(paneId) }))
+        .find(({ list }) => {
+            if (!list || list.closest('.workspace-pane')?.hidden) return false;
+            const rect = list.getBoundingClientRect();
+            return clientX >= rect.left && clientX <= rect.right
+                && clientY >= rect.top - 6 && clientY <= rect.bottom + 6;
+        }) || null;
+}
+
+function updateWorkspaceTabDrag(state, clientX, clientY) {
+    if (!state.dragging) return;
+    state.preview.style.left = `${Math.max(4, Math.min(clientX + 10, window.innerWidth - state.preview.offsetWidth - 4))}px`;
+    state.preview.style.top = `${Math.max(4, Math.min(clientY + 10, window.innerHeight - state.preview.offsetHeight - 4))}px`;
+    state.indicator.remove();
+    state.targetPaneId = null;
+    state.insertionIndex = null;
+
+    const target = getWorkspaceTabDropTarget(clientX, clientY);
+    if (!target) return;
+    const listRect = target.list.getBoundingClientRect();
+    const edgeSize = Math.min(36, listRect.width / 4);
+    if (clientX < listRect.left + edgeSize) {
+        target.list.scrollLeft -= Math.ceil((listRect.left + edgeSize - clientX) / 4);
+    } else if (clientX > listRect.right - edgeSize) {
+        target.list.scrollLeft += Math.ceil((clientX - (listRect.right - edgeSize)) / 4);
+    }
+    const tabs = Array.from(target.list.querySelectorAll('.main-tab')).filter(tab => tab !== state.tabButton);
+    const insertionIndex = getHorizontalInsertionIndex(tabs.map(tab => tab.getBoundingClientRect()), clientX);
+    target.list.insertBefore(state.indicator, tabs[insertionIndex] || null);
+    state.targetPaneId = target.paneId;
+    state.insertionIndex = insertionIndex;
+}
+
+function startWorkspaceTabDrag(state) {
+    state.dragging = true;
+    state.tabButton.classList.add('workspace-tab-dragging');
+    const preview = state.tabButton.cloneNode(true);
+    preview.classList.remove('active', 'workspace-tab-dragging');
+    preview.classList.add('workspace-tab-drag-preview');
+    preview.setAttribute('aria-hidden', 'true');
+    preview.querySelectorAll('button, [tabindex]').forEach(element => { element.tabIndex = -1; });
+    preview.style.width = `${state.tabButton.getBoundingClientRect().width}px`;
+    document.body.appendChild(preview);
+    state.preview = preview;
+    state.indicator = document.createElement('span');
+    state.indicator.className = 'workspace-tab-drop-indicator';
+    state.indicator.setAttribute('aria-hidden', 'true');
+    updateWorkspaceTabDrag(state, state.lastX, state.lastY);
+}
+
+function finishWorkspaceTabDrag(state) {
+    state.preview?.remove();
+    state.indicator?.remove();
+    state.tabButton.classList.remove('workspace-tab-dragging');
+    if (state.dragging && state.targetPaneId && state.insertionIndex !== null) {
+        moveTabToPane(state.tabId, state.targetPaneId, { insertionIndex: state.insertionIndex });
+        state.tabButton.dataset.suppressClickUntil = String(performance.now() + 300);
+    }
+}
+
+function bindWorkspaceTabDragging() {
+    ['pane-1', 'pane-2'].forEach(paneId => {
+        getPaneTabsList(paneId)?.addEventListener('pointerdown', event => {
+            const tabButton = event.target.closest('.main-tab');
+            if (!tabButton || event.target.closest('.main-tab-close')) return;
+            if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+            workspaceTabDragState = {
+                pointerId: event.pointerId,
+                tabId: tabButton.dataset.target,
+                tabButton,
+                startX: event.clientX,
+                startY: event.clientY,
+                lastX: event.clientX,
+                lastY: event.clientY,
+                dragging: false
+            };
+        });
+    });
+    document.addEventListener('pointermove', event => {
+        const state = workspaceTabDragState;
+        if (!state || state.pointerId !== event.pointerId) return;
+        state.lastX = event.clientX;
+        state.lastY = event.clientY;
+        if (!state.dragging && Math.hypot(event.clientX - state.startX, event.clientY - state.startY) >= 6) {
+            startWorkspaceTabDrag(state);
+        }
+        if (state.dragging) {
+            event.preventDefault();
+            updateWorkspaceTabDrag(state, event.clientX, event.clientY);
+        }
+    }, { passive: false });
+    const finish = event => {
+        const state = workspaceTabDragState;
+        if (!state || state.pointerId !== event.pointerId) return;
+        workspaceTabDragState = null;
+        finishWorkspaceTabDrag(state);
+    };
+    document.addEventListener('pointerup', finish);
+    document.addEventListener('pointercancel', finish);
+    document.addEventListener('click', event => {
+        const tabButton = event.target.closest?.('.main-tab');
+        if (tabButton && performance.now() < Number(tabButton.dataset.suppressClickUntil || 0)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }
+    }, true);
+}
+
+bindWorkspaceTabDragging();
 
 function collapseSplit() {
     return workspaceManager.collapseSplit();
