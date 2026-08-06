@@ -281,6 +281,19 @@ test('filter tabs support persistent whole-word matching', () => {
   assert.match(main, /sendAction\('toggle-whole-word'\)/);
 });
 
+test('passive search changes refresh results without selecting a match', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const tabChangedHandler = renderer.match(/window\.addEventListener\('main-tab-changed', \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
+  const searchInputHandler = renderer.match(/searchInput\.addEventListener\('input', \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
+
+  assert.match(tabChangedHandler, /refreshSearchCount\(\{ force: true \}\)/);
+  assert.match(searchInputHandler, /scheduleSearchRefresh\(\)/);
+  assert.doesNotMatch(renderer, /scheduleSearchSelection|selectFirstSearchResult/);
+  assert.doesNotMatch(tabChangedHandler, /selectSearchMatch/);
+  assert.match(renderer, /findNextBtn\.addEventListener\('click',[\s\S]*?selectSearchMatch\(nextIndex\)/);
+  assert.match(renderer, /findPrevBtn\.addEventListener\('click',[\s\S]*?selectSearchMatch\(previousIndex\)/);
+});
+
 test('sidebar can export the active terminal through an independent save dialog', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');

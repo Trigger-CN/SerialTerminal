@@ -848,7 +848,7 @@ function setSearchFromText(text) {
     }
     searchInput.value = text;
     resetSearchState();
-    selectFirstSearchResult({ force: true });
+    refreshSearchCount({ force: true });
 }
 
 function focusSearchWithActiveSelection() {
@@ -3812,21 +3812,9 @@ function refreshSearchCount({ force = false } = {}) {
     return searchState;
 }
 
-function selectFirstSearchResult({ force = true } = {}) {
+function scheduleSearchRefresh() {
     clearTimeout(searchDebounceTimer);
-    const state = refreshSearchCount({ force });
-    clearSearchSelection();
-    if (!searchInput.value || state.regexError || !state.total) {
-        searchState.current = 0;
-        updateSearchResultCount(0, state.total, state.regexError);
-        return false;
-    }
-    return selectSearchMatch(1);
-}
-
-function scheduleSearchSelection() {
-    clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => selectFirstSearchResult({ force: true }), 200);
+    searchDebounceTimer = setTimeout(() => refreshSearchCount({ force: true }), 200);
 }
 
 function resetSearchState() {
@@ -3891,34 +3879,36 @@ searchInput.addEventListener('keydown', (e) => {
 
 searchInput.addEventListener('input', () => {
     resetSearchState();
+    clearSearchSelection();
     if (!searchInput.value) {
         clearTimeout(searchDebounceTimer);
-        clearSearchSelection();
         updateSearchResultCount(0, 0);
         return;
     }
-    scheduleSearchSelection();
+    scheduleSearchRefresh();
 });
 
 [searchRegex, searchCase, searchWord].forEach(control => {
     control.addEventListener('change', () => {
         resetSearchState();
+        clearSearchSelection();
         if (!searchInput.value) {
             updateSearchResultCount(0, 0);
             return;
         }
-        selectFirstSearchResult({ force: true });
+        refreshSearchCount({ force: true });
     });
 });
 
 window.addEventListener('main-tab-changed', () => {
+    clearTimeout(searchDebounceTimer);
     resetSearchState();
     updateSearchTargetLabel();
     if (!searchInput.value) {
         updateSearchResultCount(0, 0);
         return;
     }
-    scheduleSearchSelection();
+    refreshSearchCount({ force: true });
 });
 
 updateSearchTargetLabel();
