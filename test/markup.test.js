@@ -121,6 +121,8 @@ test('collapsed sidebar scrolls only quick sends above fixed serial tools', () =
   assert.ok(fixedToolsIndex > quickListIndex && connectIndex > fixedToolsIndex, 'fixed serial tools must follow quick sends');
   assert.ok(expandIndex > connectIndex, 'expand button must remain outside both tool regions');
   assert.match(styles, /\.sidebar-quick-send-scroll\s*\{[^}]*overflow-y:\s*auto;/s);
+  assert.match(styles, /\.sidebar-quick-send-scroll\s*\{[^}]*width:\s*40px;/s);
+  assert.match(styles, /\.sidebar-quick-send-list\s*\{[^}]*width:\s*40px;/s);
   assert.doesNotMatch(styles, /\.sidebar-fixed-tools\s*\{[^}]*overflow-y:/s);
   assert.match(styles, /\.sidebar-tool-btn#sidebar-expand-btn\s*\{[^}]*flex-shrink:\s*0;[^}]*margin-top:\s*8px;/s);
   assert.equal((toolbar.match(/data-material-icon=/g) || []).length, 6);

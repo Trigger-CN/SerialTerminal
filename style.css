@@ -986,7 +986,7 @@ label:hover {
     gap: 6px;
     width: 48px;
     min-width: 48px;
-    padding: 8px 6px;
+    padding: 8px 4px;
     box-sizing: border-box;
 }
 
@@ -1057,6 +1057,7 @@ label:hover {
 }
 
 .sidebar-quick-send-scroll {
+    width: 40px;
     min-height: 0;
     flex: 1;
     overflow-x: hidden;
@@ -1074,7 +1075,7 @@ label:hover {
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    width: 36px;
+    width: 40px;
     min-height: 100%;
     justify-content: flex-end;
     padding: 4px 0 6px;
