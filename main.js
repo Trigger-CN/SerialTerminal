@@ -52,6 +52,8 @@ const DEFAULT_SHORTCUTS = {
   refreshPorts: 'Ctrl+R',
   toggleSerialConnection: 'Ctrl+Shift+D'
 };
+const SIDEBAR_TAB_IDS = new Set(['tab-settings', 'tab-search', 'tab-send']);
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const MENU_ICON_DIRECTORY = path.join(__dirname, 'assets', 'menu-icons');
 const APP_ICON_PATH = path.join(__dirname, 'assets', process.platform === 'win32' ? 'app.ico' : 'icon-512x512.png');
 
@@ -179,7 +181,25 @@ function normalizeConfig(config, defaults) {
     sendOnEnter: normalizeBoolean(oldMainInput.sendOnEnter, true),
     historyLimit: normalizeMainInputHistoryLimit(oldMainInput.historyLimit)
   };
+  const oldHighlightColors = source.highlightColors && typeof source.highlightColors === 'object'
+    ? source.highlightColors
+    : {};
+  normalized.highlightColors = {};
+  for (const type of ['search', 'filter', 'selection']) {
+    const colors = oldHighlightColors[type] && typeof oldHighlightColors[type] === 'object'
+      ? oldHighlightColors[type]
+      : {};
+    normalized.highlightColors[type] = {
+      background: HEX_COLOR_PATTERN.test(colors.background || '')
+        ? colors.background
+        : defaults.highlightColors[type].background,
+      foreground: HEX_COLOR_PATTERN.test(colors.foreground || '')
+        ? colors.foreground
+        : defaults.highlightColors[type].foreground
+    };
+  }
   normalized.sidebarCollapsed = normalizeBoolean(source.sidebarCollapsed, false);
+  normalized.activeSidebarTab = oneOf(source.activeSidebarTab, SIDEBAR_TAB_IDS, defaults.activeSidebarTab);
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
   normalized.fontSize = normalizeIntegerSetting(source.fontSize, 'fontSize');
@@ -301,8 +321,13 @@ function loadConfig() {
     fontFamilyZh: '"Microsoft YaHei"',
     foreground: '#cccccc',
     background: '#000000',
-    timestampColor: '#00ff00',
-    lineNoColor: '#ffff00',
+    timestampColor: '#808080',
+    lineNoColor: '#67986f',
+    highlightColors: {
+      search: { background: '#f5d90a', foreground: '#000000' },
+      filter: { background: '#535353', foreground: '#ffffff' },
+      selection: { background: '#073ca8', foreground: '#ffffff' }
+    },
     logEnabled: false,
     saveAllTabsLogToFiles: false,
     logIncludeTimestamp: false,
@@ -371,6 +396,7 @@ function loadConfig() {
       historyLimit: 20
     },
     sidebarCollapsed: false,
+    activeSidebarTab: 'tab-settings',
     mainInputHistory: [],
     shortcuts: DEFAULT_SHORTCUTS,
     autoSendSettings: {
@@ -749,7 +775,7 @@ function startLogAutoFlushTimer() {
 
 function saveConfig(config) {
   const merged = { ...currentConfig, ...config };
-  for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'autoSendSettings']) {
+  for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'autoSendSettings', 'highlightColors']) {
     if (config && config[key] && typeof config[key] === 'object') {
       merged[key] = { ...currentConfig[key], ...config[key] };
     }

@@ -45,6 +45,12 @@ const elements = {
   timestampColorHex: document.getElementById('timestampColor-hex'),
   lineNoColor: document.getElementById('lineNoColor'),
   lineNoColorHex: document.getElementById('lineNoColor-hex'),
+  searchHighlightBackground: document.getElementById('searchHighlightBackground'),
+  searchHighlightForeground: document.getElementById('searchHighlightForeground'),
+  filterHighlightBackground: document.getElementById('filterHighlightBackground'),
+  filterHighlightForeground: document.getElementById('filterHighlightForeground'),
+  selectionHighlightBackground: document.getElementById('selectionHighlightBackground'),
+  selectionHighlightForeground: document.getElementById('selectionHighlightForeground'),
 
   scrollbackLimit: document.getElementById('scrollbackLimit'),
   historyBufferSize: document.getElementById('historyBufferSize'),
@@ -450,10 +456,20 @@ async function init() {
   elements.foregroundHex.textContent = config.foreground;
   elements.backgroundHex.textContent = config.background;
 
-  elements.timestampColor.value = config.timestampColor || '#00ff00';
-  elements.timestampColorHex.textContent = config.timestampColor || '#00ff00';
-  elements.lineNoColor.value = config.lineNoColor || '#ffff00';
-  elements.lineNoColorHex.textContent = config.lineNoColor || '#ffff00';
+  elements.timestampColor.value = config.timestampColor || '#808080';
+  elements.timestampColorHex.textContent = config.timestampColor || '#808080';
+  elements.lineNoColor.value = config.lineNoColor || '#67986f';
+  elements.lineNoColorHex.textContent = config.lineNoColor || '#67986f';
+  const highlightColors = config.highlightColors || {};
+  elements.searchHighlightBackground.value = highlightColors.search?.background || '#f5d90a';
+  elements.searchHighlightForeground.value = highlightColors.search?.foreground || '#000000';
+  elements.filterHighlightBackground.value = highlightColors.filter?.background || '#535353';
+  elements.filterHighlightForeground.value = highlightColors.filter?.foreground || '#ffffff';
+  elements.selectionHighlightBackground.value = highlightColors.selection?.background || '#073ca8';
+  elements.selectionHighlightForeground.value = highlightColors.selection?.foreground || '#ffffff';
+  [elements.searchHighlightBackground, elements.searchHighlightForeground, elements.filterHighlightBackground,
+    elements.filterHighlightForeground, elements.selectionHighlightBackground, elements.selectionHighlightForeground]
+    .forEach(input => document.getElementById(`${input.id}-hex`).textContent = input.value);
   
   elements.scrollbackLimit.value = String(normalizeIntegerSetting(config.scrollbackLimit, 'scrollbackLimit'));
   elements.historyBufferSize.value = String(normalizeIntegerSetting(config.historyBufferSize, 'historyBufferSize'));
@@ -697,6 +713,9 @@ elements.foreground.oninput = (e) => elements.foregroundHex.textContent = e.targ
 elements.background.oninput = (e) => elements.backgroundHex.textContent = e.target.value;
 elements.timestampColor.oninput = (e) => elements.timestampColorHex.textContent = e.target.value;
 elements.lineNoColor.oninput = (e) => elements.lineNoColorHex.textContent = e.target.value;
+[elements.searchHighlightBackground, elements.searchHighlightForeground, elements.filterHighlightBackground,
+  elements.filterHighlightForeground, elements.selectionHighlightBackground, elements.selectionHighlightForeground]
+  .forEach(input => input.oninput = () => document.getElementById(`${input.id}-hex`).textContent = input.value);
 elements.hexIdleFlushMs.onchange = () => {
     elements.hexIdleFlushMs.value = String(normalizeHexDisplaySettings({
         ...DEFAULT_HEX_DISPLAY_SETTINGS,
@@ -755,6 +774,11 @@ elements.saveBtn.onclick = async () => {
     background: elements.background.value,
     timestampColor: elements.timestampColor.value,
     lineNoColor: elements.lineNoColor.value,
+    highlightColors: {
+      search: { background: elements.searchHighlightBackground.value, foreground: elements.searchHighlightForeground.value },
+      filter: { background: elements.filterHighlightBackground.value, foreground: elements.filterHighlightForeground.value },
+      selection: { background: elements.selectionHighlightBackground.value, foreground: elements.selectionHighlightForeground.value }
+    },
     scrollbackLimit: normalizeIntegerSetting(elements.scrollbackLimit.value, 'scrollbackLimit'),
     historyBufferSize: normalizeIntegerSetting(elements.historyBufferSize.value, 'historyBufferSize'),
     mouseWheelScrollLines: normalizeIntegerSetting(elements.mouseWheelScrollLines.value, 'mouseWheelScrollLines'),

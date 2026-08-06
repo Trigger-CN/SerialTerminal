@@ -68,9 +68,14 @@ let serialNewLine = true;
 let lastCharWasCR = false;
 
 // Color settings
-let timestampColor = '#00ff00';
-let lineNoColor = '#ffff00';
+let timestampColor = '#808080';
+let lineNoColor = '#67986f';
 let highlightRules = [];
+let highlightColors = {
+    search: { background: '#f5d90a', foreground: '#000000' },
+    filter: { background: '#535353', foreground: '#ffffff' },
+    selection: { background: '#073ca8', foreground: '#ffffff' }
+};
 let mouseWheelScrollLines = 3;
 
 const DEFAULT_WORKSPACE_LAYOUT = {
@@ -117,6 +122,25 @@ function hexToAnsi(hex) {
     const g = parseInt(hex.substring(2, 4), 16);
     const b = parseInt(hex.substring(4, 6), 16);
     return `\x1b[38;2;${r};${g};${b}m`;
+}
+
+function hexToAnsiBackground(hex) {
+    if (!hex) return '';
+    hex = hex.replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return `\x1b[48;2;${r};${g};${b}m`;
+}
+
+function getTerminalTheme(config) {
+    return {
+        background: config.background,
+        foreground: config.foreground,
+        cursor: config.foreground,
+        selectionBackground: config.highlightColors.selection.background,
+        selectionForeground: config.highlightColors.selection.foreground
+    };
 }
 
 const showTimestampCb = document.getElementById('show-timestamp');
@@ -342,8 +366,9 @@ function applyHighlighting(text, filterRegex = null, globalMatches = null) {
         
         // \x1b[48;5;236m is a dark gray background. \x1b[1m is bold.
         if (m.isFilterMatch) {
-            // Filter match: Dark gray background + bold text
-            result += '\x1b[48;5;238m\x1b[1m' + text.substring(m.start, m.end) + '\x1b[0m';
+            result += hexToAnsiBackground(highlightColors.filter.background)
+                + hexToAnsi(highlightColors.filter.foreground)
+                + '\x1b[1m' + text.substring(m.start, m.end) + '\x1b[0m';
         } else {
             // Normal highlight rule
             result += hexToAnsi(m.color) + text.substring(m.start, m.end) + '\x1b[0m';
@@ -850,9 +875,7 @@ function locateInMainTerminal(context) {
 
 function setSearchFromText(text) {
     if (!text) return;
-    if (typeof showSidebarTab === 'function') {
-        showSidebarTab('tab-search');
-    }
+    showSidebarTab('tab-search');
     searchInput.value = text;
     resetSearchState();
     refreshSearchCount({ force: true });
@@ -864,9 +887,9 @@ function focusSearchWithActiveSelection() {
     const selectedText = target?.term?.hasSelection?.() ? target.term.getSelection() : '';
     if (selectedText) {
         setSearchFromText(selectedText);
-        return;
+    } else {
+        showSidebarTab('tab-search');
     }
-    showSidebarTab('tab-search');
     searchInput?.focus();
     searchInput?.select();
 }
@@ -1098,6 +1121,7 @@ term.open(document.getElementById('terminal-container'));
 
 const serialTerm = new Terminal({ 
     cursorBlink: true,
+    allowProposedApi: true,
     scrollback: 20000
 });
 const serialFitAddon = new FitAddon();
@@ -1657,6 +1681,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
 
     const term = new Terminal({
         cursorBlink: true,
+        allowProposedApi: true,
         scrollback: currentConfig ? (currentConfig.scrollbackLimit || 20000) : 20000
     });
     const fitAddon = new FitAddon();
@@ -1669,11 +1694,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         term.options = {
             fontSize: currentConfig.fontSize,
             fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
-            theme: {
-                background: currentConfig.background,
-                foreground: currentConfig.foreground,
-                cursor: currentConfig.foreground
-            }
+            theme: getTerminalTheme(currentConfig)
         };
     }
 
@@ -1858,6 +1879,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     // 3. Initialize Terminal
     const term = new Terminal({ 
         cursorBlink: true,
+        allowProposedApi: true,
         scrollback: currentConfig ? (currentConfig.scrollbackLimit || 20000) : 20000
     });
     const fitAddon = new FitAddon();
@@ -1870,11 +1892,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         term.options = {
             fontSize: currentConfig.fontSize,
             fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
-            theme: {
-                background: currentConfig.background,
-                foreground: currentConfig.foreground,
-                cursor: currentConfig.foreground
-            }
+            theme: getTerminalTheme(currentConfig)
         };
     }
     
@@ -2541,20 +2559,27 @@ function bindShellSidebarEvents() {
     });
 }
 
+function showSidebarTab(tabId, persist = true) {
+    const normalizedTabId = ['tab-settings', 'tab-search', 'tab-send'].includes(tabId) ? tabId : 'tab-settings';
+    const button = document.querySelector(`.sidebar-tab[data-target="${normalizedTabId}"]`);
+    const pane = document.getElementById(normalizedTabId);
+    if (!button || !pane) return false;
+    document.querySelectorAll('.sidebar-tab-pane').forEach(tabPane => {
+        tabPane.classList.toggle('active', tabPane === pane);
+    });
+    document.querySelectorAll('.sidebar-tab').forEach(tabButton => {
+        const selected = tabButton === button;
+        tabButton.classList.toggle('active', selected);
+        tabButton.setAttribute('aria-selected', String(selected));
+    });
+    if (currentConfig) currentConfig.activeSidebarTab = normalizedTabId;
+    if (persist && !isApplyingConfig) ipcRenderer.send('save-config', { activeSidebarTab: normalizedTabId });
+    return true;
+}
+
 function bindSidebarToolbarEvents() {
     document.querySelectorAll('.sidebar-tab').forEach(button => {
-        const activate = () => {
-            const tabId = button.dataset.target;
-            document.querySelectorAll('.sidebar-tab-pane').forEach(pane => {
-                pane.classList.toggle('active', pane.id === tabId);
-            });
-            document.querySelectorAll('.sidebar-tab').forEach(tabButton => {
-                const selected = tabButton === button;
-                tabButton.classList.toggle('active', selected);
-                tabButton.setAttribute('aria-selected', String(selected));
-            });
-        };
-        button.addEventListener('click', activate);
+        button.addEventListener('click', () => showSidebarTab(button.dataset.target));
     });
     document.getElementById('open-prefs')?.addEventListener('click', () => {
         ipcRenderer.send('open-prefs');
@@ -3017,17 +3042,19 @@ function applyConfig(config) {
     try {
     currentConfig = config;
     setSidebarCollapsed(config.sidebarCollapsed === true, false);
+    showSidebarTab(config.activeSidebarTab, false);
     sidebarShellBtn?.classList.toggle('active', shellSidebar && !shellSidebar.classList.contains('hidden'));
     activeShortcuts = normalizeShortcutSettings(config.shortcuts);
     let sendProfileChanged = false;
     currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
+    highlightColors = config.highlightColors;
     const normalizedWorkspaceLayout = normalizeWorkspaceLayout(config.workspaceLayout);
     const normalizedWorkspaceLayoutKey = JSON.stringify(normalizedWorkspaceLayout);
     
     // Update local color settings
-    timestampColor = config.timestampColor || '#00ff00';
-    lineNoColor = config.lineNoColor || '#ffff00';
+    timestampColor = config.timestampColor || '#808080';
+    lineNoColor = config.lineNoColor || '#67986f';
     mouseWheelScrollLines = config.mouseWheelScrollLines || 3;
     
     // Update Checkboxes
@@ -3042,11 +3069,7 @@ function applyConfig(config) {
         fontSize: config.fontSize,
         fontFamily: `${config.fontFamily}, ${config.fontFamilyZh}, "Courier New", monospace`,
         scrollback: config.scrollbackLimit || 20000,
-        theme: {
-            background: config.background,
-            foreground: config.foreground,
-            cursor: config.foreground
-        }
+        theme: getTerminalTheme(config)
     };
     serialTerm.options = options;
     
@@ -3059,6 +3082,9 @@ function applyConfig(config) {
         tab.term.options = options;
         tab.fitAddon.fit();
     });
+    if (searchState.current > 0 && searchState.matches[searchState.current - 1]) {
+        decorateActiveSearchMatch(getActiveSearchTarget().term, searchState.matches[searchState.current - 1]);
+    }
     
     document.body.style.background = config.background;
 
@@ -3759,6 +3785,7 @@ const searchState = {
     regexError: '',
     matches: []
 };
+let activeSearchDecoration = null;
 
 function getActiveSearchTarget() {
     const activeTabId = getActiveTabId();
@@ -3816,8 +3843,35 @@ function clearSearchDecorations(addon) {
 }
 
 function clearSearchSelection(target = getActiveSearchTarget()) {
+    activeSearchDecoration?.decoration?.dispose();
+    activeSearchDecoration?.marker?.dispose();
+    activeSearchDecoration = null;
     clearSearchDecorations(target.addon);
     if (typeof target.term?.clearSelection === 'function') target.term.clearSelection();
+}
+
+function decorateActiveSearchMatch(term, match) {
+    activeSearchDecoration?.decoration?.dispose();
+    activeSearchDecoration?.marker?.dispose();
+    activeSearchDecoration = null;
+    if (typeof term?.registerMarker !== 'function' || typeof term?.registerDecoration !== 'function') return;
+    const buffer = term.buffer?.active;
+    const cursorLine = (buffer?.baseY || 0) + (buffer?.cursorY || 0);
+    const marker = term.registerMarker(match.line - cursorLine);
+    if (!marker) return;
+    const decoration = term.registerDecoration({
+        marker,
+        x: match.column,
+        width: match.length,
+        backgroundColor: highlightColors.search.background,
+        foregroundColor: highlightColors.search.foreground,
+        layer: 'top'
+    });
+    if (!decoration) {
+        marker.dispose();
+        return;
+    }
+    activeSearchDecoration = { decoration, marker };
 }
 
 function updateSearchResultCount(current = 0, resultCount = 0, regexError = '') {
@@ -3951,6 +4005,12 @@ function resetSearchState() {
     searchState.matches = [];
 }
 
+function scrollSearchMatchIntoCenter(term, line) {
+    if (typeof term?.scrollToLine !== 'function') return;
+    const visibleRows = Math.max(1, Number(term.rows) || 1);
+    term.scrollToLine(Math.max(0, line - Math.floor(visibleRows / 2)));
+}
+
 function selectSearchMatch(index) {
     const target = getActiveSearchTarget();
     if (!searchState.total || index < 1 || index > searchState.total) {
@@ -3959,12 +4019,9 @@ function selectSearchMatch(index) {
     }
     const match = searchState.matches[index - 1];
     if (!match) return false;
-    if (typeof target.term.scrollToLine === 'function') {
-        target.term.scrollToLine(match.line);
-    }
-    if (typeof target.term.select === 'function') {
-        target.term.select(match.column, match.line, match.length);
-    }
+    scrollSearchMatchIntoCenter(target.term, match.line);
+    target.term.clearSelection?.();
+    decorateActiveSearchMatch(target.term, match);
     searchState.current = index;
     updateSearchResultCount(searchState.current, searchState.total);
     return true;

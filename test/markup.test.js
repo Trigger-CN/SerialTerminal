@@ -296,6 +296,22 @@ test('full and compact quick-send clicks share one lightweight result pulse', ()
   assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
 });
 
+test('Ctrl+F opens search and restores the last sidebar tab', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(main, /SIDEBAR_TAB_IDS = new Set\(\['tab-settings', 'tab-search', 'tab-send'\]\)/);
+  assert.match(main, /activeSidebarTab: 'tab-settings'/);
+  assert.match(main, /normalized\.activeSidebarTab = oneOf\(source\.activeSidebarTab, SIDEBAR_TAB_IDS, defaults\.activeSidebarTab\)/);
+  assert.match(renderer, /function showSidebarTab\(tabId, persist = true\)/);
+  assert.match(renderer, /includes\(tabId\) \? tabId : 'tab-settings'/);
+  assert.match(renderer, /ipcRenderer\.send\('save-config', \{ activeSidebarTab: normalizedTabId \}\)/);
+  assert.match(renderer, /showSidebarTab\(config\.activeSidebarTab, false\)/);
+  assert.match(renderer, /case 'focusSearch':[\s\S]*?focusSearchWithActiveSelection\(\)/);
+  assert.match(renderer, /function focusSearchWithActiveSelection\(\)[\s\S]*?showSidebarTab\('tab-search'\)[\s\S]*?searchInput\?\.focus\(\)/);
+  assert.doesNotMatch(renderer, /setSearchFromText\(selectedText\);\s*return;/);
+});
+
 test('repeated disconnected quick-send clicks show a localized nearby toast', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
@@ -381,6 +397,47 @@ test('passive search changes refresh results without selecting a match', () => {
   assert.doesNotMatch(tabChangedHandler, /selectSearchMatch/);
   assert.match(renderer, /findNextBtn\.addEventListener\('click',[\s\S]*?selectSearchMatch\(nextIndex\)/);
   assert.match(renderer, /findPrevBtn\.addEventListener\('click',[\s\S]*?selectSearchMatch\(previousIndex\)/);
+});
+
+test('active search results are scrolled near the terminal center', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const centerScroll = renderer.match(/function scrollSearchMatchIntoCenter\(term, line\) \{[\s\S]*?\n\}/)?.[0] || '';
+  const selectMatch = renderer.match(/function selectSearchMatch\(index\) \{[\s\S]*?\n\}/)?.[0] || '';
+
+  assert.match(centerScroll, /Number\(term\.rows\)/);
+  assert.match(centerScroll, /line - Math\.floor\(visibleRows \/ 2\)/);
+  assert.match(centerScroll, /term\.scrollToLine\(Math\.max\(0,/);
+  assert.match(selectMatch, /scrollSearchMatchIntoCenter\(target\.term, match\.line\)/);
+  assert.doesNotMatch(selectMatch, /scrollToLine\(match\.line\)/);
+});
+
+test('preferences configure search, filter, and selection highlight colors', () => {
+  const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  ['search', 'filter', 'selection'].forEach(type => {
+    const prefix = `${type}Highlight`;
+    assert.match(html, new RegExp(`id="${prefix}Background"`));
+    assert.match(html, new RegExp(`id="${prefix}Foreground"`));
+  });
+  assert.match(preferences, /highlightColors:\s*\{[\s\S]*search:[\s\S]*filter:[\s\S]*selection:/);
+  assert.match(main, /for \(const type of \['search', 'filter', 'selection'\]\)/);
+  assert.match(main, /HEX_COLOR_PATTERN\.test\(colors\.background/);
+  assert.match(main, /filter: \{ background: '#535353', foreground: '#ffffff' \}/);
+  assert.match(main, /selection: \{ background: '#073ca8', foreground: '#ffffff' \}/);
+  assert.match(main, /timestampColor: '#808080'/);
+  assert.match(main, /lineNoColor: '#67986f'/);
+  assert.match(renderer, /selectionBackground: config\.highlightColors\.selection\.background/);
+  assert.match(renderer, /selectionForeground: config\.highlightColors\.selection\.foreground/);
+  assert.match(renderer, /backgroundColor: highlightColors\.search\.background/);
+  assert.match(renderer, /foregroundColor: highlightColors\.search\.foreground/);
+  assert.equal((renderer.match(/allowProposedApi: true/g) || []).length, 3);
+  assert.match(renderer, /target\.term\.clearSelection\?\.\(\);\s*decorateActiveSearchMatch\(target\.term, match\)/);
+  assert.doesNotMatch(renderer, /target\.term\.select\(match\.column, match\.line, match\.length\)/);
+  assert.match(renderer, /hexToAnsiBackground\(highlightColors\.filter\.background\)/);
+  assert.match(renderer, /hexToAnsi\(highlightColors\.filter\.foreground\)/);
 });
 
 test('sidebar can export the active terminal through an independent save dialog', () => {

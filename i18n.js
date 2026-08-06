@@ -193,6 +193,13 @@ const translations = {
       historyBufferHelp: 'Size of the history buffer for new windows (in characters). Approx 1MB = 1,000,000 chars.',
       mouseWheelScrollLines: 'Mouse Wheel Scroll Lines',
       mouseWheelScrollHelp: 'Number of lines to scroll per mouse wheel tick in the terminal display.',
+      highlightColors: 'Highlight Colors',
+      searchHighlightBackground: 'Search Highlight Background',
+      searchHighlightForeground: 'Search Highlight Text',
+      filterHighlightBackground: 'Filter Highlight Background',
+      filterHighlightForeground: 'Filter Highlight Text',
+      selectionHighlightBackground: 'Selection Highlight Background',
+      selectionHighlightForeground: 'Selection Highlight Text',
       keywordHighlighting: 'Keyword Highlighting',
       addRule: '+ Add New Rule',
       resetHighlightDefaults: 'Reset Highlight Defaults',
@@ -389,7 +396,7 @@ Object.assign(translations.en.prefs, {
 Object.assign(translations['zh-CN'].prefs, {
   shortcuts: '快捷键', shortcutsSettings: '快捷键设置', shortcutsHelp: '点击快捷键输入框后按下组合键。按 Backspace 清空快捷键。', resetShortcutDefaults: '恢复默认快捷键', shortcutDisabled: '已禁用',
   shortcutSendMainInput: '发送底部输入框', shortcutToggleSendHistory: '打开发送历史', shortcutHistoryPrevious: '上一条发送历史', shortcutHistoryNext: '下一条发送历史', shortcutFocusSearch: '聚焦搜索', shortcutClearActiveTerminal: '清空当前终端', shortcutRefreshPorts: '刷新串口', shortcutToggleSerialConnection: '连接 / 断开串口',
-  logFileSuffix: '日志文件后缀', logFileSuffixPlaceholder: '.txt'
+  logFileSuffix: '日志文件后缀', logFileSuffixPlaceholder: '.txt', highlightColors: '高亮颜色', searchHighlightBackground: '搜索高亮背景色', searchHighlightForeground: '搜索高亮文字颜色', filterHighlightBackground: '过滤高亮背景色', filterHighlightForeground: '过滤高亮文字颜色', selectionHighlightBackground: '选中高亮背景色', selectionHighlightForeground: '选中高亮文字颜色'
 });
 Object.assign(translations['zh-TW'].prefs, {
   shortcuts: '快捷鍵', shortcutsSettings: '快捷鍵設定', shortcutsHelp: '點擊快捷鍵輸入框後按下組合鍵。按 Backspace 清空快捷鍵。', resetShortcutDefaults: '恢復預設快捷鍵', shortcutDisabled: '已停用',
