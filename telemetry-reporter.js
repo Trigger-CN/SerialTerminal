@@ -9,6 +9,7 @@ const RETRY_DELAYS_MS = [5 * 60 * 1000, 30 * 60 * 1000, 2 * 60 * 60 * 1000, 6 * 
 
 function createTelemetryReporter({
   getAppVersion,
+  isReleaseBuild = () => false,
   onStateChange,
   logger,
   fetchImpl = global.fetch,
@@ -86,7 +87,7 @@ function createTelemetryReporter({
 
   function configure(next = {}) {
     const nextConfig = {
-      enabled: next.telemetryEnabled === true,
+      enabled: next.telemetryEnabled === true && isReleaseBuild(),
       installationId: UUID_PATTERN.test(next.telemetryInstallationId || '')
         ? next.telemetryInstallationId
         : '',

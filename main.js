@@ -805,6 +805,15 @@ function persistTelemetryState(state) {
 
 telemetryReporter = createTelemetryReporter({
   getAppVersion: () => app.getVersion(),
+  isReleaseBuild: () => {
+    if (!app.isPackaged) return false;
+    try {
+      const releaseVersion = fs.readFileSync(path.join(__dirname, 'release-build.txt'), 'utf8').trim();
+      return releaseVersion === app.getVersion();
+    } catch {
+      return false;
+    }
+  },
   onStateChange: persistTelemetryState,
   logger: log
 });

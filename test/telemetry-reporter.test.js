@@ -6,11 +6,12 @@ const { createTelemetryReporter } = require('../telemetry-reporter');
 
 const installationId = '9284747a-85cc-4e0a-92b2-6d577442b27e';
 
-function createHarness(fetchImpl) {
+function createHarness(fetchImpl, { releaseBuild = true } = {}) {
   const timers = new Set();
   const stateChanges = [];
   const reporter = createTelemetryReporter({
     getAppVersion: () => '0.3.6',
+    isReleaseBuild: () => releaseBuild,
     onStateChange: state => stateChanges.push(state),
     logger: { warn() {} },
     fetchImpl,
@@ -40,6 +41,21 @@ test('anonymous activity reporting stays disabled after explicit opt-out', async
 
   assert.equal(calls, 0);
   assert.equal(timers.size, 0);
+});
+
+test('non-release builds never schedule or send activity reports', async () => {
+  let calls = 0;
+  const { reporter, timers, stateChanges } = createHarness(async () => {
+    calls++;
+    return { ok: true, json: async () => ({ activityDate: '2026-08-04' }) };
+  }, { releaseBuild: false });
+
+  reporter.configure({ telemetryEnabled: true });
+  await reporter.runNow();
+
+  assert.equal(calls, 0);
+  assert.equal(timers.size, 0);
+  assert.deepEqual(stateChanges, []);
 });
 
 test('activity report sends only minimal installation metadata and persists server date', async () => {

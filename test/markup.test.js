@@ -181,10 +181,14 @@ test('anonymous activity statistics default to enabled and exclude server code f
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const releaseWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
 
   assert.match(main, /telemetryEnabled: true/);
   assert.match(main, /normalized\.telemetryEnabled = normalizeBoolean\(source\.telemetryEnabled, true\)/);
   assert.match(main, /telemetryReporter\.configure\(currentConfig\)/);
+  assert.match(main, /if \(!app\.isPackaged\) return false/);
+  assert.match(main, /releaseVersion === app\.getVersion\(\)/);
+  assert.match(releaseWorkflow, /printf '%s\\n' "\$\{GITHUB_REF_NAME#v\}" > release-build\.txt/);
   assert.match(main, /telemetryReporter\.stop\(\)/);
   assert.match(preferences, /id="telemetryEnabled"/);
   assert.ok(packageJson.build.files.includes('!telemetry-server/**'));

@@ -39,6 +39,9 @@ jobs:
       - name: Sync package version from tag
         shell: bash
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+      - name: Mark official release build
+        shell: bash
+        run: printf '%s\n' "${GITHUB_REF_NAME#v}" > release-build.txt
       - name: Install Linux build dependencies
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libudev-dev libfuse2
