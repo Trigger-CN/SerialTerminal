@@ -236,13 +236,13 @@ test('collapsed quick-send shortcuts persist an independent order', () => {
   assert.doesNotMatch(styles, /\.quick-send-item-compact \.quick-send-label\s*\{[^}]*-webkit-line-clamp:/s);
   assert.match(renderer, /compact \? 'quick-send-main-btn sidebar-tool-btn' : 'quick-send-main-btn'/);
   assert.match(styles, /\.quick-send-item-compact\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;[^}]*flex:\s*0 0 36px;/s);
-  assert.match(styles, /\.quick-send-item:not\(\.quick-send-item-compact\):hover \.quick-send-main-btn/);
-  assert.match(styles, /\.quick-send-item:not\(\.quick-send-item-compact\) \.quick-send-main-btn:hover/);
-  assert.doesNotMatch(styles, /(?:^|\n)\.quick-send-main-btn:hover\s*\{/);
-  assert.doesNotMatch(styles, /\.quick-send-item-compact \.quick-send-main-btn:hover/);
+  assert.match(styles, /\.quick-send-main-btn:hover::before\s*\{[^}]*opacity:\s*0\.28;/s);
   assert.match(styles, /\.quick-send-label\s*\{[^}]*white-space:\s*nowrap;/s);
   assert.match(styles, /\.quick-send-main-btn\s*\{[^}]*justify-content:\s*center;[^}]*text-align:\s*center;/s);
-  assert.match(styles, /\.quick-send-item:not\(\.quick-send-item-compact\):hover \.quick-send-main-btn,[\s\S]*?padding-right:\s*30px;[\s\S]*?padding-left:\s*30px;/);
+  assert.match(styles, /\.quick-send-main-btn\s*\{[^}]*transition:\s*transform 0\.12s ease;/s);
+  assert.match(styles, /\.quick-send-main-btn::before\s*\{[^}]*transition:\s*opacity 0\.12s ease;[^}]*will-change:\s*opacity;/s);
+  assert.match(styles, /\.quick-send-item:not\(\.quick-send-item-compact\) \.quick-send-main-btn\s*\{[^}]*padding-right:\s*30px;[^}]*padding-left:\s*30px;/s);
+  assert.doesNotMatch(styles, /:hover \.quick-send-main-btn[^\{]*\{[^}]*padding-/s);
   assert.match(styles, /\.quick-send-label\s*\{[^}]*line-height:\s*16px;/s);
   assert.match(styles, /\.quick-send-item-compact \.quick-send-label\s*\{[^}]*line-height:\s*16px;/s);
   assert.match(styles, /\.quick-sidebar-controls\s*\{[^}]*grid-template-columns:/s);
@@ -258,37 +258,40 @@ test('collapsed quick-send shortcuts persist an independent order', () => {
   assert.match(renderer, /disableSidebarQuickSend\(quickSendList, sidebarQuickSendOrder, item\.id\)/);
   assert.match(renderer, /function deleteQuickSendItem\(item, element\)/);
   assert.match(renderer, /deleteQuickSendById\(quickSendList, sidebarQuickSendOrder, item\.id\)/);
-  assert.match(renderer, /function createQuickSendShatterFragment\(element, rect, clipPath, motion, showDeleteButton\)/);
-  assert.match(renderer, /clipPath: `polygon\(\$\{x0\}% \$\{y0\}%, \$\{x1\}% \$\{y0\}%, \$\{x1\}% \$\{y1\}%\)`/);
-  assert.match(renderer, /function createQuickSendShatterDust\(rect, colors\)/);
-  assert.match(renderer, /debris\.push\(\.\.\.createQuickSendShatterDust\(rect, dustColors\)\)/);
   assert.match(renderer, /function animateQuickSendRemoval\(element, onComplete\)/);
+  assert.match(renderer, /duration:\s*220/);
+  assert.match(renderer, /animation\.addEventListener\('finish', complete, \{ once: true \}\)/);
+  assert.doesNotMatch(`${renderer}\n${styles}`, /quick-send-shard|quick-send-shatter-dust|createQuickSendShatter/);
   assert.match(styles, /\.quick-send-reorder-mode \.quick-send-edit-delete-btn\s*\{[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/s);
   assert.match(styles, /\.quick-send-edit-delete-btn\s*\{[^}]*border-radius:\s*50%;/s);
   assert.match(styles, /\.quick-send-edit-delete-btn\.compact\s*\{[^}]*top:\s*-7px;[^}]*right:\s*0;/s);
   assert.match(styles, /\.quick-send-edit-delete-btn\.full\s*\{[^}]*top:\s*50%;[^}]*right:\s*4px;/s);
   assert.match(styles, /\.quick-send-list-container\.quick-send-reorder-mode \.quick-send-item:not\(\.quick-send-drag-placeholder\) \.quick-send-main-btn/);
+  assert.match(styles, /animation:\s*quick-send-jiggle 300ms ease-in-out infinite alternate/);
+  assert.match(styles, /animation-delay:\s*-150ms/);
   assert.match(styles, /@keyframes quick-send-jiggle/);
   assert.match(styles, /\.quick-send-drag-preview\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*1400;/s);
   assert.match(styles, /\.quick-send-drop-indicator\s*\{[^}]*position:\s*absolute;[^}]*background:\s*var\(--accent-hover\);/s);
   assert.match(styles, /\.quick-send-list-container \.quick-send-drop-indicator\s*\{[^}]*left:\s*10px;[^}]*right:\s*10px;[^}]*height:\s*2px;/s);
   assert.match(styles, /\.quick-send-list-container\s*\{[^}]*position:\s*relative;[^}]*overflow-y:\s*auto;[^}]*overflow-x:\s*hidden;/s);
   assert.match(styles, /\.quick-send-item\.quick-send-removing\s*\{[^}]*pointer-events:\s*none;/s);
-  assert.match(styles, /\.quick-send-shard\s*\{[^}]*position:\s*fixed !important;[^}]*z-index:\s*1501 !important;/s);
-  assert.match(styles, /\.quick-send-shatter-dust\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*1502;/s);
+  assert.match(styles, /\.quick-send-item\.quick-send-removing\s*\{[^}]*will-change:\s*opacity;/s);
 });
 
-test('quick-send clicks animate press and report send success or failure', () => {
+test('full and compact quick-send clicks share one lightweight result pulse', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
 
-  assert.match(renderer, /animateQuickSendPress\(btn\)/);
-  assert.match(renderer, /result\?\.ok \? 'quick-send-send-flash' : 'quick-send-send-failed'/);
+  assert.match(renderer, /showQuickSendClickResult\(btn, result\?\.ok === true\)/);
+  assert.match(renderer, /const className = ok \? 'quick-send-click-success' : 'quick-send-click-failed'/);
   assert.match(renderer, /function flashQuickSendItem\(itemId, className = 'auto-trigger-flash', duration = 1300\)/);
-  assert.match(styles, /@keyframes quick-send-press/);
-  assert.match(styles, /@keyframes quick-send-send-flash/);
-  assert.match(styles, /@keyframes quick-send-send-failed/);
-  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.quick-send-main-btn\.quick-send-send-flash/);
+  assert.match(styles, /\.quick-send-main-btn\.quick-send-click-success::after\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--success-color\) 58%, transparent\);/s);
+  assert.match(styles, /\.quick-send-main-btn\.quick-send-click-failed::after\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--danger-color\) 58%, transparent\);/s);
+  assert.match(styles, /\.quick-send-item-compact \.quick-send-main-btn\.quick-send-click-success\s*\{[^}]*box-shadow:\s*0 0 0 2px #237a27;/s);
+  assert.match(styles, /\.quick-send-item-compact \.quick-send-main-btn\.quick-send-click-failed\s*\{[^}]*box-shadow:\s*0 0 0 2px #9f2828;/s);
+  assert.match(styles, /@keyframes quick-send-click-feedback\s*\{[^}]*opacity:\s*0\.82;[\s\S]*?opacity:\s*0;/s);
+  assert.doesNotMatch(`${renderer}\n${styles}`, /quick-send-press|quick-send-send-flash|quick-send-send-failed/);
+  assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
 });
 
 test('each quick-send item persists and uses its own text or hex mode', () => {
@@ -310,7 +313,7 @@ test('each quick-send item persists and uses its own text or hex mode', () => {
   assert.match(renderer, /btn\.classList\.add\('has-mode-badge'\)/);
   assert.doesNotMatch(renderer, /if \(compact && item\.mode === 'hex'\)/);
   assert.match(styles, /\.quick-send-mode-badge\s*\{[^}]*position:\s*absolute;[^}]*right:\s*5px;/s);
-  assert.match(styles, /\.quick-send-main-btn\.has-mode-badge,[\s\S]*?padding-right:\s*36px;[\s\S]*?padding-left:\s*36px;/);
+  assert.match(styles, /\.quick-send-main-btn\.has-mode-badge\s*\{[^}]*padding-right:\s*36px;[^}]*padding-left:\s*36px;/s);
   assert.match(styles, /\.quick-send-mode-control\s*\{[^}]*display:\s*flex;[^}]*gap:\s*8px 18px;/s);
   assert.match(styles, /\.quick-send-mode-control input\s*\{[^}]*accent-color:\s*var\(--accent-color\);/s);
   assert.doesNotMatch(styles, /\.quick-send-mode-control input\s*\{[^}]*opacity:\s*0;/s);

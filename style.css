@@ -324,9 +324,47 @@ label:hover {
     display: flex;
     align-items: center;
     line-height: 16px;
+    transition: transform 0.12s ease;
+}
+
+.quick-send-main-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: var(--accent-color);
+    opacity: 0;
+    transform: translateZ(0);
+    transition: opacity 0.12s ease;
+    will-change: opacity;
+}
+
+.quick-send-main-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    opacity: 0;
+    transform: translateZ(0);
+    will-change: opacity;
+}
+
+.quick-send-main-btn:hover {
+    background: var(--bg-input);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.quick-send-main-btn:hover::before {
+    opacity: 0.28;
 }
 
 .quick-send-label {
+    position: relative;
+    z-index: 1;
     display: block;
     width: 100%;
     line-height: 16px;
@@ -343,6 +381,7 @@ label:hover {
     padding: 2px 3px;
     transform: translateY(-50%);
     pointer-events: none;
+    z-index: 1;
 }
 
 .quick-send-item-compact {
@@ -368,6 +407,10 @@ label:hover {
     border-color: transparent;
     overflow: hidden;
     line-height: 16px;
+}
+
+.quick-send-item-compact .quick-send-main-btn:hover {
+    border-color: transparent;
 }
 
 .quick-send-item-compact .quick-send-label {
@@ -446,14 +489,14 @@ label:hover {
 
 .quick-send-list-container.quick-send-reorder-mode .quick-send-item:not(.quick-send-drag-placeholder) .quick-send-main-btn,
 .sidebar-quick-send-list.quick-send-reorder-mode .quick-send-item-compact:not(.quick-send-drag-placeholder) .quick-send-main-btn {
-    animation: quick-send-jiggle 170ms ease-in-out infinite alternate;
+    animation: quick-send-jiggle 300ms ease-in-out infinite alternate;
     transform-origin: 50% 58%;
     will-change: transform;
 }
 
 .quick-send-list-container.quick-send-reorder-mode .quick-send-item:nth-of-type(even) .quick-send-main-btn,
 .sidebar-quick-send-list.quick-send-reorder-mode .quick-send-item-compact:nth-of-type(even) .quick-send-main-btn {
-    animation-delay: -85ms;
+    animation-delay: -150ms;
     animation-direction: alternate-reverse;
 }
 
@@ -482,56 +525,7 @@ label:hover {
 .quick-send-item.quick-send-removing {
     z-index: 8;
     pointer-events: none;
-    overflow: hidden;
-    transform-origin: center right;
-    will-change: opacity, transform, height, flex-basis;
-}
-
-.quick-send-shard {
-    position: fixed !important;
-    z-index: 1501 !important;
-    box-sizing: border-box;
-    margin: 0 !important;
-    pointer-events: none !important;
-    user-select: none;
-    transition: none !important;
-    animation: none !important;
-    transform-origin: center;
-    will-change: opacity, transform, filter;
-}
-
-.quick-send-shard button,
-.quick-send-shard .quick-send-main-btn {
-    animation: none !important;
-    transition: none !important;
-}
-
-.quick-send-shard .quick-send-actions,
-.quick-send-shard .quick-send-edit-delete-btn {
-    opacity: 0 !important;
-    pointer-events: none !important;
-}
-
-.quick-send-shard.quick-send-shard-show-delete .quick-send-edit-delete-btn {
-    opacity: 1 !important;
-}
-
-.quick-send-shard.quick-send-shard-show-delete .quick-send-edit-delete-btn.compact {
-    transform: scale(1) rotate(0deg);
-}
-
-.quick-send-shard.quick-send-shard-show-delete .quick-send-edit-delete-btn.full {
-    transform: translateY(-50%) scale(1) rotate(0deg);
-}
-
-.quick-send-shatter-dust {
-    position: fixed;
-    z-index: 1502;
-    display: block;
-    border-radius: 1px;
-    pointer-events: none;
-    box-shadow: 0 0 3px currentColor;
-    will-change: opacity, transform;
+    will-change: opacity;
 }
 
 .quick-send-drag-preview {
@@ -586,61 +580,31 @@ label:hover {
     to { opacity: 1; }
 }
 
-.quick-send-item:not(.quick-send-item-compact) .quick-send-main-btn:hover {
-    border-color: var(--accent-color);
-    color: #fff;
-}
-
 .quick-send-main-btn.auto-trigger-flash {
     animation: quick-send-auto-trigger-flash 1.25s ease-out;
 }
 
-.quick-send-main-btn.quick-send-press {
-    animation: quick-send-press 220ms cubic-bezier(.2, .85, .25, 1);
+.quick-send-main-btn.quick-send-click-success::after {
+    background: color-mix(in srgb, var(--success-color) 58%, transparent);
+    animation: quick-send-click-feedback 300ms ease-out;
 }
 
-@keyframes quick-send-press {
-    0% { transform: scale(1); filter: brightness(1); }
-    38% { transform: scale(0.88); filter: brightness(1.24); }
-    72% { transform: scale(1.045); filter: brightness(1.1); }
-    100% { transform: scale(1); filter: brightness(1); }
+.quick-send-main-btn.quick-send-click-failed::after {
+    background: color-mix(in srgb, var(--danger-color) 58%, transparent);
+    animation: quick-send-click-feedback 300ms ease-out;
 }
 
-.quick-send-main-btn.quick-send-send-flash {
-    animation: quick-send-send-flash 720ms cubic-bezier(.2, .8, .2, 1);
+.quick-send-item-compact .quick-send-main-btn.quick-send-click-success {
+    box-shadow: 0 0 0 2px #237a27;
 }
 
-@keyframes quick-send-send-flash {
-    0% {
-        border-color: var(--accent-hover);
-        box-shadow: 0 0 0 0 rgba(0, 152, 255, 0.62);
-        filter: brightness(1.22);
-    }
-    34% {
-        color: #fff;
-        background: var(--accent-color);
-        border-color: var(--accent-hover);
-        box-shadow: 0 0 0 5px rgba(0, 152, 255, 0.2), 0 0 15px rgba(0, 152, 255, 0.36);
-        filter: brightness(1.18);
-    }
-    100% {
-        color: var(--text-primary);
-        border-color: transparent;
-        box-shadow: 0 0 0 0 rgba(0, 152, 255, 0);
-        filter: brightness(1);
-    }
+.quick-send-item-compact .quick-send-main-btn.quick-send-click-failed {
+    box-shadow: 0 0 0 2px #9f2828;
 }
 
-.quick-send-main-btn.quick-send-send-failed {
-    animation: quick-send-send-failed 520ms ease-out;
-}
-
-@keyframes quick-send-send-failed {
-    0%, 100% { transform: translateX(0); border-color: transparent; }
-    18% { transform: translateX(-3px); border-color: var(--danger-color); }
-    38% { transform: translateX(3px); background: rgba(217, 76, 76, 0.28); }
-    58% { transform: translateX(-2px); border-color: var(--danger-color); }
-    78% { transform: translateX(1px); }
+@keyframes quick-send-click-feedback {
+    0% { opacity: 0.82; }
+    100% { opacity: 0; }
 }
 
 @keyframes quick-send-auto-trigger-flash {
@@ -670,16 +634,13 @@ label:hover {
     .sidebar-quick-send-list.quick-send-reorder-mode .quick-send-item-compact:not(.quick-send-drag-placeholder) .quick-send-main-btn,
     .quick-send-drop-indicator,
     .quick-send-main-btn.auto-trigger-flash,
-    .quick-send-main-btn.quick-send-press,
-    .quick-send-main-btn.quick-send-send-flash,
-    .quick-send-main-btn.quick-send-send-failed {
+    .quick-send-main-btn.quick-send-click-success::after,
+    .quick-send-main-btn.quick-send-click-failed::after {
         animation: none;
     }
 
     .quick-send-edit-delete-btn,
-    .quick-send-removing,
-    .quick-send-shard,
-    .quick-send-shatter-dust {
+    .quick-send-removing {
         transition: none;
         animation: none;
     }
@@ -698,19 +659,15 @@ label:hover {
     pointer-events: none;
     transform: translateY(-50%) translateX(-4px);
     transition: opacity 0.15s ease, transform 0.15s ease;
+    will-change: opacity, transform;
 }
 
-.quick-send-item:not(.quick-send-item-compact):hover .quick-send-main-btn,
-.quick-send-item:not(.quick-send-item-compact).actions-focused .quick-send-main-btn,
-.quick-send-item:not(.quick-send-item-compact).editing .quick-send-main-btn {
+.quick-send-item:not(.quick-send-item-compact) .quick-send-main-btn {
     padding-right: 30px;
     padding-left: 30px;
 }
 
-.quick-send-main-btn.has-mode-badge,
-.quick-send-item:not(.quick-send-item-compact):hover .quick-send-main-btn.has-mode-badge,
-.quick-send-item:not(.quick-send-item-compact).actions-focused .quick-send-main-btn.has-mode-badge,
-.quick-send-item:not(.quick-send-item-compact).editing .quick-send-main-btn.has-mode-badge {
+.quick-send-main-btn.has-mode-badge {
     padding-right: 36px;
     padding-left: 36px;
 }
