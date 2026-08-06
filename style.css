@@ -351,6 +351,9 @@ label:hover {
     min-height: 36px;
     flex: 0 0 36px;
     padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 .quick-send-item-compact .quick-send-main-btn {
@@ -381,6 +384,154 @@ label:hover {
     display: none;
 }
 
+.quick-send-edit-delete-btn {
+    position: absolute;
+    z-index: 7;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.82);
+    border-radius: 50%;
+    color: #fff;
+    background: var(--danger-color);
+    box-shadow: 0 2px 7px rgba(0, 0, 0, 0.46);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms ease, transform 190ms cubic-bezier(.2, .9, .25, 1.35), background 120ms ease;
+}
+
+.quick-send-edit-delete-btn.compact {
+    top: -7px;
+    right: 0;
+    transform: scale(0.45) rotate(-70deg);
+}
+
+.quick-send-edit-delete-btn.full {
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%) scale(0.45) rotate(-70deg);
+}
+
+.quick-send-edit-delete-btn svg[data-material-icon] {
+    width: 12px;
+    height: 12px;
+}
+
+.quick-send-edit-delete-btn:hover,
+.quick-send-edit-delete-btn:focus-visible {
+    background: #f06464;
+}
+
+.quick-send-reorder-mode .quick-send-edit-delete-btn {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.quick-send-reorder-mode .quick-send-edit-delete-btn.compact {
+    transform: scale(1) rotate(0deg);
+}
+
+.quick-send-reorder-mode .quick-send-edit-delete-btn.full {
+    transform: translateY(-50%) scale(1) rotate(0deg);
+}
+
+.quick-send-list-container.quick-send-reorder-mode,
+.sidebar-quick-send-list.quick-send-reorder-mode {
+    touch-action: none;
+    cursor: grab;
+}
+
+.quick-send-list-container.quick-send-reorder-mode .quick-send-item:not(.quick-send-drag-placeholder) .quick-send-main-btn,
+.sidebar-quick-send-list.quick-send-reorder-mode .quick-send-item-compact:not(.quick-send-drag-placeholder) .quick-send-main-btn {
+    animation: quick-send-jiggle 170ms ease-in-out infinite alternate;
+    transform-origin: 50% 58%;
+    will-change: transform;
+}
+
+.quick-send-list-container.quick-send-reorder-mode .quick-send-item:nth-of-type(even) .quick-send-main-btn,
+.sidebar-quick-send-list.quick-send-reorder-mode .quick-send-item-compact:nth-of-type(even) .quick-send-main-btn {
+    animation-delay: -85ms;
+    animation-direction: alternate-reverse;
+}
+
+@keyframes quick-send-jiggle {
+    from { transform: translateY(-0.5px) rotate(-1.8deg); }
+    to { transform: translateY(0.5px) rotate(1.8deg); }
+}
+
+.quick-send-item.quick-send-drag-placeholder {
+    opacity: 0.22;
+    border-color: rgba(0, 152, 255, 0.72);
+    background: rgba(0, 122, 204, 0.12);
+    transform: scale(0.86);
+    animation: none;
+}
+
+.quick-send-item.quick-send-drag-placeholder .quick-send-main-btn {
+    opacity: 0.34;
+}
+
+.quick-send-item.quick-send-drag-placeholder .quick-send-edit-delete-btn,
+.quick-send-drag-preview .quick-send-edit-delete-btn {
+    opacity: 0;
+}
+
+.quick-send-item.quick-send-removing {
+    z-index: 8;
+    pointer-events: none;
+    overflow: hidden;
+    transform-origin: center right;
+    will-change: opacity, transform, height, flex-basis;
+}
+
+.quick-send-drag-preview {
+    position: fixed;
+    z-index: 1400;
+    margin: 0;
+    pointer-events: none;
+    opacity: 0.98;
+    transform: rotate(var(--quick-send-drag-tilt, 0deg)) scale(1.1);
+    transform-origin: center;
+    animation: none;
+    filter: drop-shadow(0 9px 8px rgba(0, 0, 0, 0.42));
+    will-change: left, top, transform;
+}
+
+.quick-send-drag-preview .quick-send-main-btn {
+    border: 1px solid rgba(255, 255, 255, 0.38);
+    box-shadow: 0 0 0 2px rgba(0, 152, 255, 0.34);
+    transform: none;
+}
+
+.quick-send-drop-indicator {
+    position: absolute;
+    z-index: 4;
+    left: 2px;
+    right: 2px;
+    width: auto;
+    height: 3px;
+    border-radius: 2px;
+    pointer-events: none;
+    background: var(--accent-hover);
+    box-shadow: 0 0 0 1px rgba(0, 152, 255, 0.24), 0 0 8px rgba(0, 152, 255, 0.72);
+    transform: translateY(-50%);
+    animation: quick-send-drop-pulse 720ms ease-in-out infinite alternate;
+}
+
+.sidebar-quick-send-list .quick-send-drop-indicator {
+    left: -1px;
+    right: auto;
+    width: 38px;
+}
+
+@keyframes quick-send-drop-pulse {
+    from { opacity: 0.68; }
+    to { opacity: 1; }
+}
+
 .quick-send-item:not(.quick-send-item-compact) .quick-send-main-btn:hover {
     border-color: var(--accent-color);
     color: #fff;
@@ -388,6 +539,54 @@ label:hover {
 
 .quick-send-main-btn.auto-trigger-flash {
     animation: quick-send-auto-trigger-flash 1.25s ease-out;
+}
+
+.quick-send-main-btn.quick-send-press {
+    animation: quick-send-press 220ms cubic-bezier(.2, .85, .25, 1);
+}
+
+@keyframes quick-send-press {
+    0% { transform: scale(1); filter: brightness(1); }
+    38% { transform: scale(0.88); filter: brightness(1.24); }
+    72% { transform: scale(1.045); filter: brightness(1.1); }
+    100% { transform: scale(1); filter: brightness(1); }
+}
+
+.quick-send-main-btn.quick-send-send-flash {
+    animation: quick-send-send-flash 720ms cubic-bezier(.2, .8, .2, 1);
+}
+
+@keyframes quick-send-send-flash {
+    0% {
+        border-color: var(--accent-hover);
+        box-shadow: 0 0 0 0 rgba(0, 152, 255, 0.62);
+        filter: brightness(1.22);
+    }
+    34% {
+        color: #fff;
+        background: var(--accent-color);
+        border-color: var(--accent-hover);
+        box-shadow: 0 0 0 5px rgba(0, 152, 255, 0.2), 0 0 15px rgba(0, 152, 255, 0.36);
+        filter: brightness(1.18);
+    }
+    100% {
+        color: var(--text-primary);
+        border-color: transparent;
+        box-shadow: 0 0 0 0 rgba(0, 152, 255, 0);
+        filter: brightness(1);
+    }
+}
+
+.quick-send-main-btn.quick-send-send-failed {
+    animation: quick-send-send-failed 520ms ease-out;
+}
+
+@keyframes quick-send-send-failed {
+    0%, 100% { transform: translateX(0); border-color: transparent; }
+    18% { transform: translateX(-3px); border-color: var(--danger-color); }
+    38% { transform: translateX(3px); background: rgba(217, 76, 76, 0.28); }
+    58% { transform: translateX(-2px); border-color: var(--danger-color); }
+    78% { transform: translateX(1px); }
 }
 
 @keyframes quick-send-auto-trigger-flash {
@@ -409,6 +608,24 @@ label:hover {
         border-color: var(--border-color);
         color: var(--text-primary);
         box-shadow: 0 0 0 0 rgba(76, 175, 80, 0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .quick-send-list-container.quick-send-reorder-mode .quick-send-item:not(.quick-send-drag-placeholder) .quick-send-main-btn,
+    .sidebar-quick-send-list.quick-send-reorder-mode .quick-send-item-compact:not(.quick-send-drag-placeholder) .quick-send-main-btn,
+    .quick-send-drop-indicator,
+    .quick-send-main-btn.auto-trigger-flash,
+    .quick-send-main-btn.quick-send-press,
+    .quick-send-main-btn.quick-send-send-flash,
+    .quick-send-main-btn.quick-send-send-failed {
+        animation: none;
+    }
+
+    .quick-send-edit-delete-btn,
+    .quick-send-removing {
+        transition: none;
+        animation: none;
     }
 }
 
@@ -448,6 +665,21 @@ label:hover {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(-50%) translateX(0);
+}
+
+/* In edit mode the close control owns the right edge and the normal hover actions stay out of the way. */
+.quick-send-list-container.quick-send-reorder-mode .quick-send-actions {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.quick-send-list-container.quick-send-reorder-mode .quick-send-item:not(.quick-send-item-compact) .quick-send-main-btn {
+    padding-left: 6px !important;
+    padding-right: 32px !important;
+}
+
+.quick-send-list-container.quick-send-reorder-mode .quick-send-mode-badge {
+    opacity: 0;
 }
 
 .quick-send-action-btn {
@@ -824,6 +1056,7 @@ label:hover {
 }
 
 .sidebar-quick-send-list {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
