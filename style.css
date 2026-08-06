@@ -487,6 +487,53 @@ label:hover {
     will-change: opacity, transform, height, flex-basis;
 }
 
+.quick-send-shard {
+    position: fixed !important;
+    z-index: 1501 !important;
+    box-sizing: border-box;
+    margin: 0 !important;
+    pointer-events: none !important;
+    user-select: none;
+    transition: none !important;
+    animation: none !important;
+    transform-origin: center;
+    will-change: opacity, transform, filter;
+}
+
+.quick-send-shard button,
+.quick-send-shard .quick-send-main-btn {
+    animation: none !important;
+    transition: none !important;
+}
+
+.quick-send-shard .quick-send-actions,
+.quick-send-shard .quick-send-edit-delete-btn {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+.quick-send-shard.quick-send-shard-show-delete .quick-send-edit-delete-btn {
+    opacity: 1 !important;
+}
+
+.quick-send-shard.quick-send-shard-show-delete .quick-send-edit-delete-btn.compact {
+    transform: scale(1) rotate(0deg);
+}
+
+.quick-send-shard.quick-send-shard-show-delete .quick-send-edit-delete-btn.full {
+    transform: translateY(-50%) scale(1) rotate(0deg);
+}
+
+.quick-send-shatter-dust {
+    position: fixed;
+    z-index: 1502;
+    display: block;
+    border-radius: 1px;
+    pointer-events: none;
+    box-shadow: 0 0 3px currentColor;
+    will-change: opacity, transform;
+}
+
 .quick-send-drag-preview {
     position: fixed;
     z-index: 1400;
@@ -519,6 +566,13 @@ label:hover {
     box-shadow: 0 0 0 1px rgba(0, 152, 255, 0.24), 0 0 8px rgba(0, 152, 255, 0.72);
     transform: translateY(-50%);
     animation: quick-send-drop-pulse 720ms ease-in-out infinite alternate;
+}
+
+.quick-send-list-container .quick-send-drop-indicator {
+    left: 10px;
+    right: 10px;
+    height: 2px;
+    box-shadow: 0 0 0 1px rgba(0, 152, 255, 0.18), 0 0 5px rgba(0, 152, 255, 0.48);
 }
 
 .sidebar-quick-send-list .quick-send-drop-indicator {
@@ -623,7 +677,9 @@ label:hover {
     }
 
     .quick-send-edit-delete-btn,
-    .quick-send-removing {
+    .quick-send-removing,
+    .quick-send-shard,
+    .quick-send-shatter-dust {
         transition: none;
         animation: none;
     }
@@ -2096,11 +2152,13 @@ label:hover {
 
 /* Quick Send Container */
 .quick-send-list-container {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 2px;
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     margin-bottom: 4px;
     min-height: 0;
 }

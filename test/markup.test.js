@@ -258,6 +258,10 @@ test('collapsed quick-send shortcuts persist an independent order', () => {
   assert.match(renderer, /disableSidebarQuickSend\(quickSendList, sidebarQuickSendOrder, item\.id\)/);
   assert.match(renderer, /function deleteQuickSendItem\(item, element\)/);
   assert.match(renderer, /deleteQuickSendById\(quickSendList, sidebarQuickSendOrder, item\.id\)/);
+  assert.match(renderer, /function createQuickSendShatterFragment\(element, rect, clipPath, motion, showDeleteButton\)/);
+  assert.match(renderer, /clipPath: `polygon\(\$\{x0\}% \$\{y0\}%, \$\{x1\}% \$\{y0\}%, \$\{x1\}% \$\{y1\}%\)`/);
+  assert.match(renderer, /function createQuickSendShatterDust\(rect, colors\)/);
+  assert.match(renderer, /debris\.push\(\.\.\.createQuickSendShatterDust\(rect, dustColors\)\)/);
   assert.match(renderer, /function animateQuickSendRemoval\(element, onComplete\)/);
   assert.match(styles, /\.quick-send-reorder-mode \.quick-send-edit-delete-btn\s*\{[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/s);
   assert.match(styles, /\.quick-send-edit-delete-btn\s*\{[^}]*border-radius:\s*50%;/s);
@@ -267,7 +271,11 @@ test('collapsed quick-send shortcuts persist an independent order', () => {
   assert.match(styles, /@keyframes quick-send-jiggle/);
   assert.match(styles, /\.quick-send-drag-preview\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*1400;/s);
   assert.match(styles, /\.quick-send-drop-indicator\s*\{[^}]*position:\s*absolute;[^}]*background:\s*var\(--accent-hover\);/s);
+  assert.match(styles, /\.quick-send-list-container \.quick-send-drop-indicator\s*\{[^}]*left:\s*10px;[^}]*right:\s*10px;[^}]*height:\s*2px;/s);
+  assert.match(styles, /\.quick-send-list-container\s*\{[^}]*position:\s*relative;[^}]*overflow-y:\s*auto;[^}]*overflow-x:\s*hidden;/s);
   assert.match(styles, /\.quick-send-item\.quick-send-removing\s*\{[^}]*pointer-events:\s*none;/s);
+  assert.match(styles, /\.quick-send-shard\s*\{[^}]*position:\s*fixed !important;[^}]*z-index:\s*1501 !important;/s);
+  assert.match(styles, /\.quick-send-shatter-dust\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*1502;/s);
 });
 
 test('quick-send clicks animate press and report send success or failure', () => {
