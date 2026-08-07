@@ -2,10 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { Blob } = require('node:buffer');
+const { Agent, FormData, fetch: undiciFetch } = require('undici');
 const yaml = require('js-yaml');
 
 const API_ROOT = 'https://gitee.com/api/v5';
 const RETRY_DELAYS_MS = [2000, 5000, 10000];
+const GITEE_TIMEOUT_MS = 30 * 60 * 1000;
 
 function parseArguments(args) {
   const options = { files: [] };
@@ -25,15 +28,22 @@ function parseArguments(args) {
   return options;
 }
 
-function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_ROOT, wait = delay }) {
+function createGiteePublisher({
+  token,
+  fetchImpl = undiciFetch,
+  apiRoot = API_ROOT,
+  wait = delay,
+  dispatcher = new Agent({ headersTimeout: GITEE_TIMEOUT_MS, bodyTimeout: GITEE_TIMEOUT_MS })
+}) {
   if (!token) throw new Error('GITEE_ACCESS_TOKEN is required');
 
-  async function request(method, endpoint, { body, form, allowNotFound = false } = {}) {
+  async function request(method, endpoint, { body, form, allowNotFound = false, retry = true } = {}) {
     const url = new URL(`${apiRoot}${endpoint}`);
     url.searchParams.set('access_token', token);
-    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    const retryDelays = retry ? RETRY_DELAYS_MS : [];
+    for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
       try {
-        const options = { method, headers: {} };
+        const options = { method, headers: {}, dispatcher };
         if (body) {
           options.headers['Content-Type'] = 'application/json';
           options.body = JSON.stringify(body);
@@ -45,16 +55,16 @@ function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_R
         if (response.ok) return response.status === 204 ? null : response.json();
 
         const details = (await response.text()).slice(0, 500);
-        if (!isRetryableStatus(response.status) || attempt === RETRY_DELAYS_MS.length) {
+        if (!isRetryableStatus(response.status) || attempt === retryDelays.length) {
           throw new Error(`Gitee API ${method} ${endpoint} failed: HTTP ${response.status}${details ? ` ${details}` : ''}`);
         }
       } catch (error) {
-        if (attempt === RETRY_DELAYS_MS.length || /^Gitee API .* failed: HTTP (?!429|5\d\d)/.test(error.message)) {
+        if (attempt === retryDelays.length || /^Gitee API .* failed: HTTP (?!429|5\d\d)/.test(error.message)) {
           const cause = error.cause?.message || error.cause?.code || '';
           throw new Error(`Gitee API ${method} ${endpoint} failed after ${attempt + 1} attempt(s): ${error.message}${cause ? ` (${cause})` : ''}`, { cause: error });
         }
       }
-      await wait(RETRY_DELAYS_MS[attempt]);
+      await wait(retryDelays[attempt]);
     }
   }
 
@@ -77,6 +87,22 @@ function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_R
     const attachmentsEndpoint = `${base}/${release.id}/attach_files`;
     let attachments = await request('GET', attachmentsEndpoint);
     const assetUrls = new Map();
+
+    async function uploadAttachment(form, fileName) {
+      try {
+        return await request('POST', attachmentsEndpoint, { form, retry: false });
+      } catch (uploadError) {
+        // A timed-out upload may have completed on Gitee even though no response arrived.
+        for (const waitMilliseconds of RETRY_DELAYS_MS) {
+          await wait(waitMilliseconds);
+          attachments = await request('GET', attachmentsEndpoint);
+          const uploaded = attachments.find(item => item.name === fileName);
+          if (uploaded) return uploaded;
+        }
+        throw uploadError;
+      }
+    }
+
     const uploadFiles = [...files].sort((left, right) => {
       const leftIsMetadata = /(?:^|[\\/])latest(?:-linux)?\.yml$/i.test(left);
       const rightIsMetadata = /(?:^|[\\/])latest(?:-linux)?\.yml$/i.test(right);
@@ -97,7 +123,7 @@ function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_R
         if (existing) await request('DELETE', `${attachmentsEndpoint}/${existing.id}`);
         const form = new FormData();
         form.set('file', new Blob([metadata]), fileName);
-        const uploaded = await request('POST', attachmentsEndpoint, { form });
+        const uploaded = await uploadAttachment(form, fileName);
         const assetUrl = getAttachmentUrl(uploaded);
         if (assetUrl) assetUrls.set(fileName, assetUrl);
         attachments = await request('GET', attachmentsEndpoint);
@@ -109,7 +135,7 @@ function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_R
       }
       const form = new FormData();
       form.set('file', new Blob([await fs.promises.readFile(uploadPath)]), fileName);
-      const uploaded = await request('POST', attachmentsEndpoint, { form });
+      const uploaded = await uploadAttachment(form, fileName);
       const assetUrl = getAttachmentUrl(uploaded);
       if (assetUrl) assetUrls.set(fileName, assetUrl);
       attachments = await request('GET', attachmentsEndpoint);

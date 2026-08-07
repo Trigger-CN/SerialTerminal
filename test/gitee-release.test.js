@@ -110,3 +110,33 @@ test('Gitee publisher reports the failed API and underlying network cause', asyn
     notes: 'Changes', files: [__filename]
   }), /Gitee API GET \/repos\/trigger-cn\/SerialTerminal\/releases\/tags\/v1\.2\.3 failed after 4 attempt\(s\): fetch failed \(headers timeout\)/);
 });
+
+test('Gitee publisher recovers when a timed-out attachment upload completed remotely', async () => {
+  const methods = [];
+  let attachmentChecks = 0;
+  const waits = [];
+  const publisher = createGiteePublisher({
+    token: 'secret',
+    wait: async milliseconds => waits.push(milliseconds),
+    async fetchImpl(url, options) {
+      methods.push(options.method);
+      if (url.pathname.endsWith('/tags/v1.2.3')) return response(200, { id: 7 });
+      if (options.method === 'PATCH') return response(200, { id: 7, tag_name: 'v1.2.3' });
+      if (options.method === 'POST') {
+        throw new TypeError('fetch failed', { cause: new Error('Headers Timeout Error') });
+      }
+      attachmentChecks++;
+      return response(200, attachmentChecks >= 2
+        ? [{ id: 10, name: 'gitee-release.test.js', browser_download_url: 'https://gitee.test/file' }]
+        : []);
+    }
+  });
+
+  await publisher.publish({
+    owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3', target: 'abc123',
+    notes: 'Changes', files: [__filename]
+  });
+
+  assert.deepEqual(methods, ['GET', 'PATCH', 'GET', 'POST', 'GET', 'GET']);
+  assert.deepEqual(waits, [2000]);
+});

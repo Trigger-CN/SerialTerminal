@@ -88,7 +88,8 @@
     "iconv-lite": "^0.7.2",
     "js-yaml": "^5.2.3",
     "node-pty": "^1.1.0",
-    "serialport": "^13.0.0"
+    "serialport": "^13.0.0",
+    "undici": "^6.21.3"
   },
   "overrides": {
     "js-yaml": "^5.2.3"
