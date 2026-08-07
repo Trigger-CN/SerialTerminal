@@ -49,3 +49,8 @@ test('expired log cleanup runs at startup, daily, and after settings change', ()
   assert.match(main, /app\.whenReady\(\)[\s\S]*startLogCleanupTimer\(\)/);
   assert.match(main, /app\.on\('before-quit'[\s\S]*clearInterval\(logCleanupTimer\)/);
 });
+
+test('resetting preferences preserves the telemetry installation identity', () => {
+  assert.match(main, /ipcMain\.on\('reset-config'[\s\S]*telemetryState = \{[\s\S]*telemetryInstallationId[\s\S]*telemetryLastReportedVersion/);
+  assert.match(main, /currentConfig = loadConfig\(\);\s*currentConfig = normalizeConfig\(\{ \.\.\.currentConfig, \.\.\.telemetryState \}, currentConfig\)/);
+});

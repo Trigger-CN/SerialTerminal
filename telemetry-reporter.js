@@ -19,7 +19,7 @@ function createTelemetryReporter({
   random = Math.random,
   now = () => new Date()
 }) {
-  let config = { enabled: false, installationId: '', lastReportedDate: '' };
+  let config = { enabled: false, installationId: '', lastReportedDate: '', lastReportedVersion: '' };
   let timer = null;
   let controller = null;
   let retryIndex = 0;
@@ -37,7 +37,8 @@ function createTelemetryReporter({
     timer = null;
     if (stopped || !config.enabled || controller) return;
     const today = now().toISOString().slice(0, 10);
-    if (config.lastReportedDate === today) {
+    const appVersion = getAppVersion();
+    if (config.lastReportedDate === today && config.lastReportedVersion === appVersion) {
       schedule(CHECK_INTERVAL_MS);
       return;
     }
@@ -50,11 +51,11 @@ function createTelemetryReporter({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': `SerialTerminal/${getAppVersion()}`
+          'User-Agent': `SerialTerminal/${appVersion}`
         },
         body: JSON.stringify({
           installationId: config.installationId,
-          appVersion: getAppVersion(),
+          appVersion,
           platform: process.platform,
           arch: process.arch,
           schemaVersion: 1
@@ -67,11 +68,13 @@ function createTelemetryReporter({
         throw new Error('Invalid activity date');
       }
       config.lastReportedDate = result.activityDate;
+      config.lastReportedVersion = appVersion;
       configurationKey = JSON.stringify(config);
       retryIndex = 0;
       onStateChange({
         telemetryInstallationId: config.installationId,
-        telemetryLastReportedDate: config.lastReportedDate
+        telemetryLastReportedDate: config.lastReportedDate,
+        telemetryLastReportedVersion: config.lastReportedVersion
       });
       schedule(CHECK_INTERVAL_MS);
     } catch (error) {
@@ -93,6 +96,9 @@ function createTelemetryReporter({
         : '',
       lastReportedDate: /^\d{4}-\d{2}-\d{2}$/.test(next.telemetryLastReportedDate || '')
         ? next.telemetryLastReportedDate
+        : '',
+      lastReportedVersion: typeof next.telemetryLastReportedVersion === 'string'
+        ? next.telemetryLastReportedVersion.trim()
         : ''
     };
     const nextKey = JSON.stringify(nextConfig);

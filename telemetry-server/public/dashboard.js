@@ -98,6 +98,36 @@ function renderChart(values) {
   });
 }
 
+function renderRecentActivity(values) {
+  const root = document.getElementById('recent-activity');
+  root.replaceChildren();
+  if (!values.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 5;
+    cell.className = 'empty-cell';
+    cell.textContent = '暂无上报记录';
+    row.append(cell);
+    root.append(row);
+    return;
+  }
+  values.forEach(item => {
+    const row = document.createElement('tr');
+    [
+      item.last_seen_at ? new Date(item.last_seen_at).toLocaleString('zh-CN') : '-',
+      `...${item.device_id || '-'}`,
+      item.app_version || '-',
+      item.platform || '-',
+      item.arch || '-'
+    ].forEach(value => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    });
+    root.append(row);
+  });
+}
+
 async function loadMetrics() {
   const error = document.getElementById('error');
   error.hidden = true;
@@ -116,6 +146,7 @@ async function loadMetrics() {
     renderBars('versions', data.versions);
     renderBars('platforms', data.platforms);
     renderBars('architectures', data.architectures);
+    renderRecentActivity(data.recentActivity || []);
   } catch (cause) {
     error.textContent = `加载统计数据失败：${cause.message}`;
     error.hidden = false;

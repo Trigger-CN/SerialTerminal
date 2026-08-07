@@ -19,7 +19,7 @@ async function startServer(overrides = {}) {
       return {
         summary: { dau: 2, wau: 4, mau: 8, total_installations: 12, new_today: 1 },
         daily: [{ day: '2026-08-04', devices: 2 }],
-        versions: [], platforms: [], architectures: [], days
+        versions: [], platforms: [], architectures: [], recentActivity: [], days
       };
     }
   };

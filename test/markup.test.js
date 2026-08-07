@@ -629,9 +629,9 @@ test('update confirmation opens a controlled download window with progress and i
   assert.match(main, /sendUpdateDownloadStatus\('progress', progressObj\)/);
   assert.match(main, /sendUpdateDownloadStatus\('downloaded', info\)/);
   assert.match(main, /getManualUpdateDownloadUrl\(info\)/);
-  assert.match(main, /UPDATE_FEED_URL = 'https:\/\/trigger-cn\.top\/serialterminal\/'/);
-  assert.match(main, /autoUpdater\.setFeedURL\(\{ provider: 'generic', url: UPDATE_FEED_URL \}\)/);
-  assert.match(main, /new URL\(String\(exeFile\.url\), UPDATE_FEED_URL\)/);
+  assert.match(main, /UPDATE_FEED = \{ provider: 'github', owner: 'Trigger-CN', repo: 'SerialTerminal' \}/);
+  assert.match(main, /autoUpdater\.setFeedURL\(UPDATE_FEED\)/);
+  assert.match(main, /new URL\(String\(exeFile\.url\)\)/);
   assert.match(main, /open-update-download-url/);
   assert.match(progressHtml, /id="progress-fill"/);
   assert.match(progressHtml, /id="install-btn"/);

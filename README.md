@@ -2,7 +2,7 @@
 
 一个基于 Electron 的桌面串口终端工具，面向嵌入式开发、串口调试、设备联调、日志查看与关键字过滤场景。当前版本已支持主串口终端、过滤标签页、分屏工作区、Shell 标签页、多标签独立日志、多语言和在线更新。
 
-[服务器下载最新版（Windows 0.3.5）](https://trigger-cn.top/serialterminal/SerialTerminal-Setup-0.3.5.exe) · [GitHub Releases](https://github.com/Trigger-CN/SerialTerminal/releases/latest)
+[GitHub Releases 下载最新版](https://github.com/Trigger-CN/SerialTerminal/releases/latest)
 
 ![Serial Terminal Screenshot](assets/Snipaste_2026-04-18_22-22-44.png)
 
@@ -196,7 +196,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 ### 匿名标识活跃统计
 
 - 匿名活跃统计默认开启，可随时在设置窗口中关闭
-- 首次启用时生成随机安装 ID，每天最多向服务端成功上报一次；应用持续运行时也会按天检查
+- 首次启用时生成随机安装 ID，每天向服务端成功上报一次；版本变化后会额外上报一次，应用持续运行时也会按天检查
 - 上报字段仅包含随机安装 ID、应用版本、操作系统、处理器架构和协议版本
 - 不收集串口名称、串口数据、文件、用户名、硬件序列号或崩溃转储；上报失败不会影响串口功能
 - 服务端只保存安装 ID 的 HMAC，不保存原始安装 ID，并按 UTC 日期去重统计 DAU、WAU 和 MAU；该数据属于可关联的假名化统计，不用于授权、计费或安全判断
@@ -213,17 +213,13 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
   - 暂不更新
   - 跳过此版本
 - 下载完成后支持重启安装或稍后安装
-- 自动更新元数据、安装包和差分文件优先从 `https://trigger-cn.top/serialterminal/` 下载，GitHub Release 保留为公开发布和备用入口
+- 自动更新元数据、安装包和差分文件均从 GitHub Releases 下载
 - 更新提示会尝试显示 GitHub Release 正文；获取不到时提示网络异常
 - 使用 `electron-builder` 打包 Windows 与 Linux 发布物
 - 推送 `v*` Git tag 后，GitHub Actions 会使用同一 lockfile 并行构建 Windows/Linux 发布物；构建前执行测试和 native rebuild，构建后校验 lockfile 未变化
 - GitHub Release 正文会自动列出上一个 tag 到当前 tag 之间的提交，每个提交只出现一次，不按提交类型分类
-- 发布任务先创建 GitHub Release，再将 Windows 的 `latest.yml`、NSIS 安装包和 blockmap 上传到自建镜像；镜像发布需要仓库 Secret `MIRROR_SSH_PRIVATE_KEY`
-- 镜像发布脚本位于 `scripts/publish-update-mirror.sh`，CI 会先更新服务器脚本，再归档安装包并最后原子切换 `latest.yml`
-
-首次启用镜像发布时，需要在 GitHub 仓库 `Settings > Secrets and variables > Actions` 新增 Repository Secret `MIRROR_SSH_PRIVATE_KEY`，内容为镜像专用 Ed25519 私钥全文。服务器只授权无 sudo 的 `serialterminal-deploy` 账户写入安装包工作目录；不要使用 `ubuntu` 管理账户的私钥。
-
-工作流中的 `known_hosts` 条目是镜像服务器的公开 SSH 主机密钥，用于固定服务器身份并防止中间人攻击，不是敏感私钥。服务器重装或轮换主机密钥后，应通过可信渠道核对新指纹再更新该条目，不要改用 `StrictHostKeyChecking=no` 或运行时 `ssh-keyscan` 绕过校验。
+- 发布任务将 Windows 和 Linux 安装包、更新元数据统一上传到 GitHub Releases
+- 发布任务还会将发布提交和 Tag 同步到 Gitee，并创建同名 Gitee Release、上传相同产物；Gitee 同步不强制覆盖分叉历史
 
 ## 项目结构
 

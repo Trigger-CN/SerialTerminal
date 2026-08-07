@@ -18,6 +18,7 @@ function createStore(pool) {
             last_version = EXCLUDED.last_version,
             platform = EXCLUDED.platform,
             arch = EXCLUDED.arch
+          WHERE installations.last_seen_at <= EXCLUDED.last_seen_at
         `, [deviceKey, now, appVersion, platform, arch]);
         await client.query(`
           INSERT INTO device_activity
@@ -63,7 +64,7 @@ function createStore(pool) {
       const startDate = new Date(`${today}T00:00:00.000Z`);
       startDate.setUTCDate(startDate.getUTCDate() - (days - 1));
       const start = startDate.toISOString().slice(0, 10);
-      const [summary, activity, versions, platforms, architectures] = await Promise.all([
+      const [summary, activity, versions, platforms, architectures, recentActivity] = await Promise.all([
         pool.query(`
           SELECT
             (SELECT COUNT(*)::int FROM device_activity WHERE activity_date = $1) AS dau,
@@ -81,17 +82,11 @@ function createStore(pool) {
           ORDER BY activity_date
         `, [start, today]),
         pool.query(`
-          SELECT app_version AS label, COUNT(*)::int AS devices
-          FROM (
-            SELECT DISTINCT ON (device_key) device_key, app_version
-            FROM device_activity
-            WHERE activity_date BETWEEN $1 AND $2
-            ORDER BY device_key, activity_date DESC, last_seen_at DESC
-          ) latest
-          GROUP BY app_version
+          SELECT last_version AS label, COUNT(*)::int AS devices
+          FROM installations
+          GROUP BY last_version
           ORDER BY devices DESC, label
-          LIMIT 12
-        `, [start, today]),
+        `),
         pool.query(`
           SELECT platform AS label, COUNT(*)::int AS devices
           FROM (
@@ -113,7 +108,18 @@ function createStore(pool) {
           ) latest
           GROUP BY arch
           ORDER BY devices DESC, label
-        `, [start, today])
+        `, [start, today]),
+        pool.query(`
+          SELECT
+            RIGHT(device_key, 8) AS device_id,
+            app_version,
+            platform,
+            arch,
+            last_seen_at
+          FROM device_activity
+          ORDER BY last_seen_at DESC, device_key
+          LIMIT 50
+        `)
       ]);
       const byDay = new Map(activity.rows.map(row => [row.day, row.devices]));
       const daily = [];
@@ -128,7 +134,8 @@ function createStore(pool) {
         daily,
         versions: versions.rows,
         platforms: platforms.rows,
-        architectures: architectures.rows
+        architectures: architectures.rows,
+        recentActivity: recentActivity.rows
       };
     },
 

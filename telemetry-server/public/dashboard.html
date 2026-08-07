@@ -27,7 +27,7 @@
       <article><span>今日活跃</span><strong id="dau">-</strong><small>DAU</small></article>
       <article><span>最近 7 日</span><strong id="wau">-</strong><small>WAU</small></article>
       <article><span>最近 30 日</span><strong id="mau">-</strong><small>MAU</small></article>
-      <article><span>累计设备</span><strong id="total">-</strong><small>安装实例</small></article>
+      <article><span>总装机数</span><strong id="total">-</strong><small>唯一安装实例</small></article>
       <article><span>今日新增</span><strong id="new-today">-</strong><small>首次上报</small></article>
     </section>
     <section class="trend-section">
@@ -38,9 +38,23 @@
       <svg id="activity-chart" viewBox="0 0 1000 320" role="img" aria-label="每日活跃设备趋势图"></svg>
     </section>
     <section class="breakdowns">
-      <div><p class="eyebrow">Versions</p><h2>版本分布</h2><div id="versions" class="bars"></div></div>
+      <div><p class="eyebrow">Installations</p><h2>当前版本装机数</h2><div id="versions" class="bars"></div></div>
       <div><p class="eyebrow">Platforms</p><h2>平台分布</h2><div id="platforms" class="bars"></div></div>
       <div><p class="eyebrow">Architecture</p><h2>架构分布</h2><div id="architectures" class="bars"></div></div>
+    </section>
+    <section class="recent-section">
+      <div class="section-heading">
+        <div><p class="eyebrow">Recent Reports</p><h2>最近上传</h2></div>
+        <span>最多显示 50 条</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>上报时间</th><th>匿名安装</th><th>版本</th><th>平台</th><th>架构</th></tr>
+          </thead>
+          <tbody id="recent-activity"></tbody>
+        </table>
+      </div>
     </section>
     <p id="error" class="error" hidden></p>
   </main>

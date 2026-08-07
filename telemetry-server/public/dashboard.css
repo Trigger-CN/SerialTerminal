@@ -44,6 +44,15 @@ main { width: min(1240px, calc(100% - 56px)); margin: 28px auto 56px; }
 .bar-track::-webkit-progress-value { background: #e3a53b; }
 .bar-track::-moz-progress-bar { background: #e3a53b; }
 .bar-value { text-align: right; font-variant-numeric: tabular-nums; }
+.recent-section { margin-top: 22px; padding: 22px; background: #fff; border: 1px solid #d8dde2; }
+.recent-section .section-heading > span { color: #687681; font-size: 12px; }
+.table-wrap { margin-top: 16px; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 11px 10px; text-align: left; border-bottom: 1px solid #e5e9ec; white-space: nowrap; }
+th { color: #687681; font-size: 12px; font-weight: 650; background: #f7f9fa; }
+td { color: #25333d; }
+tbody tr:last-child td { border-bottom: 0; }
+.empty-cell { padding: 24px 10px; color: #687681; text-align: center; }
 .error { margin-top: 18px; padding: 12px; color: #9f2929; background: #fff0f0; border-left: 3px solid #d84a4a; }
 .login-page { display: grid; place-items: center; padding: 24px; background: #15202b; }
 .login-panel { width: min(380px, 100%); padding: 34px; background: #fff; border-top: 4px solid #21a179; }

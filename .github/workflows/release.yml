@@ -135,23 +135,41 @@ jobs:
           body_path: release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Configure mirror SSH
+      - name: Configure Gitee SSH
         shell: bash
         env:
-          MIRROR_SSH_PRIVATE_KEY: ${{ secrets.MIRROR_SSH_PRIVATE_KEY }}
+          GITEE_SSH_PRIVATE_KEY: ${{ secrets.GITEE_SSH_PRIVATE_KEY }}
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$MIRROR_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' '43.157.13.24 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJGra2UcB4l6SAhzwZkrR6uNEF6h7729fQa7JRXaHrnc' > ~/.ssh/known_hosts
-      - name: Publish Windows update mirror
+          printf '%s\n' "$GITEE_SSH_PRIVATE_KEY" > ~/.ssh/gitee_ed25519
+          chmod 600 ~/.ssh/gitee_ed25519
+          printf '%s\n' \
+            'Host gitee.com' \
+            '  HostName gitee.com' \
+            '  User git' \
+            '  IdentityFile ~/.ssh/gitee_ed25519' \
+            '  IdentitiesOnly yes' > ~/.ssh/config
+          printf '%s\n' 'gitee.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB/OvYN' > ~/.ssh/known_hosts
+      - name: Synchronize release commit and tag to Gitee
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { echo "Invalid release version: $VERSION" >&2; exit 1; }
-          TARGET="/home/ubuntu/ws/SerialTerminalPackages/incoming/$VERSION"
-          scp scripts/publish-update-mirror.sh serialterminal-deploy@43.157.13.24:/home/ubuntu/ws/SerialTerminalPackages/bin/publish.new
-          ssh serialterminal-deploy@43.157.13.24 "chmod 775 /home/ubuntu/ws/SerialTerminalPackages/bin/publish.new && mv -f /home/ubuntu/ws/SerialTerminalPackages/bin/publish.new /home/ubuntu/ws/SerialTerminalPackages/bin/publish"
-          ssh serialterminal-deploy@43.157.13.24 "rm -rf '$TARGET' && mkdir -p '$TARGET'"
-          scp dist/latest.yml dist/*.exe dist/*.exe.blockmap serialterminal-deploy@43.157.13.24:"$TARGET/"
-          ssh serialterminal-deploy@43.157.13.24 "/home/ubuntu/ws/SerialTerminalPackages/bin/publish '$VERSION'"
+          git remote add gitee git@gitee.com:trigger-cn/SerialTerminal.git
+          git push gitee "${GITHUB_SHA}:refs/heads/main" "refs/tags/${GITHUB_REF_NAME}"
+      - name: Publish Gitee release
+        shell: bash
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+        run: |
+          node scripts/publish-gitee-release.js \
+            --owner trigger-cn \
+            --repo SerialTerminal \
+            --tag "${GITHUB_REF_NAME}" \
+            --target "${GITHUB_SHA}" \
+            --notes release-notes.md \
+            --files \
+              dist/*.exe \
+              dist/*.exe.blockmap \
+              dist/*.AppImage \
+              dist/*.deb \
+              dist/latest.yml \
+              dist/latest-linux.yml

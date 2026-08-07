@@ -22,11 +22,11 @@ const {
 // Configure logging
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
-const UPDATE_FEED_URL = 'https://trigger-cn.top/serialterminal/';
+const UPDATE_FEED = { provider: 'github', owner: 'Trigger-CN', repo: 'SerialTerminal' };
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const UPDATE_PROMPT_INTERVAL_MS = 8 * 60 * 60 * 1000;
 const MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN';
-autoUpdater.setFeedURL({ provider: 'generic', url: UPDATE_FEED_URL });
+autoUpdater.setFeedURL(UPDATE_FEED);
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
@@ -230,6 +230,9 @@ function normalizeConfig(config, defaults) {
   normalized.telemetryLastReportedDate = /^\d{4}-\d{2}-\d{2}$/.test(source.telemetryLastReportedDate || '')
     ? source.telemetryLastReportedDate
     : '';
+  normalized.telemetryLastReportedVersion = typeof source.telemetryLastReportedVersion === 'string'
+    ? source.telemetryLastReportedVersion.trim()
+    : '';
 
   normalized.shellProfiles = normalizeShellProfiles(source.shellProfiles, defaults.shellProfiles);
   normalized.defaultShellProfileId = resolveDefaultShellProfileId(source, normalized.shellProfiles);
@@ -375,6 +378,7 @@ function loadConfig() {
     telemetryEnabled: true,
     telemetryInstallationId: '',
     telemetryLastReportedDate: '',
+    telemetryLastReportedVersion: '',
     filterHistory: [],
     windowBounds: {
       width: 1000,
@@ -1157,12 +1161,11 @@ function getManualUpdateDownloadUrl(info) {
     : null;
   if (exeFile?.url) {
     try {
-      return new URL(String(exeFile.url), UPDATE_FEED_URL).toString();
+      return new URL(String(exeFile.url)).toString();
     } catch (error) {
-      log.warn('Failed to resolve mirrored update URL:', error);
+      log.warn('Failed to resolve GitHub update URL:', error);
     }
   }
-  if (exeFile?.name) return new URL(encodeURIComponent(exeFile.name), UPDATE_FEED_URL).toString();
   return getReleaseUrl();
 }
 
@@ -1527,6 +1530,11 @@ ipcMain.on('update-display-settings', (event, settings) => {
 });
 
 ipcMain.on('reset-config', (event) => {
+  const telemetryState = {
+    telemetryInstallationId: currentConfig.telemetryInstallationId,
+    telemetryLastReportedDate: currentConfig.telemetryLastReportedDate,
+    telemetryLastReportedVersion: currentConfig.telemetryLastReportedVersion
+  };
   // Delete config file
   if (fs.existsSync(configPath)) {
     fs.unlinkSync(configPath);
@@ -1534,6 +1542,7 @@ ipcMain.on('reset-config', (event) => {
   
   // Reload defaults
   currentConfig = loadConfig();
+  currentConfig = normalizeConfig({ ...currentConfig, ...telemetryState }, currentConfig);
   
   // Update runtime settings
   displaySettings.showTimestamp = currentConfig.showTimestamp;

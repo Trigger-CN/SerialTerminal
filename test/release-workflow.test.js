@@ -7,7 +7,6 @@ const path = require('node:path');
 
 const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-const mirrorPublisher = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'publish-update-mirror.sh'), 'utf8');
 
 test('release builds use a supported Windows toolchain', () => {
   assert.match(workflow, /uses: actions\/checkout@v6/);
@@ -59,24 +58,26 @@ test('release notes summarize commits since the previous tag', () => {
   assert.doesNotMatch(workflow, /generate_release_notes:\s*true/);
 });
 
-test('release publishes Windows updater files to the self-hosted mirror', () => {
+test('release publishes updater files to GitHub without a self-hosted mirror', () => {
   assert.deepEqual(packageJson.build.publish, {
-    provider: 'generic',
-    url: 'https://trigger-cn.top/serialterminal/'
+    provider: 'github',
+    owner: 'Trigger-CN',
+    repo: 'SerialTerminal'
   });
-  assert.ok(packageJson.build.files.includes('!scripts/publish-update-mirror.sh'));
-  assert.match(workflow, /MIRROR_SSH_PRIVATE_KEY: \$\{\{ secrets\.MIRROR_SSH_PRIVATE_KEY \}\}/);
-  assert.match(workflow, /scp dist\/latest\.yml dist\/\*\.exe dist\/\*\.exe\.blockmap/);
-  assert.match(workflow, /serialterminal-deploy@43\.157\.13\.24/);
-  assert.match(workflow, /43\.157\.13\.24 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJGra2UcB4l6SAhzwZkrR6uNEF6h7729fQa7JRXaHrnc/);
+  assert.ok(packageJson.build.files.includes('!scripts/publish-gitee-release.js'));
+  assert.doesNotMatch(workflow, /MIRROR_SSH_PRIVATE_KEY|serialterminal-deploy|43\.157\.13\.24|\bscp\b/);
+  assert.doesNotMatch(workflow, /Publish Windows update mirror|SerialTerminalPackages|publish-update-mirror/);
+  assert.match(workflow, /uses: softprops\/action-gh-release@v3/);
+});
+
+test('release synchronizes the commit, tag, and artifacts to Gitee', () => {
+  assert.match(workflow, /GITEE_SSH_PRIVATE_KEY: \$\{\{ secrets\.GITEE_SSH_PRIVATE_KEY \}\}/);
+  assert.match(workflow, /GITEE_ACCESS_TOKEN: \$\{\{ secrets\.GITEE_ACCESS_TOKEN \}\}/);
+  assert.match(workflow, /git remote add gitee git@gitee\.com:trigger-cn\/SerialTerminal\.git/);
+  assert.match(workflow, /git push gitee "\$\{GITHUB_SHA\}:refs\/heads\/main" "refs\/tags\/\$\{GITHUB_REF_NAME\}"/);
+  assert.doesNotMatch(workflow, /git push[^\n]*(?:--force|--mirror)/);
+  assert.match(workflow, /node scripts\/publish-gitee-release\.js/);
+  assert.match(workflow, /dist\/\*\.exe[\s\S]*dist\/\*\.AppImage[\s\S]*dist\/latest-linux\.yml/);
+  assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
   assert.doesNotMatch(workflow, /ssh-keyscan/);
-  assert.match(workflow, /scp scripts\/publish-update-mirror\.sh/);
-  assert.match(workflow, /Invalid release version/);
-  assert.match(workflow, /SerialTerminalPackages\/bin\/publish/);
-  assert.match(mirrorPublisher, /public_installer=.*latest\.yml/);
-  assert.match(mirrorPublisher, /mv -Tf "\$PUBLIC\/latest\.yml\.new" "\$PUBLIC\/latest\.yml"/);
-  assert.ok(
-    workflow.indexOf('uses: softprops/action-gh-release@v3') < workflow.indexOf('name: Publish Windows update mirror'),
-    'GitHub Release should be published before the mirror'
-  );
 });

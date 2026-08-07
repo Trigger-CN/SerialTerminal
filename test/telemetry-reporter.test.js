@@ -75,7 +75,8 @@ test('activity report sends only minimal installation metadata and persists serv
   assert.equal(payload.schemaVersion, 1);
   assert.deepEqual(stateChanges.at(-1), {
     telemetryInstallationId: installationId,
-    telemetryLastReportedDate: '2026-08-04'
+    telemetryLastReportedDate: '2026-08-04',
+    telemetryLastReportedVersion: '0.3.6'
   });
 });
 
@@ -89,11 +90,52 @@ test('activity report does not repeat after the server date is recorded', async 
   reporter.configure({
     telemetryEnabled: true,
     telemetryInstallationId: installationId,
-    telemetryLastReportedDate: '2026-08-04'
+    telemetryLastReportedDate: '2026-08-04',
+    telemetryLastReportedVersion: '0.3.6'
   });
   await reporter.runNow();
 
   assert.equal(calls, 0);
+});
+
+test('activity report repeats on the same day after an app upgrade', async () => {
+  let request;
+  const { reporter, stateChanges } = createHarness(async (_url, options) => {
+    request = options;
+    return { ok: true, json: async () => ({ activityDate: '2026-08-04' }) };
+  });
+
+  reporter.configure({
+    telemetryEnabled: true,
+    telemetryInstallationId: installationId,
+    telemetryLastReportedDate: '2026-08-04',
+    telemetryLastReportedVersion: '0.3.5'
+  });
+  await reporter.runNow();
+
+  assert.equal(JSON.parse(request.body).appVersion, '0.3.6');
+  assert.deepEqual(stateChanges.at(-1), {
+    telemetryInstallationId: installationId,
+    telemetryLastReportedDate: '2026-08-04',
+    telemetryLastReportedVersion: '0.3.6'
+  });
+});
+
+test('legacy report state without a version refreshes once', async () => {
+  let calls = 0;
+  const { reporter } = createHarness(async () => {
+    calls++;
+    return { ok: true, json: async () => ({ activityDate: '2026-08-04' }) };
+  });
+
+  reporter.configure({
+    telemetryEnabled: true,
+    telemetryInstallationId: installationId,
+    telemetryLastReportedDate: '2026-08-04'
+  });
+  await reporter.runNow();
+
+  assert.equal(calls, 1);
 });
 
 test('reapplying unchanged telemetry config preserves the scheduled report', () => {
