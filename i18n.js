@@ -374,7 +374,13 @@ Object.assign(translations['zh-CN'].main, {
   saveCurrentTab: '保存当前标签页', currentTabSaved: '当前标签页已保存：{path}', currentTabSaveFailed: '保存当前标签页失败：{error}'
 });
 Object.assign(translations.en.main, {
-  saveCurrentTab: 'Save Current Tab', currentTabSaved: 'Current tab saved: {path}', currentTabSaveFailed: 'Failed to save current tab: {error}'
+  saveCurrentTab: 'Save Current Tab', currentTabSaved: 'Current tab saved: {path}', currentTabSaveFailed: 'Failed to save current tab: {error}',
+  welcomeGuide: "Thank you for using Trigger's SerialTerminal v{version}\n1. Log filters: Use the filter button at the top left to create a filtered view that only shows logs containing specified text, with regular expression support.\n2. Log saving: Open Settings at the bottom right to enable log saving and choose the path and file name.\n3. Context menu: Right-click the log window for quick copy, paste, search, and split-screen actions.\n4. Quick commands: Add quick-send commands from the left sidebar and trigger automatic sending when matching log text appears.\n5. Wide-screen mode: Collapse the left and right sidebars to display logs at maximum width.\n6. Terminal window: Use the new terminal button at the top left to open a system terminal.\nExplore the application to discover more features~",
+  welcomeClearHint: 'Click the Clear Log button on the left to clear this guide.'
+});
+Object.assign(translations['zh-CN'].main, {
+  welcomeGuide: "感谢使用 Trigger's SerialTerminal v{version}\n1. Log 过滤：左上角的过滤按钮可以新建过滤窗口，只显示包含指定文本的 Log，支持正则表达式。\n2. Log 保存：右下角设置中可以打开 Log 保存，并指定保存路径和文件名。\n3. 右键菜单：Log 窗口中可以右键打开右键菜单，快速复制粘贴、搜索、分屏。\n4. 快捷指令：左边栏有加入快捷发送指令功能，并支持由匹配 Log 触发自动发送。\n5. 宽屏模式：左右边栏可以收起，以最大宽度展示 Log。\n6. 终端窗口：左上角有新建终端按钮，可以打开系统终端。\n其他更多功能，请自行探索~",
+  welcomeClearHint: '可点击左侧“清空 Log”按钮清除此提示。'
 });
 Object.assign(translations['zh-CN'].main, { renameTab: '重命名标签页', tabName: '标签页名称', save: '保存' });
 Object.assign(translations.en.main, { renameTab: 'Rename Tab', tabName: 'Tab Name', save: 'Save' });

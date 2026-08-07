@@ -194,6 +194,7 @@ const DEFAULT_SHORTCUTS = {
     toggleSerialConnection: 'Ctrl+Shift+D'
 };
 let activeShortcuts = { ...DEFAULT_SHORTCUTS };
+let welcomeGuideChecked = false;
 
 function setActionStatus(message) {
     if (mainActionStatus) {
@@ -1134,6 +1135,48 @@ if (mainTabButton) {
     mainTabButton.addEventListener('click', () => {
         switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
     });
+}
+
+async function showWelcomeGuideForCurrentVersion(config) {
+    if (welcomeGuideChecked) return;
+    welcomeGuideChecked = true;
+    try {
+        const aboutInfo = await ipcRenderer.invoke('get-about-info');
+        const version = typeof aboutInfo?.version === 'string' ? aboutInfo.version : '';
+        if (!version || config.lastWelcomeVersion === version) return;
+        serialTerm.write(buildWelcomeGuideOutput(version));
+        config.lastWelcomeVersion = version;
+        ipcRenderer.send('save-config', { lastWelcomeVersion: version });
+    } catch (error) {
+        console.error('Failed to show welcome guide:', error);
+    }
+}
+
+function buildWelcomeGuideOutput(version) {
+    const reset = '\x1b[0m';
+    const banner = [
+        '██╗ ████████╗███████╗████████╗',
+        '╚██╗╚══██╔══╝██╔════╝╚══██╔══╝',
+        ' ╚██╗  ██║   ███████╗   ██║   ',
+        ' ██╔╝  ██║   ╚════██║   ██║   ',
+        '██╔╝   ██║   ███████║   ██║   ',
+        '╚═╝    ╚═╝   ╚══════╝   ╚═╝   '
+    ];
+    const bannerColors = ['45;212;191', '34;211;238', '56;189;248', '96;165;250', '129;140;248', '192;132;252'];
+    const bannerOutput = banner.map((line, index) => `\x1b[1;38;2;${bannerColors[index]}m${line}${reset}`).join('\r\n');
+    const guideLines = tr('main.welcomeGuide', { version }).split('\n').map((line, index, lines) => {
+        if (index === 0) return `\x1b[1;38;2;94;234;212m${line}${reset}`;
+        const feature = line.match(/^(\d+\.\s*)([^:：]+)([:：])(.*)$/);
+        if (feature) {
+            return `\x1b[1;38;2;250;204;21m${feature[1]}${reset}`
+                + `\x1b[1;38;2;96;165;250m${feature[2]}${feature[3]}${reset}`
+                + `\x1b[38;2;203;213;225m${feature[4]}${reset}`;
+        }
+        if (index === lines.length - 1) return `\x1b[38;2;192;132;252m${line}${reset}`;
+        return line;
+    }).join('\r\n');
+    const clearHint = `\x1b[1;38;2;251;191;36m${tr('main.welcomeClearHint')}${reset}`;
+    return `${bannerOutput}\r\n\r\n${guideLines}\r\n\r\n${clearHint}\r\n\r\n`;
 }
 bindTerminalContextMenu({
     terminalType: 'main',
@@ -3280,6 +3323,7 @@ window.setMode = (mode) => {
 // Config IPC
 ipcRenderer.invoke('get-config').then(config => {
     applyConfig(config);
+    showWelcomeGuideForCurrentVersion(config);
 });
 ipcRenderer.on('config-updated', (event, config) => applyConfig(config));
 

@@ -200,6 +200,9 @@ function normalizeConfig(config, defaults) {
   }
   normalized.sidebarCollapsed = normalizeBoolean(source.sidebarCollapsed, false);
   normalized.activeSidebarTab = oneOf(source.activeSidebarTab, SIDEBAR_TAB_IDS, defaults.activeSidebarTab);
+  normalized.lastWelcomeVersion = typeof source.lastWelcomeVersion === 'string'
+    ? source.lastWelcomeVersion
+    : defaults.lastWelcomeVersion;
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
   normalized.fontSize = normalizeIntegerSetting(source.fontSize, 'fontSize');
@@ -397,6 +400,7 @@ function loadConfig() {
     },
     sidebarCollapsed: false,
     activeSidebarTab: 'tab-settings',
+    lastWelcomeVersion: '',
     mainInputHistory: [],
     shortcuts: DEFAULT_SHORTCUTS,
     autoSendSettings: {

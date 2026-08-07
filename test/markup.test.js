@@ -440,6 +440,29 @@ test('preferences configure search, filter, and selection highlight colors', () 
   assert.match(renderer, /hexToAnsi\(highlightColors\.filter\.foreground\)/);
 });
 
+test('welcome guide is shown once for each installed version', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const i18n = fs.readFileSync(path.join(root, 'i18n.js'), 'utf8');
+
+  assert.match(main, /lastWelcomeVersion: ''/);
+  assert.match(main, /normalized\.lastWelcomeVersion = typeof source\.lastWelcomeVersion === 'string'/);
+  assert.match(renderer, /function showWelcomeGuideForCurrentVersion\(config\)/);
+  assert.match(renderer, /config\.lastWelcomeVersion === version/);
+  assert.match(renderer, /serialTerm\.write\(buildWelcomeGuideOutput\(version\)\)/);
+  assert.match(renderer, /function buildWelcomeGuideOutput\(version\)/);
+  assert.match(renderer, /'██╗ ████████╗███████╗████████╗'/);
+  assert.match(renderer, /'╚═╝    ╚═╝   ╚══════╝   ╚═╝   '/);
+  assert.match(renderer, /bannerColors = \['45;212;191', '34;211;238', '56;189;248', '96;165;250', '129;140;248', '192;132;252'\]/);
+  assert.match(renderer, /tr\('main\.welcomeClearHint'\)/);
+  assert.match(renderer, /ipcRenderer\.send\('save-config', \{ lastWelcomeVersion: version \}\)/);
+  assert.match(renderer, /applyConfig\(config\);\s*showWelcomeGuideForCurrentVersion\(config\)/);
+  assert.match(i18n, /感谢使用 Trigger's SerialTerminal v\{version\}/);
+  assert.match(i18n, /1\. Log 过滤/);
+  assert.match(i18n, /6\. 终端窗口/);
+  assert.match(i18n, /可点击左侧“清空 Log”按钮清除此提示/);
+});
+
 test('sidebar can export the active terminal through an independent save dialog', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
