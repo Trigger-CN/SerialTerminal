@@ -42,9 +42,7 @@ let currentLanguage = 'en';
 let isApplyingConfig = false;
 let receiveDisplayMode = 'text';
 let receiveEncoding = 'utf8';
-let sendMode = 'text';
 let sendEncoding = 'utf8';
-let sendAppendCrLf = false;
 let newlineMode = 'crlf';
 let textDecoder = null;
 let quickTriggerDecoder = null;
@@ -153,6 +151,8 @@ const mainAddQuickSendBtn = document.getElementById('main-add-quick-send-btn');
 const mainSendLast = document.getElementById('main-send-last');
 const mainActionStatus = document.getElementById('main-action-status');
 const mainInputPanel = document.getElementById('main-input-panel');
+const mainSendHexCb = document.getElementById('main-send-hex');
+const mainSendAppendCrlfCb = document.getElementById('main-send-append-crlf');
 const sidebar = document.getElementById('sidebar');
 const sidebarExpandBtn = document.getElementById('sidebar-expand-btn');
 const sidebarCollapseBtn = document.getElementById('sidebar-collapse-btn');
@@ -168,9 +168,7 @@ const mainSendOnEnterCb = document.getElementById('main-send-on-enter');
 const mainInputValidation = document.getElementById('main-input-validation');
 const receiveModeSelect = document.getElementById('receive-mode-select');
 const receiveEncodingSelect = document.getElementById('receive-encoding-select');
-const sendModeSelect = document.getElementById('send-mode-select');
 const sendEncodingSelect = document.getElementById('send-encoding-select');
-const sendAppendCrlfCb = document.getElementById('send-append-crlf');
 const toggleMainInputBtn = document.getElementById('toggle-main-input');
 const toggleShellSidebarBtn = document.getElementById('toggle-shell-sidebar');
 const shellSidebar = document.getElementById('shell-sidebar');
@@ -976,10 +974,8 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (text) {
                 if (isShell && shellTab) {
                     ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
-                } else if (sendMode === 'hex') {
-                    putTextInMainInput(text, 'hex');
                 } else if (isConnected) {
-                    await sendSerialRequest({ mode: sendMode, content: text, encoding: sendEncoding, source: 'paste' }, SEND_LIMITS.paste);
+                    await sendSerialRequest({ mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
                 }
             }
             break;
@@ -989,7 +985,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (text && isShell && shellTab) {
                 ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
             } else if (text && isConnected) {
-                await sendSerialRequest({ mode: sendMode, content: text, encoding: sendEncoding, source: 'selection' }, SEND_LIMITS.paste);
+                await sendSerialRequest({ mode: 'text', content: text, source: 'selection' }, SEND_LIMITS.paste);
             }
             break;
         }
@@ -2305,10 +2301,8 @@ function createTerminalKeyHandler(targetTerm, terminalType = 'serial', getTabId 
                 if (!text) return;
                 if (terminalType === 'shell') {
                     ipcRenderer.send('shell-tab-input', { tabId: typeof getTabId === 'function' ? getTabId() : '', data: text });
-                } else if (sendMode === 'hex') {
-                    putTextInMainInput(text, 'hex');
                 } else {
-                    sendSerialRequest({ mode: 'text', content: text, encoding: sendEncoding, source: 'paste' }, SEND_LIMITS.paste);
+                    sendSerialRequest({ mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
                 }
             });
             return false;
@@ -2364,9 +2358,9 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
     }
     const profileRequest = {
         ...request,
-        mode: request.mode === 'hex' || request.mode === 'text' ? request.mode : sendMode,
+        mode: request.mode === 'hex' ? 'hex' : 'text',
         encoding: sendEncoding,
-        appendCrLf: request.source === 'terminal' ? false : sendAppendCrLf
+        appendCrLf: request.source === 'terminal' ? false : request.appendCrLf === true
     };
     const validation = validateSendContent(profileRequest.mode, profileRequest.content, profileRequest.encoding, maxBytes - (profileRequest.appendCrLf ? 2 : 0));
     if (!validation.ok) {
@@ -2400,8 +2394,8 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
     }
 }
 
-function putTextInMainInput(text, mode = sendMode) {
-    switchMainInputMode(mode, { syncGlobal: true, persist: true });
+function putTextInMainInput(text, mode = mainInputMode) {
+    switchMainInputMode(mode, { persist: true });
     mainSendInput.value = text;
     mainInputDrafts[mode] = text;
     updateMainInputState();
@@ -2815,17 +2809,18 @@ function navigateMainInputHistory(direction) {
 
     mainInputHistoryIndex = nextIndex;
     const entry = mainInputHistoryIndex === -1 ? mainInputHistoryDraft : mainInputHistory[mainInputHistory.length - 1 - mainInputHistoryIndex];
-    switchMainInputMode(entry.mode, { syncGlobal: true, persist: true });
+    switchMainInputMode(entry.mode, { persist: true });
     mainSendInput.value = entry.content;
     mainInputDrafts[entry.mode] = entry.content;
     updateMainInputHeight();
-    const validation = validateSendContent(sendMode, entry.content, sendEncoding, SEND_LIMITS.main - (sendAppendCrLf ? 2 : 0));
-    mainInputValidation.textContent = formatValidation(validation, sendMode, sendAppendCrLf);
+    const appendCrLf = mainSendAppendCrlfCb?.checked === true;
+    const validation = validateSendContent(mainInputMode, entry.content, sendEncoding, SEND_LIMITS.main - (appendCrLf ? 2 : 0));
+    mainInputValidation.textContent = formatValidation(validation, mainInputMode, appendCrLf);
     mainInputValidation.classList.toggle('valid', validation.ok);
     mainInputValidation.classList.toggle('invalid', !validation.ok && entry.content.length > 0);
     mainSendBtn.disabled = !validation.ok;
     mainAddQuickSendBtn.disabled = !validation.ok;
-    mainSendInput.placeholder = sendMode === 'hex' ? 'AA 55 01 FF' : tr('main.sendInputPlaceholder');
+    mainSendInput.placeholder = mainInputMode === 'hex' ? 'AA 55 01 FF' : tr('main.sendInputPlaceholder');
     focusMainInput();
 }
 
@@ -2847,7 +2842,12 @@ function clearMainInput() {
 }
 
 function getMainInputRequest() {
-    return { mode: sendMode, content: mainSendInput.value, encoding: sendEncoding, appendCrLf: sendAppendCrLf };
+    return {
+        mode: mainInputMode,
+        content: mainSendInput.value,
+        encoding: sendEncoding,
+        appendCrLf: mainSendAppendCrlfCb?.checked === true
+    };
 }
 
 function updateMainInputState() {
@@ -2863,14 +2863,15 @@ function updateMainInputState() {
     mainSendInput.placeholder = request.mode === 'hex' ? 'AA 55 01 FF' : tr('main.sendInputPlaceholder');
 }
 
-function switchMainInputMode(mode, { syncGlobal = true, persist = true } = {}) {
+function switchMainInputMode(mode, { persist = true } = {}) {
     const normalized = mode === 'hex' ? 'hex' : 'text';
     const oldMode = mainInputMode;
     if (oldMode !== normalized) mainInputDrafts[oldMode] = mainSendInput.value;
     mainInputMode = normalized;
     mainSendInput.value = mainInputDrafts[normalized];
-    if (syncGlobal) switchSendMode(normalized, { syncInput: false, persist });
+    if (mainSendHexCb) mainSendHexCb.checked = normalized === 'hex';
     updateMainInputState();
+    if (persist && !isApplyingConfig) saveMainInputSettings();
 }
 
 async function sendMainInputBuffer() {
@@ -2906,6 +2907,7 @@ function addMainInputToQuickSend() {
         id: createQuickSendId(),
         label: buildQuickSendLabel(content),
         mode: mainInputMode,
+        appendCrLf: mainSendAppendCrlfCb?.checked === true,
         content,
         sidebarShortcut: {
             enabled: false,
@@ -2931,6 +2933,8 @@ function saveMainInputSettings() {
         mainInputSettings: {
             visible: !mainInputPanel?.classList.contains('hidden'),
             sendOnEnter: mainSendOnEnterCb?.checked !== false,
+            mode: mainInputMode,
+            appendCrLf: mainSendAppendCrlfCb?.checked === true,
             historyLimit: mainInputHistoryLimit
         }
     });
@@ -2964,6 +2968,11 @@ function bindMainInputEvents() {
     mainSendInput.addEventListener('input', updateMainInputState);
     mainSendBtn.addEventListener('click', sendMainInputBuffer);
     mainAddQuickSendBtn?.addEventListener('click', addMainInputToQuickSend);
+    mainSendHexCb?.addEventListener('change', () => switchMainInputMode(mainSendHexCb.checked ? 'hex' : 'text'));
+    mainSendAppendCrlfCb?.addEventListener('change', () => {
+        updateMainInputState();
+        saveMainInputSettings();
+    });
     mainInputHistoryBtn?.addEventListener('click', (event) => {
         event.stopPropagation();
         toggleMainInputHistoryMenu();
@@ -2992,7 +3001,8 @@ function applyMainInputConfig(config) {
     if (mainSendOnEnterCb) {
         mainSendOnEnterCb.checked = settings.sendOnEnter !== false;
     }
-    switchMainInputMode(sendMode, { syncGlobal: false, persist: false });
+    if (mainSendAppendCrlfCb) mainSendAppendCrlfCb.checked = settings.appendCrLf === true;
+    switchMainInputMode(settings.mode, { persist: false });
 }
 
 bindMainInputEvents();
@@ -3008,7 +3018,7 @@ function getSerialOptionsFromUi() {
         dataBits: document.getElementById('data-bits-select')?.value || '8',
         stopBits: document.getElementById('stop-bits-select')?.value || '1',
         parity: document.getElementById('parity-select')?.value || 'none',
-        receiveDisplayMode, receiveEncoding, sendMode, sendEncoding, appendCrLf: sendAppendCrLf, newlineMode
+        receiveDisplayMode, receiveEncoding, sendEncoding, newlineMode
     };
 }
 
@@ -3019,34 +3029,14 @@ function saveSerialModeConfig() {
     ipcRenderer.send('save-config', { lastSerialOptions });
 }
 
-function switchSendMode(nextMode, { syncInput = true, persist = true, refresh = true } = {}) {
-    sendMode = nextMode === 'hex' ? 'hex' : 'text';
-    if (sendModeSelect) sendModeSelect.value = sendMode;
-    if (sendEncodingSelect) sendEncodingSelect.disabled = sendMode === 'hex';
-    if (syncInput) {
-        switchMainInputMode(sendMode, { syncGlobal: false, persist: false });
-    }
-    if (refresh) refreshSharedSendConsumers();
-    if (persist && !isApplyingConfig) {
-        saveSharedSendProfile();
-    }
-}
-
 function switchSendEncoding(nextEncoding, { persist = true, refresh = true } = {}) {
     sendEncoding = SUPPORTED_ENCODINGS.has(nextEncoding) ? nextEncoding : 'utf8';
     if (sendEncodingSelect) sendEncodingSelect.value = sendEncoding;
-    if (refresh) refreshSharedSendConsumers();
-    if (persist && !isApplyingConfig) saveSharedSendProfile();
+    if (refresh) refreshSendConsumers();
+    if (persist && !isApplyingConfig) saveSendEncoding();
 }
 
-function switchSendAppendCrLf(appendCrLf, { persist = true, refresh = true } = {}) {
-    sendAppendCrLf = appendCrLf === true;
-    if (sendAppendCrlfCb) sendAppendCrlfCb.checked = sendAppendCrLf;
-    if (refresh) refreshSharedSendConsumers();
-    if (persist && !isApplyingConfig) saveSharedSendProfile();
-}
-
-function refreshSharedSendConsumers() {
+function refreshSendConsumers() {
     updateMainInputState();
     if (typeof updateAutoSendValidation === 'function') {
         updateAutoSendValidation();
@@ -3056,7 +3046,7 @@ function refreshSharedSendConsumers() {
     if (typeof renderQuickSendLists === 'function') renderQuickSendLists();
 }
 
-function saveSharedSendProfile() {
+function saveSendEncoding() {
     const lastSerialOptions = getSerialOptionsFromUi();
     const config = { lastSerialOptions };
     if (autoSendEnableCb) {
@@ -3072,9 +3062,7 @@ function saveSharedSendProfile() {
 
 receiveModeSelect?.addEventListener('change', () => switchReceiveMode(receiveModeSelect.value));
 receiveEncodingSelect?.addEventListener('change', () => switchReceiveEncoding(receiveEncodingSelect.value));
-sendModeSelect?.addEventListener('change', () => switchSendMode(sendModeSelect.value));
 sendEncodingSelect?.addEventListener('change', () => switchSendEncoding(sendEncodingSelect.value));
-sendAppendCrlfCb?.addEventListener('change', () => switchSendAppendCrLf(sendAppendCrlfCb.checked));
 document.getElementById('newline-mode-select')?.addEventListener('change', event => {
     newlineMode = event.target.value;
     saveSerialModeConfig();
@@ -3088,7 +3076,7 @@ function applyConfig(config) {
     showSidebarTab(config.activeSidebarTab, false);
     sidebarShellBtn?.classList.toggle('active', shellSidebar && !shellSidebar.classList.contains('hidden'));
     activeShortcuts = normalizeShortcutSettings(config.shortcuts);
-    let sendProfileChanged = false;
+    let sendEncodingChanged = false;
     currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
     highlightColors = config.highlightColors;
@@ -3153,7 +3141,7 @@ function applyConfig(config) {
     
     // Restore Serial Settings
     if (config.lastSerialOptions) {
-        const previousSendProfileKey = JSON.stringify([sendMode, sendEncoding, sendAppendCrLf]);
+        const previousSendEncoding = sendEncoding;
         // Elements are defined below, but this function runs async or after load
         const baud = document.getElementById('baud-select');
         const baudInput = document.getElementById('baud-custom-input');
@@ -3192,9 +3180,7 @@ function applyConfig(config) {
         switchReceiveEncoding(config.lastSerialOptions.receiveEncoding, { persist: false });
         switchReceiveMode(config.lastSerialOptions.receiveDisplayMode, { persist: false });
         switchSendEncoding(config.lastSerialOptions.sendEncoding, { persist: false, refresh: false });
-        switchSendMode(config.lastSerialOptions.sendMode, { syncInput: false, persist: false, refresh: false });
-        switchSendAppendCrLf(config.lastSerialOptions.appendCrLf, { persist: false, refresh: false });
-        sendProfileChanged = previousSendProfileKey !== JSON.stringify([sendMode, sendEncoding, sendAppendCrLf]);
+        sendEncodingChanged = previousSendEncoding !== sendEncoding;
         
         // Refresh ports to update selection based on config
         refreshPorts();
@@ -3213,7 +3199,7 @@ function applyConfig(config) {
     normalizeSidebarQuickSendOrder();
     renderQuickSendLists();
     updateQuickSendValidation();
-    if (sendProfileChanged || autoSendChanged) {
+    if (sendEncodingChanged || autoSendChanged) {
         updateAutoSendValidation();
         updateAutoSendState();
     }
@@ -3347,10 +3333,6 @@ ipcRenderer.on('shell-tab-exit', (event, payload = {}) => {
 // Serial Logic
 serialTerm.onData((data) => {
     if (!isConnected) {
-        return;
-    }
-    if (sendMode === 'hex') {
-        setActionStatus(trFallback('main.hexUseInput', 'Hex mode: use the bottom input'));
         return;
     }
     sendSerialRequest({
@@ -3747,9 +3729,7 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
                 parity,
                 receiveDisplayMode,
                 receiveEncoding,
-                sendMode,
                 sendEncoding,
-                appendCrLf: sendAppendCrLf,
                 newlineMode
             }
         });
@@ -4165,6 +4145,7 @@ const quickSendDialogCancelBtn = document.getElementById('quick-send-dialog-canc
 const quickSendLabelInput = document.getElementById('quick-send-label');
 const quickSendContentInput = document.getElementById('quick-send-content');
 const quickSendModeInputs = Array.from(document.querySelectorAll('input[name="quick-send-mode"]'));
+const quickSendAppendCrlfInput = document.getElementById('quick-send-append-crlf');
 const quickSendTriggerEnableInput = document.getElementById('quick-send-trigger-enable');
 const quickSendTriggerTextInput = document.getElementById('quick-send-trigger-text');
 const quickSendTriggerRegexInput = document.getElementById('quick-send-trigger-regex');
@@ -4196,8 +4177,8 @@ function stopAutoSendRuntime() {
 
 function getAutoSendRequest() {
     return {
-        mode: sendMode, content: autoSendTextInput.value,
-        encoding: sendEncoding, appendCrLf: sendAppendCrLf,
+        mode: 'text', content: autoSendTextInput.value,
+        encoding: sendEncoding, appendCrLf: false,
         source: 'auto-send'
     };
 }
@@ -4661,6 +4642,7 @@ function normalizeQuickSendItem(item = {}) {
         id: typeof item.id === 'string' && item.id ? item.id : createQuickSendId(),
         label: typeof item.label === 'string' ? item.label : '',
         mode: item.mode === 'hex' ? 'hex' : 'text',
+        appendCrLf: item.appendCrLf === true,
         content: typeof item.content === 'string' ? item.content : '',
         sidebarShortcut: {
             enabled: item.sidebarShortcut?.enabled === true,
@@ -4701,6 +4683,7 @@ function getQuickEditorItem() {
         id: editingQuickSendId || createQuickSendId(),
         label: quickSendLabelInput.value.trim(),
         mode: quickSendModeInputs.find(input => input.checked)?.value === 'hex' ? 'hex' : 'text',
+        appendCrLf: quickSendAppendCrlfInput.checked,
         content: quickSendContentInput.value,
         sidebarShortcut: {
             enabled: quickSendSidebarEnableInput.checked,
@@ -4723,6 +4706,7 @@ function closeQuickSendDialog() {
     quickSendLabelInput.value = '';
     quickSendContentInput.value = '';
     quickSendModeInputs.forEach(input => { input.checked = input.value === 'text'; });
+    quickSendAppendCrlfInput.checked = false;
     quickSendTriggerEnableInput.checked = false;
     quickSendTriggerTextInput.value = '';
     quickSendTriggerRegexInput.checked = false;
@@ -4747,7 +4731,8 @@ function openQuickSendDialog(itemId = '') {
     const item = quickSendList.find(entry => entry.id === itemId) || null;
     quickSendLabelInput.value = item?.label || '';
     quickSendContentInput.value = item?.content || '';
-    quickSendModeInputs.forEach(input => { input.checked = input.value === (item?.mode || sendMode); });
+    quickSendModeInputs.forEach(input => { input.checked = input.value === (item?.mode || mainInputMode); });
+    quickSendAppendCrlfInput.checked = item?.appendCrLf === true;
     quickSendTriggerEnableInput.checked = item?.autoTrigger?.enabled === true;
     quickSendTriggerTextInput.value = item?.autoTrigger?.text || '';
     quickSendTriggerRegexInput.checked = item?.autoTrigger?.useRegex === true;
@@ -4772,14 +4757,14 @@ function openQuickSendDialog(itemId = '') {
 
 function updateQuickSendValidation() {
     const item = getQuickEditorItem();
-    const result = validateSendContent(item.mode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
+    const result = validateSendContent(item.mode, item.content, sendEncoding, SEND_LIMITS.quick - (item.appendCrLf ? 2 : 0));
     const triggerResult = !item.autoTrigger.enabled
         ? { ok: true, regex: null }
         : (!item.autoTrigger.text
             ? { ok: false, message: trFallback('main.quickTriggerTextRequired', 'Auto trigger needs match text') }
             : buildQuickTriggerRegex(item.autoTrigger));
     quickSendValidation.textContent = triggerResult.ok
-        ? formatValidation(result, item.mode, sendAppendCrLf)
+        ? formatValidation(result, item.mode, item.appendCrLf)
         : triggerResult.message;
     quickSendValidation.classList.toggle('valid', result.ok && triggerResult.ok);
     quickSendValidation.classList.toggle('invalid', (!result.ok && item.content.length > 0) || !triggerResult.ok);
@@ -4793,7 +4778,7 @@ async function triggerQuickSendItem(item) {
     quickSendTriggerInFlight.add(item.id);
     try {
         flashQuickSendItem(item.id);
-        const result = await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
+        const result = await sendSerialRequest({ mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
         const label = item.label || item.content;
         setActionStatus(result.ok
             ? trFallback('main.quickTriggerSent', 'Auto-trigger sent: {label}', { label })
@@ -5006,8 +4991,8 @@ function renderQuickSendContainer(container, compact = false) {
         const label = document.createElement('span');
         label.className = 'quick-send-label';
         label.textContent = compact ? (item.sidebarShortcut?.text || item.label || item.content) : (item.label || item.content);
-        const validation = validateSendContent(item.mode, item.content, sendEncoding, SEND_LIMITS.quick - (sendAppendCrLf ? 2 : 0));
-        btn.title = validation.ok ? `${validation.normalized} (${validation.byteCount + (sendAppendCrLf ? 2 : 0)} B)` : validation.message;
+        const validation = validateSendContent(item.mode, item.content, sendEncoding, SEND_LIMITS.quick - (item.appendCrLf ? 2 : 0));
+        btn.title = validation.ok ? `${validation.normalized} (${validation.byteCount + (item.appendCrLf ? 2 : 0)} B)` : validation.message;
         btn.className = compact ? 'quick-send-main-btn sidebar-tool-btn' : 'quick-send-main-btn';
         if (compact) {
             btn.style.backgroundColor = item.sidebarShortcut?.backgroundColor || 'var(--bg-tertiary)';
@@ -5031,7 +5016,7 @@ function renderQuickSendContainer(container, compact = false) {
                 event.stopPropagation();
                 return;
             }
-            const result = await sendSerialRequest({ mode: item.mode, content: item.content, source: 'quick-send' }, SEND_LIMITS.quick);
+            const result = await sendSerialRequest({ mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send' }, SEND_LIMITS.quick);
             showQuickSendClickResult(btn, result?.ok === true);
             if (result?.code === 'SERIAL_NOT_OPEN') recordQuickSendDisconnectedClick(btn);
         });
@@ -5160,6 +5145,7 @@ addQuickSendBtn.addEventListener('click', () => {
 });
 quickSendContentInput.addEventListener('input', updateQuickSendValidation);
 quickSendModeInputs.forEach(input => input.addEventListener('change', updateQuickSendValidation));
+quickSendAppendCrlfInput.addEventListener('change', updateQuickSendValidation);
 quickSendTriggerEnableInput.addEventListener('change', updateQuickSendValidation);
 quickSendTriggerTextInput.addEventListener('input', updateQuickSendValidation);
 quickSendTriggerRegexInput.addEventListener('change', updateQuickSendValidation);

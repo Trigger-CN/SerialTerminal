@@ -136,25 +136,12 @@
                     <option value="cr">NL: CR / CR</option>
                 </select>
 
-                <section class="shared-send-profile" aria-labelledby="shared-send-profile-title">
-                    <div class="shared-send-profile-title" id="shared-send-profile-title" data-i18n="main.sharedSendProfile" data-i18n-fallback="Send Profile">Send Profile</div>
-                    <div class="shared-send-profile-grid">
-                        <label for="send-mode-select" data-i18n="main.sendMode" data-i18n-fallback="Mode">Mode</label>
-                        <select id="send-mode-select" title="Send mode" data-i18n-title="main.sendMode">
-                            <option value="text" data-i18n="main.textMode" data-i18n-fallback="Text">Text</option>
-                            <option value="hex" data-i18n="main.hexMode" data-i18n-fallback="Hex">Hex</option>
-                        </select>
-                        <label for="send-encoding-select" data-i18n="main.sendEncoding" data-i18n-fallback="Encoding">Encoding</label>
-                        <select id="send-encoding-select" title="Send encoding" data-i18n-title="main.sendEncoding">
-                            <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
-                        </select>
-                    </div>
-                    <label class="shared-send-append" for="send-append-crlf">
-                        <input type="checkbox" id="send-append-crlf">
-                        <span data-i18n="main.sharedAppend" data-i18n-fallback="Append CRLF / 0D 0A">Append CRLF / 0D 0A</span>
-                    </label>
-                    <div class="shared-send-profile-hint" data-i18n="main.sharedSendProfileHint" data-i18n-fallback="Used by message send actions">Used by message send actions</div>
-                </section>
+                <div class="serial-mode-grid serial-send-encoding">
+                    <label class="serial-mode-label" for="send-encoding-select" data-i18n="main.sendShort" data-i18n-fallback="TX">TX</label>
+                    <select id="send-encoding-select" title="Send encoding" data-i18n-title="main.sendEncoding">
+                        <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
+                    </select>
+                </div>
 
                 <div id="display-controls" class="settings-group">
                     <label>
@@ -282,6 +269,14 @@
                 <textarea id="main-send-input" placeholder="输入要发送的内容..." data-i18n-placeholder="main.sendInputPlaceholder" rows="1"></textarea>
                 <button id="main-send-btn" title="发送" data-i18n-title="main.send"><span data-i18n="main.send">Send</span></button>
                 <button id="main-add-quick-send-btn" class="secondary" title="加入快捷发送" data-i18n-title="main.addToQuickSend"><span class="material-icon-placeholder" data-material-icon="add"></span><span data-i18n="main.addQuickSendShort">Quick</span></button>
+                <label class="main-input-icon-toggle main-input-text-toggle" for="main-send-hex" title="十六进制发送" data-i18n-title="main.hexMode">
+                    <input type="checkbox" id="main-send-hex">
+                    <span>HEX</span>
+                </label>
+                <label class="main-input-icon-toggle main-input-text-toggle" for="main-send-append-crlf" title="追加 CRLF" data-i18n-title="main.appendCrlf">
+                    <input type="checkbox" id="main-send-append-crlf">
+                    <span>CRLF</span>
+                </label>
                 <label class="main-input-icon-toggle" for="main-send-on-enter" title="按回车发送" data-i18n-title="main.sendOnEnterToggle" aria-label="Input settings">
                     <input type="checkbox" id="main-send-on-enter" checked>
                     <span class="material-icon-placeholder" data-material-icon="keyboard_return"></span>
@@ -349,13 +344,19 @@
                      <label for="quick-send-content" data-i18n="main.content">Content</label>
                      <textarea id="quick-send-content" placeholder="Content (multi-line)" data-i18n-placeholder="main.contentMultiLine" class="send-editor-textarea"></textarea>
                  </div>
-                 <div class="form-group quick-send-mode-field">
+                  <div class="form-group quick-send-mode-field">
                      <span class="quick-send-field-label" data-i18n="main.quickSendMode">Quick send mode</span>
                      <div class="quick-send-mode-control" role="radiogroup" aria-label="Quick send mode" data-i18n-aria-label="main.quickSendMode">
                          <label><input type="radio" name="quick-send-mode" value="text" checked><span data-i18n="main.textMode">Text</span></label>
                          <label><input type="radio" name="quick-send-mode" value="hex"><span data-i18n="main.hexMode">Hex</span></label>
-                     </div>
-                 </div>
+                      </div>
+                  </div>
+                  <div class="form-group quick-send-options">
+                      <label class="quick-trigger-check" for="quick-send-append-crlf">
+                          <input type="checkbox" id="quick-send-append-crlf">
+                          <span data-i18n="main.appendCrlf">Append CRLF</span>
+                      </label>
+                  </div>
                  <section class="form-group quick-sidebar-settings" aria-label="Sidebar shortcut settings" data-i18n-aria-label="main.quickSidebarSettings">
                      <label class="quick-sidebar-toggle" for="quick-send-sidebar-enable">
                          <input type="checkbox" id="quick-send-sidebar-enable">

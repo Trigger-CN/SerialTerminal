@@ -1247,49 +1247,7 @@ label:hover {
     font-weight: 700;
 }
 
-.shared-send-profile {
-    padding: 2px 0 10px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.shared-send-profile-title {
-    margin-bottom: 6px;
-    color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-}
-
-.shared-send-profile-grid {
-    display: grid;
-    grid-template-columns: 52px minmax(0, 1fr);
-    gap: 4px;
-    align-items: center;
-}
-
-.shared-send-profile-grid label,
-.shared-send-append,
-.shared-send-profile-hint {
-    color: var(--text-secondary);
-    font-size: 10px;
-}
-
-.shared-send-profile-grid select {
-    width: 100%;
-    min-width: 0;
-    height: 26px;
-    padding: 3px 20px 3px 6px;
-}
-
-.shared-send-append {
-    display: flex;
-    align-items: center;
-    margin-top: 6px;
-    line-height: 1.2;
-}
-
-.shared-send-append input { margin-right: 5px; }
-.shared-send-profile-hint { margin: 5px 0 0 20px; opacity: 0.8; }
+.serial-send-encoding select { grid-column: 2 / 4; }
 
 .send-sidebar-section {
     padding-bottom: 7px;
@@ -1831,6 +1789,10 @@ label:hover {
     line-height: 1;
 }
 
+.main-input-text-toggle span {
+    font: 600 10px/1 Consolas, monospace;
+}
+
 .main-input-icon-toggle svg[data-material-icon] {
     width: 20px;
     height: 20px;
@@ -1975,7 +1937,7 @@ label:hover {
 @media (max-width: 760px) {
     .sidebar { width: 184px; }
     .main-input-row { flex-wrap: wrap; }
-    #main-send-input { flex-basis: calc(100% - 154px); }
+    #main-send-input { flex-basis: calc(100% - 46px); }
     .main-input-meta-row { flex-wrap: wrap; padding-left: 0; gap: 2px 8px; }
     .main-input-meta-row .input-validation { flex: 1 0 100%; max-width: none; }
     .main-input-meta-row .main-input-last { justify-content: flex-start; text-align: left; }

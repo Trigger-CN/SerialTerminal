@@ -42,7 +42,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 6;
+const CONFIG_VERSION = 7;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const DEFAULT_SHORTCUTS = {
@@ -156,14 +156,12 @@ function normalizeConfig(config, defaults) {
     parity: oneOf(oldSerial.parity, new Set(['none', 'even', 'odd', 'mark', 'space']), defaults.lastSerialOptions.parity),
     receiveDisplayMode: oneOf(oldSerial.receiveDisplayMode, SERIAL_MODES, migratedMode),
     receiveEncoding: oneOf(oldSerial.receiveEncoding, SERIAL_ENCODINGS, migratedEncoding),
-    sendMode: oneOf(oldSerial.sendMode, SERIAL_MODES, migratedMode),
     sendEncoding: oneOf(oldSerial.sendEncoding, SERIAL_ENCODINGS, migratedEncoding),
-    appendCrLf: normalizeBoolean(oldSerial.appendCrLf,
-      normalizeBoolean(source.mainInputSettings?.appendCrLf,
-        normalizeBoolean(source.autoSendSettings?.appendCrLf, false))),
     newlineMode: oneOf(oldSerial.newlineMode, new Set(['crlf', 'lf', 'cr']), 'crlf')
   };
   delete normalized.lastSerialOptions.encoding;
+  delete normalized.lastSerialOptions.sendMode;
+  delete normalized.lastSerialOptions.appendCrLf;
 
   const oldHex = source.hexDisplaySettings && typeof source.hexDisplaySettings === 'object'
     ? source.hexDisplaySettings
@@ -182,6 +180,8 @@ function normalizeConfig(config, defaults) {
   normalized.mainInputSettings = {
     visible: normalizeBoolean(oldMainInput.visible, true),
     sendOnEnter: normalizeBoolean(oldMainInput.sendOnEnter, true),
+    mode: oneOf(oldMainInput.mode, SERIAL_MODES, oneOf(oldSerial.sendMode, SERIAL_MODES, migratedMode)),
+    appendCrLf: normalizeBoolean(oldMainInput.appendCrLf, normalizeBoolean(oldSerial.appendCrLf, false)),
     historyLimit: normalizeMainInputHistoryLimit(oldMainInput.historyLimit)
   };
   const oldHighlightColors = source.highlightColors && typeof source.highlightColors === 'object'
@@ -270,10 +270,12 @@ function normalizeConfig(config, defaults) {
         return {
           id,
           label: typeof item.label === 'string' ? item.label : '',
-          mode: oneOf(item.mode, SERIAL_MODES, normalized.lastSerialOptions.sendMode),
+          mode: oneOf(item.mode, SERIAL_MODES, normalized.mainInputSettings.mode),
+          appendCrLf: normalizeBoolean(item.appendCrLf,
+            Number(source.configVersion || 0) < 7 && normalizeBoolean(oldSerial.appendCrLf, false)),
           content: typeof item.content === 'string'
             && Number(source.configVersion || 0) < 3
-            && normalized.lastSerialOptions.appendCrLf
+            && normalizeBoolean(oldSerial.appendCrLf, false)
             && /\r\n$/.test(item.content)
             ? item.content.slice(0, -2)
             : (typeof item.content === 'string' ? item.content : ''),
@@ -405,6 +407,8 @@ function loadConfig() {
     mainInputSettings: {
       visible: true,
       sendOnEnter: true,
+      mode: 'text',
+      appendCrLf: false,
       historyLimit: 20
     },
     sidebarCollapsed: false,
@@ -437,9 +441,7 @@ function loadConfig() {
         parity: 'none',
         receiveDisplayMode: 'text',
         receiveEncoding: 'utf8',
-        sendMode: 'text',
         sendEncoding: 'utf8',
-        appendCrLf: false,
         newlineMode: 'crlf'
     }
   };
@@ -798,7 +800,7 @@ function saveConfig(config) {
   if (config?.lastSerialOptions && typeof config.lastSerialOptions.encoding === 'string') {
     const legacyEncoding = config.lastSerialOptions.encoding;
     merged.lastSerialOptions.receiveDisplayMode = legacyEncoding === 'hex' ? 'hex' : 'text';
-    merged.lastSerialOptions.sendMode = legacyEncoding === 'hex' ? 'hex' : 'text';
+    merged.mainInputSettings.mode = legacyEncoding === 'hex' ? 'hex' : 'text';
     if (legacyEncoding !== 'hex' && SERIAL_ENCODINGS.has(legacyEncoding)) {
       merged.lastSerialOptions.receiveEncoding = legacyEncoding;
       merged.lastSerialOptions.sendEncoding = legacyEncoding;

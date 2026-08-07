@@ -158,7 +158,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 6/);
+  assert.match(main, /const CONFIG_VERSION = 7/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
@@ -348,7 +348,7 @@ test('workspace tabs support pointer reordering across panes', () => {
   assert.match(styles, /\.main-tab\s*\{[^}]*touch-action:\s*none;/s);
 });
 
-test('each quick-send item persists and uses its own text or hex mode', () => {
+test('each quick-send item persists its own mode and CRLF setting', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
@@ -356,11 +356,14 @@ test('each quick-send item persists and uses its own text or hex mode', () => {
 
   assert.match(html, /name="quick-send-mode" value="text" checked/);
   assert.match(html, /name="quick-send-mode" value="hex"/);
-  assert.match(main, /mode: oneOf\(item\.mode, SERIAL_MODES, normalized\.lastSerialOptions\.sendMode\)/);
+  assert.match(html, /id="quick-send-append-crlf"/);
+  assert.match(main, /mode: oneOf\(item\.mode, SERIAL_MODES, normalized\.mainInputSettings\.mode\)/);
+  assert.match(main, /appendCrLf: normalizeBoolean\(item\.appendCrLf/);
   assert.match(renderer, /mode: item\.mode === 'hex' \? 'hex' : 'text'/);
-  assert.match(renderer, /mode: request\.mode === 'hex' \|\| request\.mode === 'text' \? request\.mode : sendMode/);
-  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, source: 'quick-send' \}/);
-  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, source: 'quick-send-trigger' \}/);
+  assert.match(renderer, /appendCrLf: item\.appendCrLf === true/);
+  assert.match(renderer, /appendCrLf: quickSendAppendCrlfInput\.checked/);
+  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send' \}/);
+  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send-trigger' \}/);
   assert.match(renderer, /validateSendContent\(item\.mode, item\.content, sendEncoding/);
   assert.match(renderer, /if \(!compact && item\.mode === 'hex'\) \{[\s\S]*modeBadge\.textContent = 'HEX'/);
   assert.match(renderer, /mode-badge hex quick-send-mode-badge/);
@@ -500,19 +503,23 @@ test('filter and shell tabs support persistent double-click renaming', () => {
   assert.match(styles, /\.rename-tab-dialog \.form-group > label\s*\{[^}]*margin-bottom:\s*5px;/s);
 });
 
-test('shared send profile is located in the settings tab', () => {
+test('send mode and CRLF controls belong to the bottom input', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
   const settings = html.match(/<div id="tab-settings"[\s\S]*?<\/div>\s*<!-- Search Tab -->/)?.[0] || '';
-  const send = html.match(/<div id="tab-send"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
+  const inputPanel = html.match(/<div class="main-input-panel"[\s\S]*?<\/div>\s*<\/div>\s*<!-- Right Shell Sidebar -->/)?.[0] || '';
 
-  assert.match(settings, /class="shared-send-profile"/);
-  assert.doesNotMatch(send, /class="shared-send-profile"/);
-  assert.match(settings, /id="send-mode-select"/);
   assert.match(settings, /id="send-encoding-select"/);
-  assert.match(settings, /id="send-append-crlf"/);
-  assert.ok(settings.indexOf('class="shared-send-profile"') < settings.indexOf('id="display-controls"'));
-  assert.match(styles, /#display-controls\s*\{[^}]*border-top:\s*none;/s);
+  assert.doesNotMatch(settings, /id="send-mode-select"|id="send-append-crlf"/);
+  assert.match(inputPanel, /id="main-send-hex"/);
+  assert.match(inputPanel, /id="main-send-append-crlf"/);
+  assert.match(inputPanel, /id="main-send-on-enter"/);
+  assert.match(renderer, /mode: request\.mode === 'hex' \? 'hex' : 'text'/);
+  assert.match(renderer, /appendCrLf: request\.source === 'terminal' \? false : request\.appendCrLf === true/);
+  assert.match(renderer, /mode: mainInputMode,[\s\S]*appendCrLf: mainSendAppendCrlfCb\?\.checked === true/);
+  assert.doesNotMatch(renderer, /let sendMode|let sendAppendCrLf/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*#main-send-input \{ flex-basis: calc\(100% - 46px\); \}/);
 });
 
 test('text filter tabs do not display a TXT mode badge', () => {
