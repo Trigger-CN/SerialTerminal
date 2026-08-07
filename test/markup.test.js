@@ -475,6 +475,7 @@ test('sidebar can export the active terminal through an independent save dialog'
   assert.match(html, /id="open-log-folder-btn"[\s\S]*id="save-current-tab-btn"/);
   assert.match(styles, /\.sidebar-log-actions\s*\{[^}]*grid-template-columns:/s);
   assert.match(renderer, /function getActiveTerminalExport\(\)/);
+  assert.match(renderer, /serializeTerminalBuffer\(targetTerm\?\.buffer\?\.active\)/);
   assert.match(renderer, /invoke\('save-current-tab-log', getActiveTerminalExport\(\)\)/);
   assert.match(main, /ipcMain\.handle\('save-current-tab-log'/);
   assert.match(main, /dialog\.showSaveDialog\(owner/);

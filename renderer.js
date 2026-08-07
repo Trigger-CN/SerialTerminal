@@ -25,6 +25,7 @@ const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./wor
 const { getHorizontalInsertionIndex } = require('./tab-reorder');
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
+const { serializeTerminalBuffer } = require('./terminal-buffer-text');
 const {
     getVerticalInsertionIndex,
     reorderQuickSendItems,
@@ -693,15 +694,7 @@ function switchReceiveEncoding(nextEncoding, { persist = true } = {}) {
 }
 
 function getTerminalPlainText(targetTerm) {
-    if (!targetTerm?.buffer?.active) return '';
-    const buffer = targetTerm.buffer.active;
-    const lines = [];
-    for (let i = 0; i < buffer.length; i++) {
-        const line = buffer.getLine(i);
-        if (!line) continue;
-        lines.push(line.translateToString(true));
-    }
-    return lines.join('\n').replace(/\s+$/g, '');
+    return serializeTerminalBuffer(targetTerm?.buffer?.active);
 }
 
 async function writeClipboardText(text) {
