@@ -68,3 +68,45 @@ test('Gitee publisher updates an existing release and replaces same-name attachm
 
   assert.deepEqual(methods, ['GET', 'PATCH', 'GET', 'DELETE', 'POST', 'GET']);
 });
+
+test('Gitee publisher retries temporary network failures with request context', async () => {
+  let attempts = 0;
+  const waits = [];
+  const publisher = createGiteePublisher({
+    token: 'secret',
+    wait: async milliseconds => waits.push(milliseconds),
+    async fetchImpl(url, options) {
+      if (url.pathname.endsWith('/tags/v1.2.3')) {
+        attempts++;
+        if (attempts < 3) throw new TypeError('fetch failed', { cause: new Error('connection reset') });
+        return response(200, { id: 7 });
+      }
+      if (options.method === 'PATCH') return response(200, { id: 7, tag_name: 'v1.2.3' });
+      if (options.method === 'GET') return response(200, []);
+      return response(201, { id: 10 });
+    }
+  });
+
+  await publisher.publish({
+    owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3', target: 'abc123',
+    notes: 'Changes', files: [__filename]
+  });
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(waits, [2000, 5000]);
+});
+
+test('Gitee publisher reports the failed API and underlying network cause', async () => {
+  const publisher = createGiteePublisher({
+    token: 'secret',
+    wait: async () => {},
+    async fetchImpl() {
+      throw new TypeError('fetch failed', { cause: new Error('headers timeout') });
+    }
+  });
+
+  await assert.rejects(() => publisher.publish({
+    owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3', target: 'abc123',
+    notes: 'Changes', files: [__filename]
+  }), /Gitee API GET \/repos\/trigger-cn\/SerialTerminal\/releases\/tags\/v1\.2\.3 failed after 4 attempt\(s\): fetch failed \(headers timeout\)/);
+});

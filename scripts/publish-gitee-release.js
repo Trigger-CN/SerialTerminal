@@ -5,6 +5,7 @@ const path = require('node:path');
 const yaml = require('js-yaml');
 
 const API_ROOT = 'https://gitee.com/api/v5';
+const RETRY_DELAYS_MS = [2000, 5000, 10000];
 
 function parseArguments(args) {
   const options = { files: [] };
@@ -24,26 +25,37 @@ function parseArguments(args) {
   return options;
 }
 
-function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_ROOT }) {
+function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_ROOT, wait = delay }) {
   if (!token) throw new Error('GITEE_ACCESS_TOKEN is required');
 
   async function request(method, endpoint, { body, form, allowNotFound = false } = {}) {
     const url = new URL(`${apiRoot}${endpoint}`);
     url.searchParams.set('access_token', token);
-    const options = { method, headers: {} };
-    if (body) {
-      options.headers['Content-Type'] = 'application/json';
-      options.body = JSON.stringify(body);
-    } else if (form) {
-      options.body = form;
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        const options = { method, headers: {} };
+        if (body) {
+          options.headers['Content-Type'] = 'application/json';
+          options.body = JSON.stringify(body);
+        } else if (form) {
+          options.body = cloneFormData(form);
+        }
+        const response = await fetchImpl(url, options);
+        if (allowNotFound && response.status === 404) return null;
+        if (response.ok) return response.status === 204 ? null : response.json();
+
+        const details = (await response.text()).slice(0, 500);
+        if (!isRetryableStatus(response.status) || attempt === RETRY_DELAYS_MS.length) {
+          throw new Error(`Gitee API ${method} ${endpoint} failed: HTTP ${response.status}${details ? ` ${details}` : ''}`);
+        }
+      } catch (error) {
+        if (attempt === RETRY_DELAYS_MS.length || /^Gitee API .* failed: HTTP (?!429|5\d\d)/.test(error.message)) {
+          const cause = error.cause?.message || error.cause?.code || '';
+          throw new Error(`Gitee API ${method} ${endpoint} failed after ${attempt + 1} attempt(s): ${error.message}${cause ? ` (${cause})` : ''}`, { cause: error });
+        }
+      }
+      await wait(RETRY_DELAYS_MS[attempt]);
     }
-    const response = await fetchImpl(url, options);
-    if (allowNotFound && response.status === 404) return null;
-    if (!response.ok) {
-      const details = (await response.text()).slice(0, 500);
-      throw new Error(`Gitee API ${method} ${endpoint} failed: HTTP ${response.status}${details ? ` ${details}` : ''}`);
-    }
-    return response.status === 204 ? null : response.json();
   }
 
   async function publish({ owner, repo, tag, target, name, notes, files }) {
@@ -110,6 +122,22 @@ function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_R
 
 function getAttachmentUrl(attachment) {
   return attachment?.browser_download_url || attachment?.download_url || attachment?.url || '';
+}
+
+function cloneFormData(form) {
+  const copy = new FormData();
+  for (const [name, value] of form.entries()) {
+    copy.append(name, value, typeof value === 'object' && value?.name ? value.name : undefined);
+  }
+  return copy;
+}
+
+function isRetryableStatus(status) {
+  return status === 429 || status >= 500;
+}
+
+function delay(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 async function main() {
