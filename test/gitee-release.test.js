@@ -41,7 +41,7 @@ test('Gitee publisher creates a missing release and uploads attachments', async 
     notes: 'Changes', files: [__filename]
   });
 
-  assert.deepEqual(requests.map(item => item.options.method), ['GET', 'POST', 'GET', 'POST']);
+  assert.deepEqual(requests.map(item => item.options.method), ['GET', 'POST', 'GET', 'POST', 'GET']);
   assert.equal(JSON.parse(requests[1].options.body).target_commitish, 'abc123');
   requests.forEach(item => assert.equal(item.url.searchParams.get('access_token'), 'secret'));
   assert.doesNotMatch(requests.map(item => item.url.toString().replace('secret', '')).join('\n'), /undefined/);
@@ -66,5 +66,5 @@ test('Gitee publisher updates an existing release and replaces same-name attachm
     notes: 'Changes', files: [__filename]
   });
 
-  assert.deepEqual(methods, ['GET', 'PATCH', 'GET', 'DELETE', 'POST']);
+  assert.deepEqual(methods, ['GET', 'PATCH', 'GET', 'DELETE', 'POST', 'GET']);
 });

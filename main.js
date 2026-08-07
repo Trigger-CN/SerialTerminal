@@ -5,9 +5,10 @@ const { createTelemetryReporter, UUID_PATTERN } = require('./telemetry-reporter'
 const pty = require('node-pty');
 const { SerialPort } = require('serialport');
 const iconv = require('iconv-lite');
-const { autoUpdater } = require('electron-updater');
+const { autoUpdater, Provider } = require('electron-updater');
 const { CancellationToken } = require('builder-util-runtime');
 const log = require('electron-log');
+const yaml = require('js-yaml');
 const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
@@ -22,13 +23,35 @@ const {
 // Configure logging
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
-const UPDATE_FEED = { provider: 'github', owner: 'Trigger-CN', repo: 'SerialTerminal' };
+const GITEE_OWNER = 'trigger-cn';
+const GITEE_REPO = 'SerialTerminal';
+const GITEE_API_BASE = `https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}`;
+const GITEE_RELEASE_PAGE = `https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases`;
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const UPDATE_PROMPT_INTERVAL_MS = 8 * 60 * 60 * 1000;
 const MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN';
-autoUpdater.setFeedURL(UPDATE_FEED);
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
+
+class GiteeProvider extends Provider {
+  constructor(configuration, updater, runtimeOptions) {
+    super(runtimeOptions);
+    this.metadataUrl = new URL(configuration.metadataUrl);
+  }
+
+  async getLatestVersion() {
+    const rawData = await this.httpRequest(this.metadataUrl);
+    return yaml.load(rawData);
+  }
+
+  resolveFiles(updateInfo) {
+    const files = updateInfo.files || [{ url: updateInfo.path, sha512: updateInfo.sha512 }];
+    return files.map(info => ({
+      url: new URL(info.url, this.metadataUrl),
+      info
+    }));
+  }
+}
 
 let mainWindow;
 let prefsWindow;
@@ -1163,10 +1186,10 @@ function getManualUpdateDownloadUrl(info) {
     try {
       return new URL(String(exeFile.url)).toString();
     } catch (error) {
-      log.warn('Failed to resolve GitHub update URL:', error);
+      log.warn('Failed to resolve Gitee update URL:', error);
     }
   }
-  return getReleaseUrl();
+  return GITEE_RELEASE_PAGE;
 }
 
 function createUpdateDownloadWindow(info) {
@@ -1223,42 +1246,53 @@ function createUpdateDownloadWindow(info) {
 }
 
 function getReleaseUrl() {
-  const pkg = require('./package.json');
-  if (pkg.homepage) return pkg.homepage;
-  const repoUrl = pkg.repository ? (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository.url) : '';
-  if (repoUrl.includes('github.com')) {
-    return repoUrl.replace(/\.git$/i, '').replace(/#.*$/, '') + '/releases/latest';
-  }
-  return 'https://github.com/Trigger-CN/SerialTerminal/releases/latest';
+  return GITEE_RELEASE_PAGE;
 }
 
-function getGithubRepoInfo() {
-  const pkg = require('./package.json');
-  const repoUrl = pkg.repository ? (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository.url) : '';
-  const matched = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/i);
-  if (!matched) {
-    return null;
+async function checkGiteeForUpdates() {
+  try {
+    await configureGiteeUpdateFeed();
+    return await autoUpdater.checkForUpdates();
+  } catch (error) {
+    if (updatePromptState.phase === 'checking') {
+      sendUpdateStatusToPrefs('error', error.message);
+      updatePromptState.phase = 'idle';
+      updatePromptState.checkSource = null;
+    }
+    throw error;
   }
-  return {
-    owner: matched[1],
-    repo: matched[2]
-  };
 }
 
-async function fetchGithubReleaseNotes(version) {
-  const repoInfo = getGithubRepoInfo();
-  if (!repoInfo || !version) return '';
+async function configureGiteeUpdateFeed() {
+  const response = await fetch(`${GITEE_API_BASE}/releases?per_page=20`, {
+    headers: { Accept: 'application/json', 'User-Agent': `${app.getName()}/${app.getVersion()}` }
+  });
+  if (!response.ok) throw new Error(`Gitee release check failed: HTTP ${response.status}`);
+  const releases = await response.json();
+  const release = Array.isArray(releases)
+    ? releases.find(item => item && item.tag_name && item.draft !== true && item.prerelease !== true)
+    : null;
+  if (!release) throw new Error('No Gitee release is available');
+  const attachments = await fetch(`${GITEE_API_BASE}/releases/${release.id}/attach_files`, {
+    headers: { Accept: 'application/json', 'User-Agent': `${app.getName()}/${app.getVersion()}` }
+  });
+  if (!attachments.ok) throw new Error(`Gitee attachment lookup failed: HTTP ${attachments.status}`);
+  const metadataAsset = (await attachments.json()).find(asset => asset?.name === 'latest.yml' && asset.browser_download_url);
+  if (!metadataAsset) throw new Error('The latest Gitee release has no Windows update metadata');
+  autoUpdater.setFeedURL({ provider: 'custom', updateProvider: GiteeProvider, metadataUrl: metadataAsset.browser_download_url });
+  return release;
+}
+
+async function fetchGiteeReleaseNotes(version) {
+  if (!version) return '';
 
   const tagsToTry = [`v${version}`, version];
 
   for (const tag of tagsToTry) {
-    const apiUrl = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}/releases/tags/${encodeURIComponent(tag)}`;
+    const apiUrl = `${GITEE_API_BASE}/releases/tags/${encodeURIComponent(tag)}`;
     try {
       const response = await fetch(apiUrl, {
-        headers: {
-          'Accept': 'application/vnd.github+json',
-          'User-Agent': `${app.getName()}/${app.getVersion()}`
-        }
+        headers: { Accept: 'application/json', 'User-Agent': `${app.getName()}/${app.getVersion()}` }
       });
 
       if (!response.ok) {
@@ -1268,7 +1302,7 @@ async function fetchGithubReleaseNotes(version) {
       const data = await response.json();
       return typeof data.body === 'string' ? data.body.trim() : '';
     } catch (error) {
-      log.warn(`Failed to fetch release notes for tag ${tag}:`, error);
+      log.warn(`Failed to fetch Gitee release notes for tag ${tag}:`, error);
     }
   }
 
@@ -1282,7 +1316,7 @@ async function promptForAvailableUpdate(info, isStartupPrompt = false) {
   const detailLines = [];
   if (info?.releaseName) detailLines.push(`${tr('updateDialog.releaseLabel')} ${info.releaseName}`);
   if (info?.releaseDate) detailLines.push(`${tr('updateDialog.dateLabel')} ${new Date(info.releaseDate).toLocaleString()}`);
-  const releaseNotes = await fetchGithubReleaseNotes(version);
+  const releaseNotes = await fetchGiteeReleaseNotes(version);
 
   if (!releaseNotes) {
     detailLines.push('', tr('updateDialog.releaseNotesLabel'), tr('updateDialog.releaseNotesUnavailable'));
@@ -1423,7 +1457,7 @@ function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
     if (scheduled) {
       updatePromptState.phase = 'checking';
       updatePromptState.checkSource = 'scheduled';
-      autoUpdater.checkForUpdates().catch(error => {
+      checkGiteeForUpdates().catch(error => {
         log.error('Failed to check for updates:', error);
       });
       return;
@@ -1435,7 +1469,7 @@ function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
 
   updatePromptState.phase = 'checking';
   updatePromptState.checkSource = manual ? 'manual' : scheduled ? 'scheduled' : 'startup';
-  autoUpdater.checkForUpdates().catch(error => {
+  checkGiteeForUpdates().catch(error => {
     log.error('Failed to check for updates:', error);
   });
 }

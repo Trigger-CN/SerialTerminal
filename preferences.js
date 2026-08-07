@@ -880,10 +880,10 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
             break;
         case 'error':
             if (data && (data.includes('504') || data.includes('Cannot download') || data.includes('net::ERR_'))) {
-                statusEl.innerHTML = `${tr('prefs.updateFailedNetwork')} <a href="#" id="manual-dl-link" style="color: var(--accent-color); text-decoration: underline; cursor: pointer;">${tr('prefs.downloadFromGithub')}</a>`;
+                statusEl.innerHTML = `${tr('prefs.updateFailedNetwork')} <a href="#" id="manual-dl-link" style="color: var(--accent-color); text-decoration: underline; cursor: pointer;">${tr('updateDialog.manualDownload')}</a>`;
                 document.getElementById('manual-dl-link').onclick = (e) => {
                     e.preventDefault();
-                    shell.openExternal('https://github.com/Trigger-CN/SerialTerminal/releases/latest');
+                    shell.openExternal('https://gitee.com/trigger-cn/SerialTerminal/releases');
                 };
             } else {
                 statusEl.textContent = tr('prefs.error', { message: data });

@@ -611,6 +611,7 @@ test('update confirmation opens a controlled download window with progress and i
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const progressHtml = fs.readFileSync(path.join(root, 'update-progress.html'), 'utf8');
   const progressRenderer = fs.readFileSync(path.join(root, 'update-progress.js'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
 
   assert.match(main, /autoUpdater\.autoDownload = false/);
   assert.match(main, /autoUpdater\.autoInstallOnAppQuit = false/);
@@ -629,8 +630,15 @@ test('update confirmation opens a controlled download window with progress and i
   assert.match(main, /sendUpdateDownloadStatus\('progress', progressObj\)/);
   assert.match(main, /sendUpdateDownloadStatus\('downloaded', info\)/);
   assert.match(main, /getManualUpdateDownloadUrl\(info\)/);
-  assert.match(main, /UPDATE_FEED = \{ provider: 'github', owner: 'Trigger-CN', repo: 'SerialTerminal' \}/);
-  assert.match(main, /autoUpdater\.setFeedURL\(UPDATE_FEED\)/);
+  assert.match(main, /GITEE_API_BASE = `https:\/\/gitee\.com\/api\/v5\/repos\/\$\{GITEE_OWNER\}\/\$\{GITEE_REPO\}`/);
+  assert.match(main, /releases\/\$\{release\.id\}\/attach_files/);
+  assert.match(main, /asset\?\.name === 'latest\.yml' && asset\.browser_download_url/);
+  assert.match(main, /autoUpdater\.setFeedURL\(\{ provider: 'custom', updateProvider: GiteeProvider, metadataUrl: metadataAsset\.browser_download_url \}\)/);
+  assert.match(main, /checkGiteeForUpdates\(\)/);
+  assert.match(main, /if \(updatePromptState\.phase === 'checking'\) \{[\s\S]*sendUpdateStatusToPrefs\('error', error\.message\);[\s\S]*updatePromptState\.phase = 'idle';/);
+  assert.doesNotMatch(main, /autoUpdater\.setFeedURL\(UPDATE_FEED\)/);
+  assert.match(preferences, /shell\.openExternal\('https:\/\/gitee\.com\/trigger-cn\/SerialTerminal\/releases'\)/);
+  assert.doesNotMatch(preferences, /github\.com\/Trigger-CN\/SerialTerminal\/releases\/latest/);
   assert.match(main, /new URL\(String\(exeFile\.url\)\)/);
   assert.match(main, /open-update-download-url/);
   assert.match(progressHtml, /id="progress-fill"/);

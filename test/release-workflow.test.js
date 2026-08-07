@@ -58,11 +58,10 @@ test('release notes summarize commits since the previous tag', () => {
   assert.doesNotMatch(workflow, /generate_release_notes:\s*true/);
 });
 
-test('release publishes updater files to GitHub without a self-hosted mirror', () => {
+test('release publishes updater files without a self-hosted mirror', () => {
   assert.deepEqual(packageJson.build.publish, {
-    provider: 'github',
-    owner: 'Trigger-CN',
-    repo: 'SerialTerminal'
+    provider: 'generic',
+    url: 'https://gitee.com/trigger-cn/SerialTerminal/releases/download/'
   });
   assert.ok(packageJson.build.files.includes('!scripts/publish-gitee-release.js'));
   assert.doesNotMatch(workflow, /MIRROR_SSH_PRIVATE_KEY|serialterminal-deploy|43\.157\.13\.24|\bscp\b/);

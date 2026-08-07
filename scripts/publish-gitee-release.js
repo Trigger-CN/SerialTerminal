@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const yaml = require('js-yaml');
 
 const API_ROOT = 'https://gitee.com/api/v5';
 
@@ -62,21 +63,53 @@ function createGiteePublisher({ token, fetchImpl = global.fetch, apiRoot = API_R
     }
 
     const attachmentsEndpoint = `${base}/${release.id}/attach_files`;
-    const attachments = await request('GET', attachmentsEndpoint);
-    for (const filePath of files) {
+    let attachments = await request('GET', attachmentsEndpoint);
+    const assetUrls = new Map();
+    const uploadFiles = [...files].sort((left, right) => {
+      const leftIsMetadata = /(?:^|[\\/])latest(?:-linux)?\.yml$/i.test(left);
+      const rightIsMetadata = /(?:^|[\\/])latest(?:-linux)?\.yml$/i.test(right);
+      return Number(leftIsMetadata) - Number(rightIsMetadata);
+    });
+    for (const filePath of uploadFiles) {
       const fileName = path.basename(filePath);
+      let uploadPath = filePath;
+      if (/^latest(?:-linux)?\.yml$/i.test(fileName)) {
+        const source = yaml.load(await fs.promises.readFile(filePath, 'utf8'));
+        for (const file of source.files || []) {
+          const assetUrl = assetUrls.get(file.url);
+          if (assetUrl) file.url = assetUrl;
+        }
+        uploadPath = null;
+        const metadata = Buffer.from(yaml.dump(source), 'utf8');
+        const existing = attachments.find(item => item.name === fileName);
+        if (existing) await request('DELETE', `${attachmentsEndpoint}/${existing.id}`);
+        const form = new FormData();
+        form.set('file', new Blob([metadata]), fileName);
+        const uploaded = await request('POST', attachmentsEndpoint, { form });
+        const assetUrl = getAttachmentUrl(uploaded);
+        if (assetUrl) assetUrls.set(fileName, assetUrl);
+        attachments = await request('GET', attachmentsEndpoint);
+        continue;
+      }
       const existing = attachments.find(item => item.name === fileName);
       if (existing) {
         await request('DELETE', `${attachmentsEndpoint}/${existing.id}`);
       }
       const form = new FormData();
-      form.set('file', new Blob([await fs.promises.readFile(filePath)]), fileName);
-      await request('POST', attachmentsEndpoint, { form });
+      form.set('file', new Blob([await fs.promises.readFile(uploadPath)]), fileName);
+      const uploaded = await request('POST', attachmentsEndpoint, { form });
+      const assetUrl = getAttachmentUrl(uploaded);
+      if (assetUrl) assetUrls.set(fileName, assetUrl);
+      attachments = await request('GET', attachmentsEndpoint);
     }
     return release;
   }
 
   return { publish };
+}
+
+function getAttachmentUrl(attachment) {
+  return attachment?.browser_download_url || attachment?.download_url || attachment?.url || '';
 }
 
 async function main() {

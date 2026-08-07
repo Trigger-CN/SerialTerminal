@@ -30,9 +30,8 @@
       "**/*"
     ],
     "publish": {
-      "provider": "github",
-      "owner": "Trigger-CN",
-      "repo": "SerialTerminal"
+      "provider": "generic",
+      "url": "https://gitee.com/trigger-cn/SerialTerminal/releases/download/"
     },
     "win": {
       "target": [
@@ -87,6 +86,7 @@
     "electron-updater": "^6.8.9",
     "font-list": "^2.0.2",
     "iconv-lite": "^0.7.2",
+    "js-yaml": "^4.3.0",
     "node-pty": "^1.1.0",
     "serialport": "^13.0.0"
   },
