@@ -6,6 +6,7 @@ const pty = require('node-pty');
 const { SerialPort } = require('serialport');
 const iconv = require('iconv-lite');
 const { autoUpdater } = require('electron-updater');
+const { CancellationToken } = require('builder-util-runtime');
 const log = require('electron-log');
 const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
@@ -22,6 +23,7 @@ log.transports.file.level = 'info';
 autoUpdater.logger = log;
 const UPDATE_FEED_URL = 'https://trigger-cn.top/serialterminal/';
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const UPDATE_PROMPT_INTERVAL_MS = 8 * 60 * 60 * 1000;
 const MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN';
 autoUpdater.setFeedURL({ provider: 'generic', url: UPDATE_FEED_URL });
 autoUpdater.autoDownload = false;
@@ -31,6 +33,7 @@ let mainWindow;
 let prefsWindow;
 let updateDownloadWindow;
 let updateCheckTimer;
+let updateDownloadToken = null;
 let updatePromptState = {
   phase: 'idle',
   checkSource: null,
@@ -203,6 +206,12 @@ function normalizeConfig(config, defaults) {
   normalized.lastWelcomeVersion = typeof source.lastWelcomeVersion === 'string'
     ? source.lastWelcomeVersion
     : defaults.lastWelcomeVersion;
+  normalized.lastUpdatePromptVersion = typeof source.lastUpdatePromptVersion === 'string'
+    ? source.lastUpdatePromptVersion
+    : defaults.lastUpdatePromptVersion;
+  normalized.lastUpdatePromptAt = Number.isFinite(source.lastUpdatePromptAt) && source.lastUpdatePromptAt >= 0
+    ? source.lastUpdatePromptAt
+    : defaults.lastUpdatePromptAt;
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
   normalized.fontSize = normalizeIntegerSetting(source.fontSize, 'fontSize');
@@ -401,6 +410,8 @@ function loadConfig() {
     sidebarCollapsed: false,
     activeSidebarTab: 'tab-settings',
     lastWelcomeVersion: '',
+    lastUpdatePromptVersion: '',
+    lastUpdatePromptAt: 0,
     mainInputHistory: [],
     shortcuts: DEFAULT_SHORTCUTS,
     autoSendSettings: {
@@ -1075,9 +1086,15 @@ function createPrefsWindow(focusTab = null) {
 
 function sendUpdateDownloadStatus(status, data) {
   if (updateDownloadWindow && !updateDownloadWindow.isDestroyed()) {
-    if (status === 'error') updateDownloadWindow.setClosable(true);
+    if (status === 'error' || status === 'cancelled') updateDownloadWindow.setClosable(true);
     updateDownloadWindow.webContents.send('update-download-status', { status, data });
   }
+}
+
+function closeUpdateDownloadWindow() {
+  if (!updateDownloadWindow || updateDownloadWindow.isDestroyed()) return;
+  updateDownloadWindow.setClosable(true);
+  updateDownloadWindow.close();
 }
 
 function getManualUpdateDownloadUrl(info) {
@@ -1133,7 +1150,9 @@ function createUpdateDownloadWindow(info) {
       restartToInstall: tr('updateDialog.restartToInstall'),
       manualDownloadHint: tr('updateDialog.manualDownloadHint'),
       manualDownload: tr('updateDialog.manualDownload'),
-      manualDownloadUrl: getManualUpdateDownloadUrl(info)
+      manualDownloadUrl: getManualUpdateDownloadUrl(info),
+      cancel: tr('prefs.cancelDownload'),
+      cancelled: tr('prefs.downloadCancelled')
     });
     if (updatePromptState.phase === 'downloaded') {
       sendUpdateDownloadStatus('downloaded', updatePromptState.latestInfo);
@@ -1246,17 +1265,56 @@ function startUpdateDownload(info) {
     return;
   }
 
-  updatePromptState.phase = 'downloading';
   updatePromptState.latestInfo = info;
   updatePromptState.latestProgress = null;
   createUpdateDownloadWindow(info);
-  autoUpdater.downloadUpdate().catch(error => {
-    log.error('Failed to start update download:', error);
+  beginUpdateDownload();
+}
+
+function beginUpdateDownload() {
+  if (updateDownloadToken || updatePromptState.phase === 'downloaded') return;
+
+  updatePromptState.phase = 'downloading';
+  const token = new CancellationToken();
+  updateDownloadToken = token;
+
+  autoUpdater.downloadUpdate(token).catch(error => {
+    if (!token.cancelled) log.error('Failed to download update:', error);
+  }).finally(() => {
+    if (updateDownloadToken !== token) return;
+
+    updateDownloadToken = null;
+    if (token.cancelled) {
+      updatePromptState.phase = 'available';
+      updatePromptState.latestProgress = null;
+      sendUpdateDownloadStatus('cancelled');
+      closeUpdateDownloadWindow();
+    }
   });
+}
+
+function cancelUpdateDownload() {
+  if (updatePromptState.phase !== 'downloading' || !updateDownloadToken) return false;
+  updateDownloadToken.cancel();
+  return true;
+}
+
+function shouldShowAutomaticUpdatePrompt(info, now = Date.now()) {
+  const version = typeof info?.version === 'string' ? info.version : '';
+  if (!version || currentConfig.skippedUpdateVersion === version) return false;
+  if (currentConfig.lastUpdatePromptVersion !== version) return true;
+  return now - currentConfig.lastUpdatePromptAt >= UPDATE_PROMPT_INTERVAL_MS;
+}
+
+function recordUpdatePrompt(info, now = Date.now()) {
+  const version = typeof info?.version === 'string' ? info.version : '';
+  if (!version) return;
+  saveConfig({ lastUpdatePromptVersion: version, lastUpdatePromptAt: now });
 }
 
 function offerAvailableUpdate(info, isStartupPrompt) {
   if (updatePromptState.promptPromise) return updatePromptState.promptPromise;
+  recordUpdatePrompt(info);
   updatePromptState.phase = 'prompting';
   updatePromptState.promptPromise = promptForAvailableUpdate(info, isStartupPrompt)
     .catch(error => {
@@ -1815,13 +1873,17 @@ autoUpdater.on('update-available', (info) => {
   sendUpdateStatusToPrefs('available', info);
 
   if (updatePromptState.checkSource === 'scheduled') {
-    updatePromptState.phase = 'available';
-    updatePromptState.checkSource = null;
+    if (shouldShowAutomaticUpdatePrompt(info)) {
+      offerAvailableUpdate(info, false);
+    } else {
+      updatePromptState.phase = 'available';
+      updatePromptState.checkSource = null;
+    }
     return;
   }
 
   const isStartupPrompt = updatePromptState.checkSource === 'startup';
-  if (isStartupPrompt && currentConfig.skippedUpdateVersion === info.version) {
+  if (isStartupPrompt && !shouldShowAutomaticUpdatePrompt(info)) {
     updatePromptState.phase = 'available';
     updatePromptState.checkSource = null;
     return;
@@ -1852,12 +1914,18 @@ autoUpdater.on('download-progress', (progressObj) => {
 });
 
 autoUpdater.on('update-downloaded', (info) => {
+  updateDownloadToken = null;
   updatePromptState.phase = 'downloaded';
   updatePromptState.latestInfo = info;
   updatePromptState.latestProgress = null;
   sendUpdateStatusToPrefs('downloaded', info);
   sendUpdateDownloadStatus('downloaded', info);
   saveConfig({ skippedUpdateVersion: '' });
+});
+
+ipcMain.on('cancel-update-download', event => {
+  if (BrowserWindow.fromWebContents(event.sender) !== updateDownloadWindow) return;
+  cancelUpdateDownload();
 });
 
 ipcMain.on('check-for-updates', () => {

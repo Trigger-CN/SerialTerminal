@@ -14,7 +14,11 @@
         #details { margin-top: 10px; color: #bdbdbd; }
         #manual-download { margin-top: 14px; color: #bdbdbd; line-height: 1.4; }
         #manual-download a { color: #4da3ff; }
-        #install-btn { display: none; margin-top: 20px; padding: 8px 14px; border: 0; border-radius: 3px; background: #4da3ff; color: #fff; cursor: pointer; }
+        #actions { display: flex; gap: 8px; margin-top: 20px; }
+        #actions button { padding: 8px 14px; border: 1px solid #555; border-radius: 3px; background: #353535; color: #fff; cursor: pointer; }
+        #actions button:hover { background: #454545; }
+        #actions button:disabled { cursor: default; opacity: 0.55; }
+        #install-btn { display: none; border: 0; background: #4da3ff; }
         #install-btn:hover { background: #6db5ff; }
     </style>
 </head>
@@ -23,7 +27,10 @@
     <div id="progress-track"><div id="progress-fill"></div></div>
     <div id="details"></div>
     <div id="manual-download"><span id="manual-download-hint"></span> <a id="manual-download-link" href="#"></a></div>
-    <button id="install-btn" type="button"></button>
+    <div id="actions">
+        <button id="cancel-btn" type="button"></button>
+        <button id="install-btn" type="button"></button>
+    </div>
     <script src="update-progress.js"></script>
 </body>
 </html>

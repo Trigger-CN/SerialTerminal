@@ -6,6 +6,7 @@ const statusEl = document.getElementById('status');
 const detailsEl = document.getElementById('details');
 const progressFill = document.getElementById('progress-fill');
 const installBtn = document.getElementById('install-btn');
+const cancelBtn = document.getElementById('cancel-btn');
 const manualDownloadHintEl = document.getElementById('manual-download-hint');
 const manualDownloadLinkEl = document.getElementById('manual-download-link');
 let strings = {};
@@ -30,6 +31,7 @@ ipcRenderer.on('update-download-init', (event, data = {}) => {
     statusEl.textContent = `${data.downloading || 'Downloading...'} 0%`;
     detailsEl.textContent = data.version ? `v${data.version}` : '';
     installBtn.textContent = data.installAndRestart || 'Install and Restart';
+    cancelBtn.textContent = data.cancel || 'Cancel';
     manualDownloadHintEl.textContent = data.manualDownloadHint || 'If the download fails or is slow, download it manually:';
     manualDownloadLinkEl.textContent = data.manualDownload || 'Download EXE';
     manualDownloadLinkEl.onclick = event => {
@@ -48,10 +50,20 @@ ipcRenderer.on('update-download-status', (event, { status, data } = {}) => {
             : 'Update downloaded';
         detailsEl.textContent = strings.restartToInstall || '';
         installBtn.style.display = 'inline-block';
+        cancelBtn.style.display = 'none';
+    } else if (status === 'cancelled') {
+        statusEl.textContent = strings.cancelled || 'Download cancelled';
+        detailsEl.textContent = '';
+        cancelBtn.style.display = 'none';
     } else if (status === 'error') {
         statusEl.textContent = data || 'Update failed.';
         detailsEl.textContent = '';
+        cancelBtn.style.display = 'none';
     }
 });
 
 installBtn.onclick = () => ipcRenderer.send('quit-and-install');
+cancelBtn.onclick = () => {
+    cancelBtn.disabled = true;
+    ipcRenderer.send('cancel-update-download');
+};

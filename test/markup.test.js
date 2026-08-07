@@ -589,7 +589,7 @@ test('auto send exposes the interval unit and uses a compact text input', () => 
   assert.match(styles, /#auto-send-text\s*\{[^}]*height:\s*30px;[^}]*min-height:\s*30px;[^}]*max-height:\s*30px;/s);
 });
 
-test('update confirmation opens a non-closable download window with progress and install flow', () => {
+test('update confirmation opens a controlled download window with progress and install flow', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const progressHtml = fs.readFileSync(path.join(root, 'update-progress.html'), 'utf8');
   const progressRenderer = fs.readFileSync(path.join(root, 'update-progress.js'), 'utf8');
@@ -597,7 +597,7 @@ test('update confirmation opens a non-closable download window with progress and
   assert.match(main, /autoUpdater\.autoDownload = false/);
   assert.match(main, /autoUpdater\.autoInstallOnAppQuit = false/);
   assert.match(main, /function startUpdateDownload\(info\)/);
-  assert.equal((main.match(/autoUpdater\.downloadUpdate\(\)/g) || []).length, 1);
+  assert.equal((main.match(/autoUpdater\.downloadUpdate\(token\)/g) || []).length, 1);
   assert.match(main, /phase === 'downloading' \|\| updatePromptState\.phase === 'downloaded'/);
   assert.match(main, /if \(updatePromptState\.promptPromise\) return updatePromptState\.promptPromise/);
   assert.match(main, /function sendCurrentUpdateStatusToPrefs\(\)/);
@@ -607,7 +607,7 @@ test('update confirmation opens a non-closable download window with progress and
   assert.match(main, /const isTrustedSource = sourceWindow === updateDownloadWindow \|\| sourceWindow === prefsWindow/);
   assert.match(main, /if \(updatePromptState\.phase !== 'downloaded' \|\| !isTrustedSource\) return;\s*autoUpdater\.quitAndInstall\(\);/s);
   assert.match(main, /closable:\s*false/);
-  assert.match(main, /if \(status === 'error'\) updateDownloadWindow\.setClosable\(true\)/);
+  assert.match(main, /if \(status === 'error' \|\| status === 'cancelled'\) updateDownloadWindow\.setClosable\(true\)/);
   assert.match(main, /sendUpdateDownloadStatus\('progress', progressObj\)/);
   assert.match(main, /sendUpdateDownloadStatus\('downloaded', info\)/);
   assert.match(main, /getManualUpdateDownloadUrl\(info\)/);
@@ -617,17 +617,41 @@ test('update confirmation opens a non-closable download window with progress and
   assert.match(main, /open-update-download-url/);
   assert.match(progressHtml, /id="progress-fill"/);
   assert.match(progressHtml, /id="install-btn"/);
+  assert.match(progressHtml, /id="cancel-btn"/);
   assert.match(progressHtml, /id="manual-download-link"/);
   assert.match(progressRenderer, /bytesPerSecond/);
   assert.match(progressRenderer, /open-update-download-url/);
   assert.match(progressRenderer, /ipcRenderer\.send\('quit-and-install'\)/);
+  assert.match(progressRenderer, /ipcRenderer\.send\('cancel-update-download'\)/);
+  assert.doesNotMatch(progressHtml, /id="pause-btn"/);
+  assert.doesNotMatch(progressRenderer, /pause-update-download|resume-update-download/);
 });
 
-test('automatic update checks repeat every two hours without prompting', () => {
+test('update downloads can be cancelled with a cancellation token', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+
+  assert.match(main, /const \{ CancellationToken \} = require\('builder-util-runtime'\)/);
+  assert.match(main, /const token = new CancellationToken\(\)/);
+  assert.match(main, /if \(!token\.cancelled\) log\.error\('Failed to download update:', error\)/);
+  assert.match(main, /function cancelUpdateDownload\(\)[\s\S]*updateDownloadToken\.cancel\(\)/);
+  assert.match(main, /if \(token\.cancelled\) \{[\s\S]*sendUpdateDownloadStatus\('cancelled'\);[\s\S]*closeUpdateDownloadWindow\(\)/);
+  assert.match(main, /ipcMain\.on\('cancel-update-download'[\s\S]*cancelUpdateDownload\(\)/);
+  assert.doesNotMatch(main, /pause-update-download|resume-update-download|phase = 'paused'/);
+});
+
+test('automatic update checks every two hours and reminds every eight hours', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 
   assert.match(main, /UPDATE_CHECK_INTERVAL_MS = 2 \* 60 \* 60 \* 1000/);
+  assert.match(main, /UPDATE_PROMPT_INTERVAL_MS = 8 \* 60 \* 60 \* 1000/);
   assert.match(main, /setInterval\(\(\) => \{\s*checkForAppUpdates\(\{ scheduled: true \}\);\s*\}, UPDATE_CHECK_INTERVAL_MS\)/s);
-  assert.match(main, /if \(updatePromptState\.checkSource === 'scheduled'\) \{\s*updatePromptState\.phase = 'available';\s*updatePromptState\.checkSource = null;\s*return;/s);
+  assert.match(main, /function shouldShowAutomaticUpdatePrompt\(info, now = Date\.now\(\)\)/);
+  assert.match(main, /currentConfig\.skippedUpdateVersion === version/);
+  assert.match(main, /currentConfig\.lastUpdatePromptVersion !== version/);
+  assert.match(main, /now - currentConfig\.lastUpdatePromptAt >= UPDATE_PROMPT_INTERVAL_MS/);
+  assert.match(main, /saveConfig\(\{ lastUpdatePromptVersion: version, lastUpdatePromptAt: now \}\)/);
+  assert.match(main, /if \(updatePromptState\.checkSource === 'scheduled'\) \{\s*if \(shouldShowAutomaticUpdatePrompt\(info\)\) \{\s*offerAvailableUpdate\(info, false\);/s);
+  assert.match(main, /lastUpdatePromptVersion: ''/);
+  assert.match(main, /lastUpdatePromptAt: 0/);
   assert.match(main, /if \(updateCheckTimer\) clearInterval\(updateCheckTimer\)/);
 });
