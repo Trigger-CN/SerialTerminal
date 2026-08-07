@@ -160,7 +160,8 @@ jobs:
         shell: bash
         run: |
           git remote add gitee git@gitee.com:trigger-cn/SerialTerminal.git
-          git push gitee "${GITHUB_SHA}:refs/heads/main" "refs/tags/${GITHUB_REF_NAME}"
+          git push gitee "${GITHUB_SHA}:refs/heads/main"
+          git push gitee --force "refs/tags/${GITHUB_REF_NAME}"
       - name: Publish Gitee release
         shell: bash
         env:

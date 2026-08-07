@@ -74,8 +74,9 @@ test('release synchronizes the commit, tag, and artifacts to Gitee', () => {
   assert.match(workflow, /GITEE_SSH_PRIVATE_KEY: \$\{\{ secrets\.GITEE_SSH_PRIVATE_KEY \}\}/);
   assert.match(workflow, /GITEE_ACCESS_TOKEN: \$\{\{ secrets\.GITEE_ACCESS_TOKEN \}\}/);
   assert.match(workflow, /git remote add gitee git@gitee\.com:trigger-cn\/SerialTerminal\.git/);
-  assert.match(workflow, /git push gitee "\$\{GITHUB_SHA\}:refs\/heads\/main" "refs\/tags\/\$\{GITHUB_REF_NAME\}"/);
-  assert.doesNotMatch(workflow, /git push[^\n]*(?:--force|--mirror)/);
+  assert.match(workflow, /git push gitee "\$\{GITHUB_SHA\}:refs\/heads\/main"/);
+  assert.match(workflow, /git push gitee --force "refs\/tags\/\$\{GITHUB_REF_NAME\}"/);
+  assert.doesNotMatch(workflow, /git push gitee[^\n]*--mirror/);
   assert.match(workflow, /node scripts\/publish-gitee-release\.js/);
   assert.match(workflow, /dist\/\*\.exe[\s\S]*dist\/\*\.AppImage[\s\S]*dist\/latest-linux\.yml/);
   assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
