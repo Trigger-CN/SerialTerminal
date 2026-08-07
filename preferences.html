@@ -392,6 +392,17 @@
                 </div>
 
                 <div class="form-group">
+                    <label for="logRetentionDays" data-i18n="prefs.logAutoCleanup">Automatic Log Cleanup</label>
+                    <select id="logRetentionDays" style="width: 200px;">
+                        <option value="0" data-i18n="prefs.logCleanupOff">Off</option>
+                        <option value="7" data-i18n="prefs.logCleanupOneWeek">Keep one week</option>
+                        <option value="30" data-i18n="prefs.logCleanupOneMonth">Keep one month</option>
+                        <option value="60" data-i18n="prefs.logCleanupTwoMonths">Keep two months</option>
+                    </select>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logAutoCleanupHelp">Deletes expired .txt, .log, and .bin files in the log directory. Subdirectories are not scanned.</small>
+                </div>
+
+                <div class="form-group">
                     <label data-i18n="prefs.logAutoFlushSize">Log Cache Flush Size (MB)</label>
                     <input type="number" id="rawBufferAutoFlushMB" min="1" max="1024" step="1" style="width: 150px;">
                     <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logAutoFlushHelp">Text, tab, and raw logs are flushed to disk when this cache size is reached.</small>

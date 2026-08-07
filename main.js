@@ -12,6 +12,7 @@ const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeIntegerSetting } = require('./config-values');
+const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const {
   findShellProfile: findConfiguredShellProfile,
   normalizeShellProfiles,
@@ -45,6 +46,7 @@ const configPath = path.join(app.getPath('userData'), 'config.json');
 const CONFIG_VERSION = 7;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
+const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
 const DEFAULT_SHORTCUTS = {
   sendMainInput: 'Ctrl+Enter',
   toggleSendHistory: 'Alt+H',
@@ -318,6 +320,7 @@ function normalizeConfig(config, defaults) {
   normalized.rawLogFileNameFormat = typeof source.rawLogFileNameFormat === 'string' && source.rawLogFileNameFormat.trim()
     ? source.rawLogFileNameFormat
     : 'raw_%Y-%m-%d_%H-%M-%S.bin';
+  normalized.logRetentionDays = oneOf(Number(source.logRetentionDays), LOG_RETENTION_DAYS, 0);
   return normalized;
 }
 
@@ -351,6 +354,7 @@ function loadConfig() {
     rawLogFileNameFormat: 'raw_%Y-%m-%d_%H-%M-%S.bin',
     stripAnsiInLog: true,
     logPath: path.join(app.getPath('documents'), 'SerialTerminalLogs'),
+    logRetentionDays: 0,
     manualExportDirectory: app.getPath('documents'),
     logFileNameFormat: 'log_%Y-%m-%d_%H-%M-%S.txt',
     logFileSuffix: '.txt',
@@ -484,8 +488,12 @@ let rawBinaryLogOverflowNotified = false;
 let textLogOverflowNotified = false;
 let tabLogOverflowNotified = false;
 let logFlushTimer = null;
+let logCleanupTimer = null;
+let logCleanupInFlight = false;
+let logCleanupPending = false;
 const logErrorNoticeKeys = new Set();
 const LOG_AUTO_FLUSH_INTERVAL_MS = 5000;
+const LOG_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function getAutoFlushThreshold() {
   const mb = Number(currentConfig.rawBufferAutoFlushMB);
@@ -790,6 +798,47 @@ function startLogAutoFlushTimer() {
   logFlushTimer = setInterval(() => flushPendingLogs({ notify: false }), LOG_AUTO_FLUSH_INTERVAL_MS);
 }
 
+function getActiveLogFilePaths() {
+  const activePaths = [mainLogFilePath, rawBinaryLogPath];
+  tabLogBuffers.forEach(entry => activePaths.push(entry.filePath));
+  return activePaths.filter(Boolean);
+}
+
+async function runLogCleanup() {
+  if (currentConfig.logRetentionDays <= 0) return;
+  if (logCleanupInFlight) {
+    logCleanupPending = true;
+    return;
+  }
+
+  logCleanupInFlight = true;
+  try {
+    const result = await cleanupExpiredLogFiles(currentConfig.logPath, currentConfig.logRetentionDays, {
+      activePaths: getActiveLogFilePaths()
+    });
+    if (result.deleted.length > 0) log.info(`Deleted ${result.deleted.length} expired log file(s)`);
+    result.failed.forEach(({ filePath, error }) => {
+      log.warn(`Failed to delete expired log file ${filePath}:`, error);
+    });
+  } catch (error) {
+    log.warn('Failed to clean up expired log files:', error);
+  } finally {
+    logCleanupInFlight = false;
+    if (logCleanupPending) {
+      logCleanupPending = false;
+      runLogCleanup();
+    }
+  }
+}
+
+function startLogCleanupTimer() {
+  if (logCleanupTimer) clearInterval(logCleanupTimer);
+  logCleanupTimer = null;
+  if (currentConfig.logRetentionDays <= 0) return;
+  runLogCleanup();
+  logCleanupTimer = setInterval(runLogCleanup, LOG_CLEANUP_INTERVAL_MS);
+}
+
 function saveConfig(config) {
   const merged = { ...currentConfig, ...config };
   for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'autoSendSettings', 'highlightColors']) {
@@ -816,6 +865,8 @@ function saveConfig(config) {
   const textLogDestinationChanged = normalized.logPath !== currentConfig.logPath
     || normalized.logFileNameFormat !== currentConfig.logFileNameFormat
     || normalized.logEncoding !== currentConfig.logEncoding;
+  const logCleanupSettingsChanged = normalized.logPath !== currentConfig.logPath
+    || normalized.logRetentionDays !== currentConfig.logRetentionDays;
   if (currentConfig.logEnabled && textLogDestinationChanged) {
     if (currentConfig.saveAllTabsLogToFiles) saveAllTabLogs();
     else saveLog();
@@ -839,6 +890,7 @@ function saveConfig(config) {
   currentConfig = normalized;
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
   telemetryReporter?.configure(currentConfig);
+  if (logCleanupSettingsChanged) startLogCleanupTimer();
 }
 
 function persistTelemetryState(state) {
@@ -1388,6 +1440,7 @@ function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
 app.whenReady().then(() => {
   createWindow();
   startLogAutoFlushTimer();
+  startLogCleanupTimer();
   telemetryReporter.configure(currentConfig);
   checkForAppUpdates();
   updateCheckTimer = setInterval(() => {
@@ -1423,6 +1476,7 @@ app.on('before-quit', () => {
   telemetryReporter.stop();
   if (updateCheckTimer) clearInterval(updateCheckTimer);
   if (logFlushTimer) clearInterval(logFlushTimer);
+  if (logCleanupTimer) clearInterval(logCleanupTimer);
   Array.from(shellSessions.keys()).forEach(tabId => closeShellSession(tabId));
   flushRawBinaryLogSync();
   saveLog();

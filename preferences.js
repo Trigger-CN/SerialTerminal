@@ -71,6 +71,7 @@ const elements = {
     stripAnsiInLog: document.getElementById('stripAnsiInLog'),
   logSettings: document.getElementById('log-settings'),
   logPath: document.getElementById('logPath'),
+  logRetentionDays: document.getElementById('logRetentionDays'),
   logFileNameFormat: document.getElementById('logFileNameFormat'),
   logEncoding: document.getElementById('logEncoding'),
   logIncludeTimestamp: document.getElementById('logIncludeTimestamp'),
@@ -487,6 +488,9 @@ async function init() {
     elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
     elements.stripAnsiInLog.checked = config.stripAnsiInLog !== false;
   elements.logPath.value = config.logPath;
+  elements.logRetentionDays.value = ['0', '7', '30', '60'].includes(String(config.logRetentionDays))
+    ? String(config.logRetentionDays)
+    : '0';
   elements.logFileNameFormat.value = config.logFileNameFormat;
   elements.logEncoding.value = config.logEncoding;
   elements.logIncludeTimestamp.checked = config.logIncludeTimestamp === true;
@@ -791,6 +795,7 @@ elements.saveBtn.onclick = async () => {
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,
     stripAnsiInLog: elements.stripAnsiInLog.checked,
     logPath: elements.logPath.value,
+    logRetentionDays: Number(elements.logRetentionDays.value),
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,
     logIncludeTimestamp: elements.logIncludeTimestamp.checked,

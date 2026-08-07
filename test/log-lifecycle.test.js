@@ -40,3 +40,12 @@ test('local Electron crash dumps are enabled without uploading data', () => {
   assert.match(main, /crashReporter\.start\(\{[\s\S]*uploadToServer: false,[\s\S]*compress: true/);
   assert.match(main, /crashDumpsPath/);
 });
+
+test('expired log cleanup runs at startup, daily, and after settings change', () => {
+  assert.match(main, /logRetentionDays = oneOf\(Number\(source\.logRetentionDays\), LOG_RETENTION_DAYS, 0\)/);
+  assert.match(main, /function getActiveLogFilePaths\(\)[\s\S]*mainLogFilePath, rawBinaryLogPath[\s\S]*entry\.filePath/);
+  assert.match(main, /function startLogCleanupTimer\(\)[\s\S]*runLogCleanup\(\)[\s\S]*setInterval\(runLogCleanup, LOG_CLEANUP_INTERVAL_MS\)/);
+  assert.match(main, /logCleanupSettingsChanged[\s\S]*currentConfig = normalized;[\s\S]*if \(logCleanupSettingsChanged\) startLogCleanupTimer\(\)/);
+  assert.match(main, /app\.whenReady\(\)[\s\S]*startLogCleanupTimer\(\)/);
+  assert.match(main, /app\.on\('before-quit'[\s\S]*clearInterval\(logCleanupTimer\)/);
+});

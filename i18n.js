@@ -424,33 +424,39 @@ Object.assign(translations.en.prefs, {
   anonymousUsageStatistics: 'Pseudonymous Usage Statistics',
   telemetryEnabled: 'Send anonymous active installation statistics',
   telemetryDescription: 'Sends a random installation ID, app version, operating system, and architecture at most once per day. Serial ports, serial data, files, usernames, and hardware identifiers are never collected.',
-  cancelDownload: 'Cancel', downloadCancelled: 'Download cancelled'
+  cancelDownload: 'Cancel', downloadCancelled: 'Download cancelled',
+  logAutoCleanup: 'Automatic Log Cleanup', logCleanupOff: 'Off', logCleanupOneWeek: 'Keep one week', logCleanupOneMonth: 'Keep one month', logCleanupTwoMonths: 'Keep two months', logAutoCleanupHelp: 'Deletes expired .txt, .log, and .bin files in the log directory. Subdirectories are not scanned.'
 });
 Object.assign(translations['zh-CN'].prefs, {
   anonymousUsageStatistics: '匿名安装标识统计',
   telemetryEnabled: '发送匿名活跃安装统计',
   telemetryDescription: '每天最多发送一次随机安装标识、应用版本、操作系统和处理器架构。不会收集串口、串口数据、文件、用户名或硬件标识。',
-  cancelDownload: '取消', downloadCancelled: '下载已取消'
+  cancelDownload: '取消', downloadCancelled: '下载已取消',
+  logAutoCleanup: '自动清理日志', logCleanupOff: '关闭', logCleanupOneWeek: '保留一周', logCleanupOneMonth: '保留一个月', logCleanupTwoMonths: '保留两个月', logAutoCleanupHelp: '删除日志目录第一层中过期的 .txt、.log 和 .bin 文件，不扫描子目录。'
 });
 Object.assign(translations['zh-TW'].prefs, {
   anonymousUsageStatistics: '匿名安裝識別統計',
   telemetryEnabled: '傳送匿名活躍安裝統計',
-  telemetryDescription: '每天最多傳送一次隨機安裝識別碼、應用程式版本、作業系統和處理器架構。不會收集串口、串口資料、檔案、使用者名稱或硬體識別碼。'
+  telemetryDescription: '每天最多傳送一次隨機安裝識別碼、應用程式版本、作業系統和處理器架構。不會收集串口、串口資料、檔案、使用者名稱或硬體識別碼。',
+  logAutoCleanup: '自動清理日誌', logCleanupOff: '關閉', logCleanupOneWeek: '保留一週', logCleanupOneMonth: '保留一個月', logCleanupTwoMonths: '保留兩個月', logAutoCleanupHelp: '刪除日誌目錄第一層中過期的 .txt、.log 和 .bin 檔案，不掃描子目錄。'
 });
 Object.assign(translations.fr.prefs, {
   anonymousUsageStatistics: 'Statistiques anonymes',
   telemetryEnabled: 'Envoyer des statistiques anonymes d’installation active',
-  telemetryDescription: 'Envoie au maximum une fois par jour un identifiant aléatoire, la version, le système et l’architecture. Aucun port série, contenu, fichier, nom d’utilisateur ou identifiant matériel n’est collecté.'
+  telemetryDescription: 'Envoie au maximum une fois par jour un identifiant aléatoire, la version, le système et l’architecture. Aucun port série, contenu, fichier, nom d’utilisateur ou identifiant matériel n’est collecté.',
+  logAutoCleanup: 'Nettoyage automatique des journaux', logCleanupOff: 'Désactivé', logCleanupOneWeek: 'Conserver une semaine', logCleanupOneMonth: 'Conserver un mois', logCleanupTwoMonths: 'Conserver deux mois', logAutoCleanupHelp: 'Supprime les fichiers .txt, .log et .bin expirés du dossier des journaux. Les sous-dossiers ne sont pas analysés.'
 });
 Object.assign(translations.ru.prefs, {
   anonymousUsageStatistics: 'Анонимная статистика',
   telemetryEnabled: 'Отправлять анонимную статистику активных установок',
-  telemetryDescription: 'Не чаще раза в день отправляются случайный ID установки, версия, ОС и архитектура. Последовательные порты, данные, файлы, имена пользователей и аппаратные ID не собираются.'
+  telemetryDescription: 'Не чаще раза в день отправляются случайный ID установки, версия, ОС и архитектура. Последовательные порты, данные, файлы, имена пользователей и аппаратные ID не собираются.',
+  logAutoCleanup: 'Автоматическая очистка журналов', logCleanupOff: 'Отключено', logCleanupOneWeek: 'Хранить одну неделю', logCleanupOneMonth: 'Хранить один месяц', logCleanupTwoMonths: 'Хранить два месяца', logAutoCleanupHelp: 'Удаляет просроченные файлы .txt, .log и .bin из папки журналов. Вложенные папки не сканируются.'
 });
 Object.assign(translations.de.prefs, {
   anonymousUsageStatistics: 'Anonyme Nutzungsstatistik',
   telemetryEnabled: 'Anonyme Statistik aktiver Installationen senden',
-  telemetryDescription: 'Höchstens einmal täglich werden eine zufällige Installations-ID, Version, Betriebssystem und Architektur gesendet. Serielle Ports, Daten, Dateien, Benutzernamen und Hardwarekennungen werden nicht erfasst.'
+  telemetryDescription: 'Höchstens einmal täglich werden eine zufällige Installations-ID, Version, Betriebssystem und Architektur gesendet. Serielle Ports, Daten, Dateien, Benutzernamen und Hardwarekennungen werden nicht erfasst.',
+  logAutoCleanup: 'Automatische Protokollbereinigung', logCleanupOff: 'Aus', logCleanupOneWeek: 'Eine Woche behalten', logCleanupOneMonth: 'Einen Monat behalten', logCleanupTwoMonths: 'Zwei Monate behalten', logAutoCleanupHelp: 'Löscht abgelaufene .txt-, .log- und .bin-Dateien im Protokollordner. Unterordner werden nicht durchsucht.'
 });
 function getLanguage(configLanguage) {
   return translations[configLanguage] ? configLanguage : 'en';

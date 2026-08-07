@@ -296,6 +296,16 @@ test('full and compact quick-send clicks share one lightweight result pulse', ()
   assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
 });
 
+test('logging preferences save the automatic cleanup period', () => {
+  const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+
+  assert.match(html, /<select id="logRetentionDays"[\s\S]*value="0"[\s\S]*value="7"[\s\S]*value="30"[\s\S]*value="60"/);
+  assert.match(preferences, /logRetentionDays: document\.getElementById\('logRetentionDays'\)/);
+  assert.match(preferences, /elements\.logRetentionDays\.value = \['0', '7', '30', '60'\]/);
+  assert.match(preferences, /logRetentionDays: Number\(elements\.logRetentionDays\.value\)/);
+});
+
 test('Ctrl+F opens search and restores the last sidebar tab', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
