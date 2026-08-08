@@ -44,8 +44,29 @@ function normalizeWorkspaceLayoutShape(layout) {
     if (!normalized.panes.find(pane => pane.id === normalized.activePaneId)?.tabIds.length) {
         normalized.activePaneId = normalized.panes.find(pane => pane.tabIds.length)?.id || 'pane-1';
     }
-    if (!normalized.panes[1].tabIds.length) normalized.splitEnabled = false;
+    reconcileEmptyPaneLayout(normalized);
     return normalized;
+}
+
+function reconcileEmptyPaneLayout(layout) {
+    const pane1 = layout.panes.find(pane => pane.id === 'pane-1');
+    const pane2 = layout.panes.find(pane => pane.id === 'pane-2');
+    if (!pane1 || !pane2 || (pane1.tabIds.length && pane2.tabIds.length)) {
+        return { collapsed: false, movedTabIds: [] };
+    }
+
+    const movedTabIds = pane1.tabIds.length === 0 ? [...pane2.tabIds] : [];
+    if (movedTabIds.length) {
+        pane1.tabIds = movedTabIds;
+        pane1.activeTabId = pane2.activeTabId && movedTabIds.includes(pane2.activeTabId)
+            ? pane2.activeTabId
+            : movedTabIds[0];
+        pane2.tabIds = [];
+    }
+    pane2.activeTabId = null;
+    layout.splitEnabled = false;
+    layout.activePaneId = 'pane-1';
+    return { collapsed: true, movedTabIds };
 }
 
 function moveWorkspaceTab(layout, tabId, targetPaneId, insertionIndex = null) {
@@ -185,6 +206,23 @@ function createWorkspaceManager(options = {}) {
         }
     }
 
+    function reconcileEmptyPanes() {
+        const layout = getLayoutState();
+        const result = reconcileEmptyPaneLayout(layout);
+        if (!result.collapsed || result.movedTabIds.length === 0) return result;
+
+        result.movedTabIds.forEach(tabId => {
+            const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
+            const tabPane = document.getElementById(tabId);
+            getPaneTabsList('pane-1')?.appendChild(tabBtn);
+            getPaneTabsContent('pane-1')?.appendChild(tabPane);
+            if (tabBtn) tabBtn.dataset.paneId = 'pane-1';
+            if (tabPane) tabPane.dataset.paneId = 'pane-1';
+            onTabMoved?.({ tabId, sourcePaneId: 'pane-2', targetPaneId: 'pane-1' });
+        });
+        return result;
+    }
+
     function setActivePane(paneId, { persist = true } = {}) {
         const layout = getLayoutState();
         layout.activePaneId = paneId === 'pane-2' ? 'pane-2' : 'pane-1';
@@ -248,6 +286,7 @@ function createWorkspaceManager(options = {}) {
             pane.tabIds.forEach(tabId => {
                 const tabButton = document.querySelector(`.main-tab[data-target="${tabId}"]`);
                 const tabPane = document.getElementById(tabId);
+                const previousPaneId = tabButton?.dataset?.paneId || tabPane?.dataset?.paneId || null;
                 if (tabButton && tabsList) {
                     tabsList.appendChild(tabButton);
                     tabButton.dataset.paneId = pane.id;
@@ -255,6 +294,9 @@ function createWorkspaceManager(options = {}) {
                 if (tabPane && tabsContent) {
                     tabsContent.appendChild(tabPane);
                     tabPane.dataset.paneId = pane.id;
+                }
+                if (previousPaneId && previousPaneId !== pane.id) {
+                    onTabMoved?.({ tabId, sourcePaneId: previousPaneId, targetPaneId: pane.id });
                 }
             });
             prunePaneTabIds(pane.id);
@@ -275,6 +317,9 @@ function createWorkspaceManager(options = {}) {
                 }
             }
         });
+        reconcileEmptyPanes();
+        updatePaneVisibility();
+        applyPaneSizes();
         setActivePane(layout.activePaneId, { persist: false });
         if (typeof onLayoutApplied === 'function') {
             onLayoutApplied(layout);
@@ -336,19 +381,18 @@ function createWorkspaceManager(options = {}) {
         tabBtn.dataset.paneId = targetPaneId;
         tabPane.dataset.paneId = targetPaneId;
 
-        if (!sourcePane.tabIds.length && sourcePane.id === 'pane-2' && targetPaneId === 'pane-1') {
-            layout.splitEnabled = false;
-            layout.activePaneId = 'pane-1';
-        } else if (!preserveSplit) {
+        const reconciliation = reconcileEmptyPanes();
+        if (!reconciliation.collapsed && !preserveSplit) {
             layout.splitEnabled = targetPaneId === 'pane-2' || layout.panes[1].tabIds.length > 0;
         }
 
-        if (typeof onTabMoved === 'function') {
+        if (typeof onTabMoved === 'function' && !reconciliation.movedTabIds.includes(tabId)) {
             onTabMoved({ tabId, sourcePaneId, targetPaneId });
         }
 
+        const finalPaneId = reconciliation.movedTabIds.includes(tabId) ? 'pane-1' : targetPaneId;
         applyLayoutToDom();
-        switchPaneTab(targetPaneId, tabId, { persist: false });
+        switchPaneTab(finalPaneId, tabId, { persist: false });
         persistLayout();
         fitWorkspace?.();
     }
@@ -377,13 +421,12 @@ function createWorkspaceManager(options = {}) {
         const pane = getPaneById(paneId);
         pane.tabIds = pane.tabIds.filter(id => id !== tabId);
         ensurePaneActiveTab(paneId);
-        if (!pane.tabIds.length && paneId === 'pane-2') {
-            const layout = getLayoutState();
-            layout.splitEnabled = false;
-            layout.activePaneId = 'pane-1';
-        }
+        const reconciliation = reconcileEmptyPanes();
         applyLayoutToDom();
-        let nextActiveTabId = pane.activeTabId || null;
+        let nextActiveTabId = reconciliation.collapsed
+            ? getPaneById('pane-1').activeTabId
+            : pane.activeTabId;
+        nextActiveTabId ||= null;
         if (!nextActiveTabId && fallbackTabId) {
             nextActiveTabId = fallbackTabId;
         }
@@ -477,6 +520,7 @@ function createWorkspaceManager(options = {}) {
         getTabPaneId,
         isTabActive,
         ensurePaneActiveTab,
+        reconcileEmptyPanes,
         ensurePaneTabMembership,
         setActivePane,
         applyLayoutToDom,
@@ -495,5 +539,6 @@ function createWorkspaceManager(options = {}) {
 module.exports = {
     createWorkspaceManager,
     normalizeWorkspaceLayoutShape,
+    reconcileEmptyPaneLayout,
     moveWorkspaceTab
 };
