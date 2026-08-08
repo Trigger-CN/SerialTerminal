@@ -96,7 +96,7 @@ SerialTerminal/
 - 向渲染进程发送串口输出、错误、吞吐量数据
 - 自动更新逻辑
 - 启动时自动检查更新与用户确认安装逻辑
-- 更新提示通过 Gitee Release API 读取对应 tag 的正文，获取不到时提示网络异常
+- 自动更新元数据和产物从腾讯云 COS 获取；更新提示仍通过 Gitee Release API 读取对应 tag 的正文
 - 更新弹窗文案跟随当前界面语言显示
 - 系统 shell 会话的创建、输入、resize、关闭与退出事件转发
 - shellProfiles 配置管理、profile 查找与 shell 路径/参数解析
@@ -121,7 +121,7 @@ SerialTerminal/
 - 开发、测试和打包使用 Node.js `>=22.12.0`，与当前 electron-builder 间接依赖的 engine 要求一致；CI 固定 Node 22.12
 - `.github/workflows/checks.yml` 在 push/PR 上执行 `npm ci --ignore-scripts`、`npm test`、全仓库 JavaScript 语法检查和官方 registry 生产依赖审计；简中 i18n 必须覆盖英语基线键，其他语言允许回退英语
 - `.github/workflows/release.yml` 仅响应 `v*` tag；Windows/Linux 使用同一 Node 22.12、官方 registry lockfile、`npm ci --ignore-scripts`、显式 `npm run rebuild` 和打包命令，并检查构建不修改 lockfile
-- 客户端自动更新先通过 Gitee Releases API 确定最新稳定 Tag，再将 Generic Provider 指向该 Tag 的 Gitee Release 下载目录；更新元数据、安装包和手动下载入口均使用 Gitee。Release publish job 同时创建 GitHub 与 Gitee Release，不再上传自建镜像。
+- 客户端自动更新直接读取腾讯云 COS 的 `releases/latest/latest.yml`，安装包、差分文件和手动下载入口使用版本化 COS URL。Release publish job 将大型产物上传到 COS，创建 GitHub/Gitee Release，并只向 Gitee 附加重写后的元数据以兼容旧客户端。
 - Release 的 Windows native rebuild 固定使用 `windows-2022`、MSBuild 和 VS developer environment，避免旧版 Electron node-gyp 无法识别 VS 18；构建矩阵必须传 `--publish never`，产物统一交由独立 publish job 上传 GitHub Release
 - Release artifact 必须使用安装包白名单，仅上传 Windows `.exe`/`.blockmap`/`latest.yml` 与 Linux `.AppImage`/`.deb`/`latest-linux.yml`；禁止使用 `dist/**`，避免把 unpacked 目录和 native build 中间文件发布到 GitHub
 - Windows NSIS `artifactName` 固定为 `${productName}-Setup-${version}.${ext}`，GitHub Release、镜像和 `latest.yml` 均不得出现空格或由 GitHub 转义成点号的安装包文件名
@@ -871,7 +871,7 @@ Hex 相关配置结构：
 - `checkForAppUpdates()`：统一的自动/手动检查更新入口
 - `promptForAvailableUpdate()`：新版提示与用户选择
 - `promptToInstallDownloadedUpdate()`：下载完成后的安装提示
-- `configureGiteeUpdateFeed()`：通过 Gitee Releases API 确定最新稳定 Tag 并配置 Generic Provider
+- `configureCosUpdateFeed()`：将自定义更新 Provider 指向腾讯云 COS 的稳定元数据地址
 - `fetchGiteeReleaseNotes()`：通过 Gitee Release API 拉取版本正文
 
 ### `renderer.js`

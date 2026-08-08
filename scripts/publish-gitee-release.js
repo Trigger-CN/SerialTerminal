@@ -25,7 +25,6 @@ function parseArguments(args) {
   for (const name of ['owner', 'repo', 'tag', 'target', 'notes']) {
     if (!options[name]) throw new Error(`Missing --${name}`);
   }
-  if (options.files.length === 0) throw new Error('Missing --files');
   return options;
 }
 
@@ -79,7 +78,7 @@ function createGiteePublisher({
     }
   }
 
-  async function publish({ owner, repo, tag, target, name, notes, files }) {
+  async function publish({ owner, repo, tag, target, name, notes, files = [] }) {
     const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases`;
     const releaseBody = {
       tag_name: tag,
@@ -94,6 +93,8 @@ function createGiteePublisher({
     } else {
       release = await request('POST', base, { body: releaseBody });
     }
+
+    if (files.length === 0) return release;
 
     const attachmentsEndpoint = `${base}/${release.id}/attach_files`;
     let attachments = await request('GET', attachmentsEndpoint);

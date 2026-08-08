@@ -28,6 +28,16 @@ test('Gitee release arguments separate files from named options', () => {
   });
 });
 
+test('Gitee release arguments allow a notes-only release', () => {
+  assert.deepEqual(parseArguments([
+    '--owner', 'trigger-cn', '--repo', 'SerialTerminal', '--tag', 'v1.2.3',
+    '--target', 'abc123', '--notes', 'notes.md'
+  ]), {
+    owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3', target: 'abc123',
+    notes: 'notes.md', files: []
+  });
+});
+
 test('Gitee publisher creates a missing release and uploads attachments', async () => {
   const requests = [];
   const publisher = createGiteePublisher({

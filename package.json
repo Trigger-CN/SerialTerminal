@@ -24,6 +24,7 @@
       "!**/*.ts",
       "!**/*.map",
       "!assets/NotoColorEmoji-Regular.ttf",
+      "!scripts/publish-cos-release.js",
       "!scripts/publish-gitee-release.js",
       "!telemetry-server/**",
       "package.json",
@@ -31,7 +32,7 @@
     ],
     "publish": {
       "provider": "generic",
-      "url": "https://gitee.com/trigger-cn/SerialTerminal/releases/download/"
+      "url": "https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases/latest/"
     },
     "win": {
       "target": [
@@ -74,6 +75,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
+    "cos-nodejs-sdk-v5": "^3.0.0",
     "electron": "^28.3.3",
     "electron-builder": "^26.7.0"
   },

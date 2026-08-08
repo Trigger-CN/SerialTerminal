@@ -27,13 +27,14 @@ const GITEE_OWNER = 'trigger-cn';
 const GITEE_REPO = 'SerialTerminal';
 const GITEE_API_BASE = `https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}`;
 const GITEE_RELEASE_PAGE = `https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases`;
+const COS_UPDATE_METADATA_URL = 'https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases/latest/latest.yml';
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const UPDATE_PROMPT_INTERVAL_MS = 8 * 60 * 60 * 1000;
 const MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN';
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
-class GiteeProvider extends Provider {
+class CosProvider extends Provider {
   constructor(configuration, updater, runtimeOptions) {
     super(runtimeOptions);
     this.metadataUrl = new URL(configuration.metadataUrl);
@@ -1186,7 +1187,7 @@ function getManualUpdateDownloadUrl(info) {
     try {
       return new URL(String(exeFile.url)).toString();
     } catch (error) {
-      log.warn('Failed to resolve Gitee update URL:', error);
+      log.warn('Failed to resolve COS update URL:', error);
     }
   }
   return GITEE_RELEASE_PAGE;
@@ -1249,9 +1250,9 @@ function getReleaseUrl() {
   return GITEE_RELEASE_PAGE;
 }
 
-async function checkGiteeForUpdates() {
+async function checkCosForUpdates() {
   try {
-    await configureGiteeUpdateFeed();
+    configureCosUpdateFeed();
     return await autoUpdater.checkForUpdates();
   } catch (error) {
     if (updatePromptState.phase === 'checking') {
@@ -1263,24 +1264,8 @@ async function checkGiteeForUpdates() {
   }
 }
 
-async function configureGiteeUpdateFeed() {
-  const response = await fetch(`${GITEE_API_BASE}/releases?per_page=20`, {
-    headers: { Accept: 'application/json', 'User-Agent': `${app.getName()}/${app.getVersion()}` }
-  });
-  if (!response.ok) throw new Error(`Gitee release check failed: HTTP ${response.status}`);
-  const releases = await response.json();
-  const release = Array.isArray(releases)
-    ? releases.find(item => item && item.tag_name && item.draft !== true && item.prerelease !== true)
-    : null;
-  if (!release) throw new Error('No Gitee release is available');
-  const attachments = await fetch(`${GITEE_API_BASE}/releases/${release.id}/attach_files`, {
-    headers: { Accept: 'application/json', 'User-Agent': `${app.getName()}/${app.getVersion()}` }
-  });
-  if (!attachments.ok) throw new Error(`Gitee attachment lookup failed: HTTP ${attachments.status}`);
-  const metadataAsset = (await attachments.json()).find(asset => asset?.name === 'latest.yml' && asset.browser_download_url);
-  if (!metadataAsset) throw new Error('The latest Gitee release has no Windows update metadata');
-  autoUpdater.setFeedURL({ provider: 'custom', updateProvider: GiteeProvider, metadataUrl: metadataAsset.browser_download_url });
-  return release;
+function configureCosUpdateFeed() {
+  autoUpdater.setFeedURL({ provider: 'custom', updateProvider: CosProvider, metadataUrl: COS_UPDATE_METADATA_URL });
 }
 
 async function fetchGiteeReleaseNotes(version) {
@@ -1457,7 +1442,7 @@ function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
     if (scheduled) {
       updatePromptState.phase = 'checking';
       updatePromptState.checkSource = 'scheduled';
-      checkGiteeForUpdates().catch(error => {
+      checkCosForUpdates().catch(error => {
         log.error('Failed to check for updates:', error);
       });
       return;
@@ -1469,7 +1454,7 @@ function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
 
   updatePromptState.phase = 'checking';
   updatePromptState.checkSource = manual ? 'manual' : scheduled ? 'scheduled' : 'startup';
-  checkGiteeForUpdates().catch(error => {
+  checkCosForUpdates().catch(error => {
     log.error('Failed to check for updates:', error);
   });
 }

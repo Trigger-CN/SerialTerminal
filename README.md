@@ -213,13 +213,13 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
   - 暂不更新
   - 跳过此版本
 - 下载完成后支持重启安装或稍后安装
-- 自动更新元数据、安装包和差分文件均从 GitHub Releases 下载
-- 更新提示会尝试显示 GitHub Release 正文；获取不到时提示网络异常
+- 自动更新元数据、安装包和差分文件均从腾讯云 COS 下载
+- 更新提示会尝试显示 Gitee Release 正文；获取不到时提示网络异常
 - 使用 `electron-builder` 打包 Windows 与 Linux 发布物
 - 推送 `v*` Git tag 后，GitHub Actions 会使用同一 lockfile 并行构建 Windows/Linux 发布物；构建前执行测试和 native rebuild，构建后校验 lockfile 未变化
 - GitHub Release 正文会自动列出上一个 tag 到当前 tag 之间的提交，每个提交只出现一次，不按提交类型分类
 - 发布任务将 Windows 和 Linux 安装包、更新元数据统一上传到 GitHub Releases
-- 发布任务还会将发布提交和 Tag 同步到 Gitee，并创建同名 Gitee Release、上传相同产物；Gitee 同步不强制覆盖分叉历史
+- 发布任务还会将发布提交和 Tag 同步到 Gitee，并创建同名 Gitee Release；Gitee 仅保留用于旧客户端迁移的更新元数据，大型产物不再重复上传
 
 ## 项目结构
 

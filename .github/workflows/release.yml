@@ -124,8 +124,9 @@ jobs:
             printf '\n\n'
 
             printf '## Downloads\n\n'
-            printf '%s\n' '- Windows: installer, blockmap, and update metadata are attached below.'
-            printf '%s\n' '- Linux: AppImage, deb package, and update metadata are attached below.'
+            COS_ROOT='https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases'
+            printf '%s\n' "- Windows: [installer]($COS_ROOT/$CURRENT_TAG/SerialTerminal-Setup-$VERSION.exe)"
+            printf '%s\n' "- Linux: [AppImage and deb package]($COS_ROOT/$CURRENT_TAG/)"
           } > release-notes.md
           cat release-notes.md
       - uses: softprops/action-gh-release@v3
@@ -162,7 +163,32 @@ jobs:
           git remote add gitee git@gitee.com:trigger-cn/SerialTerminal.git
           git push gitee "${GITHUB_SHA}:refs/heads/main"
           git push gitee --force "refs/tags/${GITHUB_REF_NAME}"
-      - name: Publish Gitee release
+      - name: Publish release artifacts to COS
+        shell: bash
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+        run: |
+          node scripts/publish-cos-release.js \
+            --tag "${GITHUB_REF_NAME}" \
+            --files \
+              dist/*.exe \
+              dist/*.exe.blockmap \
+              dist/*.AppImage \
+              dist/*.deb \
+              dist/latest.yml \
+              dist/latest-linux.yml
+      - name: Verify public COS downloads
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          COS_ROOT="https://${{ secrets.COS_BUCKET }}.cos.${{ secrets.COS_REGION }}.myqcloud.com/releases"
+          curl --fail --silent --show-error --retry 3 --output /dev/null "$COS_ROOT/latest/latest.yml"
+          curl --fail --silent --show-error --retry 3 --range 0-0 --output /dev/null \
+            "$COS_ROOT/${GITHUB_REF_NAME}/SerialTerminal-Setup-$VERSION.exe"
+      - name: Publish Gitee release notes
         shell: bash
         env:
           GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
@@ -174,9 +200,5 @@ jobs:
             --target "${GITHUB_SHA}" \
             --notes release-notes.md \
             --files \
-              dist/*.exe \
-              dist/*.exe.blockmap \
-              dist/*.AppImage \
-              dist/*.deb \
               dist/latest.yml \
               dist/latest-linux.yml

@@ -55,29 +55,42 @@ test('release notes summarize commits since the previous tag', () => {
   assert.equal((workflow.match(/git log "\$RANGE"/g) || []).length, 1);
   assert.doesNotMatch(workflow, /### (?:Features|Fixes|Improvements|Documentation|Tests|Build|Other Changes)/);
   assert.match(workflow, /body_path: release-notes\.md/);
+  assert.match(workflow, /COS_ROOT='https:\/\/tst-update-package-1316411824\.cos\.ap-hongkong\.myqcloud\.com\/releases'/);
+  assert.match(workflow, /SerialTerminal-Setup-\$VERSION\.exe/);
   assert.doesNotMatch(workflow, /generate_release_notes:\s*true/);
 });
 
-test('release publishes updater files without a self-hosted mirror', () => {
+test('release publishes updater files to Tencent COS', () => {
   assert.deepEqual(packageJson.build.publish, {
     provider: 'generic',
-    url: 'https://gitee.com/trigger-cn/SerialTerminal/releases/download/'
+    url: 'https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases/latest/'
   });
+  assert.ok(packageJson.build.files.includes('!scripts/publish-cos-release.js'));
   assert.ok(packageJson.build.files.includes('!scripts/publish-gitee-release.js'));
   assert.doesNotMatch(workflow, /MIRROR_SSH_PRIVATE_KEY|serialterminal-deploy|43\.157\.13\.24|\bscp\b/);
   assert.doesNotMatch(workflow, /Publish Windows update mirror|SerialTerminalPackages|publish-update-mirror/);
   assert.match(workflow, /uses: softprops\/action-gh-release@v3/);
 });
 
-test('release synchronizes the commit, tag, and artifacts to Gitee', () => {
+test('release synchronizes code to Gitee and artifacts to COS', () => {
   assert.match(workflow, /publish:[\s\S]*uses: actions\/setup-node@v6[\s\S]*node-version: 22\.12\.0[\s\S]*run: npm ci --ignore-scripts/);
   assert.match(workflow, /GITEE_SSH_PRIVATE_KEY: \$\{\{ secrets\.GITEE_SSH_PRIVATE_KEY \}\}/);
   assert.match(workflow, /GITEE_ACCESS_TOKEN: \$\{\{ secrets\.GITEE_ACCESS_TOKEN \}\}/);
+  assert.match(workflow, /COS_SECRET_ID: \$\{\{ secrets\.COS_SECRET_ID \}\}/);
+  assert.match(workflow, /COS_SECRET_KEY: \$\{\{ secrets\.COS_SECRET_KEY \}\}/);
+  assert.match(workflow, /COS_BUCKET: \$\{\{ secrets\.COS_BUCKET \}\}/);
+  assert.match(workflow, /COS_REGION: \$\{\{ secrets\.COS_REGION \}\}/);
   assert.match(workflow, /git remote add gitee git@gitee\.com:trigger-cn\/SerialTerminal\.git/);
   assert.match(workflow, /git push gitee "\$\{GITHUB_SHA\}:refs\/heads\/main"/);
   assert.match(workflow, /git push gitee --force "refs\/tags\/\$\{GITHUB_REF_NAME\}"/);
   assert.doesNotMatch(workflow, /git push gitee[^\n]*--mirror/);
+  assert.match(workflow, /node scripts\/publish-cos-release\.js/);
+  assert.match(workflow, /name: Verify public COS downloads/);
+  assert.match(workflow, /curl --fail --silent --show-error --retry 3 --output \/dev\/null "\$COS_ROOT\/latest\/latest\.yml"/);
+  assert.match(workflow, /--range 0-0 --output \/dev\/null/);
   assert.match(workflow, /node scripts\/publish-gitee-release\.js/);
+  assert.match(workflow, /--notes release-notes\.md \\\s*--files \\\s*dist\/latest\.yml \\\s*dist\/latest-linux\.yml/);
+  assert.doesNotMatch(workflow, /Publish Gitee release notes[\s\S]*dist\/\*\.exe/);
   assert.match(workflow, /dist\/\*\.exe[\s\S]*dist\/\*\.AppImage[\s\S]*dist\/latest-linux\.yml/);
   assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
   assert.doesNotMatch(workflow, /ssh-keyscan/);
