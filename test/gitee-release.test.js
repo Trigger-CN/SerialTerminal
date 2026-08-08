@@ -2,7 +2,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createGiteePublisher, parseArguments } = require('../scripts/publish-gitee-release');
+const {
+  createGiteePublisher,
+  createMultipartUpload,
+  formatError,
+  parseArguments
+} = require('../scripts/publish-gitee-release');
 
 function response(status, body) {
   return {
@@ -108,7 +113,7 @@ test('Gitee publisher reports the failed API and underlying network cause', asyn
   await assert.rejects(() => publisher.publish({
     owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3', target: 'abc123',
     notes: 'Changes', files: [__filename]
-  }), /Gitee API GET \/repos\/trigger-cn\/SerialTerminal\/releases\/tags\/v1\.2\.3 failed after 4 attempt\(s\): fetch failed \(headers timeout\)/);
+  }), /Gitee API GET \/repos\/trigger-cn\/SerialTerminal\/releases\/tags\/v1\.2\.3 failed after 4 attempt\(s\): fetch failed/);
 });
 
 test('Gitee publisher recovers when a timed-out attachment upload completed remotely', async () => {
@@ -139,4 +144,40 @@ test('Gitee publisher recovers when a timed-out attachment upload completed remo
 
   assert.deepEqual(methods, ['GET', 'PATCH', 'GET', 'POST', 'GET', 'GET']);
   assert.deepEqual(waits, [2000]);
+});
+
+test('multipart attachment upload reports byte progress and an exact content length', async () => {
+  const logs = [];
+  let currentTime = 0;
+  const upload = createMultipartUpload(
+    { buffer: Buffer.from('artifact-data'), size: 13 },
+    'artifact.exe',
+    {
+      logger: { log: message => logs.push(message) },
+      now: () => currentTime += 5000,
+      progressIntervalMs: 5000
+    }
+  );
+  const chunks = [];
+  for await (const chunk of upload.body) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+
+  assert.equal(body.length, upload.contentLength);
+  assert.equal(upload.headers['Content-Length'], String(body.length));
+  assert.match(body.toString(), /name="file"; filename="artifact\.exe"/);
+  assert.match(body.toString(), /artifact-data/);
+  assert.equal(upload.transferred(), 13);
+  assert.match(logs.join('\n'), /upload progress: artifact\.exe, 13 B\/13 B \(100\.0%\),/);
+  assert.match(logs.join('\n'), /upload body complete: artifact\.exe, 13 B read; waiting for Gitee response/);
+});
+
+test('Gitee error diagnostics include nested network error codes', () => {
+  const networkError = new Error('Headers Timeout Error');
+  networkError.code = 'UND_ERR_HEADERS_TIMEOUT';
+  const error = new TypeError('fetch failed', { cause: networkError });
+
+  assert.equal(
+    formatError(error),
+    'TypeError: fetch failed <- cause: Error/UND_ERR_HEADERS_TIMEOUT: Headers Timeout Error'
+  );
 });
