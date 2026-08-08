@@ -296,6 +296,14 @@ test('full and compact quick-send clicks share one lightweight result pulse', ()
   assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
 });
 
+test('sidebar transitions clip fixed-width content without reflowing controls', () => {
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(styles, /\.sidebar\s*\{[^}]*--sidebar-expanded-width:\s*200px;[^}]*width:\s*var\(--sidebar-expanded-width\);/s);
+  assert.match(styles, /\.sidebar\s*>\s*:not\(\.sidebar-collapsed-toolbar\)\s*\{[^}]*min-width:\s*var\(--sidebar-expanded-width\);/s);
+  assert.match(styles, /\.shell-sidebar\s*>\s*\*\s*\{[^}]*width:\s*200px;[^}]*min-width:\s*200px;/s);
+});
+
 test('logging preferences save the automatic cleanup period', () => {
   const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');

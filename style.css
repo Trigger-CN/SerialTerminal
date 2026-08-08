@@ -950,7 +950,8 @@ label:hover {
 
 /* Sidebar Layout */
 .sidebar {
-    width: 200px;
+    --sidebar-expanded-width: 200px;
+    width: var(--sidebar-expanded-width);
     background: var(--bg-secondary);
     display: flex;
     flex-direction: column;
@@ -960,6 +961,12 @@ label:hover {
     overflow: hidden;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
     transition: width 0.18s ease;
+}
+
+.sidebar > :not(.sidebar-collapsed-toolbar) {
+    width: var(--sidebar-expanded-width);
+    min-width: var(--sidebar-expanded-width);
+    box-sizing: border-box;
 }
 
 .quick-sidebar-settings {
@@ -1935,7 +1942,10 @@ label:hover {
 }
 
 @media (max-width: 760px) {
-    .sidebar { width: 184px; }
+    .sidebar {
+        --sidebar-expanded-width: 184px;
+        width: var(--sidebar-expanded-width);
+    }
     .main-input-row { flex-wrap: wrap; }
     #main-send-input { flex-basis: calc(100% - 46px); }
     .main-input-meta-row { flex-wrap: wrap; padding-left: 0; gap: 2px 8px; }
@@ -2213,6 +2223,12 @@ input[type="color"] {
     overflow: hidden;
     box-shadow: -2px 0 5px rgba(0,0,0,0.1);
     transition: width 0.2s ease, opacity 0.2s ease;
+}
+
+.shell-sidebar > * {
+    width: 200px;
+    min-width: 200px;
+    box-sizing: border-box;
 }
 
 .shell-sidebar.hidden {
