@@ -7,11 +7,17 @@ const yaml = require('js-yaml');
 
 const SLICE_SIZE = 8 * 1024 * 1024;
 const ASYNC_LIMIT = 4;
+const RETAINED_VERSION_COUNT = 3;
+const MAX_DELETE_OBJECTS = 1000;
 
 function parseArguments(args) {
-  const options = { files: [] };
+  const options = { files: [], pruneOnly: false };
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
+    if (name === '--prune-only') {
+      options.pruneOnly = true;
+      continue;
+    }
     if (name === '--files') {
       options.files = args.slice(index + 1);
       break;
@@ -19,8 +25,8 @@ function parseArguments(args) {
     if (!name.startsWith('--') || !args[index + 1]) throw new Error(`Invalid argument: ${name}`);
     options[name.slice(2)] = args[++index];
   }
-  if (!options.tag) throw new Error('Missing --tag');
-  if (options.files.length === 0) throw new Error('Missing --files');
+  if (!options.pruneOnly && !options.tag) throw new Error('Missing --tag');
+  if (!options.pruneOnly && options.files.length === 0) throw new Error('Missing --files');
   return options;
 }
 
@@ -68,6 +74,53 @@ function createCosPublisher({ secretId, secretKey, bucket, region, cos, logger =
     logger.log(`[cos] metadata complete: ${key}, HTTP ${result.statusCode || 200}, request ${result.RequestId || 'unknown'}`);
   }
 
+  async function listReleaseObjects() {
+    const objects = [];
+    let marker = '';
+    do {
+      const result = await callCos(client, 'getBucket', {
+        Bucket: bucket,
+        Region: region,
+        Prefix: 'releases/',
+        Marker: marker,
+        MaxKeys: 1000
+      });
+      objects.push(...(result.Contents || []).map(item => item.Key).filter(Boolean));
+      const isTruncated = result.IsTruncated === true || result.IsTruncated === 'true';
+      if (isTruncated && !result.NextMarker) throw new Error('COS getBucket response is truncated without NextMarker');
+      marker = isTruncated ? result.NextMarker : '';
+    } while (marker);
+    return objects;
+  }
+
+  async function pruneOldVersions() {
+    const objectKeys = await listReleaseObjects();
+    const versions = [...new Set(objectKeys.map(getVersionFromKey).filter(Boolean))].sort(compareVersions).reverse();
+    const removedVersions = versions.slice(RETAINED_VERSION_COUNT);
+    const removedVersionSet = new Set(removedVersions);
+    const deleteKeys = objectKeys.filter(key => removedVersionSet.has(getVersionFromKey(key)));
+    if (deleteKeys.length === 0) {
+      logger.log(`[cos] retention complete: keeping ${versions.length} version(s), nothing to delete`);
+      return;
+    }
+
+    logger.log(`[cos] retention cleanup: keeping ${versions.slice(0, RETAINED_VERSION_COUNT).join(', ')}; deleting ${removedVersions.join(', ')}`);
+    for (let index = 0; index < deleteKeys.length; index += MAX_DELETE_OBJECTS) {
+      const keys = deleteKeys.slice(index, index + MAX_DELETE_OBJECTS);
+      const result = await callCos(client, 'deleteMultipleObject', {
+        Bucket: bucket,
+        Region: region,
+        Objects: keys.map(Key => ({ Key })),
+        Quiet: true
+      });
+      const errors = result.Error || result.Errors || [];
+      if (errors.length > 0) {
+        throw new Error(`COS retention cleanup failed for ${errors.length} object(s): ${errors.map(item => `${item.Key} (${item.Code})`).join(', ')}`);
+      }
+      logger.log(`[cos] retention cleanup: deleted ${keys.length} object(s)`);
+    }
+  }
+
   async function publish({ tag, files }) {
     const versionPrefix = `releases/${tag}`;
     const metadataFiles = files.filter(file => /^latest(?:-linux)?\.yml$/i.test(path.basename(file)));
@@ -91,7 +144,7 @@ function createCosPublisher({ secretId, secretKey, bucket, region, cos, logger =
     return { publicRoot, versionPrefix };
   }
 
-  return { publish };
+  return { pruneOldVersions, publish };
 }
 
 function callCos(client, method, options) {
@@ -100,9 +153,50 @@ function callCos(client, method, options) {
       if (!error) return resolve(data || {});
       const details = [error.code, error.statusCode && `HTTP ${error.statusCode}`, error.error, error.message]
         .filter(Boolean).join(', ');
-      reject(new Error(`COS ${method} ${options.Key} failed: ${details || String(error)}`, { cause: error }));
+      const target = options.Key || options.Prefix || options.Objects?.[0]?.Key || '';
+      reject(new Error(`COS ${method}${target ? ` ${target}` : ''} failed: ${details || String(error)}`, { cause: error }));
     });
   });
+}
+
+function getVersionFromKey(key) {
+  const match = /^releases\/(v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\//.exec(key);
+  return match?.[1] || '';
+}
+
+function compareVersions(left, right) {
+  const leftVersion = parseVersion(left);
+  const rightVersion = parseVersion(right);
+  for (let index = 0; index < 3; index++) {
+    if (leftVersion.numbers[index] !== rightVersion.numbers[index]) {
+      return leftVersion.numbers[index] - rightVersion.numbers[index];
+    }
+  }
+  if (leftVersion.prerelease.length === 0 && rightVersion.prerelease.length > 0) return 1;
+  if (leftVersion.prerelease.length > 0 && rightVersion.prerelease.length === 0) return -1;
+  return comparePrerelease(leftVersion.prerelease, rightVersion.prerelease);
+}
+
+function parseVersion(version) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(version);
+  return {
+    numbers: match.slice(1, 4).map(Number),
+    prerelease: match[4] ? match[4].split('.') : []
+  };
+}
+
+function comparePrerelease(left, right) {
+  for (let index = 0; index < Math.max(left.length, right.length); index++) {
+    if (left[index] === undefined) return -1;
+    if (right[index] === undefined) return 1;
+    if (left[index] === right[index]) continue;
+    const leftNumber = /^\d+$/.test(left[index]);
+    const rightNumber = /^\d+$/.test(right[index]);
+    if (leftNumber && rightNumber) return Number(left[index]) - Number(right[index]);
+    if (leftNumber !== rightNumber) return leftNumber ? -1 : 1;
+    return left[index].localeCompare(right[index]);
+  }
+  return 0;
 }
 
 function formatBytes(bytes) {
@@ -125,6 +219,10 @@ async function main() {
     bucket: process.env.COS_BUCKET,
     region: process.env.COS_REGION
   });
+  if (options.pruneOnly) {
+    await publisher.pruneOldVersions();
+    return;
+  }
   const result = await publisher.publish(options);
   console.log(`Published ${options.files.length} artifact(s) to ${result.publicRoot}/${result.versionPrefix}/`);
 }
@@ -136,4 +234,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createCosPublisher, parseArguments };
+module.exports = { compareVersions, createCosPublisher, getVersionFromKey, parseArguments };

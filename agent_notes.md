@@ -121,7 +121,8 @@ SerialTerminal/
 - 开发、测试和打包使用 Node.js `>=22.12.0`，与当前 electron-builder 间接依赖的 engine 要求一致；CI 固定 Node 22.12
 - `.github/workflows/checks.yml` 在 push/PR 上执行 `npm ci --ignore-scripts`、`npm test`、全仓库 JavaScript 语法检查和官方 registry 生产依赖审计；简中 i18n 必须覆盖英语基线键，其他语言允许回退英语
 - `.github/workflows/release.yml` 仅响应 `v*` tag；Windows/Linux 使用同一 Node 22.12、官方 registry lockfile、`npm ci --ignore-scripts`、显式 `npm run rebuild` 和打包命令，并检查构建不修改 lockfile
-- 客户端自动更新直接读取腾讯云 COS 的 `releases/latest/latest.yml`，安装包、差分文件和手动下载入口使用版本化 COS URL。Release publish job 将大型产物上传到 COS，创建 GitHub/Gitee Release，并只向 Gitee 附加重写后的元数据以兼容旧客户端。
+- 客户端自动更新直接读取腾讯云 COS 的 `releases/latest/latest.yml`，安装包、差分文件和手动下载入口使用版本化 COS URL。Release publish job 将大型产物上传到 COS，创建 GitHub/Gitee Release，并只向 Gitee 附加重写后的元数据以兼容旧客户端。所有发布和公开下载验证成功后，最后的 `--prune-only` 步骤永久保留 `releases/latest/`，按语义版本仅保留最新三个 `releases/v*/` 前缀；COS CAM 身份需具备 `cos:GetBucket` 和批量删除对象权限。
+- `v0.3.7` 将更新源固定为 `https://trigger-cn.top/serialterminal/`；服务器通过 `telemetry-server/deploy/serialterminal-update-compat-nginx.conf` 将旧 `latest.yml` 路径反向代理到 COS。该兼容路由需长期保留，安装包由元数据中的 COS 绝对 URL 下载。
 - Release 的 Windows native rebuild 固定使用 `windows-2022`、MSBuild 和 VS developer environment，避免旧版 Electron node-gyp 无法识别 VS 18；构建矩阵必须传 `--publish never`，产物统一交由独立 publish job 上传 GitHub Release
 - Release artifact 必须使用安装包白名单，仅上传 Windows `.exe`/`.blockmap`/`latest.yml` 与 Linux `.AppImage`/`.deb`/`latest-linux.yml`；禁止使用 `dist/**`，避免把 unpacked 目录和 native build 中间文件发布到 GitHub
 - Windows NSIS `artifactName` 固定为 `${productName}-Setup-${version}.${ext}`，GitHub Release、镜像和 `latest.yml` 均不得出现空格或由 GitHub 转义成点号的安装包文件名

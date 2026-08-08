@@ -95,3 +95,13 @@ test('release synchronizes code to Gitee and artifacts to COS', () => {
   assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
   assert.doesNotMatch(workflow, /ssh-keyscan/);
 });
+
+test('release prunes COS versions only after all publication steps succeed', () => {
+  const verifyIndex = workflow.indexOf('name: Verify public COS downloads');
+  const giteeIndex = workflow.indexOf('name: Publish Gitee release notes');
+  const pruneIndex = workflow.indexOf('name: Remove old COS releases');
+
+  assert.ok(verifyIndex >= 0 && verifyIndex < pruneIndex);
+  assert.ok(giteeIndex >= 0 && giteeIndex < pruneIndex);
+  assert.match(workflow.slice(pruneIndex), /node scripts\/publish-cos-release\.js --prune-only/);
+});
