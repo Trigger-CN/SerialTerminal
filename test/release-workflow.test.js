@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
+const giteeWorkflow = fs.readFileSync(path.join(__dirname, '..', '.workflow', 'gitee-release.yml'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 
 test('release builds use a supported Windows toolchain', () => {
@@ -67,41 +68,54 @@ test('release publishes updater files to Tencent COS', () => {
   });
   assert.ok(packageJson.build.files.includes('!scripts/publish-cos-release.js'));
   assert.ok(packageJson.build.files.includes('!scripts/publish-gitee-release.js'));
+  assert.ok(packageJson.build.files.includes('!scripts/mirror-github-release-to-gitee.js'));
   assert.doesNotMatch(workflow, /MIRROR_SSH_PRIVATE_KEY|serialterminal-deploy|43\.157\.13\.24|\bscp\b/);
   assert.doesNotMatch(workflow, /Publish Windows update mirror|SerialTerminalPackages|publish-update-mirror/);
   assert.match(workflow, /uses: softprops\/action-gh-release@v3/);
 });
 
-test('release synchronizes code to Gitee and artifacts to COS', () => {
+test('release synchronizes code to Gitee after publishing Windows updater files to COS', () => {
   assert.match(workflow, /publish:[\s\S]*uses: actions\/setup-node@v6[\s\S]*node-version: 22\.12\.0[\s\S]*run: npm ci --ignore-scripts/);
   assert.match(workflow, /GITEE_SSH_PRIVATE_KEY: \$\{\{ secrets\.GITEE_SSH_PRIVATE_KEY \}\}/);
-  assert.match(workflow, /GITEE_ACCESS_TOKEN: \$\{\{ secrets\.GITEE_ACCESS_TOKEN \}\}/);
+  assert.doesNotMatch(workflow, /GITEE_ACCESS_TOKEN|Publish Gitee release notes|publish-gitee-release\.js/);
   assert.match(workflow, /COS_SECRET_ID: \$\{\{ secrets\.COS_SECRET_ID \}\}/);
   assert.match(workflow, /COS_SECRET_KEY: \$\{\{ secrets\.COS_SECRET_KEY \}\}/);
   assert.match(workflow, /COS_BUCKET: \$\{\{ secrets\.COS_BUCKET \}\}/);
   assert.match(workflow, /COS_REGION: \$\{\{ secrets\.COS_REGION \}\}/);
   assert.match(workflow, /git remote add gitee git@gitee\.com:trigger-cn\/SerialTerminal\.git/);
   assert.match(workflow, /git push gitee "\$\{GITHUB_SHA\}:refs\/heads\/main"/);
-  assert.match(workflow, /git push gitee --force "refs\/tags\/\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /git push gitee "refs\/tags\/\$\{GITHUB_REF_NAME\}"/);
+  assert.doesNotMatch(workflow, /git push gitee --force/);
   assert.doesNotMatch(workflow, /git push gitee[^\n]*--mirror/);
   assert.match(workflow, /node scripts\/publish-cos-release\.js/);
   assert.match(workflow, /name: Verify public COS downloads/);
   assert.match(workflow, /curl --fail --silent --show-error --retry 3 --output \/dev\/null "\$COS_ROOT\/latest\/latest\.yml"/);
   assert.match(workflow, /--range 0-0 --output \/dev\/null/);
-  assert.match(workflow, /node scripts\/publish-gitee-release\.js/);
-  assert.match(workflow, /--notes release-notes\.md \\\s*--files \\\s*dist\/latest\.yml \\\s*dist\/latest-linux\.yml/);
-  assert.doesNotMatch(workflow, /Publish Gitee release notes[\s\S]*dist\/\*\.exe/);
-  assert.match(workflow, /dist\/\*\.exe[\s\S]*dist\/\*\.AppImage[\s\S]*dist\/latest-linux\.yml/);
+  const cosPublish = workflow.slice(workflow.indexOf('name: Publish release artifacts to COS'), workflow.indexOf('name: Verify public COS downloads'));
+  assert.match(cosPublish, /dist\/\*\.exe[\s\S]*dist\/\*\.exe\.blockmap[\s\S]*dist\/latest\.yml/);
+  assert.doesNotMatch(cosPublish, /AppImage|\.deb|latest-linux\.yml/);
+  assert.ok(workflow.indexOf('uses: softprops/action-gh-release@v3') < workflow.indexOf('name: Publish release artifacts to COS'));
+  assert.ok(workflow.indexOf('name: Verify public COS downloads') < workflow.indexOf('name: Synchronize release commit and tag to Gitee'));
   assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
   assert.doesNotMatch(workflow, /ssh-keyscan/);
 });
 
 test('release prunes COS versions only after all publication steps succeed', () => {
   const verifyIndex = workflow.indexOf('name: Verify public COS downloads');
-  const giteeIndex = workflow.indexOf('name: Publish Gitee release notes');
+  const giteeIndex = workflow.indexOf('name: Synchronize release commit and tag to Gitee');
   const pruneIndex = workflow.indexOf('name: Remove old COS releases');
 
   assert.ok(verifyIndex >= 0 && verifyIndex < pruneIndex);
   assert.ok(giteeIndex >= 0 && giteeIndex < pruneIndex);
   assert.match(workflow.slice(pruneIndex), /node scripts\/publish-cos-release\.js --prune-only/);
+});
+
+test('Gitee tag pipeline mirrors the exact GitHub Windows installer', () => {
+  assert.match(giteeWorkflow, /tags:[\s\S]*include:[\s\S]*\^v\\d\+\\\.\\d\+\\\.\\d\+/);
+  assert.match(giteeWorkflow, /nodeVersion: 22\.12\.0/);
+  assert.match(giteeWorkflow, /npm ci --ignore-scripts/);
+  assert.match(giteeWorkflow, /git tag --points-at "\$GITEE_COMMIT"/);
+  assert.match(giteeWorkflow, /GITEE_ACCESS_TOKEN="\$CI_GITEE_ACCESS_TOKEN" node/);
+  assert.match(giteeWorkflow, /node scripts\/mirror-github-release-to-gitee\.js/);
+  assert.match(giteeWorkflow, /--tag "\$TAG" --target "\$GITEE_COMMIT"/);
 });

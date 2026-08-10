@@ -18,6 +18,18 @@ const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/;
 const ALLOWED_PLATFORMS = new Set(['win32', 'linux', 'darwin']);
 const ALLOWED_ARCHITECTURES = new Set(['x64', 'arm64', 'ia32']);
 
+function validateUpdateMetadataUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return '';
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash || (url.port && url.port !== '443')) return '';
+  if (!url.hostname || !/\/latest\.yml$/i.test(url.pathname)) return '';
+  return url.toString();
+}
+
 function loadAsset(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath));
 }
@@ -139,6 +151,11 @@ function createTelemetryServer({ store, config, clock = () => new Date(), logger
         await store.recordActivity({ ...payload, deviceKey, activityDate, now });
         return sendJson(response, 200, { accepted: true, activityDate });
       }
+      if (request.method === 'GET' && url.pathname === `${BASE}/api/v1/update-source`) {
+        const source = await store.getUpdateSource();
+        if (!source) return sendJson(response, 503, { error: 'update_source_unavailable' });
+        return sendJson(response, 200, { schemaVersion: 1, metadataUrl: source.metadata_url });
+      }
       if (request.method === 'GET' && url.pathname === `${BASE}/admin/login`) {
         if (await getSession(request)) {
           response.writeHead(303, { Location: `${BASE}/admin/` });
@@ -195,6 +212,35 @@ function createTelemetryServer({ store, config, clock = () => new Date(), logger
           const now = clock();
           const metrics = await store.getMetrics(days, now.toISOString().slice(0, 10));
           return sendJson(response, 200, { generatedAt: now.toISOString(), days, ...metrics });
+        }
+        if (request.method === 'GET' && url.pathname === `${BASE}/admin/api/update-source`) {
+          const source = await store.getUpdateSource();
+          if (!source) return sendJson(response, 503, { error: 'update_source_unavailable' });
+          return sendJson(response, 200, {
+            metadataUrl: source.metadata_url,
+            updatedAt: source.updated_at,
+            updatedBy: source.updated_by
+          });
+        }
+        if (request.method === 'PUT' && url.pathname === `${BASE}/admin/api/update-source`) {
+          const csrf = request.headers['x-csrf-token'];
+          if (validRequestMetadata(request) === false || hashToken(csrf || '') !== session.csrf_hash) {
+            return sendJson(response, 403, { error: 'forbidden' });
+          }
+          if (!String(request.headers['content-type'] || '').startsWith('application/json')) {
+            return sendJson(response, 415, { error: 'content_type' });
+          }
+          const payload = JSON.parse(await readBody(request, 2048));
+          const metadataUrl = payload && Object.keys(payload).length === 1
+            ? validateUpdateMetadataUrl(payload.metadataUrl)
+            : '';
+          if (!metadataUrl) return sendJson(response, 400, { error: 'invalid_update_source' });
+          const source = await store.setUpdateSource(metadataUrl, config.adminUsername, clock());
+          return sendJson(response, 200, {
+            metadataUrl: source.metadata_url,
+            updatedAt: source.updated_at,
+            updatedBy: source.updated_by
+          });
         }
         if (request.method === 'POST' && url.pathname === `${BASE}/admin/logout`) {
           const csrf = request.headers['x-csrf-token'];
@@ -254,4 +300,4 @@ if (require.main === module) {
   process.on('SIGINT', shutdown);
 }
 
-module.exports = { createTelemetryServer, loadConfig };
+module.exports = { createTelemetryServer, loadConfig, validateUpdateMetadataUrl };

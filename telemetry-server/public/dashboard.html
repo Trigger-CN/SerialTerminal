@@ -30,6 +30,20 @@
       <article><span>总装机数</span><strong id="total">-</strong><small>唯一安装实例</small></article>
       <article><span>今日新增</span><strong id="new-today">-</strong><small>首次上报</small></article>
     </section>
+    <section class="update-source-section" aria-labelledby="update-source-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Update Delivery</p><h2 id="update-source-title">客户端更新源</h2></div>
+        <span id="update-source-updated">正在加载</span>
+      </div>
+      <form id="update-source-form">
+        <label for="update-source-url">更新元数据地址</label>
+        <div class="update-source-controls">
+          <input id="update-source-url" name="metadataUrl" type="url" inputmode="url" required spellcheck="false" autocomplete="off" placeholder="https://example.com/releases/latest/latest.yml">
+          <button type="submit">保存</button>
+        </div>
+        <p id="update-source-status" class="form-status" aria-live="polite"></p>
+      </form>
+    </section>
     <section class="trend-section">
       <div class="section-heading">
         <div><p class="eyebrow">Activity</p><h2>每日活跃趋势</h2></div>

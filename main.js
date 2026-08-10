@@ -15,6 +15,11 @@ const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeIntegerSetting } = require('./config-values');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const {
+  SERVER_UPDATE_METADATA_URL,
+  buildUpdateMetadataCandidates,
+  resolveUpdateMetadataUrl
+} = require('./update-source-resolver');
+const {
   findShellProfile: findConfiguredShellProfile,
   normalizeShellProfiles,
   resolveDefaultShellProfileId
@@ -27,7 +32,6 @@ const GITEE_OWNER = 'trigger-cn';
 const GITEE_REPO = 'SerialTerminal';
 const GITEE_API_BASE = `https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}`;
 const GITEE_RELEASE_PAGE = `https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases`;
-const COS_UPDATE_METADATA_URL = 'https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases/latest/latest.yml';
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const UPDATE_PROMPT_INTERVAL_MS = 8 * 60 * 60 * 1000;
 const MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN';
@@ -59,6 +63,7 @@ let prefsWindow;
 let updateDownloadWindow;
 let updateCheckTimer;
 let updateDownloadToken = null;
+let updateFeedFallbackActive = false;
 let updatePromptState = {
   phase: 'idle',
   checkSource: null,
@@ -1250,10 +1255,23 @@ function getReleaseUrl() {
   return GITEE_RELEASE_PAGE;
 }
 
-async function checkCosForUpdates() {
+async function checkUpdateSources() {
+  updateFeedFallbackActive = true;
   try {
-    configureCosUpdateFeed();
-    return await autoUpdater.checkForUpdates();
+    const resolved = await resolveUpdateMetadataUrl({ fallbackUrl: SERVER_UPDATE_METADATA_URL, logger: log });
+    const candidates = buildUpdateMetadataCandidates(resolved.metadataUrl);
+    let lastError;
+    for (const [index, metadataUrl] of candidates.entries()) {
+      try {
+        configureCosUpdateFeed(metadataUrl);
+        log.info(`Checking update metadata source ${index + 1}/${candidates.length}: ${metadataUrl}`);
+        return await autoUpdater.checkForUpdates();
+      } catch (error) {
+        lastError = error;
+        log.warn(`Update metadata source failed: ${metadataUrl}`, error);
+      }
+    }
+    throw lastError || new Error('No update metadata source is available');
   } catch (error) {
     if (updatePromptState.phase === 'checking') {
       sendUpdateStatusToPrefs('error', error.message);
@@ -1261,11 +1279,13 @@ async function checkCosForUpdates() {
       updatePromptState.checkSource = null;
     }
     throw error;
+  } finally {
+    updateFeedFallbackActive = false;
   }
 }
 
-function configureCosUpdateFeed() {
-  autoUpdater.setFeedURL({ provider: 'custom', updateProvider: CosProvider, metadataUrl: COS_UPDATE_METADATA_URL });
+function configureCosUpdateFeed(metadataUrl) {
+  autoUpdater.setFeedURL({ provider: 'custom', updateProvider: CosProvider, metadataUrl });
 }
 
 async function fetchGiteeReleaseNotes(version) {
@@ -1442,7 +1462,7 @@ function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
     if (scheduled) {
       updatePromptState.phase = 'checking';
       updatePromptState.checkSource = 'scheduled';
-      checkCosForUpdates().catch(error => {
+      checkUpdateSources().catch(error => {
         log.error('Failed to check for updates:', error);
       });
       return;
@@ -1454,7 +1474,7 @@ function checkForAppUpdates({ manual = false, scheduled = false } = {}) {
 
   updatePromptState.phase = 'checking';
   updatePromptState.checkSource = manual ? 'manual' : scheduled ? 'scheduled' : 'startup';
-  checkCosForUpdates().catch(error => {
+  checkUpdateSources().catch(error => {
     log.error('Failed to check for updates:', error);
   });
 }
@@ -1985,6 +2005,7 @@ autoUpdater.on('update-not-available', (info) => {
 });
 
 autoUpdater.on('error', (err) => {
+  if (updateFeedFallbackActive) return;
   sendUpdateStatusToPrefs('error', err.message);
   sendUpdateDownloadStatus('error', err.message);
   updatePromptState.phase = updatePromptState.latestInfo ? 'available' : 'idle';

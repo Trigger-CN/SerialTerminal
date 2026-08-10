@@ -60,6 +60,28 @@ function createStore(pool) {
       await pool.query('DELETE FROM admin_sessions WHERE token_hash = $1', [tokenHash]);
     },
 
+    async getUpdateSource() {
+      const result = await pool.query(`
+        SELECT setting_value AS metadata_url, updated_at, updated_by
+        FROM service_settings
+        WHERE setting_key = 'update_metadata_url'
+      `);
+      return result.rows[0] || null;
+    },
+
+    async setUpdateSource(metadataUrl, updatedBy, now) {
+      const result = await pool.query(`
+        INSERT INTO service_settings (setting_key, setting_value, updated_at, updated_by)
+        VALUES ('update_metadata_url', $1, $3, $2)
+        ON CONFLICT (setting_key) DO UPDATE SET
+          setting_value = EXCLUDED.setting_value,
+          updated_at = EXCLUDED.updated_at,
+          updated_by = EXCLUDED.updated_by
+        RETURNING setting_value AS metadata_url, updated_at, updated_by
+      `, [metadataUrl, updatedBy, now]);
+      return result.rows[0];
+    },
+
     async getMetrics(days, today) {
       const startDate = new Date(`${today}T00:00:00.000Z`);
       startDate.setUTCDate(startDate.getUTCDate() - (days - 1));

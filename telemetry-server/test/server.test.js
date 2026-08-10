@@ -15,6 +15,12 @@ async function startServer(overrides = {}) {
     async createSession(session) { sessions.set(session.tokenHash, session); },
     async getSession(tokenHash) { return sessions.get(tokenHash) || null; },
     async deleteSession(tokenHash) { sessions.delete(tokenHash); },
+    updateSource: { metadata_url: 'https://cdn.example/releases/latest/latest.yml', updated_at: '2026-08-04T00:00:00.000Z', updated_by: 'migration' },
+    async getUpdateSource() { return this.updateSource; },
+    async setUpdateSource(metadataUrl, updatedBy, now) {
+      this.updateSource = { metadata_url: metadataUrl, updated_at: now.toISOString(), updated_by: updatedBy };
+      return this.updateSource;
+    },
     async getMetrics(days) {
       return {
         summary: { dau: 2, wau: 4, mau: 8, total_installations: 12, new_today: 1 },
@@ -93,6 +99,47 @@ test('dashboard metrics require a valid administrator session', async t => {
   const body = await authorized.json();
   assert.equal(body.summary.dau, 2);
   assert.equal(body.days, 30);
+});
+
+test('public update-source endpoint returns only the current metadata URL', async t => {
+  const harness = await startServer();
+  t.after(() => harness.server.close());
+  const response = await fetch(`${harness.baseUrl}/serialterminal/api/v1/update-source`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { schemaVersion: 1, metadataUrl: 'https://cdn.example/releases/latest/latest.yml' });
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+});
+
+test('administrator can update the source with CSRF and same-origin metadata', async t => {
+  const harness = await startServer();
+  t.after(() => harness.server.close());
+  const token = 'test-session-token';
+  harness.sessions.set(hashToken(token), { token_hash: hashToken(token), csrf_hash: hashToken('csrf'), expires_at: new Date('2026-08-05') });
+  const response = await fetch(`${harness.baseUrl}/serialterminal/admin/api/update-source`, {
+    method: 'PUT',
+    headers: {
+      Origin: 'https://trigger-cn.top',
+      Cookie: `__Host-serialterminal_admin=${token}`,
+      'X-CSRF-Token': 'csrf',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ metadataUrl: 'https://new-cdn.example/releases/latest/latest.yml' })
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).metadataUrl, 'https://new-cdn.example/releases/latest/latest.yml');
+  assert.equal((await (await fetch(`${harness.baseUrl}/serialterminal/api/v1/update-source`)).json()).metadataUrl, 'https://new-cdn.example/releases/latest/latest.yml');
+});
+
+test('administrator update-source rejects unsafe URLs and missing CSRF', async t => {
+  const harness = await startServer();
+  t.after(() => harness.server.close());
+  const token = 'test-session-token';
+  harness.sessions.set(hashToken(token), { token_hash: hashToken(token), csrf_hash: hashToken('csrf'), expires_at: new Date('2026-08-05') });
+  const headers = { Origin: 'https://trigger-cn.top', Cookie: `__Host-serialterminal_admin=${token}`, 'Content-Type': 'application/json' };
+  const unsafe = await fetch(`${harness.baseUrl}/serialterminal/admin/api/update-source`, { method: 'PUT', headers: { ...headers, 'X-CSRF-Token': 'csrf' }, body: JSON.stringify({ metadataUrl: 'http://evil.example/latest.yml' }) });
+  assert.equal(unsafe.status, 400);
+  const missingCsrf = await fetch(`${harness.baseUrl}/serialterminal/admin/api/update-source`, { method: 'PUT', headers, body: JSON.stringify({ metadataUrl: 'https://cdn.example/latest.yml' }) });
+  assert.equal(missingCsrf.status, 403);
 });
 
 test('login issues secure session and CSRF cookies', async t => {

@@ -153,6 +153,49 @@ async function loadMetrics() {
   }
 }
 
+async function loadUpdateSource() {
+  const response = await fetch(`${base}/api/update-source`, { credentials: 'same-origin' });
+  if (response.status === 401) return location.assign(`${base}/login`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const source = await response.json();
+  document.getElementById('update-source-url').value = source.metadataUrl;
+  document.getElementById('update-source-updated').textContent = source.updatedAt
+    ? `${source.updatedBy || '管理员'} 更新于 ${new Date(source.updatedAt).toLocaleString('zh-CN')}`
+    : '尚未更新';
+}
+
+document.getElementById('update-source-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  const status = document.getElementById('update-source-status');
+  button.disabled = true;
+  status.className = 'form-status';
+  status.textContent = '正在保存';
+  try {
+    const response = await fetch(`${base}/api/update-source`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': decodeURIComponent(cookie('serialterminal_csrf'))
+      },
+      body: JSON.stringify({ metadataUrl: document.getElementById('update-source-url').value.trim() })
+    });
+    if (response.status === 401) return location.assign(`${base}/login`);
+    if (!response.ok) throw new Error(response.status === 400 ? '地址必须是标准 HTTPS latest.yml 地址' : `HTTP ${response.status}`);
+    const source = await response.json();
+    document.getElementById('update-source-url').value = source.metadataUrl;
+    document.getElementById('update-source-updated').textContent = `${source.updatedBy || '管理员'} 更新于 ${new Date(source.updatedAt).toLocaleString('zh-CN')}`;
+    status.classList.add('success');
+    status.textContent = '更新源已保存，新版客户端下次检查更新时生效';
+  } catch (cause) {
+    status.classList.add('failure');
+    status.textContent = `保存失败：${cause.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 document.querySelectorAll('[data-days]').forEach(button => button.addEventListener('click', () => {
   selectedDays = Number(button.dataset.days);
   document.querySelectorAll('[data-days]').forEach(item => item.classList.toggle('active', item === button));
@@ -168,4 +211,8 @@ document.getElementById('logout').addEventListener('click', async () => {
   location.assign(`${base}/login`);
 });
 
-loadMetrics();
+Promise.all([loadMetrics(), loadUpdateSource()]).catch(cause => {
+  const error = document.getElementById('error');
+  error.textContent = `加载管理数据失败：${cause.message}`;
+  error.hidden = false;
+});

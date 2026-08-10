@@ -639,9 +639,12 @@ test('update confirmation opens a controlled download window with progress and i
   assert.match(main, /sendUpdateDownloadStatus\('downloaded', info\)/);
   assert.match(main, /getManualUpdateDownloadUrl\(info\)/);
   assert.match(main, /GITEE_API_BASE = `https:\/\/gitee\.com\/api\/v5\/repos\/\$\{GITEE_OWNER\}\/\$\{GITEE_REPO\}`/);
-  assert.match(main, /COS_UPDATE_METADATA_URL = 'https:\/\/tst-update-package-1316411824\.cos\.ap-hongkong\.myqcloud\.com\/releases\/latest\/latest\.yml'/);
-  assert.match(main, /autoUpdater\.setFeedURL\(\{ provider: 'custom', updateProvider: CosProvider, metadataUrl: COS_UPDATE_METADATA_URL \}\)/);
-  assert.match(main, /checkCosForUpdates\(\)/);
+  assert.match(main, /resolveUpdateMetadataUrl\(\{ fallbackUrl: SERVER_UPDATE_METADATA_URL/);
+  assert.match(main, /const candidates = buildUpdateMetadataCandidates\(resolved\.metadataUrl\)/);
+  assert.match(main, /for \(const \[index, metadataUrl\] of candidates\.entries\(\)\)/);
+  assert.match(main, /autoUpdater\.setFeedURL\(\{ provider: 'custom', updateProvider: CosProvider, metadataUrl \}\)/);
+  assert.match(main, /checkUpdateSources\(\)/);
+  assert.match(main, /if \(updateFeedFallbackActive\) return;/);
   assert.match(main, /if \(updatePromptState\.phase === 'checking'\) \{[\s\S]*sendUpdateStatusToPrefs\('error', error\.message\);[\s\S]*updatePromptState\.phase = 'idle';/);
   assert.doesNotMatch(main, /autoUpdater\.setFeedURL\(UPDATE_FEED\)/);
   assert.match(preferences, /shell\.openExternal\('https:\/\/gitee\.com\/trigger-cn\/SerialTerminal\/releases'\)/);

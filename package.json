@@ -26,6 +26,7 @@
       "!assets/NotoColorEmoji-Regular.ttf",
       "!scripts/publish-cos-release.js",
       "!scripts/publish-gitee-release.js",
+      "!scripts/mirror-github-release-to-gitee.js",
       "!telemetry-server/**",
       "package.json",
       "**/*"

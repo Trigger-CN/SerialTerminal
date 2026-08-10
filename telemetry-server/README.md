@@ -20,13 +20,15 @@ The public endpoint can be imitated by third parties because a desktop applicati
 ## Setup
 
 1. Create a PostgreSQL database and restricted database user.
-2. Apply `db/001-init.sql`.
+2. Apply `db/001-init.sql` and then `db/002-update-source.sql`.
 3. Run `npm install`.
 4. Generate an administrator password hash with `npm run password -- "your password"`.
 5. Copy `.env.example` values into a protected systemd environment file.
 6. Start with `npm start` behind an HTTPS reverse proxy.
 
-The process listens on `127.0.0.1:3100` by default. The public activity endpoint is `/serialterminal/api/v1/activity`; the dashboard is `/serialterminal/admin/`.
+The process listens on `127.0.0.1:3100` by default. The public activity endpoint is `/serialterminal/api/v1/activity`; the public update-source endpoint is `/serialterminal/api/v1/update-source`; the dashboard is `/serialterminal/admin/`.
+
+The dashboard's `客户端更新源` section stores the primary HTTPS `latest.yml` URL in PostgreSQL. New clients query the public endpoint before each update check, then fall back through the server `/serialterminal/latest.yml`, Tencent COS, and GitHub Release metadata. Existing clients with a hard-coded COS URL are unaffected; keep the COS objects and the legacy proxy available during migration.
 
 For production, install the application at `/home/ubuntu/ws/SerialTerminalTelemetry`, copy the units under `deploy/` to `/etc/systemd/system/`, and keep the environment file readable only by root and the service account. Enable both `serialterminal-telemetry.service` and `serialterminal-telemetry-prune.timer`. Run `npm ci --omit=dev` rather than `npm install` during deployment.
 
@@ -35,10 +37,18 @@ For production, install the application at `/home/ubuntu/ws/SerialTerminalTeleme
 ```nginx
 limit_req_zone $binary_remote_addr zone=serialterminal_activity:10m rate=10r/m;
 limit_req_zone $binary_remote_addr zone=serialterminal_admin_login:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=serialterminal_update_source:10m rate=30r/m;
 
 location = /serialterminal/api/v1/activity {
     client_max_body_size 2k;
     limit_req zone=serialterminal_activity burst=5 nodelay;
+    proxy_pass http://127.0.0.1:3100;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /serialterminal/api/v1/update-source {
+    limit_req zone=serialterminal_update_source burst=10 nodelay;
     proxy_pass http://127.0.0.1:3100;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
