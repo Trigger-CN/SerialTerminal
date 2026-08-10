@@ -30,7 +30,7 @@ The process listens on `127.0.0.1:3100` by default. The public activity endpoint
 
 The dashboard's `客户端更新源` section stores the primary HTTPS `latest.yml` URL in PostgreSQL. New clients query the public endpoint before each update check, then fall back through the server `/serialterminal/latest.yml`, Tencent COS, and GitHub Release metadata. Existing clients with a hard-coded COS URL are unaffected; keep the COS objects and the legacy proxy available during migration.
 
-For production, install the application at `/home/ubuntu/ws/SerialTerminalTelemetry`, copy the units under `deploy/` to `/etc/systemd/system/`, and keep the environment file readable only by root and the service account. Enable both `serialterminal-telemetry.service` and `serialterminal-telemetry-prune.timer`. Run `npm ci --omit=dev` rather than `npm install` during deployment.
+For production, clone `https://github.com/Trigger-CN/SerialTerminal.git` to `/home/ubuntu/ws/SerialTerminal` and keep the environment file readable only by root and the service account. The verified Node 22 runtime remains under `/home/ubuntu/ws/SerialTerminalTelemetry/runtime`; application code and `node_modules` live in the GitHub checkout. Run `telemetry-server/deploy/deploy-from-github.sh` as `ubuntu` to pull `main` with `--ff-only`, install dependencies, run tests and migrations, update systemd/Nginx configuration, and restart the service. Enable both `serialterminal-telemetry.service` and `serialterminal-telemetry-prune.timer`.
 
 ## Nginx
 
