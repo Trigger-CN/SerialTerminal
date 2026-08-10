@@ -6,6 +6,7 @@ APP="$REPO/telemetry-server"
 NODE=/home/ubuntu/ws/SerialTerminalTelemetry/runtime/bin/node
 NPM=/home/ubuntu/ws/SerialTerminalTelemetry/runtime/bin/npm
 ENV_FILE=/etc/serialterminal-telemetry.env
+export PATH="/home/ubuntu/ws/SerialTerminalTelemetry/runtime/bin:$PATH"
 
 if [[ "$(id -u)" -eq 0 ]]; then
   echo 'Run this script as ubuntu; it uses sudo only for privileged deployment steps.' >&2
