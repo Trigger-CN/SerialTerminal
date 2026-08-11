@@ -21,7 +21,8 @@ const translations = {
       versionDownloaded: 'Version {version} has been downloaded.',
       restartToInstall: 'Restart the application now to install the update.',
       manualDownloadHint: 'If the download fails or is slow, download it manually:',
-      manualDownload: 'Download EXE'
+      manualDownload: 'Download EXE',
+      updateChannel: 'Update channel'
     },
     common: {
       none: 'None',
@@ -276,7 +277,8 @@ const translations = {
       versionDownloaded: '版本 {version} 已下载完成。',
       restartToInstall: '现在重启应用以安装更新。',
       manualDownloadHint: '如果下载失败或速度过慢，可以手动下载：',
-      manualDownload: '下载 EXE 安装包'
+      manualDownload: '下载 EXE 安装包',
+      updateChannel: '更新渠道'
     },
     common: {
       none: '暂无',

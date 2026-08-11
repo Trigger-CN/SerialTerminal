@@ -4,6 +4,7 @@ const { ipcRenderer } = require('electron');
 
 const statusEl = document.getElementById('status');
 const detailsEl = document.getElementById('details');
+const channelEl = document.getElementById('channel');
 const progressFill = document.getElementById('progress-fill');
 const installBtn = document.getElementById('install-btn');
 const cancelBtn = document.getElementById('cancel-btn');
@@ -30,6 +31,9 @@ ipcRenderer.on('update-download-init', (event, data = {}) => {
     document.title = data.title || document.title;
     statusEl.textContent = `${data.downloading || 'Downloading...'} 0%`;
     detailsEl.textContent = data.version ? `v${data.version}` : '';
+    channelEl.textContent = data.updateChannel
+        ? `${data.updateChannelLabel || 'Update channel'}: ${data.updateChannel}`
+        : '';
     installBtn.textContent = data.installAndRestart || 'Install and Restart';
     cancelBtn.textContent = data.cancel || 'Cancel';
     manualDownloadHintEl.textContent = data.manualDownloadHint || 'If the download fails or is slow, download it manually:';

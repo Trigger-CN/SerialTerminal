@@ -17,6 +17,7 @@ const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const {
   SERVER_UPDATE_METADATA_URL,
   buildUpdateMetadataCandidates,
+  getUpdateChannel,
   resolveUpdateMetadataUrl
 } = require('./update-source-resolver');
 const {
@@ -64,6 +65,7 @@ let updateDownloadWindow;
 let updateCheckTimer;
 let updateDownloadToken = null;
 let updateFeedFallbackActive = false;
+let activeUpdateMetadataUrl = SERVER_UPDATE_METADATA_URL;
 let updatePromptState = {
   phase: 'idle',
   checkSource: null,
@@ -1198,6 +1200,15 @@ function getManualUpdateDownloadUrl(info) {
   return GITEE_RELEASE_PAGE;
 }
 
+function withUpdateChannel(info) {
+  if (!info || typeof info !== 'object') return info;
+  const updateChannel = getUpdateChannel(activeUpdateMetadataUrl, info)
+    || info.updateChannel
+    || updatePromptState.latestInfo?.updateChannel
+    || '';
+  return { ...info, updateChannel };
+}
+
 function createUpdateDownloadWindow(info) {
   if (updateDownloadWindow && !updateDownloadWindow.isDestroyed()) {
     updateDownloadWindow.focus();
@@ -1237,6 +1248,8 @@ function createUpdateDownloadWindow(info) {
       manualDownloadHint: tr('updateDialog.manualDownloadHint'),
       manualDownload: tr('updateDialog.manualDownload'),
       manualDownloadUrl: getManualUpdateDownloadUrl(info),
+      updateChannelLabel: tr('updateDialog.updateChannel'),
+      updateChannel: info?.updateChannel || getUpdateChannel(activeUpdateMetadataUrl, info),
       cancel: tr('prefs.cancelDownload'),
       cancelled: tr('prefs.downloadCancelled')
     });
@@ -1263,6 +1276,7 @@ async function checkUpdateSources() {
     let lastError;
     for (const [index, metadataUrl] of candidates.entries()) {
       try {
+        activeUpdateMetadataUrl = metadataUrl;
         configureCosUpdateFeed(metadataUrl);
         log.info(`Checking update metadata source ${index + 1}/${candidates.length}: ${metadataUrl}`);
         return await autoUpdater.checkForUpdates();
@@ -1319,6 +1333,7 @@ async function promptForAvailableUpdate(info, isStartupPrompt = false) {
 
   const version = info?.version || '';
   const detailLines = [];
+  if (info?.updateChannel) detailLines.push(`${tr('updateDialog.updateChannel')}: ${info.updateChannel}`);
   if (info?.releaseName) detailLines.push(`${tr('updateDialog.releaseLabel')} ${info.releaseName}`);
   if (info?.releaseDate) detailLines.push(`${tr('updateDialog.dateLabel')} ${new Date(info.releaseDate).toLocaleString()}`);
   const releaseNotes = await fetchGiteeReleaseNotes(version);
@@ -1972,6 +1987,7 @@ autoUpdater.on('checking-for-update', () => {
 });
 
 autoUpdater.on('update-available', (info) => {
+  info = withUpdateChannel(info);
   updatePromptState.latestInfo = info;
   updateMainWindowTitle();
   sendUpdateStatusToPrefs('available', info);
@@ -1997,6 +2013,7 @@ autoUpdater.on('update-available', (info) => {
 });
 
 autoUpdater.on('update-not-available', (info) => {
+  info = withUpdateChannel(info);
   sendUpdateStatusToPrefs('not-available', info);
   updatePromptState.latestInfo = null;
   updatePromptState.phase = 'idle';
@@ -2013,12 +2030,14 @@ autoUpdater.on('error', (err) => {
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
+  progressObj = { ...progressObj, updateChannel: updatePromptState.latestInfo?.updateChannel || '' };
   updatePromptState.latestProgress = progressObj;
   sendUpdateStatusToPrefs('download-progress', progressObj);
   sendUpdateDownloadStatus('progress', progressObj);
 });
 
 autoUpdater.on('update-downloaded', (info) => {
+  info = withUpdateChannel(info);
   updateDownloadToken = null;
   updatePromptState.phase = 'downloaded';
   updatePromptState.latestInfo = info;

@@ -32,6 +32,26 @@ function buildUpdateMetadataCandidates(primaryUrl) {
   ])];
 }
 
+function getUpdateChannel(metadataUrl, updateInfo) {
+  const installer = Array.isArray(updateInfo?.files)
+    ? updateInfo.files.find(file => /\.exe(?:$|[?#])/i.test(String(file?.url || file?.name || '')))
+    : null;
+  const installerUrl = installer?.url || updateInfo?.path;
+  let url;
+  try {
+    url = new URL(installerUrl || metadataUrl, metadataUrl);
+  } catch {
+    return '';
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  if (hostname.endsWith('.myqcloud.com')) return 'Tencent COS';
+  if (hostname === 'github.com' || hostname.endsWith('.githubusercontent.com')) return 'GitHub';
+  if (hostname === 'gitee.com' || hostname.endsWith('.gitee.com')) return 'Gitee';
+  if (hostname === 'trigger-cn.top' || hostname.endsWith('.trigger-cn.top')) return 'Trigger-CN';
+  return hostname;
+}
+
 async function resolveUpdateMetadataUrl({
   fallbackUrl,
   fetchImpl = fetch,
@@ -96,6 +116,7 @@ module.exports = {
   SERVER_UPDATE_METADATA_URL,
   UPDATE_SOURCE_ENDPOINT,
   buildUpdateMetadataCandidates,
+  getUpdateChannel,
   resolveUpdateMetadataUrl,
   validateMetadataUrl
 };

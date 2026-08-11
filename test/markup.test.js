@@ -641,6 +641,8 @@ test('update confirmation opens a controlled download window with progress and i
   assert.match(main, /GITEE_API_BASE = `https:\/\/gitee\.com\/api\/v5\/repos\/\$\{GITEE_OWNER\}\/\$\{GITEE_REPO\}`/);
   assert.match(main, /resolveUpdateMetadataUrl\(\{ fallbackUrl: SERVER_UPDATE_METADATA_URL/);
   assert.match(main, /const candidates = buildUpdateMetadataCandidates\(resolved\.metadataUrl\)/);
+  assert.match(main, /activeUpdateMetadataUrl = metadataUrl/);
+  assert.match(main, /const updateChannel = getUpdateChannel/);
   assert.match(main, /for \(const \[index, metadataUrl\] of candidates\.entries\(\)\)/);
   assert.match(main, /autoUpdater\.setFeedURL\(\{ provider: 'custom', updateProvider: CosProvider, metadataUrl \}\)/);
   assert.match(main, /checkUpdateSources\(\)/);
@@ -655,7 +657,10 @@ test('update confirmation opens a controlled download window with progress and i
   assert.match(progressHtml, /id="install-btn"/);
   assert.match(progressHtml, /id="cancel-btn"/);
   assert.match(progressHtml, /id="manual-download-link"/);
+  assert.match(progressHtml, /id="channel"/);
   assert.match(progressRenderer, /bytesPerSecond/);
+  assert.match(progressRenderer, /updateChannelLabel/);
+  assert.match(preferences, /updateDialog\.updateChannel/);
   assert.match(progressRenderer, /open-update-download-url/);
   assert.match(progressRenderer, /ipcRenderer\.send\('quit-and-install'\)/);
   assert.match(progressRenderer, /ipcRenderer\.send\('cancel-update-download'\)/);

@@ -858,6 +858,9 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
     const restartBtn = elements.restartInstallBtn;
 
     if (!statusEl || !checkBtn) return;
+    const withChannel = message => data?.updateChannel
+        ? `${message} ${tr('updateDialog.updateChannel')}: ${data.updateChannel}`
+        : message;
 
     switch (status) {
         case 'checking':
@@ -867,13 +870,13 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
             if (restartBtn) restartBtn.style.display = 'none';
             break;
         case 'available':
-            statusEl.textContent = tr('prefs.updateAvailableManual', { version: data.version });
+            statusEl.textContent = withChannel(tr('prefs.updateAvailableManual', { version: data.version }));
             statusEl.style.color = 'var(--accent-color)';
             if (progressEl) progressEl.style.display = 'none';
             checkBtn.disabled = false;
             break;
         case 'not-available':
-            statusEl.textContent = tr('prefs.latestVersion');
+            statusEl.textContent = withChannel(tr('prefs.latestVersion'));
             statusEl.style.color = 'var(--text-secondary)';
             checkBtn.disabled = false;
             if (progressEl) progressEl.style.display = 'none';
@@ -893,11 +896,11 @@ ipcRenderer.on('update-status', (event, { status, data }) => {
             if (progressEl) progressEl.style.display = 'none';
             break;
         case 'download-progress':
-            statusEl.textContent = tr('prefs.downloading', { percent: Math.round(data.percent) });
+            statusEl.textContent = withChannel(tr('prefs.downloading', { percent: Math.round(data.percent) }));
             if (fillEl) fillEl.style.width = `${data.percent}%`;
             break;
         case 'downloaded':
-            statusEl.textContent = tr('prefs.updateDownloaded', { version: data.version });
+            statusEl.textContent = withChannel(tr('prefs.updateDownloaded', { version: data.version }));
             statusEl.style.color = '#00ff00';
             if (progressEl) progressEl.style.display = 'none';
             checkBtn.style.display = 'none';

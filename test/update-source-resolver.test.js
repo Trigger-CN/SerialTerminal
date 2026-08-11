@@ -7,6 +7,7 @@ const {
   GITHUB_UPDATE_METADATA_URL,
   SERVER_UPDATE_METADATA_URL,
   buildUpdateMetadataCandidates,
+  getUpdateChannel,
   resolveUpdateMetadataUrl,
   validateMetadataUrl
 } = require('../update-source-resolver');
@@ -70,4 +71,14 @@ test('metadata candidates fall back through server, COS, and GitHub without dupl
     COS_UPDATE_METADATA_URL,
     GITHUB_UPDATE_METADATA_URL
   ]);
+});
+
+test('update channel follows the installer URL and falls back to the metadata host', () => {
+  assert.equal(getUpdateChannel(SERVER_UPDATE_METADATA_URL, {
+    files: [{ url: 'https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases/v1/setup.exe' }]
+  }), 'Tencent COS');
+  assert.equal(getUpdateChannel(GITHUB_UPDATE_METADATA_URL, {
+    files: [{ url: 'SerialTerminal-Setup-1.2.3.exe' }]
+  }), 'GitHub');
+  assert.equal(getUpdateChannel('https://updates.example.com/latest.yml', {}), 'updates.example.com');
 });
