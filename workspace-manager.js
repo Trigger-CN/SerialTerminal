@@ -326,27 +326,54 @@ function createWorkspaceManager(options = {}) {
         }
     }
 
+    function applyActiveTabToPane(paneId) {
+        const pane = getPaneById(paneId);
+        const paneEl = getPaneDom(paneId);
+        if (!paneEl) return;
+        paneEl.querySelector('.main-tab.active')?.classList.remove('active');
+        paneEl.querySelector('.main-tab-pane.active')?.classList.remove('active');
+        paneEl.querySelectorAll('.main-tab[aria-selected="true"]').forEach(tab => {
+            tab.setAttribute('aria-selected', 'false');
+        });
+        if (!pane.activeTabId) return;
+        const activeTab = paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
+        const activePane = paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`);
+        activeTab?.classList.add('active');
+        activeTab?.setAttribute('aria-selected', 'true');
+        activePane?.classList.add('active');
+    }
+
     function switchPaneTab(paneId, tabId, { persist = true } = {}) {
         const resolvedPaneId = paneId || getPaneIdForTabId(tabId);
         const layout = getLayoutState();
         const pane = getPaneById(resolvedPaneId);
         if (!pane.tabIds.includes(tabId)) return;
 
+        if (pane.activeTabId === tabId) {
+            if (layout.activePaneId !== resolvedPaneId) {
+                setActivePane(resolvedPaneId, { persist });
+            }
+            return false;
+        }
+
+        const changedPaneIds = new Set([resolvedPaneId]);
         layout.panes.forEach(item => {
             if (item.id !== resolvedPaneId && item.activeTabId === tabId) {
                 item.activeTabId = item.tabIds.find(id => id !== tabId) || item.tabIds[0] || null;
+                changedPaneIds.add(item.id);
             }
         });
 
         pane.activeTabId = tabId;
         setActivePane(resolvedPaneId, { persist: false });
-        applyLayoutToDom();
+        changedPaneIds.forEach(applyActiveTabToPane);
         if (persist) {
             persistLayout();
         }
         if (typeof onTabActivated === 'function') {
             onTabActivated({ tabId, paneId: resolvedPaneId });
         }
+        return true;
     }
 
     function enableSplit(orientation) {

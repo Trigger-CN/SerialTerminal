@@ -276,3 +276,78 @@ test('moves tabs to indexed positions within and across panes', () => {
   assert.deepEqual(layout.panes[0].tabIds, ['tab-filter-2', 'tab-filter-1']);
   assert.deepEqual(layout.panes[1].tabIds, ['tab-main', 'tab-shell-1']);
 });
+
+test('switching the active tab is a no-op and does not reapply pane classes', () => {
+  const layout = {
+    splitEnabled: true,
+    activePaneId: 'pane-1',
+    panes: [
+      { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main', 'tab-filter-1'] },
+      { id: 'pane-2', activeTabId: 'tab-filter-2', tabIds: ['tab-filter-2'] }
+    ]
+  };
+  let domQueries = 0;
+  let persisted = 0;
+  let activated = 0;
+  const previousDocument = global.document;
+  global.document = {
+    querySelectorAll() { domQueries++; return []; }
+  };
+
+  try {
+    const manager = createWorkspaceManager({
+      getLayout: () => layout,
+      cloneLayout: value => JSON.parse(JSON.stringify(value || layout)),
+      persistLayout: () => persisted++,
+      getPaneDom: () => { domQueries++; return null; },
+      onTabActivated: () => activated++
+    });
+    assert.equal(manager.switchPaneTab('pane-1', 'tab-main'), false);
+  } finally {
+    global.document = previousDocument;
+  }
+
+  assert.equal(domQueries, 0);
+  assert.equal(persisted, 0);
+  assert.equal(activated, 0);
+  assert.equal(layout.panes[1].activeTabId, 'tab-filter-2');
+});
+
+test('switching tabs updates only the target pane', () => {
+  const layout = {
+    splitEnabled: true,
+    activePaneId: 'pane-1',
+    panes: [
+      { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main', 'tab-filter-1'] },
+      { id: 'pane-2', activeTabId: 'tab-filter-2', tabIds: ['tab-filter-2'] }
+    ]
+  };
+  const queries = { 'pane-1': [], 'pane-2': [] };
+  const node = () => ({ classList: { add() {}, remove() {} }, setAttribute() {} });
+  const paneElements = Object.fromEntries(['pane-1', 'pane-2'].map(paneId => [paneId, {
+    querySelector(selector) { queries[paneId].push(selector); return node(); },
+    querySelectorAll(selector) { queries[paneId].push(selector); return []; }
+  }]));
+  const previousDocument = global.document;
+  global.document = {
+    querySelectorAll: selector => selector === '.workspace-pane'
+      ? [{ dataset: { paneId: 'pane-1' }, classList: { toggle() {} } }, { dataset: { paneId: 'pane-2' }, classList: { toggle() {} } }]
+      : []
+  };
+
+  try {
+    const manager = createWorkspaceManager({
+      getLayout: () => layout,
+      cloneLayout: value => JSON.parse(JSON.stringify(value || layout)),
+      persistLayout() {},
+      getPaneDom: paneId => paneElements[paneId]
+    });
+    assert.equal(manager.switchPaneTab('pane-1', 'tab-filter-1'), true);
+  } finally {
+    global.document = previousDocument;
+  }
+
+  assert.equal(layout.panes[0].activeTabId, 'tab-filter-1');
+  assert.ok(queries['pane-1'].length > 0);
+  assert.deepEqual(queries['pane-2'], []);
+});
