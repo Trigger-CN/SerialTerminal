@@ -9,9 +9,10 @@ const { createGiteePublisher, formatError } = require('./publish-gitee-release')
 const GITHUB_API_ROOT = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const RETRY_DELAYS_MS = [2000, 5000, 10000];
+const DEFAULT_COS_RELEASES_ROOT = 'https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases';
 
 function parseArguments(args) {
-  const options = {};
+  const options = { 'cos-releases-root': DEFAULT_COS_RELEASES_ROOT };
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
     if (!name.startsWith('--') || !args[index + 1]) throw new Error(`Invalid argument: ${name}`);
@@ -33,9 +34,10 @@ function createGitHubReleaseClient({
   dispatcher = new Agent({ headersTimeout: REQUEST_TIMEOUT_MS, bodyTimeout: REQUEST_TIMEOUT_MS }),
   logger = console
 } = {}) {
-  async function request(url, destination) {
-    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-      logger.log(`[github] GET ${url} attempt ${attempt + 1}/${RETRY_DELAYS_MS.length + 1}`);
+  async function request(url, { retry = true } = {}) {
+    const retryDelays = retry ? RETRY_DELAYS_MS : [];
+    for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+      logger.log(`[github] GET ${url} attempt ${attempt + 1}/${retryDelays.length + 1}`);
       try {
         const response = await fetchImpl(url, {
           headers: {
@@ -52,26 +54,25 @@ function createGitHubReleaseClient({
           error.status = response.status;
           throw error;
         }
-        if (!destination) return response.json();
-        await pipeline(response.body, fs.createWriteStream(destination));
-        return;
+        return response;
       } catch (error) {
-        if (attempt === RETRY_DELAYS_MS.length || (error.status && error.status !== 429 && error.status < 500)) throw error;
-        await wait(RETRY_DELAYS_MS[attempt]);
+        if (attempt === retryDelays.length || (error.status && error.status !== 429 && error.status < 500)) throw error;
+        await wait(retryDelays[attempt]);
       }
     }
   }
 
   async function getRelease(owner, repo, tag) {
-    return request(`${apiRoot}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`);
+    const response = await request(`${apiRoot}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`);
+    return response.json();
   }
 
-  async function downloadAsset(asset, destination) {
-    if (!asset?.browser_download_url) throw new Error('GitHub release asset has no browser_download_url');
-    await request(asset.browser_download_url, destination);
+  async function download(url, destination) {
+    const response = await request(url, { retry: false });
+    await pipeline(response.body, fs.createWriteStream(destination));
   }
 
-  return { downloadAsset, getRelease };
+  return { download, getRelease };
 }
 
 function selectWindowsInstaller(release, tag) {
@@ -87,17 +88,24 @@ function selectWindowsInstaller(release, tag) {
 async function mirrorRelease(options, {
   githubClient = createGitHubReleaseClient(),
   giteePublisher = createGiteePublisher({ token: process.env.GITEE_ACCESS_TOKEN }),
-  outputDirectory = path.resolve('release-mirror')
+  outputDirectory = path.resolve('release-mirror'),
+  downloadOptions = {}
 } = {}) {
   const release = await githubClient.getRelease(options['github-owner'], options['github-repo'], options.tag);
   const installer = selectWindowsInstaller(release, options.tag);
   await fs.promises.mkdir(outputDirectory, { recursive: true });
   const installerPath = path.join(outputDirectory, installer.name);
-  await githubClient.downloadAsset(installer, installerPath);
-  const stat = await fs.promises.stat(installerPath);
-  if (stat.size !== installer.size) {
-    throw new Error(`Downloaded installer size mismatch: expected ${installer.size}, received ${stat.size}`);
-  }
+  const cosUrl = `${options['cos-releases-root'].replace(/\/$/, '')}/${encodeURIComponent(options.tag)}/${encodeURIComponent(installer.name)}`;
+  await downloadInstallerWithFallback({
+    sources: [
+      { name: 'COS', url: cosUrl },
+      { name: 'GitHub', url: installer.browser_download_url }
+    ],
+    destination: installerPath,
+    expectedSize: installer.size,
+    download: githubClient.download,
+    ...downloadOptions
+  });
   return giteePublisher.publish({
     owner: options['gitee-owner'],
     repo: options['gitee-repo'],
@@ -107,6 +115,46 @@ async function mirrorRelease(options, {
     notes: release.body || '',
     files: [installerPath]
   });
+}
+
+async function downloadInstallerWithFallback({
+  sources,
+  destination,
+  expectedSize,
+  download,
+  retryDelays = RETRY_DELAYS_MS,
+  wait = delay,
+  logger = console
+}) {
+  const temporaryPath = `${destination}.part`;
+  const failures = [];
+  for (const source of sources) {
+    if (!source.url) {
+      failures.push(`${source.name}: missing URL`);
+      continue;
+    }
+    for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+      await fs.promises.rm(temporaryPath, { force: true });
+      logger.log(`[mirror] download ${source.name} attempt ${attempt + 1}/${retryDelays.length + 1}: ${source.url}`);
+      try {
+        await download(source.url, temporaryPath);
+        const stat = await fs.promises.stat(temporaryPath);
+        if (stat.size !== expectedSize) {
+          throw new Error(`size mismatch: expected ${expectedSize}, received ${stat.size}`);
+        }
+        await fs.promises.rm(destination, { force: true });
+        await fs.promises.rename(temporaryPath, destination);
+        logger.log(`[mirror] download accepted from ${source.name}: ${stat.size} bytes`);
+        return source.name;
+      } catch (error) {
+        failures.push(`${source.name} attempt ${attempt + 1}: ${error.message}`);
+        logger.warn(`[mirror] download failed from ${source.name}: ${error.message}`);
+        if (attempt < retryDelays.length) await wait(retryDelays[attempt]);
+      }
+    }
+  }
+  await fs.promises.rm(temporaryPath, { force: true });
+  throw new Error(`All installer download sources failed: ${failures.join('; ')}`);
 }
 
 function delay(milliseconds) {
@@ -126,4 +174,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createGitHubReleaseClient, mirrorRelease, parseArguments, selectWindowsInstaller };
+module.exports = {
+  DEFAULT_COS_RELEASES_ROOT,
+  createGitHubReleaseClient,
+  downloadInstallerWithFallback,
+  mirrorRelease,
+  parseArguments,
+  selectWindowsInstaller
+};

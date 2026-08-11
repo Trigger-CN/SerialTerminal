@@ -118,4 +118,5 @@ test('Gitee tag pipeline mirrors the exact GitHub Windows installer', () => {
   assert.match(giteeWorkflow, /GITEE_ACCESS_TOKEN="\$CI_GITEE_ACCESS_TOKEN" node/);
   assert.match(giteeWorkflow, /node scripts\/mirror-github-release-to-gitee\.js/);
   assert.match(giteeWorkflow, /--tag "\$TAG" --target "\$GITEE_COMMIT"/);
+  assert.match(giteeWorkflow, /--cos-releases-root "https:\/\/tst-update-package-1316411824\.cos\.ap-hongkong\.myqcloud\.com\/releases"/);
 });

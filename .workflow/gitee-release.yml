@@ -23,7 +23,7 @@ stages:
           - npm ci --ignore-scripts
           - TAG="$(git tag --points-at "$GITEE_COMMIT" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' | head -n 1)"
           - test -n "$TAG"
-          - GITEE_ACCESS_TOKEN="$CI_GITEE_ACCESS_TOKEN" node scripts/mirror-github-release-to-gitee.js --github-owner Trigger-CN --github-repo SerialTerminal --gitee-owner trigger-cn --gitee-repo SerialTerminal --tag "$TAG" --target "$GITEE_COMMIT"
+          - GITEE_ACCESS_TOKEN="$CI_GITEE_ACCESS_TOKEN" node scripts/mirror-github-release-to-gitee.js --github-owner Trigger-CN --github-repo SerialTerminal --gitee-owner trigger-cn --gitee-repo SerialTerminal --tag "$TAG" --target "$GITEE_COMMIT" --cos-releases-root "https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases"
         caches:
           - ~/.npm
         notify: []

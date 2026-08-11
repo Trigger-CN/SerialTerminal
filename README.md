@@ -224,7 +224,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 发布任务将 Windows 和 Linux 安装包、更新元数据统一上传到 GitHub Releases
 - GitHub Actions 仅向 COS 上传 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`；Linux 产物只保留在 GitHub Release
 - GitHub Release 和 COS 下载验证成功后，GitHub Actions 将发布提交和不可变 Tag 同步到 Gitee；不会在 GitHub 侧直接修改 Gitee Release
-- `.workflow/gitee-release.yml` 由版本 Tag 触发，从 GitHub Release 下载名称完全匹配的 Windows `.exe`，复用 GitHub Release 正文并创建或更新同 Tag 的 Gitee Release
+- `.workflow/gitee-release.yml` 由版本 Tag 触发，Windows `.exe` 优先从 COS 下载，每个来源按 `2s/5s/10s` 间隔重试三次；COS 仍失败时改从 GitHub Release 下载，并用 GitHub 附件记录校验文件名和大小，最后复用 GitHub Release 正文创建或更新同 Tag 的 Gitee Release
 - Gitee Go 流水线需要配置加密变量 `CI_GITEE_ACCESS_TOKEN`，流水线会将其映射为发布脚本读取的 `GITEE_ACCESS_TOKEN`；令牌需具备该仓库 Release 创建、更新和附件上传权限，企业流水线可复用同一条镜像命令
 - 所有发布和公开下载验证成功后，发布任务会永久保留 `releases/latest/`，并按语义版本仅保留最新三个 `releases/v*/` 版本；COS 发布身份需具备列举桶对象和批量删除对象权限
 
