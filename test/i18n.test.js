@@ -44,3 +44,8 @@ test('quick-send disconnected toast is translated for every configured language'
     assert.equal(t(language, 'main.quickSendDisconnectedToast'), text);
   });
 });
+
+test('scheduled update toast directs users to update settings', () => {
+  assert.equal(t('en', 'main.updateToastMessage', { version: '1.2.3' }), 'Version 1.2.3 is available. Update it from Settings > About.');
+  assert.equal(t('zh-CN', 'main.updateToastMessage', { version: '1.2.3' }), '新版本 1.2.3 已发布，请前往“设置 > 关于”进行更新。');
+});

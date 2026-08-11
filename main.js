@@ -1423,6 +1423,15 @@ function recordUpdatePrompt(info, now = Date.now()) {
   saveConfig({ lastUpdatePromptVersion: version, lastUpdatePromptAt: now });
 }
 
+function showScheduledUpdateToast(info) {
+  recordUpdatePrompt(info);
+  updatePromptState.phase = 'available';
+  updatePromptState.checkSource = null;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('scheduled-update-available', { version: info?.version || '' });
+  }
+}
+
 function offerAvailableUpdate(info, isStartupPrompt) {
   if (updatePromptState.promptPromise) return updatePromptState.promptPromise;
   recordUpdatePrompt(info);
@@ -1994,7 +2003,7 @@ autoUpdater.on('update-available', (info) => {
 
   if (updatePromptState.checkSource === 'scheduled') {
     if (shouldShowAutomaticUpdatePrompt(info)) {
-      offerAvailableUpdate(info, false);
+      showScheduledUpdateToast(info);
     } else {
       updatePromptState.phase = 'available';
       updatePromptState.checkSource = null;

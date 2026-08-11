@@ -682,6 +682,8 @@ test('update downloads can be cancelled with a cancellation token', () => {
 
 test('automatic update checks every two hours and reminds every eight hours', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
 
   assert.match(main, /UPDATE_CHECK_INTERVAL_MS = 2 \* 60 \* 60 \* 1000/);
   assert.match(main, /UPDATE_PROMPT_INTERVAL_MS = 8 \* 60 \* 60 \* 1000/);
@@ -691,7 +693,13 @@ test('automatic update checks every two hours and reminds every eight hours', ()
   assert.match(main, /currentConfig\.lastUpdatePromptVersion !== version/);
   assert.match(main, /now - currentConfig\.lastUpdatePromptAt >= UPDATE_PROMPT_INTERVAL_MS/);
   assert.match(main, /saveConfig\(\{ lastUpdatePromptVersion: version, lastUpdatePromptAt: now \}\)/);
-  assert.match(main, /if \(updatePromptState\.checkSource === 'scheduled'\) \{\s*if \(shouldShowAutomaticUpdatePrompt\(info\)\) \{\s*offerAvailableUpdate\(info, false\);/s);
+  assert.match(main, /if \(updatePromptState\.checkSource === 'scheduled'\) \{\s*if \(shouldShowAutomaticUpdatePrompt\(info\)\) \{\s*showScheduledUpdateToast\(info\);/s);
+  assert.match(main, /mainWindow\.webContents\.send\('scheduled-update-available'/);
+  assert.match(main, /const isStartupPrompt = updatePromptState\.checkSource === 'startup'[\s\S]*offerAvailableUpdate\(info, isStartupPrompt\)/);
+  assert.match(renderer, /ipcRenderer\.on\('scheduled-update-available'/);
+  assert.match(renderer, /setTimeout\(hideScheduledUpdateToast, 5000\)/);
+  assert.match(renderer, /createMaterialIcon\('close'\)/);
+  assert.match(styles, /\.scheduled-update-toast\s*\{[^}]*position:\s*fixed;[^}]*right:\s*16px;[^}]*bottom:\s*16px;/s);
   assert.match(main, /lastUpdatePromptVersion: ''/);
   assert.match(main, /lastUpdatePromptAt: 0/);
   assert.match(main, /if \(updateCheckTimer\) clearInterval\(updateCheckTimer\)/);

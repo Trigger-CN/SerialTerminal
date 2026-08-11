@@ -96,6 +96,9 @@ let workspaceManager = null;
 let lastAppliedWorkspaceLayoutKey = '';
 let isRestoringWorkspaceSession = false;
 let isDraggingWorkspaceSplitter = false;
+let scheduledUpdateToast = null;
+let scheduledUpdateToastTimer = null;
+let scheduledUpdateToastRemoveTimer = null;
 
 function tr(key, params = {}) {
     return t(currentLanguage, key, params);
@@ -3305,6 +3308,63 @@ ipcRenderer.invoke('get-config').then(config => {
     showWelcomeGuideForCurrentVersion(config);
 });
 ipcRenderer.on('config-updated', (event, config) => applyConfig(config));
+
+function hideScheduledUpdateToast(animate = true) {
+    if (scheduledUpdateToastTimer) clearTimeout(scheduledUpdateToastTimer);
+    scheduledUpdateToastTimer = null;
+    const toast = scheduledUpdateToast;
+    if (!toast) return;
+    if (scheduledUpdateToastRemoveTimer) clearTimeout(scheduledUpdateToastRemoveTimer);
+    scheduledUpdateToastRemoveTimer = null;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    if (!animate || reduceMotion) {
+        toast.remove();
+        scheduledUpdateToast = null;
+        return;
+    }
+    toast.classList.add('scheduled-update-toast-hiding');
+    scheduledUpdateToastRemoveTimer = setTimeout(() => {
+        toast.remove();
+        if (scheduledUpdateToast === toast) scheduledUpdateToast = null;
+        scheduledUpdateToastRemoveTimer = null;
+    }, 180);
+}
+
+function showScheduledUpdateToast({ version = '' } = {}) {
+    hideScheduledUpdateToast(false);
+    const toast = document.createElement('div');
+    toast.className = 'scheduled-update-toast';
+    toast.setAttribute('role', 'status');
+
+    const content = document.createElement('div');
+    content.className = 'scheduled-update-toast-content';
+    const title = document.createElement('div');
+    title.className = 'scheduled-update-toast-title';
+    title.textContent = trFallback('main.updateToastTitle', 'New version available');
+    const message = document.createElement('div');
+    message.className = 'scheduled-update-toast-message';
+    message.textContent = trFallback(
+        'main.updateToastMessage',
+        'Version {version} is available. Update it from Settings > About.',
+        { version }
+    );
+    content.append(title, message);
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'scheduled-update-toast-close';
+    closeButton.title = trFallback('main.closeUpdateToast', 'Close');
+    closeButton.setAttribute('aria-label', closeButton.title);
+    closeButton.appendChild(createMaterialIcon('close'));
+    closeButton.onclick = () => hideScheduledUpdateToast();
+
+    toast.append(content, closeButton);
+    document.body.appendChild(toast);
+    scheduledUpdateToast = toast;
+    scheduledUpdateToastTimer = setTimeout(hideScheduledUpdateToast, 5000);
+}
+
+ipcRenderer.on('scheduled-update-available', (_event, info) => showScheduledUpdateToast(info));
 
 ipcRenderer.on('shell-tab-output', (event, payload = {}) => {
     const tab = getShellTabState(payload.tabId);

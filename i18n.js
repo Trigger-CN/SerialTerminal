@@ -397,6 +397,17 @@ Object.assign(translations.fr.main, { quickSendDisconnectedToast: 'Un instant, a
 Object.assign(translations.ru.main, { quickSendDisconnectedToast: 'Постойте, вы не забыли открыть последовательный порт?' });
 Object.assign(translations.de.main, { quickSendDisconnectedToast: 'Moment, haben Sie vergessen, den seriellen Port zu öffnen?' });
 
+Object.assign(translations.en.main, {
+  updateToastTitle: 'New version available',
+  updateToastMessage: 'Version {version} is available. Update it from Settings > About.',
+  closeUpdateToast: 'Close update notification'
+});
+Object.assign(translations['zh-CN'].main, {
+  updateToastTitle: '发现新版本',
+  updateToastMessage: '新版本 {version} 已发布，请前往“设置 > 关于”进行更新。',
+  closeUpdateToast: '关闭更新通知'
+});
+
 Object.assign(translations.en.prefs, {
   shortcuts: 'Shortcuts', shortcutsSettings: 'Shortcut Settings', shortcutsHelp: 'Click a shortcut field and press a key combination. Backspace clears a shortcut.', resetShortcutDefaults: 'Reset Shortcut Defaults', shortcutDisabled: 'Disabled',
   shortcutSendMainInput: 'Send bottom input', shortcutToggleSendHistory: 'Open send history', shortcutHistoryPrevious: 'Previous send history', shortcutHistoryNext: 'Next send history', shortcutFocusSearch: 'Focus search', shortcutClearActiveTerminal: 'Clear active terminal', shortcutRefreshPorts: 'Refresh serial ports', shortcutToggleSerialConnection: 'Connect / disconnect serial'

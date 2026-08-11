@@ -622,6 +622,82 @@ label:hover {
     animation: quick-send-toast-out 160ms ease-in forwards;
 }
 
+.scheduled-update-toast {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 1600;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: min(360px, calc(100vw - 32px));
+    padding: 14px 12px 14px 16px;
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--accent-color);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42);
+    animation: scheduled-update-toast-in 180ms ease-out;
+}
+
+.scheduled-update-toast-content {
+    min-width: 0;
+    flex: 1;
+}
+
+.scheduled-update-toast-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.scheduled-update-toast-message {
+    margin-top: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.scheduled-update-toast-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.scheduled-update-toast-close:hover {
+    background: var(--bg-input);
+    color: var(--text-primary);
+}
+
+.scheduled-update-toast-close .material-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.scheduled-update-toast.scheduled-update-toast-hiding {
+    animation: scheduled-update-toast-out 160ms ease-in forwards;
+}
+
+@keyframes scheduled-update-toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scheduled-update-toast-out {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(8px); }
+}
+
 @keyframes quick-send-toast-in {
     from { opacity: 0; transform: translateY(3px); }
     to { opacity: 1; transform: translateY(0); }
@@ -666,7 +742,8 @@ label:hover {
     .quick-send-main-btn.auto-trigger-flash,
     .quick-send-main-btn.quick-send-click-success::after,
     .quick-send-main-btn.quick-send-click-failed::after,
-    .quick-send-disconnected-toast {
+    .quick-send-disconnected-toast,
+    .scheduled-update-toast {
         animation: none;
     }
 
