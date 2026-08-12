@@ -74,7 +74,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 7;
+const CONFIG_VERSION = 8;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -292,6 +292,24 @@ function normalizeConfig(config, defaults) {
       ? oldAutoSend.content
       : (typeof oldAutoSend.text === 'string' ? oldAutoSend.text : '')
   };
+  const usedQuickGroupIds = new Set();
+  normalized.quickSendGroups = Array.isArray(source.quickSendGroups)
+    ? source.quickSendGroups.filter(group => group && typeof group === 'object').map((group, index) => {
+        let id = typeof group.id === 'string' && group.id ? group.id : `quick-group-${index + 1}`;
+        if (usedQuickGroupIds.has(id)) {
+          let suffix = 2;
+          while (usedQuickGroupIds.has(`${id}-${suffix}`)) suffix++;
+          id = `${id}-${suffix}`;
+        }
+        usedQuickGroupIds.add(id);
+        return {
+          id,
+          name: typeof group.name === 'string' && group.name.trim() ? group.name.trim().slice(0, 60) : `Group ${index + 1}`,
+          collapsed: normalizeBoolean(group.collapsed, false)
+        };
+      })
+    : [];
+  normalized.quickSendUngroupedCollapsed = normalizeBoolean(source.quickSendUngroupedCollapsed, false);
   const usedQuickIds = new Set();
   normalized.quickSendList = Array.isArray(source.quickSendList)
     ? source.quickSendList.filter(item => item && typeof item === 'object').map((item, index) => {
@@ -305,6 +323,7 @@ function normalizeConfig(config, defaults) {
         const trigger = item.autoTrigger && typeof item.autoTrigger === 'object' ? item.autoTrigger : {};
         return {
           id,
+          groupId: typeof item.groupId === 'string' && usedQuickGroupIds.has(item.groupId) ? item.groupId : null,
           label: typeof item.label === 'string' ? item.label : '',
           mode: oneOf(item.mode, SERIAL_MODES, normalized.mainInputSettings.mode),
           appendCrLf: normalizeBoolean(item.appendCrLf,
@@ -463,6 +482,8 @@ function loadConfig() {
       content: ''
     },
     quickSendList: [],
+    quickSendGroups: [],
+    quickSendUngroupedCollapsed: false,
     sidebarQuickSendOrder: [],
     hexDisplaySettings: {
       bytesPerLine: 16,

@@ -278,6 +278,244 @@ label:hover {
 }
 
 /* Quick Send List Styling */
+.quick-send-list-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 24px;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.quick-send-heading-btn,
+.quick-send-group-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.quick-send-heading-btn {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-input);
+}
+
+.quick-send-heading-btn:hover,
+.quick-send-group-action:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.quick-send-heading-btn svg[data-material-icon],
+.quick-send-group-action svg[data-material-icon],
+.quick-send-group-handle svg[data-material-icon] {
+    width: 14px;
+    height: 14px;
+}
+
+.quick-send-group {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.quick-send-group-header {
+    display: flex;
+    align-items: center;
+    min-height: 26px;
+    gap: 2px;
+    color: var(--text-secondary);
+    user-select: none;
+}
+
+.quick-send-group:not(.ungrouped) .quick-send-group-header {
+    cursor: grab;
+}
+
+.quick-send-group-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    min-height: 24px;
+    flex: 1;
+    padding: 2px 4px;
+    border-color: transparent;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+}
+
+.quick-send-group-toggle:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.quick-send-group-toggle svg[data-material-icon] {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    transition: transform 140ms ease;
+}
+
+.quick-send-group.collapsed .quick-send-group-toggle svg[data-material-icon] {
+    transform: rotate(-90deg);
+}
+
+.quick-send-group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.quick-send-group-count {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.quick-send-group-handle {
+    display: none;
+    align-items: center;
+    color: var(--text-secondary);
+    cursor: grab;
+}
+
+.quick-send-group-action {
+    display: none;
+    flex: 0 0 22px;
+}
+
+.quick-send-group-action.delete:hover {
+    color: #fff;
+    background: var(--danger-color);
+}
+
+.quick-send-reorder-mode .quick-send-group-handle,
+.quick-send-reorder-mode .quick-send-group-action,
+.quick-send-group-header:hover .quick-send-group-handle,
+.quick-send-group-header:focus-within .quick-send-group-handle,
+.quick-send-group-header:hover .quick-send-group-action,
+.quick-send-group-header:focus-within .quick-send-group-action {
+    display: inline-flex;
+}
+
+.quick-send-group-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 2px;
+    overflow: hidden;
+    opacity: 1;
+    will-change: height, opacity;
+}
+
+.quick-send-group.collapsed .quick-send-group-items {
+    display: none;
+    opacity: 0;
+}
+
+.quick-send-group.group-dragging {
+    opacity: 0.45;
+}
+
+.quick-send-group-drop-before::before,
+.quick-send-group-drop-after::after {
+    content: '';
+    position: absolute;
+    z-index: 6;
+    left: 6px;
+    right: 6px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--accent-hover);
+    box-shadow: 0 0 5px rgba(0, 152, 255, 0.48);
+}
+
+.quick-send-group-drop-before::before {
+    top: -1px;
+}
+
+.quick-send-group-drop-after::after {
+    bottom: -1px;
+}
+
+.quick-send-group-field select,
+.quick-send-group-field input {
+    width: 100%;
+}
+
+.quick-send-group-field input {
+    margin-top: 8px;
+}
+
+.quick-send-confirm-dialog p {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.quick-send-group-dialog {
+    width: min(360px, calc(100vw - 32px));
+}
+
+.quick-send-group-dialog .app-dialog-header {
+    padding: 12px 14px;
+}
+
+.quick-send-group-dialog .app-dialog-header h2 {
+    font-size: 15px;
+}
+
+.quick-send-group-dialog-body {
+    padding: 18px 16px 20px;
+}
+
+.quick-send-group-name-field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.quick-send-group-name-field label {
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.quick-send-group-name-field input {
+    width: 100%;
+    height: 34px;
+    padding: 6px 9px;
+}
+
+.quick-send-group-dialog .app-dialog-actions {
+    padding: 10px 14px 12px;
+}
+
+.quick-send-group-dialog .app-dialog-actions button {
+    min-width: 86px;
+    min-height: 32px;
+}
+
+.quick-send-group-dialog .app-dialog-actions svg[data-material-icon] {
+    width: 15px;
+    height: 15px;
+}
+
 .quick-send-item {
     position: relative;
     display: flex;
@@ -407,6 +645,10 @@ label:hover {
     border-color: transparent;
     overflow: hidden;
     line-height: 16px;
+}
+
+.quick-send-item-compact.quick-send-group-break {
+    margin-top: 3px;
 }
 
 .quick-send-item-compact .quick-send-main-btn:hover {
@@ -748,7 +990,8 @@ label:hover {
     }
 
     .quick-send-edit-delete-btn,
-    .quick-send-removing {
+    .quick-send-removing,
+    .quick-send-group-toggle svg[data-material-icon] {
         transition: none;
         animation: none;
     }

@@ -158,7 +158,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 7/);
+  assert.match(main, /const CONFIG_VERSION = 8/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
@@ -222,15 +222,26 @@ test('collapsed quick-send shortcuts persist an independent order', () => {
   assert.match(html, /id="quick-send-sidebar-color"/);
   assert.match(main, /sidebarShortcut: \{[\s\S]*enabled: normalizeBoolean\(item\.sidebarShortcut\?\.enabled/);
   assert.match(main, /normalized\.sidebarQuickSendOrder = Array\.isArray\(source\.sidebarQuickSendOrder\)/);
+  assert.match(main, /normalized\.quickSendGroups = Array\.isArray\(source\.quickSendGroups\)/);
+  assert.match(main, /normalized\.quickSendUngroupedCollapsed = normalizeBoolean\(source\.quickSendUngroupedCollapsed, false\)/);
+  assert.match(main, /groupId: typeof item\.groupId === 'string' && usedQuickGroupIds\.has\(item\.groupId\) \? item\.groupId : null/);
   assert.match(renderer, /function renderQuickSendLists\(\)/);
+  assert.match(renderer, /quickSendGroups: quickSendGroups\.map\(normalizeQuickSendGroup\)/);
+  assert.match(renderer, /quickSendGroups = moveQuickSendGroup\(quickSendGroups, groupId, insertionIndex\)/);
+  assert.match(renderer, /quickSendListEl\.addEventListener\('drop'/);
+  assert.match(renderer, /quickSendUngroupedCollapsed,/);
+  assert.match(renderer, /const currentCollapsed = group[\s\S]*?section\.classList\.contains\('collapsed'\)/);
+  assert.doesNotMatch(renderer, /setQuickSendGroupCollapsed\(groupId, !collapsed\)/);
+  assert.doesNotMatch(renderer, /window\.prompt\(/);
   assert.match(renderer, /renderQuickSendContainer\(quickSendListEl\)/);
   assert.match(renderer, /renderQuickSendContainer\(sidebarQuickSendListEl, true\)/);
   assert.match(renderer, /function applyQuickSendElementOrder\(context, orderedIds\)/);
   assert.match(renderer, /sidebarQuickSendOrder = \[\.\.\.orderedIds\]/);
-  assert.match(renderer, /quickSendList = reorderQuickSendItems\(quickSendList, orderedIds\)/);
+  assert.match(renderer, /groupId: element\.closest\('\.quick-send-group'\)\?\.dataset\.quickGroupId \|\| null/);
   assert.match(renderer, /function beginQuickSendPointer\(context, event, element\)/);
   assert.match(renderer, /function handleQuickSendPointerMove\(event\)/);
   assert.match(renderer, /function handleQuickSendPointerUp\(event\)/);
+  assert.match(renderer, /targetRect\.width === 0 \|\| targetRect\.height === 0[\s\S]*?cleanUpQuickSendDrag\(context, state\);\s*renderQuickSendLists\(\)/);
   assert.match(renderer, /quickSendList: quickSendList\.map\(normalizeQuickSendItem\),\s*sidebarQuickSendOrder/s);
   assert.match(renderer, /element\.animate\(\[\{ transform: `translateY\(\$\{offset\}px\)` \}/);
   assert.match(styles, /\.quick-send-item-compact\s*\{[^}]*width:\s*36px;[^}]*min-height:\s*36px;/s);
@@ -587,6 +598,13 @@ test('DOM command icons use shared local Material Symbols paths', () => {
   assert.doesNotMatch(html, iconGlyphs);
   assert.doesNotMatch(preferencesHtml, iconGlyphs);
   assert.doesNotMatch(html, /<option[^>]*>\s*✎/);
+  const registeredIcons = new Set([...icons.matchAll(/^\s{8}([a-z_]+):\s*'/gm)].map(match => match[1]));
+  const usedIcons = [html, preferencesHtml, fs.readFileSync(path.join(root, 'renderer.js'), 'utf8'), fs.readFileSync(path.join(root, 'preferences.js'), 'utf8')]
+    .flatMap(source => [
+      ...[...source.matchAll(/data-material-icon="([a-z_]+)"/g)].map(match => match[1]),
+      ...[...source.matchAll(/createMaterialIcon\('([a-z_]+)'\)/g)].map(match => match[1])
+    ]);
+  usedIcons.forEach(name => assert.ok(registeredIcons.has(name), `Material icon is not registered: ${name}`));
   const packageJson = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
   assert.match(packageJson, /!assets\/NotoColorEmoji-Regular\.ttf/);
 });

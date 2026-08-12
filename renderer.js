@@ -29,6 +29,9 @@ const { serializeTerminalBuffer } = require('./terminal-buffer-text');
 const {
     getVerticalInsertionIndex,
     reorderQuickSendItems,
+    moveQuickSendGroup,
+    moveQuickSendItem,
+    deleteQuickSendGroup,
     disableSidebarQuickSend,
     deleteQuickSendById
 } = require('./quick-send-reorder');
@@ -3188,6 +3191,8 @@ function applyConfig(config) {
     hexFormatter.configure(config.hexDisplaySettings || {});
     appliedHexSettingsKey = hexSettingsKey;
     const autoSendChanged = applyAutoSendConfig(config.autoSendSettings || {});
+    quickSendGroups = Array.isArray(config.quickSendGroups) ? config.quickSendGroups.map(normalizeQuickSendGroup) : [];
+    quickSendUngroupedCollapsed = config.quickSendUngroupedCollapsed === true;
     quickSendList = Array.isArray(config.quickSendList) ? config.quickSendList.map(normalizeQuickSendItem) : [];
     sidebarQuickSendOrder = Array.isArray(config.sidebarQuickSendOrder)
         ? config.sidebarQuickSendOrder.filter(id => typeof id === 'string')
@@ -4196,6 +4201,20 @@ const quickSendDialogTitle = document.getElementById('quick-send-dialog-title');
 const quickSendDialogCloseBtn = document.getElementById('quick-send-dialog-close');
 const quickSendDialogCancelBtn = document.getElementById('quick-send-dialog-cancel');
 const quickSendLabelInput = document.getElementById('quick-send-label');
+const quickSendGroupSelect = document.getElementById('quick-send-group-select');
+const quickSendNewGroupNameInput = document.getElementById('quick-send-new-group-name');
+const addQuickSendGroupBtn = document.getElementById('add-quick-send-group-btn');
+const quickSendGroupDeleteDialog = document.getElementById('quick-send-group-delete-dialog');
+const quickSendGroupDeleteMessage = document.getElementById('quick-send-group-delete-message');
+const quickSendGroupDeleteCancelBtn = document.getElementById('quick-send-group-delete-cancel');
+const quickSendGroupDeleteConfirmBtn = document.getElementById('quick-send-group-delete-confirm');
+const quickSendGroupDialog = document.getElementById('quick-send-group-dialog');
+const quickSendGroupDialogTitle = document.getElementById('quick-send-group-dialog-title');
+const quickSendGroupDialogCloseBtn = document.getElementById('quick-send-group-dialog-close');
+const quickSendGroupDialogCancelBtn = document.getElementById('quick-send-group-dialog-cancel');
+const quickSendGroupDialogSaveBtn = document.getElementById('quick-send-group-dialog-save');
+const quickSendGroupDialogSaveLabel = quickSendGroupDialogSaveBtn.querySelector('span:last-child');
+const quickSendGroupNameInput = document.getElementById('quick-send-group-name');
 const quickSendContentInput = document.getElementById('quick-send-content');
 const quickSendModeInputs = Array.from(document.querySelectorAll('input[name="quick-send-mode"]'));
 const quickSendAppendCrlfInput = document.getElementById('quick-send-append-crlf');
@@ -4209,10 +4228,19 @@ const quickSendSidebarTextInput = document.getElementById('quick-send-sidebar-te
 const quickSendSidebarColorInput = document.getElementById('quick-send-sidebar-color');
 const quickSendSidebarControls = document.getElementById('quick-send-sidebar-controls');
 const addQuickSendBtn = document.getElementById('add-quick-send-btn');
+const addQuickSendBtnLabel = addQuickSendBtn.querySelector('span:last-child');
 const quickSendValidation = document.getElementById('quick-send-validation');
 
 let quickSendList = [];
+let quickSendGroups = [];
 let sidebarQuickSendOrder = [];
+let deletingQuickSendGroupId = '';
+let quickSendGroupDeleteTrigger = null;
+let editingQuickSendGroupId = '';
+let quickSendGroupDialogTrigger = null;
+let quickSendUngroupedCollapsed = false;
+let quickSendGroupDragState = null;
+const quickSendCollapseAnimations = new WeakMap();
 const quickSendTriggerInFlight = new Set();
 const quickSendFlashTimers = new WeakMap();
 const quickSendClickTimers = new WeakMap();
@@ -4362,8 +4390,9 @@ function getQuickSendReorderContext(compact) {
 
 function getQuickSendReorderElements(context) {
     if (!context?.container) return [];
-    return Array.from(context.container.children)
-        .filter(element => element.classList.contains('quick-send-item'));
+    return context.compact
+        ? Array.from(context.container.children).filter(element => element.classList.contains('quick-send-item'))
+        : Array.from(context.container.querySelectorAll('.quick-send-item'));
 }
 
 function clearQuickSendHoldTimer(context) {
@@ -4393,13 +4422,18 @@ function applyQuickSendElementOrder(context, orderedIds) {
         normalizeSidebarQuickSendOrder();
         return;
     }
-    quickSendList = reorderQuickSendItems(quickSendList, orderedIds);
+    const byId = new Map(quickSendList.map(item => [item.id, item]));
+    quickSendList = getQuickSendReorderElements(context).map(element => ({
+        ...byId.get(element.dataset.quickId),
+        groupId: element.closest('.quick-send-group')?.dataset.quickGroupId || null
+    })).filter(item => item.id);
 }
 
 function cleanUpQuickSendDrag(context, state) {
     if (!context || !state || state.cleanedUp) return;
     state.cleanedUp = true;
     state.snapFallbackTimer && clearTimeout(state.snapFallbackTimer);
+    state.expandTimer && clearTimeout(state.expandTimer);
     state.indicator?.remove();
     state.preview?.remove();
     state.element?.classList.remove('dragging', 'quick-send-drag-placeholder');
@@ -4420,9 +4454,15 @@ function cancelQuickSendDrag(context, { restoreOrder = true } = {}) {
     const state = context.dragState;
     if (!state) return;
     const originalOrder = !state.committed && Array.isArray(state.originalOrder) ? state.originalOrder : null;
+    const originalItems = !state.committed && Array.isArray(state.originalItems) ? state.originalItems : null;
+    const originalGroups = !state.committed && Array.isArray(state.originalGroups) ? state.originalGroups : null;
     cleanUpQuickSendDrag(context, state);
-    if (restoreOrder && originalOrder) {
-        applyQuickSendElementOrder(context, originalOrder);
+    if (restoreOrder && (originalItems || originalOrder)) {
+        if (context.compact) applyQuickSendElementOrder(context, originalOrder);
+        else {
+            quickSendList = originalItems;
+            if (originalGroups) quickSendGroups = originalGroups;
+        }
         renderQuickSendLists();
     }
 }
@@ -4438,6 +4478,7 @@ function setQuickSendEditMode(context, enabled) {
 }
 
 function animateQuickSendReflow(previousRects, elements) {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true) return;
     requestAnimationFrame(() => {
         elements.forEach(element => {
             const previous = previousRects.get(element.dataset.quickId);
@@ -4466,6 +4507,45 @@ function positionQuickSendIndicator(context, state) {
 
 function updateQuickSendDropTarget(context, state, pointerY) {
     if (!context?.container || !state.dragging) return;
+    if (!context.compact) {
+        const groups = Array.from(context.container.querySelectorAll('.quick-send-group'));
+        const targetGroup = groups.reduce((nearest, group) => {
+            const rect = group.getBoundingClientRect();
+            const distance = pointerY < rect.top ? rect.top - pointerY : (pointerY > rect.bottom ? pointerY - rect.bottom : 0);
+            return !nearest || distance < nearest.distance ? { group, distance } : nearest;
+        }, null)?.group;
+        const body = targetGroup?.querySelector('.quick-send-group-items');
+        if (!targetGroup || !body) return;
+        const groupId = targetGroup.dataset.quickGroupId || null;
+        const group = quickSendGroups.find(entry => entry.id === groupId);
+        if (group?.collapsed && state.expandGroupId !== group.id) {
+            clearTimeout(state.expandTimer);
+            state.expandGroupId = group.id;
+            state.expandTimer = setTimeout(() => {
+                group.collapsed = false;
+                state.temporarilyExpandedGroupIds.add(group.id);
+                targetGroup.classList.remove('collapsed');
+                targetGroup.querySelector('.quick-send-group-toggle')?.setAttribute('aria-expanded', 'true');
+            }, 500);
+        } else if (!group?.collapsed && state.expandGroupId !== (groupId || '')) {
+            clearTimeout(state.expandTimer);
+            state.expandGroupId = groupId || '';
+        }
+        const otherElements = Array.from(body.querySelectorAll('.quick-send-item')).filter(element => element !== state.element);
+        const insertionIndex = getVerticalInsertionIndex(otherElements.map(element => element.getBoundingClientRect()), pointerY);
+        const currentParent = state.element.parentElement;
+        const currentIndex = Array.from(currentParent?.querySelectorAll('.quick-send-item') || []).indexOf(state.element);
+        if (currentParent !== body || insertionIndex !== currentIndex) {
+            const movingElements = getQuickSendReorderElements(context).filter(element => element !== state.element);
+            const previousRects = new Map(movingElements.map(element => [element.dataset.quickId, element.getBoundingClientRect()]));
+            body.insertBefore(state.element, otherElements[insertionIndex] || null);
+            animateQuickSendReflow(previousRects, movingElements);
+        }
+        state.targetGroupId = groupId;
+        state.insertionIndex = insertionIndex;
+        requestAnimationFrame(() => positionQuickSendIndicator(context, state));
+        return;
+    }
     const otherElements = getQuickSendReorderElements(context).filter(element => element !== state.element);
     const rects = otherElements.map(element => element.getBoundingClientRect());
     const insertionIndex = getVerticalInsertionIndex(rects, pointerY);
@@ -4520,6 +4600,9 @@ function startQuickSendDrag(context, state) {
     const rect = state.element.getBoundingClientRect();
     state.dragging = true;
     state.originalOrder = getQuickSendReorderElements(context).map(element => element.dataset.quickId);
+    state.originalItems = context.compact ? null : quickSendList.map(item => ({ ...item }));
+    state.originalGroups = context.compact ? null : quickSendGroups.map(group => ({ ...group }));
+    state.temporarilyExpandedGroupIds = new Set();
     state.pointerOffsetX = Math.max(0, Math.min(rect.width, state.lastX - rect.left));
     state.pointerOffsetY = Math.max(0, Math.min(rect.height, state.lastY - rect.top));
     state.previewRect = rect;
@@ -4566,14 +4649,27 @@ function finishQuickSendDrag(context, state) {
     orderedElements.forEach((element, index) => { element.dataset.index = String(index); });
     applyQuickSendElementOrder(context, orderedElements.map(element => element.dataset.quickId));
     state.committed = true;
+    if (!context.compact && state.temporarilyExpandedGroupIds.size) {
+        state.temporarilyExpandedGroupIds.forEach(groupId => {
+            const group = quickSendGroups.find(entry => entry.id === groupId);
+            if (group) group.collapsed = true;
+        });
+        saveQuickSendList();
+        cleanUpQuickSendDrag(context, state);
+        renderQuickSendLists();
+        return;
+    }
     saveQuickSendList();
     state.indicator?.remove();
     state.indicator = null;
 
     const targetRect = state.element?.getBoundingClientRect();
     const previewRect = state.preview?.getBoundingClientRect();
-    if (!targetRect || !previewRect || typeof state.preview.animate !== 'function') {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    if (reduceMotion || !targetRect || !previewRect || targetRect.width === 0 || targetRect.height === 0
+        || typeof state.preview.animate !== 'function') {
         cleanUpQuickSendDrag(context, state);
+        renderQuickSendLists();
         return;
     }
 
@@ -4582,6 +4678,7 @@ function finishQuickSendDrag(context, state) {
         if (cleanedUp) return;
         cleanedUp = true;
         cleanUpQuickSendDrag(context, state);
+        renderQuickSendLists();
     };
     const animation = state.preview.animate([
         {
@@ -4689,10 +4786,27 @@ function createQuickSendId() {
     return `quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function createQuickSendGroupId() {
+    return `quick-group-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeQuickSendGroup(group = {}) {
+    return {
+        id: typeof group.id === 'string' && group.id ? group.id : createQuickSendGroupId(),
+        name: typeof group.name === 'string' && group.name.trim()
+            ? group.name.trim().slice(0, 60)
+            : trFallback('main.quickSendGroupDefault', 'New Group'),
+        collapsed: group.collapsed === true
+    };
+}
+
 function normalizeQuickSendItem(item = {}) {
     const trigger = item.autoTrigger && typeof item.autoTrigger === 'object' ? item.autoTrigger : {};
     return {
         id: typeof item.id === 'string' && item.id ? item.id : createQuickSendId(),
+        groupId: typeof item.groupId === 'string' && quickSendGroups.some(group => group.id === item.groupId)
+            ? item.groupId
+            : null,
         label: typeof item.label === 'string' ? item.label : '',
         mode: item.mode === 'hex' ? 'hex' : 'text',
         appendCrLf: item.appendCrLf === true,
@@ -4732,8 +4846,10 @@ function buildQuickTriggerRegex(trigger = {}) {
 }
 
 function getQuickEditorItem() {
+    const selectedGroupId = quickSendGroupSelect.value;
     return normalizeQuickSendItem({
         id: editingQuickSendId || createQuickSendId(),
+        groupId: selectedGroupId && selectedGroupId !== '__new__' ? selectedGroupId : null,
         label: quickSendLabelInput.value.trim(),
         mode: quickSendModeInputs.find(input => input.checked)?.value === 'hex' ? 'hex' : 'text',
         appendCrLf: quickSendAppendCrlfInput.checked,
@@ -4757,6 +4873,9 @@ function closeQuickSendDialog() {
     quickSendDialog.classList.add('hidden');
     editingQuickSendId = '';
     quickSendLabelInput.value = '';
+    quickSendGroupSelect.value = '';
+    quickSendNewGroupNameInput.value = '';
+    quickSendNewGroupNameInput.classList.add('hidden');
     quickSendContentInput.value = '';
     quickSendModeInputs.forEach(input => { input.checked = input.value === 'text'; });
     quickSendAppendCrlfInput.checked = false;
@@ -4782,6 +4901,7 @@ function updateQuickSidebarEditorState() {
 function openQuickSendDialog(itemId = '') {
     editingQuickSendId = itemId;
     const item = quickSendList.find(entry => entry.id === itemId) || null;
+    renderQuickSendGroupOptions(item?.groupId || null);
     quickSendLabelInput.value = item?.label || '';
     quickSendContentInput.value = item?.content || '';
     quickSendModeInputs.forEach(input => { input.checked = input.value === (item?.mode || mainInputMode); });
@@ -4799,13 +4919,40 @@ function openQuickSendDialog(itemId = '') {
     quickSendDialogTitle.textContent = editing
         ? trFallback('main.editQuickSend', 'Edit Quick Send')
         : trFallback('main.addQuickSend', 'Add Quick Send');
-    addQuickSendBtn.textContent = editing
+    addQuickSendBtnLabel.textContent = editing
         ? trFallback('main.updateItem', 'Update Item')
-        : tr('main.addToList');
+        : tr('main.addToList').replace(/^\+\s*/, '');
     updateQuickSendValidation();
     renderQuickSendLists();
     quickSendDialog.classList.remove('hidden');
     requestAnimationFrame(() => (editing ? quickSendContentInput : quickSendLabelInput).focus());
+}
+
+function renderQuickSendGroupOptions(selectedGroupId = null) {
+    quickSendGroupSelect.innerHTML = '';
+    quickSendGroups.forEach(group => {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.textContent = group.name;
+        quickSendGroupSelect.appendChild(option);
+    });
+    const ungrouped = document.createElement('option');
+    ungrouped.value = '';
+    ungrouped.textContent = trFallback('main.quickSendUngrouped', 'Ungrouped');
+    quickSendGroupSelect.appendChild(ungrouped);
+    const createOption = document.createElement('option');
+    createOption.value = '__new__';
+    createOption.textContent = trFallback('main.quickSendCreateGroup', '+ New Group');
+    quickSendGroupSelect.appendChild(createOption);
+    quickSendGroupSelect.value = selectedGroupId || '';
+}
+
+function createNamedQuickSendGroup(name) {
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) return null;
+    const group = normalizeQuickSendGroup({ id: createQuickSendGroupId(), name: trimmed, collapsed: false });
+    quickSendGroups.push(group);
+    return group;
 }
 
 function updateQuickSendValidation() {
@@ -4816,14 +4963,19 @@ function updateQuickSendValidation() {
         : (!item.autoTrigger.text
             ? { ok: false, message: trFallback('main.quickTriggerTextRequired', 'Auto trigger needs match text') }
             : buildQuickTriggerRegex(item.autoTrigger));
-    quickSendValidation.textContent = triggerResult.ok
+    const groupResult = quickSendGroupSelect.value !== '__new__' || quickSendNewGroupNameInput.value.trim()
+        ? { ok: true }
+        : { ok: false, message: trFallback('main.quickSendGroupNameRequired', 'Enter a group name') };
+    quickSendValidation.textContent = !groupResult.ok
+        ? groupResult.message
+        : triggerResult.ok
         ? formatValidation(result, item.mode, item.appendCrLf)
         : triggerResult.message;
-    quickSendValidation.classList.toggle('valid', result.ok && triggerResult.ok);
-    quickSendValidation.classList.toggle('invalid', (!result.ok && item.content.length > 0) || !triggerResult.ok);
-    addQuickSendBtn.disabled = !result.ok || !triggerResult.ok;
+    quickSendValidation.classList.toggle('valid', result.ok && triggerResult.ok && groupResult.ok);
+    quickSendValidation.classList.toggle('invalid', (!result.ok && item.content.length > 0) || !triggerResult.ok || !groupResult.ok);
+    addQuickSendBtn.disabled = !result.ok || !triggerResult.ok || !groupResult.ok;
     quickSendContentInput.placeholder = item.mode === 'hex' ? 'AA 55 01 FF' : tr('main.contentMultiLine');
-    return { ...result, ok: result.ok && triggerResult.ok };
+    return { ...result, ok: result.ok && triggerResult.ok && groupResult.ok };
 }
 
 async function triggerQuickSendItem(item) {
@@ -4948,8 +5100,15 @@ function processQuickSendAutoTriggers(bytes) {
 }
 
 function normalizeSidebarQuickSendOrder() {
+    const groupOrder = new Map(quickSendGroups.map((group, index) => [group.id, index]));
+    const itemOrder = new Map(quickSendList.map((item, index) => [item.id, index]));
     const enabledIds = quickSendList
         .filter(item => item.sidebarShortcut?.enabled === true)
+        .sort((a, b) => {
+            const aGroup = groupOrder.get(a.groupId) ?? quickSendGroups.length;
+            const bGroup = groupOrder.get(b.groupId) ?? quickSendGroups.length;
+            return aGroup - bGroup || itemOrder.get(a.id) - itemOrder.get(b.id);
+        })
         .map(item => item.id);
     const enabledIdSet = new Set(enabledIds);
     const orderedIds = [...new Set(sidebarQuickSendOrder.filter(id => enabledIdSet.has(id)))];
@@ -4998,7 +5157,7 @@ function removeSidebarQuickSendShortcut(item, element) {
         sidebarQuickSendOrder = result.sidebarQuickSendOrder;
         saveQuickSendList();
         renderQuickSendLists();
-        setActionStatus(`已从侧边栏移除快捷方式：${item.label || item.content}`);
+        setActionStatus(trFallback('main.quickSendSidebarRemoved', 'Removed sidebar shortcut: {label}', { label: item.label || item.content }));
     });
 }
 
@@ -5012,9 +5171,209 @@ function deleteQuickSendItem(item, element) {
         sidebarQuickSendOrder = result.sidebarQuickSendOrder;
         saveQuickSendList();
         renderQuickSendLists();
-        setActionStatus(`已删除快捷指令：${item.label || item.content}`);
+        setActionStatus(trFallback('main.quickSendDeleted', 'Deleted quick command: {label}', { label: item.label || item.content }));
     });
 }
+
+function setQuickSendGroupCollapsed(groupId, collapsed) {
+    const section = Array.from(quickSendListEl.querySelectorAll('.quick-send-group'))
+        .find(element => (element.dataset.quickGroupId || '') === (groupId || ''));
+    const body = section?.querySelector('.quick-send-group-items');
+    const toggle = section?.querySelector('.quick-send-group-toggle');
+    if (groupId) {
+        const group = quickSendGroups.find(entry => entry.id === groupId);
+        if (!group || group.collapsed === collapsed) return;
+        group.collapsed = collapsed;
+        saveQuickSendList();
+    } else {
+        if (quickSendUngroupedCollapsed === collapsed) return;
+        quickSendUngroupedCollapsed = collapsed;
+        saveQuickSendList();
+    }
+    if (!section || !body) return renderQuickSendContainer(quickSendListEl);
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    toggle?.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (reduceMotion || typeof body.animate !== 'function') {
+        section.classList.toggle('collapsed', collapsed);
+        return;
+    }
+    if (!collapsed) section.classList.remove('collapsed');
+    const height = body.scrollHeight;
+    quickSendCollapseAnimations.get(body)?.cancel();
+    const animation = body.animate([
+        { height: collapsed ? `${height}px` : '0px', opacity: collapsed ? 1 : 0 },
+        { height: collapsed ? '0px' : `${height}px`, opacity: collapsed ? 0 : 1 }
+    ], {
+        duration: collapsed ? 140 : 160,
+        easing: collapsed ? 'ease-in' : 'ease-out'
+    });
+    quickSendCollapseAnimations.set(body, animation);
+    animation.addEventListener('finish', () => {
+        section.classList.toggle('collapsed', collapsed);
+        quickSendCollapseAnimations.delete(body);
+    }, { once: true });
+}
+
+function closeQuickSendGroupDialog() {
+    quickSendGroupDialog.classList.add('hidden');
+    editingQuickSendGroupId = '';
+    quickSendGroupNameInput.value = '';
+    const trigger = quickSendGroupDialogTrigger;
+    quickSendGroupDialogTrigger = null;
+    if (trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
+}
+
+function openQuickSendGroupDialog(groupId = '', trigger = document.activeElement) {
+    const group = quickSendGroups.find(entry => entry.id === groupId) || null;
+    editingQuickSendGroupId = group?.id || '';
+    quickSendGroupDialogTrigger = trigger;
+    quickSendGroupDialogTitle.textContent = group
+        ? trFallback('main.renameQuickSendGroup', 'Rename group')
+        : trFallback('main.addQuickSendGroup', 'Add group');
+    quickSendGroupDialogSaveLabel.textContent = group
+        ? trFallback('main.saveGroupChanges', 'Save Changes')
+        : trFallback('main.createQuickSendGroup', 'Create Group');
+    quickSendGroupDialogSaveBtn.querySelector('svg[data-material-icon]')?.replaceWith(createMaterialIcon(group ? 'edit' : 'add'));
+    quickSendGroupNameInput.value = group?.name || '';
+    quickSendGroupDialogSaveBtn.disabled = !quickSendGroupNameInput.value.trim();
+    quickSendGroupDialog.classList.remove('hidden');
+    requestAnimationFrame(() => quickSendGroupNameInput.focus());
+}
+
+function saveQuickSendGroupDialog() {
+    const name = quickSendGroupNameInput.value.trim().slice(0, 60);
+    if (!name) return;
+    const group = quickSendGroups.find(entry => entry.id === editingQuickSendGroupId);
+    if (group) group.name = name;
+    else createNamedQuickSendGroup(name);
+    closeQuickSendGroupDialog();
+    saveQuickSendList();
+    renderQuickSendLists();
+}
+
+function closeQuickSendGroupDeleteDialog({ restoreFocus = true } = {}) {
+    deletingQuickSendGroupId = '';
+    quickSendGroupDeleteDialog.classList.add('hidden');
+    const trigger = quickSendGroupDeleteTrigger;
+    quickSendGroupDeleteTrigger = null;
+    if (restoreFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
+}
+
+function openQuickSendGroupDeleteDialog(groupId, trigger = document.activeElement) {
+    const group = quickSendGroups.find(entry => entry.id === groupId);
+    if (!group) return;
+    deletingQuickSendGroupId = groupId;
+    quickSendGroupDeleteTrigger = trigger;
+    const count = quickSendList.filter(item => item.groupId === groupId).length;
+    quickSendGroupDeleteMessage.textContent = trFallback(
+        'main.quickSendDeleteGroupMessage',
+        'Delete "{name}" and its {count} commands? This cannot be undone.',
+        { name: group.name, count }
+    );
+    quickSendGroupDeleteDialog.classList.remove('hidden');
+    requestAnimationFrame(() => quickSendGroupDeleteCancelBtn.focus());
+}
+
+function createQuickSendGroupSection(group, itemElements) {
+    const groupId = group?.id || '';
+    const collapsed = group ? group.collapsed : quickSendUngroupedCollapsed;
+    const section = document.createElement('section');
+    section.className = `quick-send-group${collapsed ? ' collapsed' : ''}${group ? '' : ' ungrouped'}`;
+    section.dataset.quickGroupId = groupId;
+    const header = document.createElement('div');
+    header.className = 'quick-send-group-header';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'quick-send-group-toggle';
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    toggle.appendChild(createMaterialIcon('arrow_drop_down'));
+    const name = document.createElement('span');
+    name.className = 'quick-send-group-name';
+    name.textContent = group?.name || trFallback('main.quickSendUngrouped', 'Ungrouped');
+    const count = document.createElement('span');
+    count.className = 'quick-send-group-count';
+    count.textContent = String(itemElements.length);
+    toggle.append(name, count);
+    toggle.addEventListener('click', event => {
+        event.stopPropagation();
+        const currentCollapsed = group
+            ? group.collapsed
+            : section.classList.contains('collapsed');
+        setQuickSendGroupCollapsed(groupId, !currentCollapsed);
+    });
+    header.appendChild(toggle);
+    if (group) {
+        const dragHandle = document.createElement('span');
+        dragHandle.className = 'quick-send-group-handle';
+        dragHandle.draggable = true;
+        dragHandle.title = trFallback('main.dragToReorder', 'Drag to reorder');
+        dragHandle.appendChild(createMaterialIcon('drag_indicator'));
+        dragHandle.addEventListener('dragstart', event => {
+            quickSendGroupDragState = { groupId: group.id, insertionIndex: quickSendGroups.indexOf(group) };
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', group.id);
+            requestAnimationFrame(() => section.classList.add('group-dragging'));
+        });
+        dragHandle.addEventListener('dragend', () => {
+            quickSendGroupDragState = null;
+            quickSendListEl.classList.remove('quick-send-group-drag-active');
+            quickSendListEl.querySelectorAll('.quick-send-group-drop-before, .quick-send-group-drop-after')
+                .forEach(element => element.classList.remove('quick-send-group-drop-before', 'quick-send-group-drop-after'));
+            section.classList.remove('group-dragging');
+        });
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'quick-send-group-action';
+        edit.title = trFallback('main.renameQuickSendGroup', 'Rename group');
+        edit.appendChild(createMaterialIcon('edit'));
+        edit.addEventListener('click', event => openQuickSendGroupDialog(group.id, event.currentTarget));
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'quick-send-group-action delete';
+        remove.title = trFallback('main.deleteQuickSendGroup', 'Delete group');
+        remove.appendChild(createMaterialIcon('delete'));
+        remove.addEventListener('click', event => openQuickSendGroupDeleteDialog(group.id, event.currentTarget));
+        header.append(dragHandle, edit, remove);
+    }
+    const body = document.createElement('div');
+    body.className = 'quick-send-group-items';
+    itemElements.forEach(element => body.appendChild(element));
+    section.append(header, body);
+    return section;
+}
+
+function updateQuickSendGroupDropTarget(pointerY) {
+    if (!quickSendGroupDragState) return;
+    const sections = Array.from(quickSendListEl.querySelectorAll('.quick-send-group:not(.ungrouped)'))
+        .filter(section => section.dataset.quickGroupId !== quickSendGroupDragState.groupId);
+    const insertionIndex = getVerticalInsertionIndex(
+        sections.map(section => section.getBoundingClientRect()),
+        pointerY
+    );
+    quickSendGroupDragState.insertionIndex = insertionIndex;
+    quickSendListEl.classList.add('quick-send-group-drag-active');
+    quickSendListEl.querySelectorAll('.quick-send-group-drop-before, .quick-send-group-drop-after')
+        .forEach(element => element.classList.remove('quick-send-group-drop-before', 'quick-send-group-drop-after'));
+    if (sections[insertionIndex]) sections[insertionIndex].classList.add('quick-send-group-drop-before');
+    else sections.at(-1)?.classList.add('quick-send-group-drop-after');
+}
+
+quickSendListEl.addEventListener('dragover', event => {
+    if (!quickSendGroupDragState) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    updateQuickSendGroupDropTarget(event.clientY);
+});
+
+quickSendListEl.addEventListener('drop', event => {
+    if (!quickSendGroupDragState) return;
+    event.preventDefault();
+    const { groupId, insertionIndex } = quickSendGroupDragState;
+    quickSendGroupDragState = null;
+    quickSendGroups = moveQuickSendGroup(quickSendGroups, groupId, insertionIndex);
+    saveQuickSendList();
+    renderQuickSendLists();
+});
 
 function renderQuickSendContainer(container, compact = false) {
     if (!container) return;
@@ -5047,13 +5406,17 @@ function renderQuickSendContainer(container, compact = false) {
         const validation = validateSendContent(item.mode, item.content, sendEncoding, SEND_LIMITS.quick - (item.appendCrLf ? 2 : 0));
         btn.title = validation.ok ? `${validation.normalized} (${validation.byteCount + (item.appendCrLf ? 2 : 0)} B)` : validation.message;
         btn.className = compact ? 'quick-send-main-btn sidebar-tool-btn' : 'quick-send-main-btn';
-        if (compact) {
+            if (compact) {
             btn.style.backgroundColor = item.sidebarShortcut?.backgroundColor || 'var(--bg-tertiary)';
             btn.style.color = 'var(--text-primary)';
-            const textLength = [...label.textContent].length;
-            btn.style.fontSize = `${Math.max(8, Math.min(13, 15 - textLength * 0.35))}px`;
-        }
-        btn.title = item.label || item.content;
+                const textLength = [...label.textContent].length;
+                btn.style.fontSize = `${Math.max(8, Math.min(13, 15 - textLength * 0.35))}px`;
+                const previousItem = items[index - 1];
+                if (previousItem && (previousItem.groupId || null) !== (item.groupId || null)) div.classList.add('quick-send-group-break');
+            }
+            const groupName = quickSendGroups.find(group => group.id === item.groupId)?.name
+                || trFallback('main.quickSendUngrouped', 'Ungrouped');
+            btn.title = compact ? `${groupName} / ${item.label || item.content}` : (item.label || item.content);
         btn.append(label);
         if (!compact && item.mode === 'hex') {
             btn.classList.add('has-mode-badge');
@@ -5079,12 +5442,14 @@ function renderQuickSendContainer(container, compact = false) {
         const editDeleteBtn = document.createElement('button');
         editDeleteBtn.type = 'button';
         editDeleteBtn.className = `quick-send-edit-delete-btn ${compact ? 'compact' : 'full'}`;
-        editDeleteBtn.title = compact ? '从侧边栏移除' : '删除快捷指令';
+        editDeleteBtn.title = compact
+            ? trFallback('main.removeQuickSendSidebar', 'Remove from sidebar')
+            : trFallback('main.deleteQuickSend', 'Delete quick command');
         editDeleteBtn.tabIndex = -1;
         editDeleteBtn.setAttribute('aria-hidden', 'true');
         editDeleteBtn.setAttribute('aria-label', compact
-            ? `从侧边栏移除快捷方式：${item.label || item.content}`
-            : `删除快捷指令：${item.label || item.content}`);
+            ? trFallback('main.removeQuickSendSidebarLabel', 'Remove sidebar shortcut: {label}', { label: item.label || item.content })
+            : trFallback('main.deleteQuickSendLabel', 'Delete quick command: {label}', { label: item.label || item.content }));
         editDeleteBtn.appendChild(createMaterialIcon('close'));
         editDeleteBtn.addEventListener('pointerdown', event => event.stopPropagation());
         editDeleteBtn.addEventListener('click', event => {
@@ -5109,17 +5474,17 @@ function renderQuickSendContainer(container, compact = false) {
 
             const editBtn = document.createElement('button');
             editBtn.className = 'quick-send-action-btn';
-            editBtn.title = 'Edit';
+        editBtn.title = trFallback('main.edit', 'Edit');
             editBtn.appendChild(createMaterialIcon('edit'));
             editBtn.addEventListener('click', event => {
                 event.stopPropagation();
                 openQuickSendDialog(item.id);
-                setActionStatus(`正在编辑快捷指令：${item.label || item.content}`);
+                setActionStatus(trFallback('main.editingQuickSend', 'Editing quick command: {label}', { label: item.label || item.content }));
             });
 
             const delBtn = document.createElement('button');
             delBtn.className = 'quick-send-action-btn delete';
-            delBtn.title = 'Remove';
+        delBtn.title = trFallback('main.delete', 'Delete');
             delBtn.appendChild(createMaterialIcon('delete'));
             delBtn.addEventListener('click', event => {
                 event.stopPropagation();
@@ -5133,8 +5498,20 @@ function renderQuickSendContainer(container, compact = false) {
         
         if (!compact || item.sidebarShortcut?.enabled === true) container.appendChild(div);
     });
+    if (!compact) {
+        const itemElements = Array.from(container.querySelectorAll('.quick-send-item'));
+        const elementsByGroup = groupId => itemElements.filter(element => {
+            const item = quickSendList.find(entry => entry.id === element.dataset.quickId);
+            return (item?.groupId || '') === groupId;
+        });
+        container.innerHTML = '';
+        quickSendGroups.forEach(group => container.appendChild(createQuickSendGroupSection(group, elementsByGroup(group.id))));
+        container.appendChild(createQuickSendGroupSection(null, elementsByGroup('')));
+    }
     requestAnimationFrame(() => {
-        Array.from(container.children).forEach(element => {
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true) return;
+        const elements = compact ? Array.from(container.children) : Array.from(container.querySelectorAll('.quick-send-item'));
+        elements.forEach(element => {
             const previous = previousRects.get(element.dataset.quickId);
             if (!previous) return;
             const current = element.getBoundingClientRect();
@@ -5159,6 +5536,8 @@ function saveQuickSendList() {
     if (isApplyingConfig) return;
     normalizeSidebarQuickSendOrder();
     ipcRenderer.send('save-config', {
+        quickSendGroups: quickSendGroups.map(normalizeQuickSendGroup),
+        quickSendUngroupedCollapsed,
         quickSendList: quickSendList.map(normalizeQuickSendItem),
         sidebarQuickSendOrder
     });
@@ -5184,11 +5563,24 @@ window.addEventListener('blur', () => {
 });
 
 addQuickSendBtn.addEventListener('click', () => {
-    const item = getQuickEditorItem();
     if (updateQuickSendValidation().ok) {
+        if (quickSendGroupSelect.value === '__new__') {
+            const group = createNamedQuickSendGroup(quickSendNewGroupNameInput.value);
+            if (!group) {
+                quickSendNewGroupNameInput.focus();
+                return;
+            }
+            renderQuickSendGroupOptions(group.id);
+        }
+        const item = getQuickEditorItem();
         const editingIndex = quickSendList.findIndex(entry => entry.id === editingQuickSendId);
         if (editingIndex > -1) {
+            const previousGroupId = quickSendList[editingIndex].groupId || null;
             quickSendList[editingIndex] = item;
+            if (previousGroupId !== item.groupId) {
+                const targetCount = quickSendList.filter(entry => entry.id !== item.id && entry.groupId === item.groupId).length;
+                quickSendList = moveQuickSendItem(quickSendList, item.id, item.groupId, targetCount);
+            }
         } else {
             quickSendList.push(item);
         }
@@ -5197,6 +5589,13 @@ addQuickSendBtn.addEventListener('click', () => {
     }
 });
 quickSendContentInput.addEventListener('input', updateQuickSendValidation);
+quickSendGroupSelect.addEventListener('change', () => {
+    const creating = quickSendGroupSelect.value === '__new__';
+    quickSendNewGroupNameInput.classList.toggle('hidden', !creating);
+    if (creating) requestAnimationFrame(() => quickSendNewGroupNameInput.focus());
+    updateQuickSendValidation();
+});
+quickSendNewGroupNameInput.addEventListener('input', updateQuickSendValidation);
 quickSendModeInputs.forEach(input => input.addEventListener('change', updateQuickSendValidation));
 quickSendAppendCrlfInput.addEventListener('change', updateQuickSendValidation);
 quickSendTriggerEnableInput.addEventListener('change', updateQuickSendValidation);
@@ -5211,10 +5610,40 @@ quickSendSidebarEnableInput.addEventListener('change', () => {
 quickSendSidebarTextInput.addEventListener('input', updateQuickSendValidation);
 quickSendSidebarColorInput.addEventListener('input', updateQuickSendValidation);
 openQuickSendDialogBtn.addEventListener('click', () => openQuickSendDialog());
+addQuickSendGroupBtn.addEventListener('click', () => {
+    openQuickSendGroupDialog('', addQuickSendGroupBtn);
+});
+quickSendGroupNameInput.addEventListener('input', () => {
+    quickSendGroupDialogSaveBtn.disabled = !quickSendGroupNameInput.value.trim();
+});
+quickSendGroupNameInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !quickSendGroupDialogSaveBtn.disabled) saveQuickSendGroupDialog();
+});
+quickSendGroupDialogSaveBtn.addEventListener('click', saveQuickSendGroupDialog);
+quickSendGroupDialogCloseBtn.addEventListener('click', closeQuickSendGroupDialog);
+quickSendGroupDialogCancelBtn.addEventListener('click', closeQuickSendGroupDialog);
+quickSendGroupDeleteCancelBtn.addEventListener('click', closeQuickSendGroupDeleteDialog);
+quickSendGroupDeleteConfirmBtn.addEventListener('click', () => {
+    const group = quickSendGroups.find(entry => entry.id === deletingQuickSendGroupId);
+    if (!group) return closeQuickSendGroupDeleteDialog();
+    const result = deleteQuickSendGroup(quickSendGroups, quickSendList, sidebarQuickSendOrder, group.id);
+    quickSendGroups = result.quickSendGroups;
+    quickSendList = result.quickSendList;
+    sidebarQuickSendOrder = result.sidebarQuickSendOrder;
+    closeQuickSendGroupDeleteDialog({ restoreFocus: false });
+    saveQuickSendList();
+    renderQuickSendLists();
+    setActionStatus(trFallback('main.quickSendGroupDeleted', 'Deleted group: {name}', { name: group.name }));
+    requestAnimationFrame(() => quickSendListEl.querySelector('.quick-send-group-toggle')?.focus());
+});
 quickSendDialogCloseBtn.addEventListener('click', closeQuickSendDialog);
 quickSendDialogCancelBtn.addEventListener('click', closeQuickSendDialog);
 document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !quickSendDialog.classList.contains('hidden')) {
+    if (event.key === 'Escape' && !quickSendGroupDialog.classList.contains('hidden')) {
+        closeQuickSendGroupDialog();
+    } else if (event.key === 'Escape' && !quickSendGroupDeleteDialog.classList.contains('hidden')) {
+        closeQuickSendGroupDeleteDialog();
+    } else if (event.key === 'Escape' && !quickSendDialog.classList.contains('hidden')) {
         closeQuickSendDialog();
     } else if (event.key === 'Escape' && quickSendReorderContexts.some(context => context.editMode)) {
         quickSendReorderContexts.forEach(context => setQuickSendEditMode(context, false));
