@@ -1731,6 +1731,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     if (currentConfig) {
         term.options = {
             fontSize: currentConfig.fontSize,
+            fontWeight: currentConfig.fontWeight,
             fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
             theme: getTerminalTheme(currentConfig)
         };
@@ -1929,6 +1930,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     if (currentConfig) {
         term.options = {
             fontSize: currentConfig.fontSize,
+            fontWeight: currentConfig.fontWeight,
             fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
             theme: getTerminalTheme(currentConfig)
         };
@@ -3097,6 +3099,7 @@ function applyConfig(config) {
 
     const options = {
         fontSize: config.fontSize,
+        fontWeight: config.fontWeight,
         fontFamily: `${config.fontFamily}, ${config.fontFamilyZh}, "Courier New", monospace`,
         scrollback: config.scrollbackLimit || 20000,
         theme: getTerminalTheme(config)

@@ -307,6 +307,21 @@ test('full and compact quick-send clicks share one lightweight result pulse', ()
   assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
 });
 
+test('font weight preferences persist and apply to every terminal type', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+
+  assert.match(preferencesHtml, /id="fontWeight"[\s\S]*?<option value="100">100<\/option>[\s\S]*?<option value="900">900<\/option>/);
+  assert.match(preferencesHtml, /\.font-settings-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/s);
+  assert.match(preferencesHtml, /@media \(max-width: 680px\)[\s\S]*?\.font-settings-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(main, /normalized\.fontWeight = normalizeFontWeight\(source\.fontWeight\)/);
+  assert.match(main, /fontWeight: 400/);
+  assert.match(preferences, /fontWeight: normalizeFontWeight\(elements\.fontWeight\.value\)/);
+  assert.equal((renderer.match(/fontWeight: (?:currentConfig|config)\.fontWeight/g) || []).length, 3);
+});
+
 test('sidebar transitions clip fixed-width content without reflowing controls', () => {
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
 

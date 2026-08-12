@@ -91,6 +91,51 @@
             color: var(--text-primary);
             font-weight: 500;
         }
+
+        .font-settings-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 12px 16px;
+            margin-bottom: 16px;
+        }
+
+        .font-settings-grid .form-group {
+            min-width: 0;
+            margin-bottom: 0;
+        }
+
+        .font-settings-grid label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 20px;
+            margin-bottom: 5px;
+        }
+
+        .font-settings-grid select,
+        .font-settings-grid input {
+            width: 100%;
+            min-width: 0;
+        }
+
+        .font-setting-symbol {
+            width: 18px;
+            color: var(--text-secondary);
+            text-align: center;
+            font-size: 15px;
+            line-height: 1;
+        }
+
+        @media (max-width: 680px) {
+            .content {
+                padding-right: 24px;
+                padding-left: 24px;
+            }
+
+            .font-settings-grid {
+                grid-template-columns: 1fr;
+            }
+        }
         
         /* About Tab Styling */
         .about-info {
@@ -213,27 +258,43 @@
                     <label data-i18n="prefs.language">Language</label>
                     <select id="language-select"></select>
                 </div>
-                <div class="form-group">
-                    <label><span class="material-icon-placeholder" data-material-icon="font_download"></span><span data-i18n="prefs.englishFontFamily">English Font Family</span></label>
-                    <select id="fontFamily">
-                        <option value='Consolas'>Consolas</option>
-                        <option value='"Fira Code"'>Fira Code</option>
-                        <option value='"Source Code Pro"'>Source Code Pro</option>
-                        <!-- Dynamic fonts will be injected here -->
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label><span class="material-icon-placeholder" data-material-icon="font_download"></span><span data-i18n="prefs.chineseFallbackFontFamily">Chinese/Fallback Font Family</span></label>
-                    <select id="fontFamilyZh">
-                        <option value='"Microsoft YaHei"'>Microsoft YaHei</option>
-                        <option value='"SimHei"'>SimHei</option>
-                        <option value='"PingFang SC"'>PingFang SC</option>
-                        <!-- Dynamic fonts will be injected here -->
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label><span class="material-icon-placeholder" data-material-icon="format_size"></span><span data-i18n="prefs.fontSize">Font Size (px)</span></label>
-                    <input type="number" id="fontSize" min="8" max="72" style="width: 100px;">
+                <div class="font-settings-grid">
+                    <div class="form-group">
+                        <label><span class="material-icon-placeholder" data-material-icon="font_download"></span><span data-i18n="prefs.englishFontFamily">English Font Family</span></label>
+                        <select id="fontFamily">
+                            <option value='Consolas'>Consolas</option>
+                            <option value='"Fira Code"'>Fira Code</option>
+                            <option value='"Source Code Pro"'>Source Code Pro</option>
+                            <!-- Dynamic fonts will be injected here -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><span class="material-icon-placeholder" data-material-icon="font_download"></span><span data-i18n="prefs.chineseFallbackFontFamily">Chinese/Fallback Font Family</span></label>
+                        <select id="fontFamilyZh">
+                            <option value='"Microsoft YaHei"'>Microsoft YaHei</option>
+                            <option value='"SimHei"'>SimHei</option>
+                            <option value='"PingFang SC"'>PingFang SC</option>
+                            <!-- Dynamic fonts will be injected here -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><span class="material-icon-placeholder" data-material-icon="format_size"></span><span data-i18n="prefs.fontSize">Font Size (px)</span></label>
+                        <input type="number" id="fontSize" min="8" max="72">
+                    </div>
+                    <div class="form-group">
+                        <label><strong class="font-setting-symbol" aria-hidden="true">B</strong><span data-i18n="prefs.fontWeight">Font Weight</span></label>
+                        <select id="fontWeight">
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                            <option value="300">300</option>
+                            <option value="400">400</option>
+                            <option value="500">500</option>
+                            <option value="600">600</option>
+                            <option value="700">700</option>
+                            <option value="800">800</option>
+                            <option value="900">900</option>
+                        </select>
+                    </div>
                 </div>
                 
                 <div class="grid-2-col">

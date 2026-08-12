@@ -12,7 +12,7 @@ const yaml = require('js-yaml');
 const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
-const { normalizeIntegerSetting } = require('./config-values');
+const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const {
   SERVER_UPDATE_METADATA_URL,
@@ -248,6 +248,7 @@ function normalizeConfig(config, defaults) {
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
   normalized.fontSize = normalizeIntegerSetting(source.fontSize, 'fontSize');
+  normalized.fontWeight = normalizeFontWeight(source.fontWeight);
   const legacyScrollbackLimit = Number(source.configVersion || 0) < 5 && source.scrollbackLimit === 100000
     ? 20000
     : source.scrollbackLimit;
@@ -387,6 +388,7 @@ function loadConfig() {
   const defaults = {
     configVersion: CONFIG_VERSION,
     fontSize: 14,
+    fontWeight: 400,
     fontFamily: 'Consolas',
     fontFamilyZh: '"Microsoft YaHei"',
     foreground: '#cccccc',

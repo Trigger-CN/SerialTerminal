@@ -10,6 +10,8 @@ const INTEGER_SETTINGS = Object.freeze({
   rawBufferAutoFlushMB: Object.freeze({ min: 1, max: 1024, fallback: 10 })
 });
 
+const FONT_WEIGHTS = Object.freeze([100, 200, 300, 400, 500, 600, 700, 800, 900]);
+
 function normalizeIntegerSetting(value, setting) {
   const range = INTEGER_SETTINGS[setting];
   if (!range) throw new Error(`Unknown integer setting: ${setting}`);
@@ -19,4 +21,9 @@ function normalizeIntegerSetting(value, setting) {
   return Math.min(range.max, Math.max(range.min, number));
 }
 
-module.exports = { INTEGER_SETTINGS, normalizeIntegerSetting };
+function normalizeFontWeight(value) {
+  const number = Number(value);
+  return FONT_WEIGHTS.includes(number) ? number : 400;
+}
+
+module.exports = { FONT_WEIGHTS, INTEGER_SETTINGS, normalizeFontWeight, normalizeIntegerSetting };

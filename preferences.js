@@ -1,7 +1,7 @@
 const { ipcRenderer, shell } = require('electron');
 const { randomUUID } = require('crypto');
 const { t, getLanguage } = require('./i18n');
-const { normalizeIntegerSetting } = require('./config-values');
+const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
 
 const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
 
@@ -36,6 +36,7 @@ const elements = {
   fontFamilyZh: document.getElementById('fontFamilyZh'),
     languageSelect: document.getElementById('language-select'),
   fontSize: document.getElementById('fontSize'),
+  fontWeight: document.getElementById('fontWeight'),
   foreground: document.getElementById('foreground'),
   background: document.getElementById('background'),
   foregroundHex: document.getElementById('foreground-hex'),
@@ -452,6 +453,7 @@ async function init() {
   }
 
   elements.fontSize.value = String(normalizeIntegerSetting(config.fontSize, 'fontSize'));
+  elements.fontWeight.value = String(normalizeFontWeight(config.fontWeight));
   elements.foreground.value = config.foreground;
   elements.background.value = config.background;
   elements.foregroundHex.textContent = config.foreground;
@@ -774,6 +776,7 @@ elements.saveBtn.onclick = async () => {
     fontFamily: elements.fontFamily.value,
     fontFamilyZh: elements.fontFamilyZh.value,
     fontSize: normalizeIntegerSetting(elements.fontSize.value, 'fontSize'),
+    fontWeight: normalizeFontWeight(elements.fontWeight.value),
     foreground: elements.foreground.value,
     background: elements.background.value,
     timestampColor: elements.timestampColor.value,

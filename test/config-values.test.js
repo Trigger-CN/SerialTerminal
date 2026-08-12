@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeIntegerSetting } = require('../config-values');
+const { normalizeFontWeight, normalizeIntegerSetting } = require('../config-values');
 
 test('accepts integer settings and clamps values outside their ranges', () => {
   assert.equal(normalizeIntegerSetting('24', 'fontSize'), 24);
@@ -23,4 +23,12 @@ test('falls back for null, empty, non-finite, and fractional values', () => {
 
 test('rejects unknown setting names', () => {
   assert.throws(() => normalizeIntegerSetting(1, 'missing'), /Unknown integer setting/);
+});
+
+test('accepts standard font weights and falls back for unsupported values', () => {
+  assert.equal(normalizeFontWeight('100'), 100);
+  assert.equal(normalizeFontWeight(500), 500);
+  assert.equal(normalizeFontWeight(900), 900);
+  assert.equal(normalizeFontWeight(450), 400);
+  assert.equal(normalizeFontWeight('invalid'), 400);
 });

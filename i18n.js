@@ -379,6 +379,19 @@ const quickSendGroupTranslations = {
   de: { quickSendGroup: 'Gruppe', quickSendUngrouped: 'Nicht gruppiert', quickSendCreateGroup: '+ Neue Gruppe', quickSendNewGroupName: 'Name der neuen Gruppe', quickSendGroupDefault: 'Neue Gruppe', quickSendGroupNameRequired: 'Gruppennamen eingeben', addQuickSendGroup: 'Gruppe hinzufugen', renameQuickSendGroup: 'Gruppe umbenennen', deleteQuickSendGroup: 'Gruppe loschen', quickSendDeleteGroupMessage: '„{name}“ und die {count} Befehle loschen? Dies kann nicht ruckgangig gemacht werden.', quickSendGroupDeleted: 'Gruppe geloscht: {name}', dragToReorder: 'Zum Sortieren ziehen', delete: 'Loschen', edit: 'Bearbeiten', removeQuickSendSidebar: 'Aus Seitenleiste entfernen', deleteQuickSend: 'Schnellbefehl loschen' }
 };
 
+const fontWeightTranslations = {
+  en: 'Font Weight',
+  'zh-CN': '字体字重',
+  'zh-TW': '字型字重',
+  fr: 'Graisse de la police',
+  ru: 'Толщина шрифта',
+  de: 'Schriftstärke'
+};
+
+for (const [language, value] of Object.entries(fontWeightTranslations)) {
+  translations[language].prefs.fontWeight = value;
+}
+
 for (const [language, values] of Object.entries(quickSendGroupTranslations)) {
   Object.assign(translations[language].main, values);
 }
