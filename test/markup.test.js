@@ -158,7 +158,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 8/);
+  assert.match(main, /const CONFIG_VERSION = 9/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
@@ -305,6 +305,57 @@ test('full and compact quick-send clicks share one lightweight result pulse', ()
   assert.match(styles, /@keyframes quick-send-click-feedback\s*\{[^}]*opacity:\s*0\.82;[\s\S]*?opacity:\s*0;/s);
   assert.doesNotMatch(`${renderer}\n${styles}`, /quick-send-press|quick-send-send-flash|quick-send-send-failed/);
   assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
+});
+
+test('chart tabs discover sample fields and consume raw serial bytes independently', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /node_modules\/uplot\/dist\/uPlot\.min\.css/);
+  assert.match(html, /id="pane-1-new-chart-tab-btn"/);
+  assert.match(html, /id="chart-sample-line"/);
+  assert.match(html, /id="chart-fields-list"/);
+  assert.match(html, /id="chart-export-window"/);
+  assert.match(html, /id="chart-export-all"/);
+  assert.match(html, /id="chart-y-axis-mode"/);
+  assert.match(html, /class="chart-settings-section" aria-labelledby="chart-parser-section-title"/);
+  assert.match(html, /class="chart-settings-section" aria-labelledby="chart-display-section-title"/);
+  assert.match(html, /class="chart-settings-section" aria-labelledby="chart-retention-section-title"/);
+  assert.match(html, /id="chart-fields-toggle"/);
+  assert.match(html, /id="chart-fields-selected-count"/);
+  assert.match(html, /class="chart-field-columns" role="row"/);
+  assert.match(renderer, /function createChartTab\(initialState = \{\}, targetPaneId = null\)/);
+  assert.match(renderer, /discoverChartFieldsInWorker\(chartSampleLine\.value/);
+  assert.match(renderer, /new ChartParserIpcClient\(\{/);
+  assert.doesNotMatch(renderer, /createChartParser/);
+  assert.match(main, /new ChartParserWorkerClient\(\{/);
+  assert.match(main, /ipcMain\.handle\('chart-parser-discover'/);
+  assert.match(main, /const chartParserClients = new Map\(\)/);
+  assert.match(main, /function closeChartParserClients\(webContentsId\)/);
+  assert.match(renderer, /chartTabs\.forEach\(tab => tab\.stream\?\.write\(buffer, receivedAt\)\)/);
+  assert.match(renderer, /function persistChartTabs\(\)/);
+  assert.match(renderer, /buildChartCsv\(samples, tab\.model\.fields\)/);
+  assert.match(renderer, /chartTabs\.forEach\(clearChartDataSession\)/);
+  assert.match(renderer, /terminalType: 'chart'/);
+  assert.match(renderer, /case 'toggle-chart-paused'/);
+  assert.match(renderer, /exportChartSamples\('window', chartTab\)/);
+  assert.match(renderer, /case 'close-chart-tab'/);
+  assert.match(renderer, /function updateChartFieldSelectionState\(\)/);
+  assert.match(renderer, /Math\.min\(16, checkboxes\.length\)/);
+  assert.match(renderer, /tr\('main\.chartTooManyFields', \{ max: 16 \}\)/);
+  assert.match(renderer, /chartYIncludeZero\.disabled = fixedYAxis/);
+  assert.match(main, /chartTabs: \[\]/);
+  assert.match(main, /\['main', 'filter', 'shell', 'chart'\]\.includes\(payload\.terminalType\)/);
+  assert.match(main, /terminalType === 'chart' \? \[/);
+  assert.match(main, /sendAction\('export-chart-window'\)/);
+  assert.match(main, /sendAction\('move-to-other-pane'\)/);
+  assert.match(main, /sendAction\('close-chart-tab'\)/);
+  assert.match(main, /receivedAt: Date\.now\(\)/);
+  assert.match(styles, /\.chart-navigator-window\s*\{/);
+  assert.match(styles, /\.chart-fields-table\s*\{[^}]*overflow-x:\s*auto;/s);
+  assert.match(styles, /\.chart-field-columns,\s*\.chart-field-row\s*\{[^}]*min-width:\s*820px;/s);
 });
 
 test('font weight preferences persist and apply to every terminal type', () => {

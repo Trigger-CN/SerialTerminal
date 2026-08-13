@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>SerialTerminal by Trigger-CN</title>
     <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="node_modules/uplot/dist/uPlot.min.css" />
     <link rel="stylesheet" href="style.css" />
     <script src="material-icons.js"></script>
     <style>
@@ -244,6 +245,7 @@
                     <div class="pane-tab-actions">
                         <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
                         <button id="pane-1-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
+                        <button id="pane-1-new-chart-tab-btn" class="secondary pane-new-tab-btn" title="New Chart Tab" data-i18n-title="main.newChartTab"><span class="material-icon-placeholder" data-material-icon="show_chart"></span></button>
                     </div>
                 </div>
                 <div class="main-tabs-content pane-tabs-content" id="pane-1-tabs-content">
@@ -259,6 +261,7 @@
                     <div class="pane-tab-actions">
                         <button id="pane-2-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
                         <button id="pane-2-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
+                        <button id="pane-2-new-chart-tab-btn" class="secondary pane-new-tab-btn" title="New Chart Tab" data-i18n-title="main.newChartTab"><span class="material-icon-placeholder" data-material-icon="show_chart"></span></button>
                     </div>
                 </div>
                 <div class="main-tabs-content pane-tabs-content" id="pane-2-tabs-content"></div>
@@ -453,6 +456,94 @@
                 <button id="rename-tab-dialog-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
                 <button id="rename-tab-dialog-save" type="button" data-i18n="main.save">Save</button>
             </footer>
+        </section>
+    </div>
+
+    <div id="chart-settings-dialog" class="app-dialog-overlay hidden" role="presentation">
+        <section class="app-dialog chart-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="chart-settings-title">
+            <header class="app-dialog-header">
+                <h2 id="chart-settings-title" data-i18n="main.chartSettings">Chart Settings</h2>
+                <button id="chart-settings-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
+            </header>
+            <div class="app-dialog-body chart-settings-body">
+                <section class="chart-settings-section" aria-labelledby="chart-parser-section-title">
+                    <div class="chart-settings-section-heading">
+                        <h3 id="chart-parser-section-title" data-i18n="main.chartParsingSettings">Data parsing</h3>
+                        <span data-i18n="main.chartParsingSettingsHint">Define how serial log lines become data points</span>
+                    </div>
+                    <div class="chart-settings-grid">
+                        <label><span data-i18n="main.chartParserMode">Parser</span><select id="chart-parser-mode"><option value="key-value" data-i18n="main.chartAutoKeyValue">Automatic key-value</option><option value="template" data-i18n="main.chartTemplate">Format template</option><option value="regex" data-i18n="main.chartRegex">Regular expression</option></select></label>
+                        <label><span data-i18n="main.receiveEncoding">Receive encoding</span><select id="chart-encoding"><option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option></select></label>
+                        <label><span data-i18n="main.chartLineMarker">Line marker</span><input id="chart-line-marker" type="text" placeholder="[FRAME_PERF]"></label>
+                        <label id="chart-separator-group"><span data-i18n="main.chartSeparator">Key/value separator</span><select id="chart-key-separator"><option value="auto" data-i18n="main.chartSeparatorAuto">Both (= and :)</option><option value="=">=</option><option value=":">:</option></select></label>
+                    </div>
+                    <label class="chart-rule-group hidden" id="chart-template-group"><span data-i18n="main.chartTemplate">Format template</span><textarea id="chart-template-input" rows="3" spellcheck="false"></textarea></label>
+                    <label class="chart-rule-group hidden" id="chart-regex-group"><span data-i18n="main.chartRegex">Regular expression</span><textarea id="chart-regex-input" rows="3" spellcheck="false"></textarea></label>
+                    <label class="chart-sample-group"><span data-i18n="main.chartSampleLine">Sample log line</span><textarea id="chart-sample-line" rows="3" spellcheck="false"></textarea></label>
+                    <div id="chart-sample-status" class="input-validation" role="status" aria-live="polite"></div>
+                </section>
+
+                <section class="chart-settings-section" aria-labelledby="chart-display-section-title">
+                    <div class="chart-settings-section-heading">
+                        <h3 id="chart-display-section-title" data-i18n="main.chartDisplaySettings">Display and range</h3>
+                        <span data-i18n="main.chartDisplaySettingsHint">Control the live viewport and vertical scale</span>
+                    </div>
+                    <div class="chart-settings-grid chart-display-grid">
+                        <label><span data-i18n="main.chartYAxisMode">Y-axis range</span><select id="chart-y-axis-mode"><option value="auto" data-i18n="main.chartYAxisAuto">Automatic</option><option value="fixed" data-i18n="main.chartYAxisFixed">Fixed</option></select></label>
+                        <label class="chart-y-fixed"><span data-i18n="main.chartYAxisMin">Y minimum</span><input id="chart-y-min" type="number" step="any"></label>
+                        <label class="chart-y-fixed"><span data-i18n="main.chartYAxisMax">Y maximum</span><input id="chart-y-max" type="number" step="any"></label>
+                        <label><span data-i18n="main.chartYAxisMargin">Y margin (%)</span><input id="chart-y-margin" type="number" min="0" max="100" step="1"></label>
+                        <label><span data-i18n="main.chartWindowDuration">Live window (seconds)</span><input id="chart-window-duration" type="number" min="1" max="86400" step="1"></label>
+                        <label class="chart-checkbox-setting"><input id="chart-y-include-zero" type="checkbox"><span data-i18n="main.chartYAxisIncludeZero">Include zero in automatic range</span></label>
+                    </div>
+                </section>
+
+                <section class="chart-settings-section" aria-labelledby="chart-retention-section-title">
+                    <div class="chart-settings-section-heading">
+                        <h3 id="chart-retention-section-title" data-i18n="main.chartRetentionSettings">Raw data retention</h3>
+                        <span data-i18n="main.chartRetentionSettingsHint">The first limit reached removes the oldest raw points</span>
+                    </div>
+                    <div class="chart-settings-grid">
+                        <label><span data-i18n="main.chartMaxPoints">Maximum raw points</span><input id="chart-max-points" type="number" min="1000" max="1000000" step="1000"></label>
+                        <label><span data-i18n="main.chartMaxDuration">Raw retention (minutes)</span><input id="chart-max-duration" type="number" min="1" max="1440" step="1"></label>
+                    </div>
+                </section>
+
+                <section class="chart-settings-section chart-fields-section" aria-labelledby="chart-fields-title">
+                    <div class="chart-fields-header">
+                        <div><h3 id="chart-fields-title" data-i18n="main.chartFields">Discovered fields</h3><span data-i18n="main.chartFieldHint">Select numeric series to draw</span></div>
+                        <span id="chart-fields-selected-count" class="chart-fields-selected-count"></span>
+                    </div>
+                    <div class="chart-fields-table" role="table" aria-labelledby="chart-fields-title">
+                        <div class="chart-field-columns" role="row">
+                            <label title="Select all" data-i18n-title="main.chartSelectAll"><input id="chart-fields-toggle" type="checkbox" aria-label="Select all" data-i18n-aria-label="main.chartSelectAll"></label>
+                            <span data-i18n="main.chartFieldKey">Field</span><span data-i18n="main.chartFieldLabel">Label</span><span data-i18n="main.chartFieldColor">Color</span>
+                            <span data-i18n="main.chartFieldSample">Sample</span><span data-i18n="main.chartFieldSourceUnit">Source unit</span><span data-i18n="main.chartFieldDisplayUnit">Display unit</span><span data-i18n="main.chartPrecision">Precision</span>
+                        </div>
+                        <div id="chart-fields-list" class="chart-fields-list" role="rowgroup"></div>
+                    </div>
+                </section>
+            </div>
+            <footer class="app-dialog-actions">
+                <button id="chart-settings-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
+                <button id="chart-settings-save" type="button" data-i18n="main.save">Save</button>
+            </footer>
+        </section>
+    </div>
+
+    <div id="chart-export-dialog" class="app-dialog-overlay hidden" role="presentation">
+        <section class="app-dialog chart-export-dialog" role="dialog" aria-modal="true" aria-labelledby="chart-export-title">
+            <header class="app-dialog-header">
+                <h2 id="chart-export-title" data-i18n="main.chartExport">Export CSV</h2>
+                <button id="chart-export-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
+            </header>
+            <div class="app-dialog-body">
+                <p id="chart-export-status" class="chart-export-status"></p>
+                <div class="chart-export-options">
+                    <button id="chart-export-window" type="button"><span class="material-icon-placeholder" data-material-icon="save"></span><span data-i18n="main.chartExportWindow">Current window</span></button>
+                    <button id="chart-export-all" type="button"><span class="material-icon-placeholder" data-material-icon="save"></span><span data-i18n="main.chartExportAll">All retained raw data</span></button>
+                </div>
+            </div>
         </section>
     </div>
     

@@ -95,7 +95,8 @@
     "js-yaml": "^5.2.3",
     "node-pty": "^1.1.0",
     "serialport": "^13.0.0",
-    "undici": "^6.21.3"
+    "undici": "^6.21.3",
+    "uplot": "^1.6.32"
   },
   "overrides": {
     "js-yaml": "^5.2.3"

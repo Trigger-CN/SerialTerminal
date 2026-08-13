@@ -27,6 +27,12 @@ const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 const { serializeTerminalBuffer } = require('./terminal-buffer-text');
 const { translateConptyMouseMode } = require('./shell-mouse-compat');
+const uPlot = require('uplot');
+const { SerialTextStream } = require('./serial-text-stream');
+const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./chart-parser-ipc-client');
+const { ChartDataModel } = require('./chart-data-model');
+const { ChartView } = require('./chart-view');
+const { buildChartCsv } = require('./chart-csv');
 const {
     getVerticalInsertionIndex,
     reorderQuickSendItems,
@@ -751,7 +757,15 @@ function getContextMenuLabels() {
         restartShell: tr('main.contextRestartShell'),
         newCmdTab: tr('main.newCmdTab'),
         newPowerShellTab: tr('main.newPowerShellTab'),
-        newBashTab: tr('main.newBashTab')
+        newBashTab: tr('main.newBashTab'),
+        chartPause: tr('main.chartPause'),
+        chartResume: tr('main.chartResume'),
+        chartLive: tr('main.chartLive'),
+        chartClear: tr('main.chartClear'),
+        chartExportWindow: tr('main.chartExportWindow'),
+        chartExportAll: tr('main.chartExportAll'),
+        chartSettings: tr('main.chartSettings'),
+        chartClose: tr('main.chartClose')
     };
 }
 
@@ -937,10 +951,12 @@ async function handleTerminalContextMenuAction(payload = {}) {
     const { action, tabId, terminalType, paneId } = payload;
     const isFilter = terminalType === 'filter';
     const isShell = terminalType === 'shell';
+    const isChart = terminalType === 'chart';
     const filterTab = isFilter ? filterTabs.find(tab => tab.id === tabId) : null;
     const shellTab = isShell ? getShellTabState(tabId) : null;
-    const targetTerm = isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialTerm);
-    if (!targetTerm && action !== 'paste-send') return;
+    const chartTab = isChart ? getChartTabState(tabId) : null;
+    const targetTerm = isChart ? null : (isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialTerm));
+    if ((isChart && !chartTab) || (!isChart && !targetTerm && action !== 'paste-send')) return;
 
     switch (action) {
         case 'copy-all': {
@@ -1030,6 +1046,34 @@ async function handleTerminalContextMenuAction(payload = {}) {
         case 'close-split': {
             collapseSplit();
             setActionStatus('已关闭分屏');
+            break;
+        }
+        case 'toggle-chart-paused': {
+            if (chartTab) toggleChartPaused(chartTab);
+            break;
+        }
+        case 'chart-return-live': {
+            chartTab?.view?.returnToLive();
+            break;
+        }
+        case 'clear-chart': {
+            if (chartTab) clearChartDataSession(chartTab);
+            break;
+        }
+        case 'export-chart-window': {
+            if (chartTab) await exportChartSamples('window', chartTab);
+            break;
+        }
+        case 'export-chart-all': {
+            if (chartTab) await exportChartSamples('all', chartTab);
+            break;
+        }
+        case 'chart-settings': {
+            if (chartTab) openChartSettings(chartTab);
+            break;
+        }
+        case 'close-chart-tab': {
+            if (chartTab) closeChartTab(chartTab.id);
             break;
         }
         case 'use-selection-as-filter': {
@@ -1134,6 +1178,23 @@ if (mainTabButton) {
     });
 }
 
+function bindChartContextMenu(tab) {
+    tab.element.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        const range = tab.view?.viewRange;
+        requestTerminalContextMenu({
+            terminalType: 'chart',
+            paneId: resolvePaneId(tab.paneId, tab.id),
+            tabId: tab.id,
+            splitEnabled: isSplitEnabled(),
+            paused: tab.paused,
+            canReturnToLive: Boolean(tab.view?.fullRange && !tab.view.following),
+            canExportWindow: Boolean(range && tab.model?.query(range[0], range[1]).length),
+            canExportAll: Boolean(tab.model?.samples.length)
+        });
+    });
+}
+
 async function showWelcomeGuideForCurrentVersion(config) {
     if (welcomeGuideChecked) return;
     welcomeGuideChecked = true;
@@ -1187,6 +1248,8 @@ let filterTabs = [];
 let nextFilterTabId = 1;
 let shellTabs = [];
 let nextShellTabId = 1;
+let chartTabs = [];
+let nextChartTabId = 1;
 let renameTabState = null;
 const renameTabDialog = document.getElementById('rename-tab-dialog');
 const renameTabInput = document.getElementById('rename-tab-input');
@@ -1205,6 +1268,10 @@ function getPaneTabsContent(paneId) {
 
 function getShellTabState(tabId) {
     return shellTabs.find(tab => tab.id === tabId) || null;
+}
+
+function getChartTabState(tabId) {
+    return chartTabs.find(tab => tab.id === tabId) || null;
 }
 
 function persistWorkspaceLayout() {
@@ -1238,6 +1305,12 @@ workspaceManager = createWorkspaceManager({
         if (shellTab) {
             shellTab.paneId = targetPaneId;
             persistShellTabs();
+            return;
+        }
+        const chartTab = getChartTabState(tabId);
+        if (chartTab) {
+            chartTab.paneId = targetPaneId;
+            persistChartTabs();
         }
     },
     fitWorkspace: fitWorkspaceTerminals
@@ -1267,6 +1340,9 @@ function fitWorkspaceTerminals() {
             if (!isDraggingWorkspaceSplitter && sizeChanged) {
                 ipcRenderer.send('resize-shell-tab', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows });
             }
+        });
+        chartTabs.forEach(tab => {
+            if (isTabActive(tab.id)) tab.view?.resize();
         });
     });
 }
@@ -1598,6 +1674,14 @@ function updateTabTitles() {
         const titleEl = document.createElement('span');
         titleEl.className = 'main-tab-title';
         titleEl.textContent = title;
+        tab.btn.replaceChildren(titleEl);
+        tab.btn.appendChild(closeBtn);
+    });
+    chartTabs.forEach((tab, index) => {
+        const closeBtn = tab.btn.querySelector('.main-tab-close');
+        const titleEl = document.createElement('span');
+        titleEl.className = 'main-tab-title';
+        titleEl.textContent = tab.title?.trim() || `${tr('main.chart')} ${index + 1}`;
         tab.btn.replaceChildren(titleEl);
         tab.btn.appendChild(closeBtn);
     });
@@ -2227,6 +2311,591 @@ function persistFilterTabs({ debounce = false } = {}) {
     save();
 }
 
+const chartSettingsDialog = document.getElementById('chart-settings-dialog');
+const chartParserMode = document.getElementById('chart-parser-mode');
+const chartEncoding = document.getElementById('chart-encoding');
+const chartLineMarker = document.getElementById('chart-line-marker');
+const chartKeySeparator = document.getElementById('chart-key-separator');
+const chartTemplateInput = document.getElementById('chart-template-input');
+const chartRegexInput = document.getElementById('chart-regex-input');
+const chartSampleLine = document.getElementById('chart-sample-line');
+const chartSampleStatus = document.getElementById('chart-sample-status');
+const chartFieldsList = document.getElementById('chart-fields-list');
+const chartFieldsToggle = document.getElementById('chart-fields-toggle');
+const chartFieldsSelectedCount = document.getElementById('chart-fields-selected-count');
+const chartYAxisMode = document.getElementById('chart-y-axis-mode');
+const chartYMin = document.getElementById('chart-y-min');
+const chartYMax = document.getElementById('chart-y-max');
+const chartYMargin = document.getElementById('chart-y-margin');
+const chartYIncludeZero = document.getElementById('chart-y-include-zero');
+const chartWindowDuration = document.getElementById('chart-window-duration');
+const chartMaxPoints = document.getElementById('chart-max-points');
+const chartMaxDuration = document.getElementById('chart-max-duration');
+const chartExportDialog = document.getElementById('chart-export-dialog');
+const chartExportStatus = document.getElementById('chart-export-status');
+const chartExportWindow = document.getElementById('chart-export-window');
+const chartExportAll = document.getElementById('chart-export-all');
+let chartSettingsState = null;
+let chartExportState = null;
+
+function serializeChartTab(tab) {
+    return {
+        id: tab.id,
+        paneId: tab.paneId || getTabPaneId(tab.id),
+        title: tab.title || '',
+        encoding: tab.encoding || 'utf8',
+        parserMode: tab.parserMode || 'key-value',
+        sampleLine: tab.sampleLine || '',
+        lineMarker: tab.lineMarker || '',
+        keyValueSeparator: ['=', ':', 'auto'].includes(tab.keyValueSeparator) ? tab.keyValueSeparator : 'auto',
+        template: tab.template || '',
+        pattern: tab.pattern || '',
+        fields: (tab.fields || []).map(field => ({ ...field })),
+        windowDurationMs: tab.windowDurationMs || 60000,
+        maxPoints: tab.maxPoints || 200000,
+        maxDurationMs: tab.maxDurationMs || 1800000,
+        yAxisMode: tab.yAxisMode === 'fixed' ? 'fixed' : 'auto',
+        yMin: tab.yMin,
+        yMax: tab.yMax,
+        yIncludeZero: tab.yIncludeZero === true,
+        yMargin: tab.yMargin ?? 0.08
+    };
+}
+
+function updateChartStats(tab) {
+    if (!tab.stats || !tab.model || !tab.view?.viewRange) return;
+    const [start, end] = tab.view.viewRange;
+    const estimated = tab.summaryHistory;
+    tab.stats.replaceChildren();
+    tab.model.fields.forEach(field => {
+        const stats = estimated ? tab.model.overviewStats(field.key, start, end) : tab.model.stats(field.key, start, end);
+        if (!stats) return;
+        const precision = field.precision ?? 2;
+        const unit = field.displayUnit ? ` ${field.displayUnit}` : '';
+        const item = document.createElement('span');
+        item.className = 'chart-series-stat';
+        item.innerHTML = `<span class="chart-series-swatch"></span><strong></strong> cur ${Number(stats.current).toFixed(precision)}${unit} · min ${Number(stats.min).toFixed(precision)} · max ${Number(stats.max).toFixed(precision)} · avg ${Number(stats.average).toFixed(precision)}`;
+        item.querySelector('.chart-series-swatch').style.backgroundColor = field.color;
+        item.querySelector('strong').textContent = field.label || field.key;
+        tab.stats.appendChild(item);
+    });
+    if (estimated) {
+        const note = document.createElement('span');
+        note.className = 'chart-stats-estimated';
+        note.textContent = tr('main.chartStatsEstimated');
+        tab.stats.appendChild(note);
+    }
+}
+
+function clearChartDataSession(tab) {
+    tab.stream?.reset();
+    tab.parserWorker?.reset();
+    tab.parserError = '';
+    tab.parserDropped = 0;
+    tab.summaryHistory = false;
+    tab.model?.clear();
+    tab.stats?.replaceChildren();
+    tab.view?.setData([[], ...(tab.model?.fields || []).map(() => [])]);
+    updateChartStatus(tab);
+}
+
+function closeChartExport() {
+    chartExportState = null;
+    chartExportDialog.classList.add('hidden');
+}
+
+function openChartExport(tab) {
+    if (!tab.model?.samples.length) {
+        setActionStatus(tr('main.chartNoExportData'));
+        return;
+    }
+    chartExportState = tab;
+    const range = tab.view?.viewRange;
+    const windowSamples = range ? tab.model.query(range[0], range[1]) : [];
+    chartExportWindow.disabled = windowSamples.length === 0;
+    chartExportAll.disabled = tab.model.samples.length === 0;
+    chartExportStatus.textContent = windowSamples.length
+        ? tr('main.chartExportWindowCount', { count: windowSamples.length }) + (tab.summaryHistory ? tr('main.chartExportSummaryWarning') : '')
+        : tr('main.chartExportNoWindowData');
+    chartExportDialog.classList.remove('hidden');
+    (chartExportWindow.disabled ? chartExportAll : chartExportWindow).focus();
+}
+
+async function exportChartSamples(scope, targetTab = chartExportState) {
+    const tab = targetTab;
+    if (!tab?.model) return;
+    const range = tab.view?.viewRange;
+    const samples = scope === 'window' && range ? tab.model.query(range[0], range[1]) : tab.model.samples;
+    if (!samples.length) return;
+    const suffix = scope === 'window' ? tr('main.chartExportWindow') : tr('main.chartExportAll');
+    const result = await ipcRenderer.invoke('save-chart-csv', {
+        title: `${tab.title || tr('main.chart')} ${suffix}`,
+        content: buildChartCsv(samples, tab.model.fields)
+    });
+    if (result?.filePath) setActionStatus(`${tr('main.chartExported')}: ${result.filePath}`);
+    if (tab === chartExportState) closeChartExport();
+}
+
+function persistChartTabs() {
+    if (isApplyingConfig) return;
+    const savedTabs = chartTabs.map(serializeChartTab);
+    if (currentConfig) currentConfig.chartTabs = savedTabs;
+    ipcRenderer.send('save-config', { chartTabs: savedTabs });
+}
+
+function getChartParserConfig(tab) {
+    return {
+        mode: tab.parserMode,
+        marker: tab.lineMarker,
+        keyValueSeparator: tab.keyValueSeparator,
+        template: tab.template,
+        pattern: tab.pattern,
+        fields: tab.fields
+    };
+}
+
+function updateChartStatus(tab) {
+    if (!tab.status) return;
+    tab.status.classList.toggle('error', Boolean(tab.parserError));
+    if (tab.parserError) {
+        tab.status.textContent = tab.parserError;
+        return;
+    }
+    if (tab.paused) {
+        tab.status.textContent = tr('main.chartPaused');
+        return;
+    }
+    if (!tab.fields?.some(field => field.role === 'series' && field.visible !== false)) {
+        tab.status.textContent = tr('main.chartNoFields');
+        return;
+    }
+    if (!tab.model?.samples.length) {
+        tab.status.textContent = tr('main.chartWaiting');
+        return;
+    }
+    const details = [`${tab.model.samples.length.toLocaleString()} ${tr('main.chartSamples')}`];
+    if (tab.parserDropped) details.push(`${tab.parserDropped.toLocaleString()} ${tr('main.chartDropped')}`);
+    if (tab.summaryHistory) details.push(tr('main.chartSummaryHistory'));
+    tab.status.textContent = details.join(' · ');
+}
+
+function toggleChartPaused(tab) {
+    tab.paused = !tab.paused;
+    tab.stream?.reset();
+    tab.parserWorker?.reset();
+    tab.parserError = '';
+    tab.parserDropped = 0;
+    tab.pauseButton.title = tr(tab.paused ? 'main.chartResume' : 'main.chartPause');
+    tab.pauseButton.replaceChildren(createMaterialIcon(tab.paused ? 'play_arrow' : 'pause'));
+    updateChartStatus(tab);
+}
+
+function scheduleChartRender(tab) {
+    if (!tab || tab.closed || tab.renderFrame !== null || !isTabActive(tab.id)) return;
+    tab.renderFrame = requestAnimationFrame(() => {
+        tab.renderFrame = null;
+        if (!tab.view || !tab.model) return;
+        tab.view.setData(tab.model.toAlignedData(), tab.model.toOverviewAlignedData());
+        updateChartStatus(tab);
+        updateChartStats(tab);
+    });
+}
+
+function configureChartTab(tab) {
+    tab.stream?.dispose();
+    tab.parserWorker?.close();
+    tab.view?.destroy();
+    tab.plotArea.replaceChildren();
+    tab.timelineHost.replaceChildren();
+    tab.model = null;
+    tab.parserWorker = null;
+    tab.view = null;
+    tab.parserError = '';
+    tab.parserDropped = 0;
+    tab.summaryHistory = false;
+    const activeFields = (tab.fields || []).filter(field => field.role === 'sequence' || field.visible !== false);
+    if (!activeFields.some(field => field.role !== 'sequence')) {
+        updateChartStatus(tab);
+        return;
+    }
+    tab.status.classList.remove('error');
+    tab.model = new ChartDataModel({ fields: activeFields, maxPoints: tab.maxPoints, maxDurationMs: tab.maxDurationMs });
+    tab.parserWorker = new ChartParserIpcClient({
+        config: { ...getChartParserConfig(tab), fields: activeFields },
+        onSamples: samples => {
+            if (tab.closed) return;
+            tab.parserError = '';
+            let changed = false;
+            samples.forEach(sample => { if (tab.model?.append(sample)) changed = true; });
+            if (changed) scheduleChartRender(tab);
+            else updateChartStatus(tab);
+        },
+        onError: error => {
+            if (tab.closed) return;
+            tab.parserError = error.message;
+            updateChartStatus(tab);
+        },
+        onStats: stats => {
+            tab.parserDropped = stats.dropped;
+            updateChartStatus(tab);
+        }
+    });
+    tab.stream = new SerialTextStream({
+        encoding: tab.encoding,
+        onRecord: record => {
+            if (tab.closed || tab.paused || record.partial) return;
+            tab.parserWorker?.push(record);
+        }
+    });
+    tab.view = new ChartView({
+        uPlot,
+        mainHost: tab.plotArea,
+        timelineHost: tab.timelineHost,
+        navigator: tab.navigator,
+        fields: activeFields,
+        windowDurationMs: tab.windowDurationMs,
+        yAxis: { mode: tab.yAxisMode, min: tab.yMin, max: tab.yMax, includeZero: tab.yIncludeZero, margin: tab.yMargin },
+        onFollowChange: following => tab.liveButton.classList.toggle('hidden', following),
+        onDataModeChange: summaryHistory => {
+            tab.summaryHistory = summaryHistory;
+            updateChartStatus(tab);
+        },
+        onViewRangeChange: () => updateChartStats(tab)
+    });
+    updateChartStatus(tab);
+}
+
+function createChartTab(initialState = {}, targetPaneId = null) {
+    const tabId = typeof initialState.id === 'string' && initialState.id ? initialState.id : `tab-chart-${getNextChartTabId()}`;
+    syncNextChartTabId(tabId);
+    const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
+    const tabBtn = document.createElement('button');
+    tabBtn.className = 'main-tab';
+    tabBtn.type = 'button';
+    tabBtn.id = `${tabId}-button`;
+    tabBtn.setAttribute('role', 'tab');
+    tabBtn.setAttribute('aria-controls', tabId);
+    tabBtn.setAttribute('aria-selected', 'false');
+    tabBtn.dataset.target = tabId;
+    tabBtn.dataset.paneId = resolvedPaneId;
+    const title = document.createElement('span');
+    title.className = 'main-tab-title';
+    title.textContent = tr('main.chart');
+    const close = document.createElement('span');
+    close.className = 'main-tab-close';
+    close.title = tr('main.closeTab');
+    close.appendChild(createMaterialIcon('close'));
+    tabBtn.append(title, close);
+    getPaneTabsList(resolvedPaneId).appendChild(tabBtn);
+
+    const tabPane = document.createElement('div');
+    tabPane.className = 'main-tab-pane chart-tab';
+    tabPane.id = tabId;
+    tabPane.setAttribute('role', 'tabpanel');
+    tabPane.setAttribute('aria-labelledby', tabBtn.id);
+    tabPane.dataset.paneId = resolvedPaneId;
+    tabPane.innerHTML = `
+        <div class="chart-toolbar">
+            <div class="chart-status" role="status"></div>
+            <div class="chart-toolbar-actions">
+                <button class="secondary chart-settings-btn" type="button" title="${tr('main.chartSettings')}"><span class="material-icon-placeholder" data-material-icon="settings"></span></button>
+                <button class="secondary chart-pause-btn" type="button" title="${tr('main.chartPause')}"><span class="material-icon-placeholder" data-material-icon="pause"></span></button>
+                <button class="secondary chart-clear-btn" type="button" title="${tr('main.chartClear')}"><span class="material-icon-placeholder" data-material-icon="delete_sweep"></span></button>
+                <button class="secondary chart-export-btn" type="button" title="${tr('main.chartExport')}"><span class="material-icon-placeholder" data-material-icon="save"></span></button>
+                <button class="secondary chart-live-btn hidden" type="button"><span class="material-icon-placeholder" data-material-icon="update"></span><span>${tr('main.chartLive')}</span></button>
+            </div>
+        </div>
+        <div class="chart-series-stats"></div>
+        <div class="chart-main-host"></div>
+        <div class="chart-timeline-shell">
+            <div class="chart-timeline-host"></div>
+            <div class="chart-navigator"><div class="chart-navigator-window" role="slider" tabindex="0" aria-label="Chart time window" hidden><span class="chart-navigator-handle start"></span><span class="chart-navigator-handle end"></span></div></div>
+        </div>`;
+    window.MaterialIcons.upgrade(tabPane);
+    getPaneTabsContent(resolvedPaneId).appendChild(tabPane);
+
+    const tab = {
+        id: tabId, paneId: resolvedPaneId, title: initialState.title || '', element: tabPane, btn: tabBtn,
+        encoding: initialState.encoding || receiveEncoding || 'utf8', parserMode: initialState.parserMode || 'key-value',
+        sampleLine: initialState.sampleLine || '', lineMarker: initialState.lineMarker || '',
+        keyValueSeparator: ['=', ':', 'auto'].includes(initialState.keyValueSeparator) ? initialState.keyValueSeparator : 'auto', template: initialState.template || '', pattern: initialState.pattern || '',
+        fields: Array.isArray(initialState.fields) ? initialState.fields.map(field => ({ ...field })) : [],
+        windowDurationMs: initialState.windowDurationMs || 60000, maxPoints: initialState.maxPoints || 200000,
+        maxDurationMs: initialState.maxDurationMs || 1800000, paused: false, closed: false, renderFrame: null,
+        yAxisMode: initialState.yAxisMode === 'fixed' ? 'fixed' : 'auto', yMin: Number(initialState.yMin ?? 0), yMax: Number(initialState.yMax ?? 100),
+        yIncludeZero: initialState.yIncludeZero === true, yMargin: Number(initialState.yMargin ?? 0.08),
+        parserWorker: null, parserError: '', parserDropped: 0, summaryHistory: false,
+        status: tabPane.querySelector('.chart-status'), stats: tabPane.querySelector('.chart-series-stats'), plotArea: tabPane.querySelector('.chart-main-host'),
+        timelineHost: tabPane.querySelector('.chart-timeline-host'), navigator: tabPane.querySelector('.chart-navigator'),
+        liveButton: tabPane.querySelector('.chart-live-btn'), pauseButton: tabPane.querySelector('.chart-pause-btn')
+    };
+    tabBtn.onclick = event => {
+        if (!event.target.closest('.main-tab-close')) switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
+    };
+    close.onclick = () => closeChartTab(tabId);
+    tabBtn.ondblclick = event => { if (!event.target.closest('.main-tab-close')) openRenameTabDialog(tab); };
+    tabPane.querySelector('.chart-settings-btn').onclick = () => openChartSettings(tab);
+    tab.pauseButton.onclick = () => toggleChartPaused(tab);
+    tabPane.querySelector('.chart-clear-btn').onclick = () => {
+        clearChartDataSession(tab);
+    };
+    tabPane.querySelector('.chart-export-btn').onclick = () => openChartExport(tab);
+    tab.liveButton.onclick = () => tab.view?.returnToLive();
+    bindChartContextMenu(tab);
+
+    chartTabs.push(tab);
+    updateTabTitles();
+    addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
+    if (tab.fields.length) configureChartTab(tab);
+    else updateChartStatus(tab);
+    if (!isRestoringWorkspaceSession) {
+        switchPaneTab(resolvedPaneId, tabId, { persist: false });
+        persistChartTabs();
+        persistWorkspaceLayout();
+        setTimeout(() => openChartSettings(tab), 0);
+    }
+    return tab;
+}
+
+function closeChartTab(tabId) {
+    const index = chartTabs.findIndex(tab => tab.id === tabId);
+    if (index < 0) return;
+    const tab = chartTabs[index];
+    tab.closed = true;
+    if (tab.renderFrame !== null) cancelAnimationFrame(tab.renderFrame);
+    tab.stream?.dispose();
+    tab.parserWorker?.close();
+    tab.view?.destroy();
+    tab.element.remove();
+    tab.btn.remove();
+    chartTabs.splice(index, 1);
+    const { nextActiveTabId } = removeTabFromWorkspace(tabId, { persist: false });
+    persistChartTabs();
+    updateTabTitles();
+    const nextId = nextActiveTabId || 'tab-main';
+    switchPaneTab(getPaneIdForTabId(nextId), nextId, { persist: false });
+    persistWorkspaceLayout();
+}
+
+function renderChartFieldCandidates(fields) {
+    chartFieldsList.replaceChildren();
+    if (!fields.length) {
+        const empty = document.createElement('div');
+        empty.className = 'chart-fields-empty';
+        empty.textContent = tr('main.chartNoFields');
+        chartFieldsList.appendChild(empty);
+        updateChartFieldSelectionState();
+        return;
+    }
+    fields.forEach(field => {
+        const row = document.createElement('div');
+        row.className = 'chart-field-row';
+        row.dataset.key = field.key;
+        row.setAttribute('role', 'row');
+        row.innerHTML = `<label class="chart-field-visible-cell"><input class="chart-field-visible" type="checkbox" ${field.visible ? 'checked' : ''}><span class="visually-hidden"></span></label>
+            <span class="chart-field-key" role="cell"></span><input class="chart-field-label" type="text"><input class="chart-field-color" type="color">
+            <span class="chart-field-value"></span><input class="chart-field-unit" type="text">
+            <select class="chart-field-display-unit"><option value="">-</option><option value="us">us</option><option value="ms">ms</option><option value="s">s</option></select>
+            <input class="chart-field-precision" type="number" min="0" max="8" title="${tr('main.chartPrecision')}">`;
+        row.querySelector('.chart-field-key').textContent = field.key;
+        row.querySelector('.chart-field-visible').setAttribute('aria-label', `${tr('main.chartFieldVisible')}: ${field.key}`);
+        row.querySelector('.chart-field-value').textContent = String(field.sampleValue);
+        row.querySelector('.chart-field-unit').value = field.sourceUnit || '';
+        row.querySelector('.chart-field-label').value = field.label || field.key;
+        row.querySelector('.chart-field-color').value = field.color || '#4fc3f7';
+        row.querySelector('.chart-field-display-unit').value = field.displayUnit || '';
+        row.querySelector('.chart-field-precision').value = field.precision ?? 2;
+        row._field = field;
+        chartFieldsList.appendChild(row);
+    });
+    updateChartFieldSelectionState();
+}
+
+function updateChartFieldSelectionState() {
+    const checkboxes = Array.from(chartFieldsList.querySelectorAll('.chart-field-visible'));
+    const selected = checkboxes.filter(checkbox => checkbox.checked).length;
+    const selectable = Math.min(16, checkboxes.length);
+    chartFieldsSelectedCount.textContent = tr('main.chartFieldsSelected', { count: selected, max: 16 });
+    chartFieldsSelectedCount.classList.toggle('limit', selected >= 16);
+    chartFieldsToggle.checked = selectable > 0 && selected === selectable;
+    chartFieldsToggle.indeterminate = selected > 0 && selected < selectable;
+    chartFieldsToggle.disabled = checkboxes.length === 0;
+}
+
+function mergeChartFieldPreferences(fields, savedFields = []) {
+    const savedByKey = new Map(savedFields.map(field => [field.key, field]));
+    return fields.map(field => {
+        const saved = savedByKey.get(field.key);
+        return saved ? { ...field, ...saved, sampleValue: field.sampleValue, type: field.type, sourceUnit: saved.sourceUnit || field.sourceUnit } : field;
+    });
+}
+
+function readChartDialogConfig() {
+    return {
+        mode: chartParserMode.value,
+        marker: chartLineMarker.value,
+        keyValueSeparator: chartKeySeparator.value,
+        template: chartTemplateInput.value,
+        pattern: chartRegexInput.value
+    };
+}
+
+function updateChartSettingsMode() {
+    document.getElementById('chart-separator-group').classList.toggle('hidden', chartParserMode.value !== 'key-value');
+    document.getElementById('chart-template-group').classList.toggle('hidden', chartParserMode.value !== 'template');
+    document.getElementById('chart-regex-group').classList.toggle('hidden', chartParserMode.value !== 'regex');
+    document.querySelectorAll('.chart-y-fixed').forEach(element => element.classList.toggle('hidden', chartYAxisMode.value !== 'fixed'));
+    const fixedYAxis = chartYAxisMode.value === 'fixed';
+    chartYMargin.disabled = fixedYAxis;
+    chartYIncludeZero.disabled = fixedYAxis;
+    chartYIncludeZero.closest('.chart-checkbox-setting')?.classList.toggle('disabled', fixedYAxis);
+}
+
+let chartDiscoveryTimer = null;
+let chartDiscoveryRequest = 0;
+
+async function discoverChartDialogFields() {
+    const request = ++chartDiscoveryRequest;
+    try {
+        chartSampleStatus.textContent = tr('main.chartParsingSample');
+        chartSampleStatus.className = 'input-validation';
+        const fields = mergeChartFieldPreferences(
+            await discoverChartFieldsInWorker(chartSampleLine.value, readChartDialogConfig()),
+            chartSettingsState?.fields || []
+        );
+        if (request !== chartDiscoveryRequest || !chartSettingsState) return;
+        renderChartFieldCandidates(fields);
+        chartSampleStatus.textContent = fields.length ? tr('main.chartFieldsFound', { count: fields.length }) : tr('main.chartNoFields');
+        chartSampleStatus.className = `input-validation ${fields.length ? 'valid' : 'invalid'}`;
+    } catch (error) {
+        if (request !== chartDiscoveryRequest || !chartSettingsState) return;
+        renderChartFieldCandidates([]);
+        chartSampleStatus.textContent = error.message;
+        chartSampleStatus.className = 'input-validation invalid';
+    }
+}
+
+function openChartSettings(tab) {
+    chartSettingsState = tab;
+    chartParserMode.value = tab.parserMode;
+    chartEncoding.value = tab.encoding;
+    chartLineMarker.value = tab.lineMarker;
+    chartKeySeparator.value = tab.keyValueSeparator;
+    chartTemplateInput.value = tab.template;
+    chartRegexInput.value = tab.pattern;
+    chartSampleLine.value = tab.sampleLine;
+    chartYAxisMode.value = tab.yAxisMode;
+    chartYMin.value = tab.yMin;
+    chartYMax.value = tab.yMax;
+    chartYMargin.value = Math.round(tab.yMargin * 100);
+    chartYIncludeZero.checked = tab.yIncludeZero;
+    chartWindowDuration.value = Math.round(tab.windowDurationMs / 1000);
+    chartMaxPoints.value = tab.maxPoints;
+    chartMaxDuration.value = Math.round(tab.maxDurationMs / 60000);
+    updateChartSettingsMode();
+    if (tab.sampleLine) discoverChartDialogFields();
+    else renderChartFieldCandidates(tab.fields || []);
+    chartSettingsDialog.classList.remove('hidden');
+    chartSampleLine.focus();
+}
+
+function closeChartSettings() {
+    chartDiscoveryRequest++;
+    clearTimeout(chartDiscoveryTimer);
+    chartDiscoveryTimer = null;
+    chartSettingsState = null;
+    chartSettingsDialog.classList.add('hidden');
+}
+
+async function saveChartSettings() {
+    const tab = chartSettingsState;
+    if (!tab) return;
+    const fields = Array.from(chartFieldsList.querySelectorAll('.chart-field-row')).map(row => {
+        const field = row._field;
+        const visible = row.querySelector('.chart-field-visible').checked;
+        return {
+            ...field,
+            visible,
+            role: field.role === 'sequence' && !visible ? 'sequence' : 'series',
+            label: row.querySelector('.chart-field-label').value.trim() || field.key,
+            color: row.querySelector('.chart-field-color').value,
+            sourceUnit: row.querySelector('.chart-field-unit').value.trim(),
+            displayUnit: row.querySelector('.chart-field-display-unit').value,
+            precision: Math.max(0, Math.min(8, Number(row.querySelector('.chart-field-precision').value) || 0))
+        };
+    });
+    const activeFields = fields.filter(field => field.role === 'series' && field.visible);
+    const invalidUnit = activeFields.some(field => field.displayUnit && field.sourceUnit !== field.displayUnit && (!['us', 'ms', 's'].includes(field.sourceUnit) || !['us', 'ms', 's'].includes(field.displayUnit)));
+    const yMin = Number(chartYMin.value);
+    const yMax = Number(chartYMax.value);
+    const invalidYAxis = chartYAxisMode.value === 'fixed' && (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMin >= yMax);
+    if (!activeFields.length || activeFields.length > 16 || invalidUnit || invalidYAxis) {
+        chartSampleStatus.textContent = !activeFields.length
+            ? tr('main.chartSelectField')
+            : activeFields.length > 16
+                ? tr('main.chartTooManyFields', { max: 16 })
+                : invalidUnit
+                    ? tr('main.chartInvalidUnit')
+                    : tr('main.chartInvalidYAxis');
+        chartSampleStatus.className = 'input-validation invalid';
+        return;
+    }
+    try {
+        const discovered = await discoverChartFieldsInWorker(chartSampleLine.value, readChartDialogConfig());
+        if (!discovered.length || activeFields.some(field => !discovered.some(candidate => candidate.key === field.key))) {
+            throw new Error(tr('main.chartSampleInvalid'));
+        }
+    } catch (error) {
+        chartSampleStatus.textContent = error.message;
+        chartSampleStatus.className = 'input-validation invalid';
+        return;
+    }
+    if (tab !== chartSettingsState) return;
+    tab.parserMode = chartParserMode.value;
+    tab.encoding = chartEncoding.value;
+    tab.lineMarker = chartLineMarker.value;
+    tab.keyValueSeparator = chartKeySeparator.value;
+    tab.template = chartTemplateInput.value;
+    tab.pattern = chartRegexInput.value;
+    tab.sampleLine = chartSampleLine.value;
+    tab.fields = fields;
+    tab.yAxisMode = chartYAxisMode.value;
+    tab.yMin = yMin;
+    tab.yMax = yMax;
+    tab.yIncludeZero = chartYIncludeZero.checked;
+    tab.yMargin = Math.max(0, Math.min(1, Number(chartYMargin.value) / 100 || 0));
+    tab.windowDurationMs = Math.max(1000, Math.min(86400000, Number(chartWindowDuration.value) * 1000 || 60000));
+    tab.maxPoints = Math.max(1000, Math.min(1000000, Number(chartMaxPoints.value) || 200000));
+    tab.maxDurationMs = Math.max(60000, Math.min(86400000, Number(chartMaxDuration.value) * 60000 || 1800000));
+    configureChartTab(tab);
+    persistChartTabs();
+    closeChartSettings();
+    scheduleChartRender(tab);
+}
+
+[chartParserMode, chartLineMarker, chartKeySeparator, chartTemplateInput, chartRegexInput, chartSampleLine].forEach(element => {
+    element?.addEventListener('input', () => {
+        updateChartSettingsMode();
+        clearTimeout(chartDiscoveryTimer);
+        chartDiscoveryTimer = setTimeout(discoverChartDialogFields, 150);
+    });
+});
+chartYAxisMode?.addEventListener('change', updateChartSettingsMode);
+chartFieldsList?.addEventListener('change', event => {
+    if (event.target.classList.contains('chart-field-visible')) updateChartFieldSelectionState();
+});
+chartFieldsToggle?.addEventListener('change', () => {
+    const checkboxes = Array.from(chartFieldsList.querySelectorAll('.chart-field-visible'));
+    checkboxes.forEach((checkbox, index) => { checkbox.checked = chartFieldsToggle.checked && index < 16; });
+    updateChartFieldSelectionState();
+});
+document.getElementById('chart-settings-close')?.addEventListener('click', closeChartSettings);
+document.getElementById('chart-settings-cancel')?.addEventListener('click', closeChartSettings);
+document.getElementById('chart-settings-save')?.addEventListener('click', saveChartSettings);
+document.getElementById('chart-export-close')?.addEventListener('click', closeChartExport);
+chartExportWindow?.addEventListener('click', () => exportChartSamples('window'));
+chartExportAll?.addEventListener('click', () => exportChartSamples('all'));
+
 function openRenameTabDialog(tabState) {
     if (!tabState) return;
     renameTabState = tabState;
@@ -2247,6 +2916,7 @@ function saveRenamedTab() {
     updateTabTitles();
     if (filterTabs.includes(renameTabState)) persistFilterTabs();
     if (shellTabs.includes(renameTabState)) persistShellTabs();
+    if (chartTabs.includes(renameTabState)) persistChartTabs();
     closeRenameTabDialog();
 }
 
@@ -2262,6 +2932,8 @@ document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', 
 document.getElementById('pane-2-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-2'));
 document.getElementById('pane-1-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ profileId: getDefaultShellProfileId() }, 'pane-1'));
 document.getElementById('pane-2-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ profileId: getDefaultShellProfileId() }, 'pane-2'));
+document.getElementById('pane-1-new-chart-tab-btn')?.addEventListener('click', () => createChartTab({}, 'pane-1'));
+document.getElementById('pane-2-new-chart-tab-btn')?.addEventListener('click', () => createChartTab({}, 'pane-2'));
 
 document.querySelectorAll('.workspace-pane').forEach(paneEl => {
     paneEl.addEventListener('mousedown', () => {
@@ -2284,6 +2956,12 @@ window.addEventListener('main-tab-changed', (e) => {
                 if (shellTab) {
                     shellTab.fitAddon.fit();
                     ipcRenderer.send('resize-shell-tab', { tabId: shellTab.id, cols: shellTab.term.cols, rows: shellTab.term.rows });
+                } else {
+                    const chartTab = getChartTabState(tabId);
+                    if (chartTab) {
+                        chartTab.view?.resize();
+                        scheduleChartRender(chartTab);
+                    }
                 }
             }
         }
@@ -2619,6 +3297,17 @@ function showSidebarTab(tabId, persist = true) {
     if (currentConfig) currentConfig.activeSidebarTab = normalizedTabId;
     if (persist && !isApplyingConfig) ipcRenderer.send('save-config', { activeSidebarTab: normalizedTabId });
     return true;
+}
+
+function getNextChartTabId() {
+    return nextChartTabId++;
+}
+
+function syncNextChartTabId(tabId) {
+    const match = String(tabId || '').match(/^tab-chart-(\d+)$/);
+    if (!match) return;
+    const numericId = Number(match[1]);
+    if (Number.isFinite(numericId) && numericId >= nextChartTabId) nextChartTabId = numericId + 1;
 }
 
 function bindSidebarToolbarEvents() {
@@ -3122,6 +3811,7 @@ function applyConfig(config) {
         tab.term.options = options;
         tab.fitAddon.fit();
     });
+    chartTabs.forEach(tab => tab.view?.resize());
     if (searchState.current > 0 && searchState.matches[searchState.current - 1]) {
         decorateActiveSearchMatch(getActiveSearchTarget().term, searchState.matches[searchState.current - 1]);
     }
@@ -3283,6 +3973,23 @@ function applyConfig(config) {
         restoreShellSessions();
     }
 
+    if (chartTabs.length === 0 && Array.isArray(config.chartTabs) && config.chartTabs.length > 0) {
+        isRestoringWorkspaceSession = true;
+        try {
+            const paneChartQueue = {
+                'pane-1': layoutTabIdsByPane['pane-1'].filter(id => /^tab-chart-\d+$/.test(id)),
+                'pane-2': layoutTabIdsByPane['pane-2'].filter(id => /^tab-chart-\d+$/.test(id))
+            };
+            config.chartTabs.forEach(tabConfig => {
+                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || 'pane-1';
+                if (!tabConfig.id) tabConfig.id = paneChartQueue[targetPaneId]?.shift();
+                createChartTab(tabConfig, targetPaneId);
+            });
+        } finally {
+            isRestoringWorkspaceSession = false;
+        }
+    }
+
     if (normalizedWorkspaceLayoutKey !== lastAppliedWorkspaceLayoutKey) {
         restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: true });
         lastAppliedWorkspaceLayoutKey = JSON.stringify(cloneWorkspaceLayout(workspaceLayout));
@@ -3418,6 +4125,9 @@ ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     if (payload.sessionId !== undefined && payload.sessionId !== serialSessionId) return;
     const bytes = payload.bytes instanceof Uint8Array ? payload.bytes : Uint8Array.from(payload.bytes || []);
     if (!bytes.length) return;
+    const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const receivedAt = Number.isFinite(payload.receivedAt) ? payload.receivedAt : Date.now();
+    chartTabs.forEach(tab => tab.stream?.write(buffer, receivedAt));
     queueSerialOutput(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
 });
 ipcRenderer.on('serial-error', (event, err) => {
@@ -3557,6 +4267,10 @@ function disconnectSerial() {
     serialWriteChain = Promise.resolve();
     stopAutoSendRuntime();
     resetQuickTriggerReceive();
+    chartTabs.forEach(tab => {
+        tab.stream?.flush();
+        tab.stream?.reset();
+    });
     updateSerialConnectionState(false);
     ipcRenderer.send('disconnect-serial');
 }
@@ -3574,6 +4288,10 @@ ipcRenderer.on('serial-disconnected', (event, message) => {
     else flushTextReceive();
     stopAutoSendRuntime();
     resetQuickTriggerReceive();
+    chartTabs.forEach(tab => {
+        tab.stream?.flush();
+        tab.stream?.reset();
+    });
     updateSerialConnectionState(false);
     if (message) {
         const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
@@ -3788,6 +4506,7 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
             newlineMode
         });
         serialSessionId = Number.isInteger(connectResult?.sessionId) ? connectResult.sessionId : serialSessionId + 1;
+        chartTabs.forEach(clearChartDataSession);
 
         ipcRenderer.send('save-config', {
             lastSerialOptions: {

@@ -14,6 +14,7 @@ const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
+const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
 const {
   SERVER_UPDATE_METADATA_URL,
   buildUpdateMetadataCandidates,
@@ -65,6 +66,7 @@ let updateDownloadWindow;
 let updateCheckTimer;
 let updateDownloadToken = null;
 let updateFeedFallbackActive = false;
+const chartParserClients = new Map();
 let activeUpdateMetadataUrl = SERVER_UPDATE_METADATA_URL;
 let updatePromptState = {
   phase: 'idle',
@@ -74,7 +76,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 8;
+const CONFIG_VERSION = 9;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -364,6 +366,30 @@ function normalizeConfig(config, defaults) {
         dataMode: oneOf(tab.dataMode, SERIAL_MODES, migratedMode)
       }))
     : [];
+  normalized.chartTabs = Array.isArray(source.chartTabs)
+    ? source.chartTabs.filter(tab => tab && typeof tab === 'object').map(tab => ({
+        ...tab,
+        id: typeof tab.id === 'string' ? tab.id : '',
+        title: typeof tab.title === 'string' ? tab.title.slice(0, 100) : '',
+        paneId: tab.paneId === 'pane-2' ? 'pane-2' : 'pane-1',
+        encoding: oneOf(tab.encoding, SERIAL_ENCODINGS, 'utf8'),
+        parserMode: oneOf(tab.parserMode, new Set(['key-value', 'template', 'regex']), 'key-value'),
+        sampleLine: typeof tab.sampleLine === 'string' ? tab.sampleLine.slice(0, 64 * 1024) : '',
+        lineMarker: typeof tab.lineMarker === 'string' ? tab.lineMarker.slice(0, 500) : '',
+        keyValueSeparator: ['=', ':', 'auto'].includes(tab.keyValueSeparator) ? tab.keyValueSeparator : 'auto',
+        template: typeof tab.template === 'string' ? tab.template.slice(0, 2000) : '',
+        pattern: typeof tab.pattern === 'string' ? tab.pattern.slice(0, 2000) : '',
+        fields: Array.isArray(tab.fields) ? tab.fields.filter(field => field && typeof field.key === 'string').slice(0, 16) : [],
+        windowDurationMs: Math.max(1000, Math.min(24 * 60 * 60 * 1000, Number(tab.windowDurationMs) || 60000)),
+        maxPoints: Math.max(1000, Math.min(1000000, Number(tab.maxPoints) || 200000)),
+        maxDurationMs: Math.max(60000, Math.min(24 * 60 * 60 * 1000, Number(tab.maxDurationMs) || 1800000)),
+        yAxisMode: tab.yAxisMode === 'fixed' ? 'fixed' : 'auto',
+        yMin: Number.isFinite(Number(tab.yMin)) ? Number(tab.yMin) : 0,
+        yMax: Number.isFinite(Number(tab.yMax)) ? Number(tab.yMax) : 100,
+        yIncludeZero: tab.yIncludeZero === true,
+        yMargin: Math.max(0, Math.min(1, Number.isFinite(Number(tab.yMargin)) ? Number(tab.yMargin) : 0.08))
+      }))
+    : [];
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
   normalized.manualExportDirectory = typeof source.manualExportDirectory === 'string' && source.manualExportDirectory.trim()
     ? source.manualExportDirectory
@@ -438,6 +464,7 @@ function loadConfig() {
     },
     filterTabs: [],
     shellTabs: [],
+    chartTabs: [],
     shellProfiles: [
       { id: 'shell-cmd', name: 'CMD', executable: 'cmd.exe', args: [], shellType: 'cmd' },
       { id: 'shell-powershell', name: 'PowerShell', executable: 'powershell.exe', args: ['-NoLogo'], shellType: 'powershell' }
@@ -1096,6 +1123,19 @@ function updateMainWindowTitle() {
   }
 }
 
+function getChartParserClientKey(webContentsId, clientId) {
+  return `${webContentsId}:${String(clientId || '').slice(0, 100)}`;
+}
+
+function closeChartParserClients(webContentsId) {
+  const prefix = `${webContentsId}:`;
+  for (const [key, client] of chartParserClients) {
+    if (!key.startsWith(prefix)) continue;
+    client.close();
+    chartParserClients.delete(key);
+  }
+}
+
 function createWindow() {
   const windowBounds = currentConfig.windowBounds || {};
   mainWindow = new BrowserWindow({
@@ -1110,6 +1150,7 @@ function createWindow() {
       contextIsolation: false
     }
   });
+  const mainWebContentsId = mainWindow.webContents.id;
 
   mainWindow.loadFile('index.html');
   mainWindow.on('page-title-updated', event => {
@@ -1127,7 +1168,12 @@ function createWindow() {
     });
 
     mainWindow.webContents.on('render-process-gone', (event, details) => {
+      closeChartParserClients(mainWebContentsId);
       log.error('Renderer process exited:', details);
+    });
+
+    mainWindow.webContents.on('destroyed', () => {
+      closeChartParserClients(mainWebContentsId);
     });
 
     mainWindow.webContents.on('unresponsive', () => {
@@ -1688,6 +1734,62 @@ ipcMain.handle('save-current-tab-log', async (event, payload = {}) => {
   return { canceled: false, filePath: result.filePath };
 });
 
+ipcMain.handle('save-chart-csv', async (event, payload = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const exportDirectory = currentConfig.manualExportDirectory || app.getPath('documents');
+  const title = sanitizeFileNamePart(payload.title) || 'Chart';
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const result = await dialog.showSaveDialog(owner, {
+    title: 'Export Chart CSV',
+    defaultPath: path.join(exportDirectory, `${title}_${timestamp}.csv`),
+    filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await fs.promises.writeFile(result.filePath, typeof payload.content === 'string' ? payload.content : '', 'utf8');
+  saveConfig({ manualExportDirectory: path.dirname(result.filePath) });
+  return { canceled: false, filePath: result.filePath };
+});
+
+ipcMain.on('chart-parser-start', (event, payload = {}) => {
+  const clientId = typeof payload.clientId === 'string' ? payload.clientId.slice(0, 100) : '';
+  if (!clientId) return;
+  const key = getChartParserClientKey(event.sender.id, clientId);
+  chartParserClients.get(key)?.close();
+  const send = message => {
+    if (!event.sender.isDestroyed()) event.sender.send('chart-parser-result', { clientId, ...message });
+  };
+  try {
+    chartParserClients.set(key, new ChartParserWorkerClient({
+      config: payload.config,
+      onSamples: samples => send({ type: 'samples', samples }),
+      onStats: stats => send({ type: 'stats', stats }),
+      onError: error => send({ type: 'error', message: error.message })
+    }));
+  } catch (error) {
+    send({ type: 'error', message: error.message });
+  }
+});
+
+ipcMain.on('chart-parser-push', (event, payload = {}) => {
+  const key = getChartParserClientKey(event.sender.id, payload.clientId);
+  chartParserClients.get(key)?.push(payload.record);
+});
+
+ipcMain.on('chart-parser-reset', (event, payload = {}) => {
+  const key = getChartParserClientKey(event.sender.id, payload.clientId);
+  chartParserClients.get(key)?.reset();
+});
+
+ipcMain.on('chart-parser-close', (event, payload = {}) => {
+  const key = getChartParserClientKey(event.sender.id, payload.clientId);
+  chartParserClients.get(key)?.close();
+  chartParserClients.delete(key);
+});
+
+ipcMain.handle('chart-parser-discover', (event, payload = {}) => {
+  return discoverChartFieldsInWorker(payload.sampleLine, payload.config);
+});
+
 ipcMain.on('save-config', (event, config) => {
   try {
     saveConfig(config);
@@ -1745,9 +1847,9 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   const hasSelection = Boolean(payload.hasSelection);
   const isConnected = Boolean(payload.isConnected);
   const canLocateInMain = Boolean(payload.canLocateInMain);
-  const terminalType = payload.terminalType === 'filter'
-    ? 'filter'
-    : (payload.terminalType === 'shell' ? 'shell' : 'main');
+  const terminalType = ['main', 'filter', 'shell', 'chart'].includes(payload.terminalType)
+    ? payload.terminalType
+    : 'main';
   const labels = payload.labels || {};
 
   const sendAction = (action) => {
@@ -1759,7 +1861,54 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     });
   };
 
-  const template = [
+  const template = terminalType === 'chart' ? [
+    {
+      label: payload.paused ? (labels.chartResume || 'Resume') : (labels.chartPause || 'Pause'),
+      ...menuIcon(payload.paused ? 'play_arrow' : 'pause'),
+      click: () => sendAction('toggle-chart-paused')
+    },
+    {
+      label: labels.chartLive || 'Return to Live',
+      ...menuIcon('restart_alt'),
+      enabled: Boolean(payload.canReturnToLive),
+      click: () => sendAction('chart-return-live')
+    },
+    {
+      label: labels.chartClear || 'Clear Chart',
+      ...menuIcon('delete_sweep'),
+      click: () => sendAction('clear-chart')
+    },
+    { type: 'separator' },
+    {
+      label: labels.chartExportWindow || 'Export Current Window CSV',
+      ...menuIcon('save'),
+      enabled: Boolean(payload.canExportWindow),
+      click: () => sendAction('export-chart-window')
+    },
+    {
+      label: labels.chartExportAll || 'Export All Raw Data CSV',
+      ...menuIcon('save'),
+      enabled: Boolean(payload.canExportAll),
+      click: () => sendAction('export-chart-all')
+    },
+    { type: 'separator' },
+    {
+      label: labels.chartSettings || 'Chart Settings',
+      ...menuIcon('settings'),
+      click: () => sendAction('chart-settings')
+    },
+    {
+      label: labels.moveToOtherPane || 'Move to Other Pane',
+      ...menuIcon('swap_horiz'),
+      enabled: Boolean(payload.tabId),
+      click: () => sendAction('move-to-other-pane')
+    },
+    {
+      label: labels.chartClose || 'Close Chart Tab',
+      ...menuIcon('close'),
+      click: () => sendAction('close-chart-tab')
+    }
+  ] : [
     {
       label: labels.newFilterTab || 'New Filter Tab',
       ...menuIcon('filter_alt'),
@@ -1927,7 +2076,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         click: () => sendAction('clear-terminal')
       }
     );
-  } else {
+  } else if (terminalType === 'shell') {
     template.push(
       { type: 'separator' },
       {
@@ -2266,11 +2415,13 @@ function flushSerialOutputQueue() {
   const queued = serialOutputQueue;
   serialOutputQueue = [];
   const sessionId = queued[0].sessionId;
+  const receivedAt = queued[0].receivedAt;
   const byteCount = queued.reduce((total, entry) => total + entry.data.length, 0);
   const bytes = Buffer.concat(queued.map(entry => entry.data), byteCount);
   mainWindow.webContents.send('serial-output-bytes', {
     bytes: new Uint8Array(bytes),
-    sessionId
+    sessionId,
+    receivedAt
   });
 }
 
@@ -2278,7 +2429,7 @@ function queueSerialOutput(data, sessionId) {
   if (serialOutputQueue.length && serialOutputQueue[0].sessionId !== sessionId) {
     flushSerialOutputQueue();
   }
-  serialOutputQueue.push({ data: Buffer.from(data), sessionId });
+  serialOutputQueue.push({ data: Buffer.from(data), sessionId, receivedAt: Date.now() });
   if (!serialOutputFlushScheduled) {
     serialOutputFlushScheduled = true;
     setImmediate(flushSerialOutputQueue);

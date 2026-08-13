@@ -412,6 +412,40 @@ Object.assign(translations['zh-CN'].main, {
 });
 Object.assign(translations['zh-CN'].main, { renameTab: '重命名标签页', tabName: '标签页名称', save: '保存' });
 Object.assign(translations.en.main, { renameTab: 'Rename Tab', tabName: 'Tab Name', save: 'Save' });
+Object.assign(translations.en.main, {
+  chart: 'Chart', newChartTab: 'New Chart Tab', chartSettings: 'Chart Settings', chartParserMode: 'Parser',
+  chartAutoKeyValue: 'Automatic key-value', chartTemplate: 'Format template', chartRegex: 'Regular expression',
+  chartLineMarker: 'Line marker', chartSeparator: 'Key/value separator', chartSeparatorAuto: 'Both (= and :)', chartSampleLine: 'Sample log line',
+  chartFields: 'Discovered fields', chartFieldHint: 'Select numeric series to draw', chartNoFields: 'No numeric fields found',
+  chartSelectField: 'Select at least one series', chartPaused: 'Paused', chartWaiting: 'Waiting for matching serial data',
+  chartSamples: 'samples', chartDropped: 'dropped', chartSummaryHistory: 'Downsampled history', chartParsingSample: 'Parsing sample...',
+  chartYAxisMode: 'Y-axis range', chartYAxisAuto: 'Automatic', chartYAxisFixed: 'Fixed', chartYAxisMin: 'Y minimum', chartYAxisMax: 'Y maximum', chartYAxisMargin: 'Y margin (%)', chartYAxisIncludeZero: 'Include zero in automatic range',
+  chartWindowDuration: 'Live window (seconds)', chartMaxPoints: 'Maximum raw points', chartMaxDuration: 'Raw retention (minutes)', chartPrecision: 'Precision',
+  chartExportWindow: 'Current window', chartExportAll: 'All retained raw data', chartExportWindowCount: '{count} raw points in the current window.', chartExportSummaryWarning: ' This window also contains downsampled history, which is not exported.', chartExportNoWindowData: 'The current window contains no retained raw points. Exact export is unavailable.', chartStatsEstimated: 'Estimated from downsampled history',
+  chartSampleInvalid: 'The current sample does not match every selected field.',
+  chartParsingSettings: 'Data parsing', chartParsingSettingsHint: 'Define how serial log lines become data points', chartDisplaySettings: 'Display and range', chartDisplaySettingsHint: 'Control the live viewport and vertical scale', chartRetentionSettings: 'Raw data retention', chartRetentionSettingsHint: 'The first limit reached removes the oldest raw points',
+  chartFieldKey: 'Field', chartFieldLabel: 'Label', chartFieldColor: 'Color', chartFieldSample: 'Sample', chartFieldSourceUnit: 'Source unit', chartFieldDisplayUnit: 'Display unit', chartFieldVisible: 'Draw series', chartSelectAll: 'Select all', chartFieldsSelected: '{count} / {max} selected', chartFieldsFound: '{count} numeric fields found',
+  chartTooManyFields: 'Select no more than {max} series.', chartInvalidUnit: 'Source and display units must use compatible time units.', chartInvalidYAxis: 'Y minimum must be a number smaller than Y maximum.',
+  chartClear: 'Clear chart', chartPause: 'Pause', chartResume: 'Resume', chartLive: 'Return to live', chartClose: 'Close chart tab'
+  , chartExport: 'Export CSV', chartExported: 'Chart data exported', chartNoExportData: 'No raw chart data to export'
+});
+Object.assign(translations['zh-CN'].main, {
+  chart: '图表', newChartTab: '新建图表标签页', chartSettings: '图表设置', chartParserMode: '解析方式',
+  chartAutoKeyValue: '自动键值', chartTemplate: '格式模板', chartRegex: '正则表达式',
+  chartLineMarker: '行标记', chartSeparator: '键值分隔符', chartSeparatorAuto: '同时识别 = 和 :', chartSampleLine: '样例日志',
+  chartFields: '发现的字段', chartFieldHint: '勾选需要绘制的数值系列', chartNoFields: '未发现数值字段',
+  chartSelectField: '请至少选择一个数据系列', chartPaused: '已暂停', chartWaiting: '等待匹配的串口数据',
+  chartSamples: '个样本', chartDropped: '条已丢弃', chartSummaryHistory: '降采样历史', chartParsingSample: '正在解析样例...',
+  chartYAxisMode: 'Y 轴范围', chartYAxisAuto: '自动', chartYAxisFixed: '固定', chartYAxisMin: 'Y 轴最小值', chartYAxisMax: 'Y 轴最大值', chartYAxisMargin: 'Y 轴边距（%）', chartYAxisIncludeZero: '自动范围包含零点',
+  chartWindowDuration: '实时窗口（秒）', chartMaxPoints: '最大原始点数', chartMaxDuration: '原始保留时长（分钟）', chartPrecision: '精度',
+  chartExportWindow: '导出当前窗口', chartExportAll: '导出全部原始数据', chartExportWindowCount: '当前窗口包含 {count} 个原始点。', chartExportSummaryWarning: ' 当前窗口还包含降采样历史，该部分不会导出。', chartExportNoWindowData: '当前窗口没有保留的原始点，无法精确导出。', chartStatsEstimated: '基于降采样历史估算',
+  chartSampleInvalid: '当前样例未能匹配所有已选字段。',
+  chartParsingSettings: '数据解析', chartParsingSettingsHint: '定义如何将串口日志转换为数据点', chartDisplaySettings: '显示与范围', chartDisplaySettingsHint: '控制实时窗口和纵轴范围', chartRetentionSettings: '原始数据保留', chartRetentionSettingsHint: '任一限制达到后，将淘汰最旧的原始点',
+  chartFieldKey: '字段', chartFieldLabel: '显示名称', chartFieldColor: '颜色', chartFieldSample: '样例值', chartFieldSourceUnit: '源单位', chartFieldDisplayUnit: '显示单位', chartFieldVisible: '绘制系列', chartSelectAll: '全选', chartFieldsSelected: '已选 {count} / {max}', chartFieldsFound: '发现 {count} 个数值字段',
+  chartTooManyFields: '最多选择 {max} 个数据系列。', chartInvalidUnit: '源单位和显示单位必须是兼容的时间单位。', chartInvalidYAxis: 'Y 轴最小值必须是小于最大值的数字。',
+  chartClear: '清空图表', chartPause: '暂停', chartResume: '继续', chartLive: '回到实时', chartClose: '关闭图表页'
+  , chartExport: '导出 CSV', chartExported: '图表数据已导出', chartNoExportData: '没有可导出的原始图表数据'
+});
 Object.assign(translations['zh-TW'].main, { sendHistory: '傳送歷史' });
 Object.assign(translations.fr.main, { sendHistory: 'Historique d’envoi' });
 Object.assign(translations.ru.main, { sendHistory: 'История отправки' });
