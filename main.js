@@ -1033,11 +1033,13 @@ function createShellSession(tabId, options = {}) {
   };
 
   const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath, profileSelector), {
-    name: 'xterm-color',
+    name: 'xterm-256color',
     cols: session.cols,
     rows: session.rows,
     cwd: session.cwd,
-    env: process.env
+    env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+    useConpty: process.platform === 'win32',
+    useConptyDll: process.platform === 'win32'
   });
 
   session.ptyProcess = ptyProcess;
@@ -1050,6 +1052,7 @@ function createShellSession(tabId, options = {}) {
   });
 
   ptyProcess.onExit(({ exitCode, signal }) => {
+    if (shellSessions.get(tabId) !== session) return;
     shellSessions.delete(tabId);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('shell-tab-exit', { tabId, exitCode, signal });
@@ -2143,6 +2146,14 @@ ipcMain.on('shell-tab-input', (event, payload = {}) => {
   const session = shellSessions.get(tabId);
   if (!session || !data) return;
   session.ptyProcess.write(data);
+});
+
+ipcMain.on('shell-tab-binary-input', (event, payload = {}) => {
+  const tabId = typeof payload.tabId === 'string' ? payload.tabId : '';
+  const bytes = Array.isArray(payload.bytes) ? payload.bytes : [];
+  const session = shellSessions.get(tabId);
+  if (!session || !bytes.length || bytes.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255)) return;
+  session.ptyProcess.write(Buffer.from(bytes));
 });
 
 ipcMain.on('resize-shell-tab', (event, payload = {}) => {

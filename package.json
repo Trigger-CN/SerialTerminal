@@ -6,11 +6,11 @@
   "scripts": {
     "start": "electron .",
     "test": "node scripts/run-tests.js",
-    "rebuild": "electron-rebuild -f -w serialport,node-pty",
+    "rebuild": "electron-rebuild -f -w serialport,node-pty && node scripts/prepare-node-pty.js",
     "dist": "electron-builder -c.npmRebuild=false --publish never",
     "dist:win": "electron-builder --win -c.npmRebuild=false --publish never",
     "dist:linux": "electron-builder --linux -c.npmRebuild=false --publish never",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps && node scripts/prepare-node-pty.js"
   },
   "build": {
     "appId": "com.serialterminal.app",
@@ -30,6 +30,9 @@
       "!telemetry-server/**",
       "package.json",
       "**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/build/Release/**"
     ],
     "publish": {
       "provider": "generic",

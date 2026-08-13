@@ -567,6 +567,29 @@ test('send mode and CRLF controls belong to the bottom input', () => {
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*#main-send-input \{ flex-basis: calc\(100% - 46px\); \}/);
 });
 
+test('shell terminals preserve xterm keyboard, paste, and mouse input handling', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(main, /name: 'xterm-256color'/);
+  assert.match(main, /env: \{ \.\.\.process\.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' \}/);
+  assert.match(main, /useConpty: process\.platform === 'win32'/);
+  assert.match(main, /useConptyDll: process\.platform === 'win32'/);
+  assert.match(main, /if \(shellSessions\.get\(tabId\) !== session\) return;\s*shellSessions\.delete\(tabId\)/);
+  assert.match(main, /ipcMain\.on\('shell-tab-binary-input'[\s\S]*?session\.ptyProcess\.write\(Buffer\.from\(bytes\)\)/);
+  assert.match(renderer, /if \(ctrlKey && key === 'v'\) \{\s*if \(terminalType === 'shell'\) return false;/);
+  assert.match(renderer, /if \(isShell && shellTab\) \{\s*shellTab\.term\.paste\(text\)/);
+  assert.match(renderer, /term\.onBinary\(\(data\) => \{[\s\S]*?ipcRenderer\.send\('shell-tab-binary-input'/);
+  assert.match(renderer, /term\.onData\(\(data\) => \{[\s\S]*?ipcRenderer\.send\('shell-tab-input', \{ tabId, data \}\)/);
+  assert.match(renderer, /require\('\.\/shell-mouse-compat'\)/);
+  assert.match(renderer, /ipcRenderer\.on\('shell-tab-output'[\s\S]*?const translatedData = translateConptyMouseMode\(tab, payload\.data\);[\s\S]*?tab\.term\.write\(translatedData\)/);
+  assert.doesNotMatch(renderer, /translateShellMouseInput/);
+  assert.match(renderer, /function handleAppShortcut\(event\) \{\s*if \(event\.target\?\.closest\?\.\('\.xterm'\)\) return;/);
+  assert.doesNotMatch(renderer, /terminalType === 'shell'[\s\S]{0,180}shell-tab-input/);
+  assert.equal((renderer.match(/bindTerminalWheel\(term, terminalWrapper\)/g) || []).length, 1);
+  assert.match(renderer, /if \(shellTab\) \{\s*shellTab\.term\.clear\(\)/);
+});
+
 test('text filter tabs do not display a TXT mode badge', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
 

@@ -26,6 +26,7 @@ const { getHorizontalInsertionIndex } = require('./tab-reorder');
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 const { serializeTerminalBuffer } = require('./terminal-buffer-text');
+const { translateConptyMouseMode } = require('./shell-mouse-compat');
 const {
     getVerticalInsertionIndex,
     reorderQuickSendItems,
@@ -909,7 +910,7 @@ function clearTerminalByTabId(tabId) {
     }
     const shellTab = getShellTabState(tabId);
     if (shellTab) {
-        shellTab.term.reset();
+        shellTab.term.clear();
     }
 }
 
@@ -917,6 +918,7 @@ function restartShellTab(tabId) {
     const shellTab = getShellTabState(tabId);
     if (!shellTab) return;
     ipcRenderer.send('close-shell-tab-session', { tabId });
+    shellTab.mouseModeSequenceCarry = '';
     shellTab.term.reset();
     shellTab.btn?.classList.remove('exited');
     shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
@@ -972,7 +974,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             const text = await readClipboardText();
             if (text) {
                 if (isShell && shellTab) {
-                    ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
+                    shellTab.term.paste(text);
                 } else if (isConnected) {
                     await sendSerialRequest({ mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
                 }
@@ -1749,12 +1751,19 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         btn: tabBtn,
         sessionReady: false,
         sessionCreateTimer: null,
+        mouseModeSequenceCarry: '',
         closed: false
     };
 
-    term.attachCustomKeyEventHandler(createTerminalKeyHandler(term, 'shell', () => tabId));
+    term.attachCustomKeyEventHandler(createTerminalKeyHandler(term, 'shell'));
     term.onData((data) => {
         ipcRenderer.send('shell-tab-input', { tabId, data });
+    });
+    term.onBinary((data) => {
+        ipcRenderer.send('shell-tab-binary-input', {
+            tabId,
+            bytes: Array.from(data, character => character.charCodeAt(0) & 0xff)
+        });
     });
     bindTerminalContextMenu({
         terminalType: 'shell',
@@ -1762,7 +1771,6 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         element: terminalWrapper,
         getTabState: () => tabState
     });
-    bindTerminalWheel(term, terminalWrapper);
 
     shellTabs.push(tabState);
     updateTabTitles();
@@ -1824,6 +1832,7 @@ function closeShellTab(tabId) {
 
 function restoreShellSessions() {
     shellTabs.forEach(tab => {
+        tab.mouseModeSequenceCarry = '';
         tab.term.reset();
         tab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
         ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows, profileId: tab.profileId || '' })
@@ -2282,7 +2291,7 @@ window.addEventListener('main-tab-changed', (e) => {
     }, 0);
 });
 
-function createTerminalKeyHandler(targetTerm, terminalType = 'serial', getTabId = null) {
+function createTerminalKeyHandler(targetTerm, terminalType = 'serial') {
     return (arg) => {
         if (arg.type !== 'keydown') return true;
 
@@ -2298,13 +2307,10 @@ function createTerminalKeyHandler(targetTerm, terminalType = 'serial', getTabId 
         }
 
         if (ctrlKey && key === 'v') {
+            if (terminalType === 'shell') return false;
             navigator.clipboard.readText().then(text => {
                 if (!text) return;
-                if (terminalType === 'shell') {
-                    ipcRenderer.send('shell-tab-input', { tabId: typeof getTabId === 'function' ? getTabId() : '', data: text });
-                } else {
-                    sendSerialRequest({ mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
-                }
+                sendSerialRequest({ mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
             });
             return false;
         }
@@ -2743,6 +2749,7 @@ function getShortcutAction(combo) {
 }
 
 function handleAppShortcut(event) {
+    if (event.target?.closest?.('.xterm')) return;
     const combo = shortcutFromEvent(event);
     if (!combo) return;
     const action = getShortcutAction(combo);
@@ -3377,7 +3384,8 @@ ipcRenderer.on('scheduled-update-available', (_event, info) => showScheduledUpda
 ipcRenderer.on('shell-tab-output', (event, payload = {}) => {
     const tab = getShellTabState(payload.tabId);
     if (tab && typeof payload.data === 'string') {
-        tab.term.write(payload.data);
+        const translatedData = translateConptyMouseMode(tab, payload.data);
+        tab.term.write(translatedData);
         writeShellTabLog(tab, payload.data);
     }
 });
