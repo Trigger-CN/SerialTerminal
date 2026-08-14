@@ -19,6 +19,19 @@ test('enabling per-tab logs closes the previous main log session', () => {
   assert.match(main, /!currentConfig\.saveAllTabsLogToFiles && normalized\.saveAllTabsLogToFiles\) \{\s*closeMainLogSession\(\);/);
 });
 
+test('date folders apply to main, tab, and raw logs and rotate at midnight', () => {
+  assert.match(main, /logCreateDateFolder: false/);
+  assert.match(main, /normalized\.logCreateDateFolder = normalizeBoolean\(source\.logCreateDateFolder, false\)/);
+  assert.match(main, /function rotateLogFilesForCurrentDate\(\)[\s\S]*?flushRawBinaryLogSync\(\)[\s\S]*?saveAllTabLogs\(\{ notify: false, closeEntries: false \}\)[\s\S]*?saveLog\(\{ notify: false \}\)[\s\S]*?mainLogFilePath = '';[\s\S]*?rawBinaryLogPath = '';[\s\S]*?entry\.filePath = ''/);
+  assert.match(main, /function writeLog\(data\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureMainLogFilePath\(\)/);
+  assert.match(main, /function writeTabLog\(tabId, title, data\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureTabLogFile\(tabId\)/);
+  assert.match(main, /function bufferRawSerialBytes\(data\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureRawBinaryLogPath\(\)/);
+  assert.match(main, /function ensureTabLogFile\(tabId\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, buildLogFileName/);
+  assert.match(main, /function ensureMainLogFilePath\(\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, fileName\)/);
+  assert.match(main, /function ensureRawBinaryLogPath\(\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, fileName\)/);
+  assert.match(main, /normalized\.logCreateDateFolder !== currentConfig\.logCreateDateFolder/);
+});
+
 test('manual tab exports remember their last successful directory independently', () => {
   assert.match(main, /manualExportDirectory: app\.getPath\('documents'\)/);
   assert.match(main, /const exportDirectory = currentConfig\.manualExportDirectory \|\| app\.getPath\('documents'\)/);

@@ -400,6 +400,10 @@ test('logging preferences save the automatic cleanup period', () => {
   assert.match(preferences, /logRetentionDays: document\.getElementById\('logRetentionDays'\)/);
   assert.match(preferences, /elements\.logRetentionDays\.value = \['0', '7', '30', '60'\]/);
   assert.match(preferences, /logRetentionDays: Number\(elements\.logRetentionDays\.value\)/);
+  assert.match(html, /id="logCreateDateFolder"/);
+  assert.match(preferences, /logCreateDateFolder: document\.getElementById\('logCreateDateFolder'\)/);
+  assert.match(preferences, /elements\.logCreateDateFolder\.checked = config\.logCreateDateFolder === true/);
+  assert.match(preferences, /logCreateDateFolder: elements\.logCreateDateFolder\.checked/);
 });
 
 test('Ctrl+F opens search and restores the last sidebar tab', () => {

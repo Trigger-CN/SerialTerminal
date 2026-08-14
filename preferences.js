@@ -72,6 +72,7 @@ const elements = {
     stripAnsiInLog: document.getElementById('stripAnsiInLog'),
   logSettings: document.getElementById('log-settings'),
   logPath: document.getElementById('logPath'),
+  logCreateDateFolder: document.getElementById('logCreateDateFolder'),
   logRetentionDays: document.getElementById('logRetentionDays'),
   logFileNameFormat: document.getElementById('logFileNameFormat'),
   logEncoding: document.getElementById('logEncoding'),
@@ -490,6 +491,7 @@ async function init() {
     elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
     elements.stripAnsiInLog.checked = config.stripAnsiInLog !== false;
   elements.logPath.value = config.logPath;
+  elements.logCreateDateFolder.checked = config.logCreateDateFolder === true;
   elements.logRetentionDays.value = ['0', '7', '30', '60'].includes(String(config.logRetentionDays))
     ? String(config.logRetentionDays)
     : '0';
@@ -798,6 +800,7 @@ elements.saveBtn.onclick = async () => {
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,
     stripAnsiInLog: elements.stripAnsiInLog.checked,
     logPath: elements.logPath.value,
+    logCreateDateFolder: elements.logCreateDateFolder.checked,
     logRetentionDays: Number(elements.logRetentionDays.value),
     logFileNameFormat: elements.logFileNameFormat.value,
     logEncoding: elements.logEncoding.value,

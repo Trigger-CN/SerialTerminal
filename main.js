@@ -14,6 +14,7 @@ const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
+const { formatLocalDate, getLogDirectory } = require('./log-directory');
 const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
 const {
   SERVER_UPDATE_METADATA_URL,
@@ -396,6 +397,7 @@ function normalizeConfig(config, defaults) {
     : defaults.manualExportDirectory;
   normalized.logIncludeTimestamp = normalizeBoolean(source.logIncludeTimestamp, false);
   normalized.logIncludeLineNumbers = normalizeBoolean(source.logIncludeLineNumbers, false);
+  normalized.logCreateDateFolder = normalizeBoolean(source.logCreateDateFolder, false);
   normalized.rawBufferAutoFlushMB = normalizeIntegerSetting(source.rawBufferAutoFlushMB, 'rawBufferAutoFlushMB');
   normalized.rawLogFileNameFormat = typeof source.rawLogFileNameFormat === 'string' && source.rawLogFileNameFormat.trim()
     ? source.rawLogFileNameFormat
@@ -435,6 +437,7 @@ function loadConfig() {
     rawLogFileNameFormat: 'raw_%Y-%m-%d_%H-%M-%S.bin',
     stripAnsiInLog: true,
     logPath: path.join(app.getPath('documents'), 'SerialTerminalLogs'),
+    logCreateDateFolder: false,
     logRetentionDays: 0,
     manualExportDirectory: app.getPath('documents'),
     logFileNameFormat: 'log_%Y-%m-%d_%H-%M-%S.txt',
@@ -568,6 +571,8 @@ let tabLogFlushError = null;
 let rawBinaryBuffers = [];
 let rawBinaryByteCount = 0;
 let rawBinaryLogPath = '';
+let activeLogDate = '';
+let logDateRotationInProgress = false;
 let rawBinaryFlushError = null;
 let rawBinaryLogOverflowNotified = false;
 let textLogOverflowNotified = false;
@@ -613,9 +618,10 @@ function shouldAcceptMoreCachedLog(kind, byteCount, error, wasNotified) {
 function ensureTabLogFile(tabId) {
   const entry = tabLogBuffers.get(tabId);
   if (!entry) return '';
+  rotateLogFilesForCurrentDate();
   if (entry.filePath) return entry.filePath;
-  ensureLogDirectory();
-  entry.filePath = path.join(currentConfig.logPath, buildLogFileName({ tabTitle: entry.title || tabId }));
+  const logDirectory = ensureLogDirectory();
+  entry.filePath = path.join(logDirectory, buildLogFileName({ tabTitle: entry.title || tabId }));
   tabLogBuffers.set(tabId, entry);
   return entry.filePath;
 }
@@ -661,30 +667,32 @@ function buildRawLogFileName() {
 }
 
 function ensureMainLogFilePath() {
+  rotateLogFilesForCurrentDate();
   if (mainLogFilePath) return mainLogFilePath;
-  ensureLogDirectory();
+  const logDirectory = ensureLogDirectory();
   const fileName = buildLogFileName({});
   const extension = path.extname(fileName);
   const baseName = path.basename(fileName, extension);
-  mainLogFilePath = path.join(currentConfig.logPath, fileName);
+  mainLogFilePath = path.join(logDirectory, fileName);
   let suffix = 2;
   while (fs.existsSync(mainLogFilePath)) {
-    mainLogFilePath = path.join(currentConfig.logPath, `${baseName}_${suffix}${extension}`);
+    mainLogFilePath = path.join(logDirectory, `${baseName}_${suffix}${extension}`);
     suffix++;
   }
   return mainLogFilePath;
 }
 
 function ensureRawBinaryLogPath() {
+  rotateLogFilesForCurrentDate();
   if (rawBinaryLogPath) return rawBinaryLogPath;
-  ensureLogDirectory();
+  const logDirectory = ensureLogDirectory();
   const fileName = buildRawLogFileName();
   const extension = path.extname(fileName);
   const baseName = path.basename(fileName, extension);
-  rawBinaryLogPath = path.join(currentConfig.logPath, fileName);
+  rawBinaryLogPath = path.join(logDirectory, fileName);
   let suffix = 2;
   while (fs.existsSync(rawBinaryLogPath)) {
-    rawBinaryLogPath = path.join(currentConfig.logPath, `${baseName}_${suffix}${extension}`);
+    rawBinaryLogPath = path.join(logDirectory, `${baseName}_${suffix}${extension}`);
     suffix++;
   }
   return rawBinaryLogPath;
@@ -711,6 +719,8 @@ function flushRawBinaryLogSync() {
 
 function bufferRawSerialBytes(data) {
   if (!currentConfig.saveRawSerialToFile || !Buffer.isBuffer(data) || data.length === 0) return;
+  rotateLogFilesForCurrentDate();
+  ensureRawBinaryLogPath();
   if (!shouldAcceptMoreCachedLog('raw', rawBinaryByteCount, rawBinaryFlushError, rawBinaryLogOverflowNotified)) {
     rawBinaryLogOverflowNotified = true;
     return;
@@ -763,10 +773,35 @@ function buildLogFileName(extra = {}) {
 }
 
 
-function ensureLogDirectory() {
-  if (!fs.existsSync(currentConfig.logPath)) {
-    fs.mkdirSync(currentConfig.logPath, { recursive: true });
+function rotateLogFilesForCurrentDate() {
+  if (!currentConfig.logCreateDateFolder || logDateRotationInProgress) return;
+  const today = formatLocalDate();
+  if (!activeLogDate) {
+    activeLogDate = today;
+    return;
   }
+  if (activeLogDate === today) return;
+  logDateRotationInProgress = true;
+  try {
+    flushRawBinaryLogSync();
+    if (currentConfig.saveAllTabsLogToFiles) saveAllTabLogs({ notify: false, closeEntries: false });
+    else saveLog({ notify: false });
+  } finally {
+    logDateRotationInProgress = false;
+  }
+  mainLogFilePath = '';
+  rawBinaryLogPath = '';
+  tabLogBuffers.forEach(entry => { entry.filePath = ''; });
+  activeLogDate = today;
+}
+
+function ensureLogDirectory() {
+  rotateLogFilesForCurrentDate();
+  const logDirectory = getLogDirectory(currentConfig.logPath, currentConfig.logCreateDateFolder);
+  if (!fs.existsSync(logDirectory)) {
+    fs.mkdirSync(logDirectory, { recursive: true });
+  }
+  return logDirectory;
 }
 
 function saveLog({ notify = true } = {}) {
@@ -837,6 +872,8 @@ function stripAnsi(str) {
 
 function writeLog(data) {
   if (!currentConfig.logEnabled || !data || currentConfig.saveAllTabsLogToFiles) return;
+  rotateLogFilesForCurrentDate();
+  ensureMainLogFilePath();
   if (!shouldAcceptMoreCachedLog('text', logBufferByteCount, textLogFlushError, textLogOverflowNotified)) {
     textLogOverflowNotified = true;
     return;
@@ -856,6 +893,9 @@ function writeTabLog(tabId, title, data) {
   }
   if (!currentConfig.saveAllTabsLogToFiles) return;
   const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [], filePath: '', byteCount: 0 };
+  tabLogBuffers.set(tabId, existing);
+  rotateLogFilesForCurrentDate();
+  ensureTabLogFile(tabId);
   if (!shouldAcceptMoreCachedLog('tab', existing.byteCount || 0, tabLogFlushError, tabLogOverflowNotified)) {
     tabLogOverflowNotified = true;
     return;
@@ -946,8 +986,10 @@ function saveConfig(config) {
   }
   const normalized = normalizeConfig(merged, currentConfig);
   const rawLogDestinationChanged = normalized.logPath !== currentConfig.logPath
+    || normalized.logCreateDateFolder !== currentConfig.logCreateDateFolder
     || normalized.rawLogFileNameFormat !== currentConfig.rawLogFileNameFormat;
   const textLogDestinationChanged = normalized.logPath !== currentConfig.logPath
+    || normalized.logCreateDateFolder !== currentConfig.logCreateDateFolder
     || normalized.logFileNameFormat !== currentConfig.logFileNameFormat
     || normalized.logEncoding !== currentConfig.logEncoding;
   const logCleanupSettingsChanged = normalized.logPath !== currentConfig.logPath
@@ -966,6 +1008,10 @@ function saveConfig(config) {
   }
   if (rawLogDestinationChanged) {
     rawBinaryLogPath = '';
+  }
+  if (normalized.logCreateDateFolder !== currentConfig.logCreateDateFolder) {
+    activeLogDate = '';
+    tabLogBuffers.forEach(entry => { entry.filePath = ''; });
   }
   if (currentConfig.saveAllTabsLogToFiles && !normalized.saveAllTabsLogToFiles) {
     saveAllTabLogs();

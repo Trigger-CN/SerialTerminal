@@ -508,14 +508,14 @@ Object.assign(translations.en.prefs, {
   telemetryEnabled: 'Send anonymous active installation statistics',
   telemetryDescription: 'Sends a random installation ID, app version, operating system, and architecture once per day, plus once after a version change. Serial ports, serial data, files, usernames, and hardware identifiers are never collected.',
   cancelDownload: 'Cancel', downloadCancelled: 'Download cancelled',
-  logAutoCleanup: 'Automatic Log Cleanup', logCleanupOff: 'Off', logCleanupOneWeek: 'Keep one week', logCleanupOneMonth: 'Keep one month', logCleanupTwoMonths: 'Keep two months', logAutoCleanupHelp: 'Deletes expired .txt, .log, and .bin files in the log directory. Subdirectories are not scanned.'
+  logAutoCleanup: 'Automatic Log Cleanup', logCleanupOff: 'Off', logCleanupOneWeek: 'Keep one week', logCleanupOneMonth: 'Keep one month', logCleanupTwoMonths: 'Keep two months', logAutoCleanupHelp: 'Deletes expired .txt, .log, and .bin files in the log directory and date subfolders.', logCreateDateFolder: 'Create a folder for each date', logCreateDateFolderHelp: 'Stores text and raw logs in YYYY-MM-DD subfolders and switches folders automatically at midnight.'
 });
 Object.assign(translations['zh-CN'].prefs, {
   anonymousUsageStatistics: '匿名安装标识统计',
   telemetryEnabled: '发送匿名活跃安装统计',
   telemetryDescription: '每天发送一次随机安装标识、应用版本、操作系统和处理器架构，版本变化后会额外发送一次。不会收集串口、串口数据、文件、用户名或硬件标识。',
   cancelDownload: '取消', downloadCancelled: '下载已取消',
-  logAutoCleanup: '自动清理日志', logCleanupOff: '关闭', logCleanupOneWeek: '保留一周', logCleanupOneMonth: '保留一个月', logCleanupTwoMonths: '保留两个月', logAutoCleanupHelp: '删除日志目录第一层中过期的 .txt、.log 和 .bin 文件，不扫描子目录。'
+  logAutoCleanup: '自动清理日志', logCleanupOff: '关闭', logCleanupOneWeek: '保留一周', logCleanupOneMonth: '保留一个月', logCleanupTwoMonths: '保留两个月', logAutoCleanupHelp: '删除日志目录和日期子目录中过期的 .txt、.log 和 .bin 文件。', logCreateDateFolder: '按日期创建文件夹', logCreateDateFolderHelp: '将文本和 Raw 日志保存到 YYYY-MM-DD 子目录，并在日期变化时自动切换目录。'
 });
 Object.assign(translations['zh-TW'].prefs, {
   anonymousUsageStatistics: '匿名安裝識別統計',

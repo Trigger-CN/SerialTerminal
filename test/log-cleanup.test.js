@@ -16,7 +16,7 @@ function createFile(directory, name, mtime) {
   return filePath;
 }
 
-test('cleanup deletes only expired first-level log files', async t => {
+test('cleanup deletes expired log files recursively and removes empty folders', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'serialterminal-log-cleanup-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 
@@ -28,17 +28,21 @@ test('cleanup deletes only expired first-level log files', async t => {
   const expiredBinary = createFile(directory, 'old.bin', oldTime);
   const recentLog = createFile(directory, 'recent.txt', recentTime);
   const unrelated = createFile(directory, 'notes.json', oldTime);
-  const nestedDirectory = path.join(directory, 'archive');
+  const nestedDirectory = path.join(directory, '2026-08-01');
   fs.mkdirSync(nestedDirectory);
   const nestedLog = createFile(nestedDirectory, 'old.txt', oldTime);
+  const unrelatedDirectory = path.join(directory, 'archive');
+  fs.mkdirSync(unrelatedDirectory);
+  const unrelatedNestedLog = createFile(unrelatedDirectory, 'old.txt', oldTime);
 
   const result = await cleanupExpiredLogFiles(directory, 7, { now });
 
-  assert.deepEqual(new Set(result.deleted), new Set([expiredText, expiredLog, expiredBinary]));
+  assert.deepEqual(new Set(result.deleted), new Set([expiredText, expiredLog, expiredBinary, nestedLog]));
   assert.deepEqual(result.failed, []);
   assert.equal(fs.existsSync(recentLog), true);
   assert.equal(fs.existsSync(unrelated), true);
-  assert.equal(fs.existsSync(nestedLog), true);
+  assert.equal(fs.existsSync(nestedDirectory), false);
+  assert.equal(fs.existsSync(unrelatedNestedLog), true);
 });
 
 test('cleanup skips active log files even when expired', async t => {

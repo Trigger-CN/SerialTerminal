@@ -450,6 +450,10 @@
                         <input type="text" id="logPath" readonly style="flex: 1;">
                         <button class="secondary" id="browse-btn" style="white-space: nowrap;"><span class="material-icon-placeholder" data-material-icon="folder_open"></span><span data-i18n="prefs.browse">Browse...</span></button>
                     </div>
+                    <label style="display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="logCreateDateFolder"> <span data-i18n="prefs.logCreateDateFolder">Create a folder for each date</span>
+                    </label>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logCreateDateFolderHelp">Stores text and raw logs in YYYY-MM-DD subfolders and switches folders automatically at midnight.</small>
                 </div>
 
                 <div class="form-group">
@@ -460,7 +464,7 @@
                         <option value="30" data-i18n="prefs.logCleanupOneMonth">Keep one month</option>
                         <option value="60" data-i18n="prefs.logCleanupTwoMonths">Keep two months</option>
                     </select>
-                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logAutoCleanupHelp">Deletes expired .txt, .log, and .bin files in the log directory. Subdirectories are not scanned.</small>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.logAutoCleanupHelp">Deletes expired .txt, .log, and .bin files in the log directory and date subfolders.</small>
                 </div>
 
                 <div class="form-group">
