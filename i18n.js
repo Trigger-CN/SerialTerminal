@@ -427,7 +427,12 @@ Object.assign(translations.en.main, {
   chartFieldKey: 'Field', chartFieldLabel: 'Label', chartFieldColor: 'Color', chartFieldSample: 'Sample', chartFieldSourceUnit: 'Source unit', chartFieldDisplayUnit: 'Display unit', chartFieldVisible: 'Draw series', chartSelectAll: 'Select all', chartFieldsSelected: '{count} / {max} selected', chartFieldsFound: '{count} numeric fields found',
   chartTooManyFields: 'Select no more than {max} series.', chartInvalidUnit: 'Source and display units must use compatible time units.', chartInvalidYAxis: 'Y minimum must be a number smaller than Y maximum.',
   chartClear: 'Clear chart', chartPause: 'Pause', chartResume: 'Resume', chartLive: 'Return to live', chartClose: 'Close chart tab'
-  , chartExport: 'Export CSV', chartExported: 'Chart data exported', chartNoExportData: 'No raw chart data to export'
+  , chartExport: 'Export CSV', chartExported: 'Chart data exported', chartNoExportData: 'No raw chart data to export',
+  chartParsingGuideButton: 'Input guide', chartParsingGuideTitle: 'Log parsing input guide', chartParsingGuideIntro: 'Enter one complete log line as the sample. The optional line marker filters unrelated lines before parsing.',
+  chartParsingGuideKeyValueTitle: 'Automatic key-value', chartParsingGuideKeyValueText: 'Use this mode when values are written as name=value or name:value. Select the matching separator, or let the parser recognize both.',
+  chartParsingGuideTemplateTitle: 'Format template', chartParsingGuideTemplateText: 'Copy the fixed part of the log and replace each changing value with a named placeholder. Spaces in the template accept variable log whitespace.', chartParsingGuideTemplateTypes: 'A placeholder without a type reads an automatic number. Optional types include int, hex, text, and the us, ms, or s units.',
+  chartParsingGuideRegexTitle: 'Regular expression', chartParsingGuideRegexText: 'Use JavaScript regular-expression syntax and named capture groups. Each numeric named group becomes a field.', chartParsingGuideRegexNote: 'Named groups use the form (?<field>...). Unnamed capture groups are ignored.',
+  chartParsingGuideLogLabel: 'Log example', chartParsingGuideInputLabel: 'Parser input', chartParsingGuideResultLabel: 'Fields found'
 });
 Object.assign(translations['zh-CN'].main, {
   chart: '图表', newChartTab: '新建图表标签页', chartSettings: '图表设置', chartParserMode: '解析方式',
@@ -444,7 +449,12 @@ Object.assign(translations['zh-CN'].main, {
   chartFieldKey: '字段', chartFieldLabel: '显示名称', chartFieldColor: '颜色', chartFieldSample: '样例值', chartFieldSourceUnit: '源单位', chartFieldDisplayUnit: '显示单位', chartFieldVisible: '绘制系列', chartSelectAll: '全选', chartFieldsSelected: '已选 {count} / {max}', chartFieldsFound: '发现 {count} 个数值字段',
   chartTooManyFields: '最多选择 {max} 个数据系列。', chartInvalidUnit: '源单位和显示单位必须是兼容的时间单位。', chartInvalidYAxis: 'Y 轴最小值必须是小于最大值的数字。',
   chartClear: '清空图表', chartPause: '暂停', chartResume: '继续', chartLive: '回到实时', chartClose: '关闭图表页'
-  , chartExport: '导出 CSV', chartExported: '图表数据已导出', chartNoExportData: '没有可导出的原始图表数据'
+  , chartExport: '导出 CSV', chartExported: '图表数据已导出', chartNoExportData: '没有可导出的原始图表数据',
+  chartParsingGuideButton: '输入指导', chartParsingGuideTitle: 'Log 解析输入指导', chartParsingGuideIntro: '请在“样例日志”中输入一条完整日志。可选的“行标记”会在解析前过滤无关日志。',
+  chartParsingGuideKeyValueTitle: '自动键值', chartParsingGuideKeyValueText: '适用于以 name=value 或 name:value 形式输出数值的日志。请选择对应分隔符，也可以同时识别两种分隔符。',
+  chartParsingGuideTemplateTitle: '格式模板', chartParsingGuideTemplateText: '复制日志中的固定内容，再将每个变化的数值替换为具名占位符。模板中的空格可匹配日志中数量不同的空白字符。', chartParsingGuideTemplateTypes: '不指定类型的占位符会自动读取数值。可选类型包括 int、hex、text，以及 us、ms、s 单位。',
+  chartParsingGuideRegexTitle: '正则表达式', chartParsingGuideRegexText: '使用 JavaScript 正则语法和具名捕获组。每个包含数值的具名捕获组都会成为一个字段。', chartParsingGuideRegexNote: '具名捕获组格式为 (?<field>...)，未命名的捕获组会被忽略。',
+  chartParsingGuideLogLabel: '日志示例', chartParsingGuideInputLabel: '解析输入', chartParsingGuideResultLabel: '发现字段'
 });
 Object.assign(translations['zh-TW'].main, { sendHistory: '傳送歷史' });
 Object.assign(translations.fr.main, { sendHistory: 'Historique d’envoi' });

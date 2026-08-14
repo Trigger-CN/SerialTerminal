@@ -320,6 +320,10 @@ test('chart tabs discover sample fields and consume raw serial bytes independent
   assert.match(html, /id="chart-export-window"/);
   assert.match(html, /id="chart-export-all"/);
   assert.match(html, /id="chart-y-axis-mode"/);
+  assert.match(html, /id="chart-parsing-guide-open"/);
+  assert.match(html, /id="chart-parsing-guide-dialog"[^>]*class="app-dialog-overlay hidden"/);
+  assert.match(html, /CPU USAGE: busy=\{a\} cpu_sleep=\{b\} bus_sleep=\{c\} subsys_sleep=\{d\}/);
+  assert.match(html, /\(\?&lt;busy&gt;\[\-\+\]\?\\d\+/);
   assert.match(html, /class="chart-settings-section" aria-labelledby="chart-parser-section-title"/);
   assert.match(html, /class="chart-settings-section" aria-labelledby="chart-display-section-title"/);
   assert.match(html, /class="chart-settings-section" aria-labelledby="chart-retention-section-title"/);
@@ -346,6 +350,8 @@ test('chart tabs discover sample fields and consume raw serial bytes independent
   assert.match(renderer, /Math\.min\(16, checkboxes\.length\)/);
   assert.match(renderer, /tr\('main\.chartTooManyFields', \{ max: 16 \}\)/);
   assert.match(renderer, /chartYIncludeZero\.disabled = fixedYAxis/);
+  assert.match(renderer, /function openChartParsingGuide\(\)/);
+  assert.match(renderer, /chartParsingGuideOpen\?\.addEventListener\('click', openChartParsingGuide\)/);
   assert.match(main, /chartTabs: \[\]/);
   assert.match(main, /\['main', 'filter', 'shell', 'chart'\]\.includes\(payload\.terminalType\)/);
   assert.match(main, /terminalType === 'chart' \? \[/);
@@ -354,6 +360,11 @@ test('chart tabs discover sample fields and consume raw serial bytes independent
   assert.match(main, /sendAction\('close-chart-tab'\)/);
   assert.match(main, /receivedAt: Date\.now\(\)/);
   assert.match(styles, /\.chart-navigator-window\s*\{/);
+  assert.match(styles, /\.chart-navigator\s*\{[^}]*bottom:\s*28px;[^}]*overflow:\s*hidden;/s);
+  assert.match(styles, /\.chart-navigator-window\s*\{[^}]*top:\s*0;[^}]*bottom:\s*0;/s);
+  assert.match(renderer, /style\.setProperty\('--chart-log-background', config\.background \|\| '#000000'\)/);
+  assert.match(styles, /\.chart-main-host\s*\{[^}]*background:\s*var\(--chart-log-background, #000\);/s);
+  assert.match(styles, /\.chart-timeline-shell\s*\{[^}]*background:\s*var\(--chart-log-background, #000\);/s);
   assert.match(styles, /\.chart-fields-table\s*\{[^}]*overflow-x:\s*auto;/s);
   assert.match(styles, /\.chart-field-columns,\s*\.chart-field-row\s*\{[^}]*min-width:\s*820px;/s);
 });

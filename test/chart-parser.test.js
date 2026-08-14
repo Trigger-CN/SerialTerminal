@@ -48,6 +48,18 @@ test('template spaces match variable log whitespace', () => {
   assert.deepEqual(parser.parse('prefix a:   1\t\tb:  2 suffix').values, { a: 1, b: 2 });
 });
 
+test('discovers and parses fields from a format template', () => {
+  const template = 'CPU USAGE: busy={a} cpu_sleep={b} bus_sleep={c} subsys_sleep={d}';
+  const line = 'CPU USAGE: busy=12 cpu_sleep=34 bus_sleep=56 subsys_sleep=78';
+  const fields = discoverChartFields(line, { mode: 'template', template });
+
+  assert.deepEqual(fields.map(field => field.key), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(fields.map(field => field.sampleValue), [12, 34, 56, 78]);
+
+  const parser = createChartParser({ mode: 'template', template, fields });
+  assert.deepEqual(parser.parse(line).values, { a: 12, b: 34, c: 56, d: 78 });
+});
+
 test('requires the configured marker and converts compatible time units', () => {
   const parser = createChartParser({ mode: 'key-value', marker: '[OTHER]', fields: [{ key: 'draw' }] });
   assert.equal(parser.parse(frameLine), null);

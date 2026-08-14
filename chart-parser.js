@@ -91,12 +91,13 @@ function compileTemplate(template, caseInsensitive = false) {
   return { regex: new RegExp(source, caseInsensitive ? 'i' : ''), fields };
 }
 
-function parseTemplate(line, config, compiled = compileTemplate(config.template, config.caseInsensitive)) {
+function parseTemplate(line, config, compiled = null) {
   if (config.marker && !line.includes(config.marker)) return null;
-  const match = compiled.regex.exec(line);
+  const activeTemplate = compiled || compileTemplate(config.template, config.caseInsensitive);
+  const match = activeTemplate.regex.exec(line);
   if (!match) return null;
   const values = {};
-  compiled.fields.forEach((field, index) => {
+  activeTemplate.fields.forEach((field, index) => {
     const raw = match[index + 1];
     if (field.type === 'text' || field.type === 'time') {
       values[field.key] = { value: raw, rawValue: raw, unit: '', type: field.type };

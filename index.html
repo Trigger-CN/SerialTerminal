@@ -468,7 +468,10 @@
             <div class="app-dialog-body chart-settings-body">
                 <section class="chart-settings-section" aria-labelledby="chart-parser-section-title">
                     <div class="chart-settings-section-heading">
-                        <h3 id="chart-parser-section-title" data-i18n="main.chartParsingSettings">Data parsing</h3>
+                        <div class="chart-settings-heading-title">
+                            <h3 id="chart-parser-section-title" data-i18n="main.chartParsingSettings">Data parsing</h3>
+                            <button id="chart-parsing-guide-open" class="secondary chart-parsing-guide-open" type="button"><span class="material-icon-placeholder" data-material-icon="info"></span><span data-i18n="main.chartParsingGuideButton">Input guide</span></button>
+                        </div>
                         <span data-i18n="main.chartParsingSettingsHint">Define how serial log lines become data points</span>
                     </div>
                     <div class="chart-settings-grid">
@@ -527,6 +530,56 @@
             <footer class="app-dialog-actions">
                 <button id="chart-settings-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
                 <button id="chart-settings-save" type="button" data-i18n="main.save">Save</button>
+            </footer>
+        </section>
+    </div>
+
+    <div id="chart-parsing-guide-dialog" class="app-dialog-overlay hidden" role="presentation">
+        <section class="app-dialog chart-parsing-guide-dialog" role="dialog" aria-modal="true" aria-labelledby="chart-parsing-guide-title">
+            <header class="app-dialog-header">
+                <h2 id="chart-parsing-guide-title" data-i18n="main.chartParsingGuideTitle">Log parsing input guide</h2>
+                <button id="chart-parsing-guide-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-title="main.close"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
+            </header>
+            <div class="app-dialog-body chart-parsing-guide-body">
+                <p class="chart-guide-intro" data-i18n="main.chartParsingGuideIntro">Enter one complete log line as the sample. The optional line marker filters unrelated lines before parsing.</p>
+
+                <section class="chart-guide-mode">
+                    <h3><span class="chart-guide-index">1</span><span data-i18n="main.chartParsingGuideKeyValueTitle">Automatic key-value</span></h3>
+                    <p data-i18n="main.chartParsingGuideKeyValueText">Use this mode when values are written as name=value or name:value. Select the matching separator, or let the parser recognize both.</p>
+                    <dl class="chart-guide-example">
+                        <dt data-i18n="main.chartParsingGuideLogLabel">Log example</dt>
+                        <dd><code>CPU USAGE: busy=12 cpu_sleep=34 bus_sleep=56</code></dd>
+                        <dt data-i18n="main.chartParsingGuideResultLabel">Fields found</dt>
+                        <dd><code>busy=12, cpu_sleep=34, bus_sleep=56</code></dd>
+                    </dl>
+                </section>
+
+                <section class="chart-guide-mode">
+                    <h3><span class="chart-guide-index">2</span><span data-i18n="main.chartParsingGuideTemplateTitle">Format template</span></h3>
+                    <p data-i18n="main.chartParsingGuideTemplateText">Copy the fixed part of the log and replace each changing value with a named placeholder. Spaces in the template accept variable log whitespace.</p>
+                    <dl class="chart-guide-example">
+                        <dt data-i18n="main.chartParsingGuideLogLabel">Log example</dt>
+                        <dd><code>CPU USAGE: busy=12 cpu_sleep=34 bus_sleep=56 subsys_sleep=78</code></dd>
+                        <dt data-i18n="main.chartParsingGuideInputLabel">Template input</dt>
+                        <dd><code>CPU USAGE: busy={a} cpu_sleep={b} bus_sleep={c} subsys_sleep={d}</code></dd>
+                    </dl>
+                    <p class="chart-guide-note" data-i18n="main.chartParsingGuideTemplateTypes">A placeholder without a type reads an automatic number. Optional types include int, hex, text, and the us, ms, or s units.</p>
+                </section>
+
+                <section class="chart-guide-mode">
+                    <h3><span class="chart-guide-index">3</span><span data-i18n="main.chartParsingGuideRegexTitle">Regular expression</span></h3>
+                    <p data-i18n="main.chartParsingGuideRegexText">Use JavaScript regular-expression syntax and named capture groups. Each numeric named group becomes a field.</p>
+                    <dl class="chart-guide-example">
+                        <dt data-i18n="main.chartParsingGuideLogLabel">Log example</dt>
+                        <dd><code>CPU USAGE: busy=12 cpu_sleep=34</code></dd>
+                        <dt data-i18n="main.chartParsingGuideInputLabel">Parser input</dt>
+                        <dd><code>busy=(?&lt;busy&gt;[-+]?\d+(?:\.\d+)?)\s+cpu_sleep=(?&lt;cpu_sleep&gt;[-+]?\d+(?:\.\d+)?)</code></dd>
+                    </dl>
+                    <p class="chart-guide-note" data-i18n="main.chartParsingGuideRegexNote">Named groups use the form (?&lt;field&gt;...). Unnamed capture groups are ignored.</p>
+                </section>
+            </div>
+            <footer class="app-dialog-actions">
+                <button id="chart-parsing-guide-done" type="button" data-i18n="main.close">Close</button>
             </footer>
         </section>
     </div>

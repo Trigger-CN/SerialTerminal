@@ -1810,7 +1810,7 @@ label:hover {
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    background: #10151b;
+    background: var(--chart-log-background, #000);
 }
 
 .chart-tab.active {
@@ -1880,6 +1880,7 @@ label:hover {
     min-height: 160px;
     position: relative;
     overflow: hidden;
+    background: var(--chart-log-background, #000);
 }
 
 .chart-timeline-shell {
@@ -1887,7 +1888,7 @@ label:hover {
     min-width: 0;
     position: relative;
     border-top: 1px solid #28323d;
-    background: #0d1217;
+    background: var(--chart-log-background, #000);
     overflow: hidden;
 }
 
@@ -1898,16 +1899,17 @@ label:hover {
 }
 
 .chart-navigator {
-    left: 34px;
-    right: 8px;
+    right: 0;
+    bottom: 28px;
     z-index: 3;
     pointer-events: none;
+    overflow: hidden;
 }
 
 .chart-navigator-window {
     position: absolute;
-    top: 5px;
-    bottom: 24px;
+    top: 0;
+    bottom: 0;
     min-width: 24px;
     border: 1px solid #4fc3f7;
     background: rgba(79, 195, 247, 0.12);
@@ -1931,7 +1933,7 @@ label:hover {
 
 .chart-tab .uplot {
     font-family: Consolas, monospace;
-    background: transparent;
+    background: var(--chart-log-background, #000);
 }
 
 .chart-settings-dialog {
@@ -1960,6 +1962,26 @@ label:hover {
     justify-content: space-between;
     gap: 16px;
     margin-bottom: 12px;
+}
+
+.chart-settings-heading-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.chart-parsing-guide-open {
+    min-height: 26px;
+    padding: 3px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+}
+
+.chart-parsing-guide-open svg {
+    width: 16px;
+    height: 16px;
 }
 
 .chart-settings-section-heading h3,
@@ -2026,6 +2048,91 @@ label:hover {
     width: 100%;
     resize: vertical;
     font-family: Consolas, monospace;
+}
+
+.chart-parsing-guide-dialog {
+    width: min(760px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+}
+
+.chart-parsing-guide-body {
+    gap: 0;
+    padding: 0 20px;
+}
+
+.chart-guide-intro {
+    margin: 16px 0 4px;
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
+.chart-guide-mode {
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.chart-guide-mode:last-child { border-bottom: 0; }
+
+.chart-guide-mode h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.chart-guide-index {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    border: 1px solid var(--accent-color);
+    border-radius: 50%;
+    color: var(--accent-color);
+    font-size: 11px;
+}
+
+.chart-guide-mode p {
+    margin: 0 0 10px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.chart-guide-example {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 6px 10px;
+    margin: 0 0 10px;
+}
+
+.chart-guide-example dt {
+    padding-top: 7px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.chart-guide-example dd { margin: 0; min-width: 0; }
+
+.chart-guide-example code {
+    display: block;
+    padding: 7px 9px;
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: nowrap;
+}
+
+.chart-guide-mode .chart-guide-note {
+    margin-bottom: 0;
+    font-size: 11px;
 }
 
 .chart-fields-header {
@@ -2158,6 +2265,9 @@ label:hover {
     .chart-settings-grid { grid-template-columns: 1fr; }
     .chart-settings-body { padding: 0 14px; }
     .chart-settings-section-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
+    .chart-settings-heading-title { width: 100%; justify-content: space-between; }
+    .chart-guide-example { grid-template-columns: 1fr; }
+    .chart-guide-example dt { padding-top: 2px; }
     .chart-fields-header { align-items: flex-start; }
     .chart-fields-header > div { align-items: flex-start; flex-direction: column; gap: 2px; }
     .chart-toolbar { align-items: flex-start; }

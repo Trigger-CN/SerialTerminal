@@ -26,6 +26,8 @@ class ChartView {
     this.fullRange = null;
     this.viewRange = null;
     this.syncingScale = false;
+    this.mainScalePointerDown = false;
+    this.mainScaleInteraction = false;
     this.listeners = [];
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(mainHost);
@@ -85,7 +87,7 @@ class ChartView {
   }
 
   _handleMainScale(key) {
-    if (key !== 'x' || this.syncingScale || !this.fullRange) return;
+    if (key !== 'x' || this.syncingScale || !this.mainScaleInteraction || !this.fullRange) return;
     const { min, max } = this.mainPlot.scales.x;
     if (!Number.isFinite(min) || !Number.isFinite(max)) return;
     this.setViewRange(min * 1000, max * 1000, { following: false, updatePlot: false });
@@ -128,6 +130,16 @@ class ChartView {
       document.addEventListener('pointercancel', stop);
     };
     const windowElement = this.navigator.querySelector('.chart-navigator-window');
+    listen(this.mainHost, 'pointerdown', () => { this.mainScalePointerDown = true; });
+    listen(document, 'pointermove', () => {
+      if (this.mainScalePointerDown) this.mainScaleInteraction = true;
+    });
+    const endMainScaleInteraction = () => {
+      this.mainScalePointerDown = false;
+      queueMicrotask(() => { this.mainScaleInteraction = false; });
+    };
+    listen(document, 'pointerup', endMainScaleInteraction);
+    listen(document, 'pointercancel', endMainScaleInteraction);
     listen(windowElement, 'pointerdown', event => {
       if (event.target.closest('.chart-navigator-handle')) return;
       startDrag(event, 'move');
@@ -200,8 +212,13 @@ class ChartView {
     if (!timestamps.length) {
       this.fullRange = null;
       this.viewRange = null;
-      this._setMainData(false);
-      this.timelinePlot.setData(overviewData);
+      this.syncingScale = true;
+      try {
+        this._setMainData(false);
+        this.timelinePlot.setData(overviewData);
+      } finally {
+        this.syncingScale = false;
+      }
       this._renderNavigator();
       return;
     }
@@ -216,12 +233,15 @@ class ChartView {
       this.viewRange[0] = Math.max(this.fullRange[0], this.viewRange[0]);
       this.viewRange[1] = Math.min(this.fullRange[1], this.viewRange[1]);
     }
-    this._updateMainData();
-    this.timelinePlot.setData(overviewData, false);
     this.syncingScale = true;
-    this.timelinePlot.setScale('x', { min: this.fullRange[0] / 1000, max: this.fullRange[1] / 1000 });
-    this.mainPlot.setScale('x', { min: this.viewRange[0] / 1000, max: this.viewRange[1] / 1000 });
-    this.syncingScale = false;
+    try {
+      this._updateMainData();
+      this.timelinePlot.setData(overviewData, false);
+      this.timelinePlot.setScale('x', { min: this.fullRange[0] / 1000, max: this.fullRange[1] / 1000 });
+      this.mainPlot.setScale('x', { min: this.viewRange[0] / 1000, max: this.viewRange[1] / 1000 });
+    } finally {
+      this.syncingScale = false;
+    }
     this._renderNavigator();
     this.onViewRangeChange?.(this.viewRange, this.summaryHistory);
   }
@@ -231,6 +251,9 @@ class ChartView {
     const fullDuration = this.fullRange[1] - this.fullRange[0];
     if (fullDuration <= 0) {
       this.viewRange = [...this.fullRange];
+      this.setFollowing(following);
+      this._renderNavigator();
+      this.onViewRangeChange?.(this.viewRange, this.summaryHistory);
       return;
     }
     start = Math.max(this.fullRange[0], Number(start));
@@ -238,10 +261,11 @@ class ChartView {
     if (end - start < Math.min(this.minWindowDurationMs, fullDuration)) return;
     this.viewRange = [start, end];
     this.setFollowing(following);
-    this._updateMainData();
-    if (updatePlot) {
-      this.syncingScale = true;
-      this.mainPlot.setScale('x', { min: start / 1000, max: end / 1000 });
+    this.syncingScale = true;
+    try {
+      this._updateMainData();
+      if (updatePlot) this.mainPlot.setScale('x', { min: start / 1000, max: end / 1000 });
+    } finally {
       this.syncingScale = false;
     }
     this._renderNavigator();

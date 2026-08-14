@@ -2331,12 +2331,17 @@ const chartYIncludeZero = document.getElementById('chart-y-include-zero');
 const chartWindowDuration = document.getElementById('chart-window-duration');
 const chartMaxPoints = document.getElementById('chart-max-points');
 const chartMaxDuration = document.getElementById('chart-max-duration');
+const chartParsingGuideDialog = document.getElementById('chart-parsing-guide-dialog');
+const chartParsingGuideOpen = document.getElementById('chart-parsing-guide-open');
+const chartParsingGuideClose = document.getElementById('chart-parsing-guide-close');
+const chartParsingGuideDone = document.getElementById('chart-parsing-guide-done');
 const chartExportDialog = document.getElementById('chart-export-dialog');
 const chartExportStatus = document.getElementById('chart-export-status');
 const chartExportWindow = document.getElementById('chart-export-window');
 const chartExportAll = document.getElementById('chart-export-all');
 let chartSettingsState = null;
 let chartExportState = null;
+let chartParsingGuideTrigger = null;
 
 function serializeChartTab(tab) {
     return {
@@ -2807,6 +2812,18 @@ function closeChartSettings() {
     chartSettingsDialog.classList.add('hidden');
 }
 
+function openChartParsingGuide() {
+    chartParsingGuideTrigger = document.activeElement;
+    chartParsingGuideDialog.classList.remove('hidden');
+    chartParsingGuideClose.focus();
+}
+
+function closeChartParsingGuide() {
+    chartParsingGuideDialog.classList.add('hidden');
+    chartParsingGuideTrigger?.focus();
+    chartParsingGuideTrigger = null;
+}
+
 async function saveChartSettings() {
     const tab = chartSettingsState;
     if (!tab) return;
@@ -2892,6 +2909,12 @@ chartFieldsToggle?.addEventListener('change', () => {
 document.getElementById('chart-settings-close')?.addEventListener('click', closeChartSettings);
 document.getElementById('chart-settings-cancel')?.addEventListener('click', closeChartSettings);
 document.getElementById('chart-settings-save')?.addEventListener('click', saveChartSettings);
+chartParsingGuideOpen?.addEventListener('click', openChartParsingGuide);
+chartParsingGuideClose?.addEventListener('click', closeChartParsingGuide);
+chartParsingGuideDone?.addEventListener('click', closeChartParsingGuide);
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !chartParsingGuideDialog?.classList.contains('hidden')) closeChartParsingGuide();
+});
 document.getElementById('chart-export-close')?.addEventListener('click', closeChartExport);
 chartExportWindow?.addEventListener('click', () => exportChartSamples('window'));
 chartExportAll?.addEventListener('click', () => exportChartSamples('all'));
@@ -3817,6 +3840,7 @@ function applyConfig(config) {
     }
     
     document.body.style.background = config.background;
+    document.documentElement.style.setProperty('--chart-log-background', config.background || '#000000');
 
     document.querySelectorAll('[data-i18n]').forEach(el => {
         let translated = tr(el.dataset.i18n);
