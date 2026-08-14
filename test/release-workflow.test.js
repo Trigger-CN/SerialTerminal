@@ -112,8 +112,13 @@ test('release prunes COS versions only after all publication steps succeed', () 
 
 test('Gitee tag pipeline mirrors the exact GitHub Windows installer', () => {
   assert.match(giteeWorkflow, /tags:[\s\S]*include:[\s\S]*\^v\\d\+\\\.\\d\+\\\.\\d\+/);
-  assert.match(giteeWorkflow, /nodeVersion: 22\.12\.0/);
+  assert.match(giteeWorkflow, /nodeVersion: 14\.16\.0/);
+  assert.match(giteeWorkflow, /set -eu/);
+  assert.match(giteeWorkflow, /node-v22\.12\.0-linux-x64\.tar\.xz/);
+  assert.match(giteeWorkflow, /22982235e1b71fa8850f82edd09cdae7e3f32df1764a9ec298c72d25ef2c164f[\s\S]*sha256sum --check/);
+  assert.match(giteeWorkflow, /export PATH="\/tmp\/node-v22\.12\.0-linux-x64\/bin:\$PATH"/);
   assert.match(giteeWorkflow, /npm ci --ignore-scripts/);
+  assert.match(giteeWorkflow, /git fetch --force origin 'refs\/tags\/\*:refs\/tags\/\*'/);
   assert.match(giteeWorkflow, /git tag --points-at "\$GITEE_COMMIT"/);
   assert.match(giteeWorkflow, /GITEE_ACCESS_TOKEN="\$CI_GITEE_ACCESS_TOKEN" node/);
   assert.match(giteeWorkflow, /node scripts\/mirror-github-release-to-gitee\.js/);

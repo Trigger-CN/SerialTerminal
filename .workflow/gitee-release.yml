@@ -17,13 +17,22 @@ stages:
       - step: build@nodejs
         name: mirror_github_release
         displayName: 镜像 GitHub Release
-        nodeVersion: 22.12.0
+        nodeVersion: 14.16.0
         commands:
-          - npm config set registry https://registry.npmmirror.com
-          - npm ci --ignore-scripts
-          - TAG="$(git tag --points-at "$GITEE_COMMIT" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' | head -n 1)"
-          - test -n "$TAG"
-          - GITEE_ACCESS_TOKEN="$CI_GITEE_ACCESS_TOKEN" node scripts/mirror-github-release-to-gitee.js --github-owner Trigger-CN --github-repo SerialTerminal --gitee-owner trigger-cn --gitee-repo SerialTerminal --tag "$TAG" --target "$GITEE_COMMIT" --cos-releases-root "https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases"
+          - |
+            set -eu
+            NODE_ARCHIVE="node-v22.12.0-linux-x64.tar.xz"
+            curl --fail --location --retry 3 --output "/tmp/$NODE_ARCHIVE" "https://npmmirror.com/mirrors/node/v22.12.0/$NODE_ARCHIVE"
+            echo "22982235e1b71fa8850f82edd09cdae7e3f32df1764a9ec298c72d25ef2c164f  /tmp/$NODE_ARCHIVE" | sha256sum --check
+            tar --extract --xz --file "/tmp/$NODE_ARCHIVE" --directory /tmp
+            export PATH="/tmp/node-v22.12.0-linux-x64/bin:$PATH"
+            node --version
+            npm config set registry https://registry.npmmirror.com
+            npm ci --ignore-scripts
+            git fetch --force origin 'refs/tags/*:refs/tags/*'
+            TAG="$(git tag --points-at "$GITEE_COMMIT" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' | sed -n '1p')"
+            test -n "$TAG"
+            GITEE_ACCESS_TOKEN="$CI_GITEE_ACCESS_TOKEN" node scripts/mirror-github-release-to-gitee.js --github-owner Trigger-CN --github-repo SerialTerminal --gitee-owner trigger-cn --gitee-repo SerialTerminal --tag "$TAG" --target "$GITEE_COMMIT" --cos-releases-root "https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases"
         caches:
           - ~/.npm
         notify: []
