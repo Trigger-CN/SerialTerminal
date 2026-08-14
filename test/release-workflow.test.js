@@ -113,6 +113,7 @@ test('release prunes COS versions only after all publication steps succeed', () 
 test('Gitee tag pipeline mirrors the exact GitHub Windows installer', () => {
   assert.match(giteeWorkflow, /tags:[\s\S]*include:[\s\S]*\^v\\d\+\\\.\\d\+\\\.\\d\+/);
   assert.match(giteeWorkflow, /nodeVersion: 14\.16\.0/);
+  assert.match(giteeWorkflow, /variables:\s*\r?\n\s+global:\s*\r?\n\s+- CI_GITEE_ACCESS_TOKEN/);
   assert.match(giteeWorkflow, /set -eu/);
   assert.match(giteeWorkflow, /node-v22\.12\.0-linux-x64\.tar\.xz/);
   assert.match(giteeWorkflow, /22982235e1b71fa8850f82edd09cdae7e3f32df1764a9ec298c72d25ef2c164f[\s\S]*sha256sum --check/);
