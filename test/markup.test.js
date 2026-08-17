@@ -419,6 +419,8 @@ test('Ctrl+F opens search and restores the last sidebar tab', () => {
   assert.match(renderer, /showSidebarTab\(config\.activeSidebarTab, false\)/);
   assert.match(renderer, /case 'focusSearch':[\s\S]*?focusSearchWithActiveSelection\(\)/);
   assert.match(renderer, /function focusSearchWithActiveSelection\(\)[\s\S]*?showSidebarTab\('tab-search'\)[\s\S]*?searchInput\?\.focus\(\)/);
+  const shortcutHandler = renderer.match(/function handleAppShortcut\(event\) \{[\s\S]*?\n\}/)?.[0] || '';
+  assert.doesNotMatch(shortcutHandler, /closest\?\.\('\.xterm'\)/);
   assert.doesNotMatch(renderer, /setSearchFromText\(selectedText\);\s*return;/);
 });
 
@@ -650,7 +652,7 @@ test('shell terminals preserve xterm keyboard, paste, and mouse input handling',
   assert.match(renderer, /require\('\.\/shell-mouse-compat'\)/);
   assert.match(renderer, /ipcRenderer\.on\('shell-tab-output'[\s\S]*?const translatedData = translateConptyMouseMode\(tab, payload\.data\);[\s\S]*?tab\.term\.write\(translatedData\)/);
   assert.doesNotMatch(renderer, /translateShellMouseInput/);
-  assert.match(renderer, /function handleAppShortcut\(event\) \{\s*if \(event\.target\?\.closest\?\.\('\.xterm'\)\) return;/);
+  assert.match(renderer, /const action = getShortcutAction\(combo\);\s*if \(!action\) return;[\s\S]*?event\.preventDefault\(\)/);
   assert.doesNotMatch(renderer, /terminalType === 'shell'[\s\S]{0,180}shell-tab-input/);
   assert.equal((renderer.match(/bindTerminalWheel\(term, terminalWrapper\)/g) || []).length, 1);
   assert.match(renderer, /if \(shellTab\) \{\s*shellTab\.term\.clear\(\)/);

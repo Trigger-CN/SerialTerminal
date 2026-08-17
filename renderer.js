@@ -3461,7 +3461,6 @@ function getShortcutAction(combo) {
 }
 
 function handleAppShortcut(event) {
-    if (event.target?.closest?.('.xterm')) return;
     const combo = shortcutFromEvent(event);
     if (!combo) return;
     const action = getShortcutAction(combo);
