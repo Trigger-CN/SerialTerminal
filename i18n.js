@@ -563,6 +563,19 @@ for (const [language, sections] of Object.entries(translationCompletions)) {
   }
 }
 
+const addToListTranslations = {
+  en: 'Add to List',
+  'zh-CN': '添加到列表',
+  'zh-TW': '加入列表',
+  fr: 'Ajouter à la liste',
+  ru: 'Добавить в список',
+  de: 'Zur Liste hinzufügen'
+};
+
+for (const [language, value] of Object.entries(addToListTranslations)) {
+  translations[language].main.addToList = value;
+}
+
 function getLanguage(configLanguage) {
   return translations[configLanguage] ? configLanguage : 'en';
 }

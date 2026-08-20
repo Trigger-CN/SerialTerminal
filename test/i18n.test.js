@@ -61,6 +61,14 @@ test('translation interpolation replaces known parameters', () => {
   assert.equal(t('unknown', 'updateDialog.versionAvailable', { version: '1.2.3' }), 'Version 1.2.3 is available.');
 });
 
+test('add-to-list labels do not duplicate the add icon', () => {
+  Object.keys(translations).forEach(language => {
+    assert.doesNotMatch(t(language, 'main.addToList'), /^\s*\+/);
+  });
+  assert.equal(t('en', 'main.addToList'), 'Add to List');
+  assert.equal(t('zh-CN', 'main.addToList'), '添加到列表');
+});
+
 test('quick-send disconnected toast is translated for every configured language', () => {
   const expected = {
     en: 'Hold on, did you forget to open the serial port?',

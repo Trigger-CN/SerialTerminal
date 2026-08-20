@@ -5767,7 +5767,7 @@ function openQuickSendDialog(itemId = '') {
         : trFallback('main.addQuickSend', 'Add Quick Send');
     addQuickSendBtnLabel.textContent = editing
         ? trFallback('main.updateItem', 'Update Item')
-        : tr('main.addToList').replace(/^\+\s*/, '');
+        : tr('main.addToList');
     updateQuickSendValidation();
     renderQuickSendLists();
     quickSendDialog.classList.remove('hidden');
