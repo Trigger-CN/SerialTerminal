@@ -389,8 +389,8 @@ test('all xterm terminals use Unicode 11 width rules and emoji font fallbacks', 
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
   assert.equal(packageJson.dependencies['@xterm/addon-unicode11'], '^0.9.0');
-  assert.match(renderer, /const \{ Unicode11Addon \} = require\('@xterm\/addon-unicode11'\)/);
-  assert.match(renderer, /function enableTerminalUnicode11\(term\) \{\s*term\.loadAddon\(new Unicode11Addon\(\)\);\s*term\.unicode\.activeVersion = '11';\s*\}/);
+  assert.match(renderer, /const \{ TerminalUnicodeWidthAddon \} = require\('\.\/terminal-unicode-width'\)/);
+  assert.match(renderer, /function enableTerminalUnicode11\(term\) \{\s*term\.loadAddon\(new TerminalUnicodeWidthAddon\(\)\);\s*\}/);
   assert.match(renderer, /enableTerminalUnicode11\(serialTerm\)/);
   assert.equal((renderer.match(/enableTerminalUnicode11\(term\);/g) || []).length, 2);
   assert.match(renderer, /"Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji"/);

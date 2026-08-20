@@ -19,7 +19,7 @@ window.addEventListener('unhandledrejection', (event) => {
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
-const { Unicode11Addon } = require('@xterm/addon-unicode11');
+const { TerminalUnicodeWidthAddon } = require('./terminal-unicode-width');
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./i18n');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./workspace-manager');
@@ -48,8 +48,7 @@ const createMaterialIcon = (name, className = 'material-icon') => window.Materia
 const TERMINAL_FONT_FAMILY = (config) => `${config.fontFamily}, ${config.fontFamilyZh}, "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", "Courier New", monospace`;
 
 function enableTerminalUnicode11(term) {
-    term.loadAddon(new Unicode11Addon());
-    term.unicode.activeVersion = '11';
+    term.loadAddon(new TerminalUnicodeWidthAddon());
 }
 
 const SEND_LIMITS = Object.freeze({ main: 1024 * 1024, quick: 1024 * 1024, auto: 64 * 1024, paste: 1024 * 1024, terminal: 1024 * 1024 });
@@ -2093,7 +2092,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     tabContent.appendChild(tabPane);
     
     // 3. Initialize Terminal
-    const term = new Terminal({ 
+    const term = new Terminal({
         cursorBlink: true,
         allowProposedApi: true,
         scrollback: currentConfig ? (currentConfig.scrollbackLimit || 20000) : 20000
