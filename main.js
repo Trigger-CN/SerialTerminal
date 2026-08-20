@@ -2138,6 +2138,13 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
         click: () => sendAction('restart-shell')
       },
       {
+        label: labels.toggleShellTextMode || 'Text Mode (select text)',
+        ...menuIcon('text_select_move_forward'),
+        type: 'checkbox',
+        checked: Boolean(payload.shellTextMode),
+        click: () => sendAction('toggle-shell-text-mode')
+      },
+      {
         label: labels.closeShellTab || 'Close Shell Tab',
         ...menuIcon('close'),
         enabled: Boolean(payload.tabId),

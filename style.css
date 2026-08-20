@@ -1560,6 +1560,15 @@ label:hover {
     border-color: #8a6d2b;
 }
 
+.mode-badge.text {
+    color: #7dd3fc;
+    border-color: #256d85;
+}
+
+.main-tab.shell-text-mode {
+    border-bottom-color: #38bdf8;
+}
+
 .serial-mode-grid select {
     width: 100%;
     min-width: 0;

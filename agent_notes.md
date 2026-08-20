@@ -28,6 +28,8 @@
 - `Ctrl+F`/搜索快捷键优先使用当前活动终端的选中文本填充搜索框并立即搜索；无选区时只聚焦搜索框。
 - `Ctrl+F`/自定义搜索快捷键触发 `focusSearchWithActiveSelection()` 时必须先展开左侧边栏，再切换搜索页；展开状态按现有 `sidebarCollapsed` 规则持久化。
 - 应用级快捷键监听不能跳过 `.xterm` 内部事件；否则 Log 终端获得焦点并选中文本后，`Ctrl+F`/自定义搜索快捷键不会进入 `focusSearchWithActiveSelection()`。未匹配应用快捷键的按键仍交由 xterm 自定义处理器处理。
+- 主 Log、过滤 Log 和 Shell 的所有 xterm 实例必须通过 `enableTerminalUnicode11()` 加载 `@xterm/addon-unicode11` 并激活 Unicode 11 宽度规则；终端字体栈统一由 `TERMINAL_FONT_FAMILY()` 补充系统 emoji 字体，避免双宽 emoji 被按半角单元格裁切。
+- Shell 标签页的文本模式只保存在对应的 tab state 中，不得写入配置；文本模式开启时必须阻止 xterm 鼠标报告发送到 PTY，并在标签上显示状态提示，便于使用终端文本选择复制内容。
 - 底部发送框普通 `ArrowUp/ArrowDown` 在多行内容中先保留 textarea 光标移动；只有光标位于第一行/最后一行时才切换历史。带修饰键的历史快捷键仍由全局快捷键处理。
 - 快捷发送条目的编辑/删除动作按钮位于主快捷发送按钮左侧，悬浮/动作按钮聚焦/编辑态显示，竖向排列且删除在上、编辑在下；主快捷发送按钮点击后不应因焦点停留而持续显示动作按钮。
 - 快捷发送支持每条指令独立的 `autoTrigger` 设置（`enabled`、`text`、`useRegex`、`caseSensitive`、`wholeWord`），配置入口在快捷指令编辑窗口，默认关闭；开启后 RX 原始字节按当前接收编码解码，匹配最近 4096 字符窗口，命中后按当前统一 TX 设置自动发送对应快捷指令，同一指令发送未完成时不重复排队，并让对应快捷发送按钮绿色慢速闪烁一次。

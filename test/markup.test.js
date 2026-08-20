@@ -384,6 +384,43 @@ test('font weight preferences persist and apply to every terminal type', () => {
   assert.equal((renderer.match(/fontWeight: (?:currentConfig|config)\.fontWeight/g) || []).length, 3);
 });
 
+test('all xterm terminals use Unicode 11 width rules and emoji font fallbacks', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+  assert.equal(packageJson.dependencies['@xterm/addon-unicode11'], '^0.9.0');
+  assert.match(renderer, /const \{ Unicode11Addon \} = require\('@xterm\/addon-unicode11'\)/);
+  assert.match(renderer, /function enableTerminalUnicode11\(term\) \{\s*term\.loadAddon\(new Unicode11Addon\(\)\);\s*term\.unicode\.activeVersion = '11';\s*\}/);
+  assert.match(renderer, /enableTerminalUnicode11\(serialTerm\)/);
+  assert.equal((renderer.match(/enableTerminalUnicode11\(term\);/g) || []).length, 2);
+  assert.match(renderer, /"Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji"/);
+  assert.equal((renderer.match(/fontFamily: TERMINAL_FONT_FAMILY\(/g) || []).length, 3);
+});
+
+test('shell text mode is per-tab, blocks mouse reports, and is exposed in the context menu', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(renderer, /textMode: false/);
+  assert.match(renderer, /stripShellMouseReports\(tabState, data\)/);
+  assert.match(renderer, /mouseService\._activeProtocol = 'NONE'/);
+  assert.match(renderer, /mouseService\._onProtocolChange\?\.fire\(0\)/);
+  assert.match(renderer, /mouseService\._protocols\[protocol\]\?\.events \|\| 0/);
+  assert.match(renderer, /protocolByMode/);
+  assert.match(renderer, /function bindShellTextModeWheel\(tabState, element\)/);
+  assert.match(renderer, /if \(!tabState\.textMode\) return;[\s\S]*tabState\.term\.scrollLines/);
+  assert.match(renderer, /bindShellTextModeWheel\(tabState, terminalWrapper\)/);
+  assert.match(renderer, /tab\.term\.write\(translatedData, \(\) => \{\s*if \(tab\.textMode\) setShellTextMode\(tab, true\);/);
+  assert.match(renderer, /shellMouseTrackingMode/);
+  assert.match(renderer, /case 'toggle-shell-text-mode'/);
+  assert.match(renderer, /shellTextMode: Boolean\(tabState\?\.textMode\)/);
+  assert.match(renderer, /mode-badge text/);
+  assert.match(main, /type: 'checkbox',[\s\S]*checked: Boolean\(payload\.shellTextMode\)[\s\S]*sendAction\('toggle-shell-text-mode'\)/);
+  assert.match(styles, /\.mode-badge\.text\s*\{/);
+  assert.match(styles, /\.main-tab\.shell-text-mode\s*\{/);
+});
+
 test('sidebar transitions clip fixed-width content without reflowing controls', () => {
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
 
@@ -650,7 +687,7 @@ test('shell terminals preserve xterm keyboard, paste, and mouse input handling',
   assert.match(renderer, /term\.onBinary\(\(data\) => \{[\s\S]*?ipcRenderer\.send\('shell-tab-binary-input'/);
   assert.match(renderer, /term\.onData\(\(data\) => \{[\s\S]*?ipcRenderer\.send\('shell-tab-input', \{ tabId, data \}\)/);
   assert.match(renderer, /require\('\.\/shell-mouse-compat'\)/);
-  assert.match(renderer, /ipcRenderer\.on\('shell-tab-output'[\s\S]*?const translatedData = translateConptyMouseMode\(tab, payload\.data\);[\s\S]*?tab\.term\.write\(translatedData\)/);
+  assert.match(renderer, /ipcRenderer\.on\('shell-tab-output'[\s\S]*?const translatedData = translateConptyMouseMode\(tab, payload\.data\);[\s\S]*?tab\.term\.write\(translatedData, \(\) => \{[\s\S]*?setShellTextMode\(tab, true\)/);
   assert.doesNotMatch(renderer, /translateShellMouseInput/);
   assert.match(renderer, /const action = getShortcutAction\(combo\);\s*if \(!action\) return;[\s\S]*?event\.preventDefault\(\)/);
   assert.doesNotMatch(renderer, /terminalType === 'shell'[\s\S]{0,180}shell-tab-input/);

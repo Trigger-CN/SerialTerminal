@@ -19,6 +19,7 @@ window.addEventListener('unhandledrejection', (event) => {
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
+const { Unicode11Addon } = require('@xterm/addon-unicode11');
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./i18n');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./workspace-manager');
@@ -44,6 +45,12 @@ const {
 } = require('./quick-send-reorder');
 
 const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
+const TERMINAL_FONT_FAMILY = (config) => `${config.fontFamily}, ${config.fontFamilyZh}, "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", "Courier New", monospace`;
+
+function enableTerminalUnicode11(term) {
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = '11';
+}
 
 const SEND_LIMITS = Object.freeze({ main: 1024 * 1024, quick: 1024 * 1024, auto: 64 * 1024, paste: 1024 * 1024, terminal: 1024 * 1024 });
 const SUPPORTED_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
@@ -755,6 +762,7 @@ function getContextMenuLabels() {
         newShellTab: tr('main.newShellTab'),
         closeShellTab: tr('main.contextCloseShellTab'),
         restartShell: tr('main.contextRestartShell'),
+        toggleShellTextMode: tr('main.contextToggleShellTextMode'),
         newCmdTab: tr('main.newCmdTab'),
         newPowerShellTab: tr('main.newPowerShellTab'),
         newBashTab: tr('main.newBashTab'),
@@ -767,6 +775,56 @@ function getContextMenuLabels() {
         chartSettings: tr('main.chartSettings'),
         chartClose: tr('main.chartClose')
     };
+}
+
+function stripShellMouseReports(tabState, data) {
+    const input = `${tabState.mouseInputSequenceCarry || ''}${data || ''}`;
+    const reportPattern = /\x1b\[<\d+(?:;\d+){2}[Mm]|\x1b\[\d+;\d+;\d+M|\x1bM[\s\S]{3}/g;
+    const filtered = input.replace(reportPattern, '');
+    let carry = '';
+    for (let length = Math.min(8, filtered.length); length > 0; length--) {
+        const suffix = filtered.slice(-length);
+        if (/^\x1b(?:\[<?[0-9;]*|M[\s\S]{0,2})$/.test(suffix)) {
+            carry = suffix;
+            break;
+        }
+    }
+    tabState.mouseInputSequenceCarry = carry;
+    return carry ? filtered.slice(0, -carry.length) : filtered;
+}
+
+function setShellTextMode(tabState, enabled) {
+    if (!tabState?.term) return;
+    const mouseService = tabState.term._core?.coreMouseService;
+    if (!mouseService) return;
+    if (enabled) {
+        if (tabState.shellMouseTrackingMode === undefined) {
+            tabState.shellMouseTrackingMode = tabState.term.modes?.mouseTrackingMode || 'none';
+        }
+        // xterm otherwise consumes drag events for the shell instead of starting selection.
+        mouseService._activeProtocol = 'NONE';
+        mouseService._onProtocolChange?.fire(0);
+        tabState.term.element?.classList.remove('enable-mouse-events');
+    } else if (tabState.shellMouseTrackingMode !== undefined) {
+        const protocolByMode = { none: 'NONE', x10: 'X10', vt200: 'VT200', drag: 'DRAG', any: 'ANY' };
+        const protocol = protocolByMode[tabState.shellMouseTrackingMode] || 'NONE';
+        mouseService._activeProtocol = protocol;
+        mouseService._onProtocolChange?.fire(mouseService._protocols[protocol]?.events || 0);
+        tabState.term.element?.classList.toggle('enable-mouse-events', protocol !== 'NONE');
+        delete tabState.shellMouseTrackingMode;
+    }
+}
+
+function bindShellTextModeWheel(tabState, element) {
+    const target = tabState?.term?.element || element;
+    if (!target) return;
+    target.addEventListener('wheel', (event) => {
+        if (!tabState.textMode) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const lines = mouseWheelScrollLines || 3;
+        tabState.term.scrollLines(event.deltaY > 0 ? lines : -lines);
+    }, { passive: false, capture: true });
 }
 
 function requestTerminalContextMenu(payload) {
@@ -844,6 +902,7 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
             caseSensitive: Boolean(tabState?.caseSensitive),
             wholeWord: Boolean(tabState?.wholeWord),
             useRegex: Boolean(tabState?.useRegex),
+            shellTextMode: Boolean(tabState?.textMode),
             receiveDisplayMode
         });
     });
@@ -933,6 +992,7 @@ function restartShellTab(tabId) {
     if (!shellTab) return;
     ipcRenderer.send('close-shell-tab-session', { tabId });
     shellTab.mouseModeSequenceCarry = '';
+    shellTab.mouseInputSequenceCarry = '';
     shellTab.term.reset();
     shellTab.btn?.classList.remove('exited');
     shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
@@ -1150,6 +1210,14 @@ async function handleTerminalContextMenuAction(payload = {}) {
             }
             break;
         }
+        case 'toggle-shell-text-mode': {
+            if (shellTab) {
+                shellTab.textMode = !shellTab.textMode;
+                setShellTextMode(shellTab, shellTab.textMode);
+                updateShellTextMode(shellTab);
+            }
+            break;
+        }
     }
 }
 
@@ -1170,6 +1238,7 @@ const serialFitAddon = new FitAddon();
 const serialSearchAddon = new SearchAddon();
 serialTerm.loadAddon(serialFitAddon);
 serialTerm.loadAddon(serialSearchAddon);
+enableTerminalUnicode11(serialTerm);
 serialTerm.open(document.getElementById('serial-container'));
 const mainTabButton = document.querySelector('.main-tab[data-target="tab-main"]');
 if (mainTabButton) {
@@ -1675,6 +1744,12 @@ function updateTabTitles() {
         titleEl.className = 'main-tab-title';
         titleEl.textContent = title;
         tab.btn.replaceChildren(titleEl);
+        if (tab.textMode) {
+            const badge = document.createElement('span');
+            badge.className = 'mode-badge text';
+            badge.textContent = 'TEXT';
+            tab.btn.appendChild(badge);
+        }
         tab.btn.appendChild(closeBtn);
     });
     chartTabs.forEach((tab, index) => {
@@ -1812,13 +1887,14 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
+    enableTerminalUnicode11(term);
     term.open(terminalWrapper);
 
     if (currentConfig) {
         term.options = {
             fontSize: currentConfig.fontSize,
             fontWeight: currentConfig.fontWeight,
-            fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
+            fontFamily: TERMINAL_FONT_FAMILY(currentConfig),
             theme: getTerminalTheme(currentConfig)
         };
     }
@@ -1836,11 +1912,18 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         sessionReady: false,
         sessionCreateTimer: null,
         mouseModeSequenceCarry: '',
+        mouseInputSequenceCarry: '',
+        shellMouseTrackingMode: undefined,
+        textMode: false,
         closed: false
     };
 
     term.attachCustomKeyEventHandler(createTerminalKeyHandler(term, 'shell'));
     term.onData((data) => {
+        if (tabState.textMode) {
+            data = stripShellMouseReports(tabState, data);
+            if (!data) return;
+        }
         ipcRenderer.send('shell-tab-input', { tabId, data });
     });
     term.onBinary((data) => {
@@ -1855,6 +1938,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         element: terminalWrapper,
         getTabState: () => tabState
     });
+    bindShellTextModeWheel(tabState, terminalWrapper);
 
     shellTabs.push(tabState);
     updateTabTitles();
@@ -2018,13 +2102,14 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
+    enableTerminalUnicode11(term);
     term.open(terminalWrapper);
     
     if (currentConfig) {
         term.options = {
             fontSize: currentConfig.fontSize,
             fontWeight: currentConfig.fontWeight,
-            fontFamily: `${currentConfig.fontFamily}, ${currentConfig.fontFamilyZh}, "Courier New", monospace`,
+            fontFamily: TERMINAL_FONT_FAMILY(currentConfig),
             theme: getTerminalTheme(currentConfig)
         };
     }
@@ -2309,6 +2394,13 @@ function persistFilterTabs({ debounce = false } = {}) {
         return;
     }
     save();
+}
+
+function updateShellTextMode(tabState) {
+    if (!tabState?.btn) return;
+    tabState.btn.classList.toggle('shell-text-mode', Boolean(tabState.textMode));
+    tabState.btn.title = tabState.textMode ? tr('main.shellTextModeEnabled') : '';
+    updateTabTitles();
 }
 
 const chartSettingsDialog = document.getElementById('chart-settings-dialog');
@@ -3818,7 +3910,7 @@ function applyConfig(config) {
     const options = {
         fontSize: config.fontSize,
         fontWeight: config.fontWeight,
-        fontFamily: `${config.fontFamily}, ${config.fontFamilyZh}, "Courier New", monospace`,
+        fontFamily: TERMINAL_FONT_FAMILY(config),
         scrollback: config.scrollbackLimit || 20000,
         theme: getTerminalTheme(config)
     };
@@ -4115,7 +4207,9 @@ ipcRenderer.on('shell-tab-output', (event, payload = {}) => {
     const tab = getShellTabState(payload.tabId);
     if (tab && typeof payload.data === 'string') {
         const translatedData = translateConptyMouseMode(tab, payload.data);
-        tab.term.write(translatedData);
+        tab.term.write(translatedData, () => {
+            if (tab.textMode) setShellTextMode(tab, true);
+        });
         writeShellTabLog(tab, payload.data);
     }
 });

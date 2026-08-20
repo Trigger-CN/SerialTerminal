@@ -98,6 +98,7 @@ const translations = {
       mainTerminal: 'Main Terminal',
       shell: 'Shell',
       shellTitle: 'Shell {index}',
+      shellTextModeEnabled: 'Text mode enabled',
       newShellTab: 'New Shell Tab',
       newFilterTab: 'New Filter Tab',
       newCmdTab: 'New CMD Tab',
@@ -140,6 +141,7 @@ const translations = {
       contextToggleMatchCase: 'Match Case',
       contextToggleRegex: 'Regex',
       contextCloseFilterTab: 'Close Filter Tab',
+      contextToggleShellTextMode: 'Text Mode (select text)',
       splitHorizontal: 'Move to Right Split',
       splitVertical: 'Move to Bottom Split',
       moveToOtherPane: 'Move to Other Pane',
@@ -162,7 +164,7 @@ const translations = {
       serialDisconnected: 'Serial port disconnected',
       errorPrefix: '[ERROR] {error}',
       rx: 'RX',
-      tx: 'TX'
+      tx: 'TX',
     },
     prefs: {
       appearance: 'Appearance',
@@ -287,6 +289,8 @@ const translations = {
       emptyContent: '空内容'
     },
     main: {
+      shellTextModeEnabled: '已开启文本模式',
+      contextToggleShellTextMode: '文本模式（选择终端文本）',
       selectPort: '选择串口', selectSerialPort: '选择串口', refreshPorts: '刷新串口', baudRate: '波特率', customBaudRate: '波特率', backToList: '返回列表', connect: '连接', disconnect: '断开', clearLog: '清空日志', clearTerminalOutput: '清空终端输出', openLogFolder: '打开日志文件夹', disconnected: '未连接', connected: '已连接', settingsTab: '设置', searchTab: '搜索', sendTab: '发送', dataBits8: '数据位: 8', dataBits7: '数据位: 7', dataBits6: '数据位: 6', dataBits5: '数据位: 5', stopBits1: '停止位: 1', stopBits15: '停止位: 1.5', stopBits2: '停止位: 2', parityNone: '校验: 无', parityEven: '校验: 偶', parityOdd: '校验: 奇', parityMark: '校验: Mark', paritySpace: '校验: Space', encodingUtf8: '编码: UTF-8', encodingAscii: '编码: ASCII', encodingHex: '编码: Hex', encodingGbk: '编码: GBK', newlineCrlf: '换行: CRLF / CRLF', newlineLf: '换行: LF / LF', newlineCr: '换行: CR / CR', showTime: '显示时间', showLineNo: '显示行号', searchPlaceholder: '搜索...', searchResultEmpty: '输入内容后搜索', searchResultZero: '无结果', searchResultCount: '{current} / {total}', prev: '上一个', next: '下一个', regex: '正则', caseSensitive: '区分大小写', wholeWord: '整词匹配', autoSend: '自动发送', autoSendText: '自动发送文本...', quickSendList: '快捷发送列表', label: '标签', contentMultiLine: '内容（多行）', addToList: '+ 添加到列表', globalSettings: '设置', toggleInput: '输入框', toggleInputShow: '显示输入框', toggleInputHide: '隐藏输入框', mainTerminal: '主终端', shell: 'Shell', shellTitle: 'Shell {index}', newShellTab: '新建 Shell 标签页', newFilterTab: '新建过滤标签页', newCmdTab: '新建 CMD 标签页', newPowerShellTab: '新建 PowerShell 标签页', newBashTab: '新建 Bash 标签页', shellPanel: 'Shell 面板', closeShellPanel: '关闭 Shell 面板', newShellSession: '新建 Shell 会话', activeShellSessions: '活跃会话', noActiveShellSessions: '无活跃 Shell 会话', shellOptions: 'Shell 选项', shellAutoCRLF: '回车时自动添加 CRLF', shellClearOnRestart: '重启时清空', manageShellProfiles: '管理配置文件...', noShellProfiles: '未配置 Shell 配置文件', defaultProfile: '默认', splitHorizontal: '左右分屏', splitVertical: '上下分屏', moveToOtherPane: '移动到另一个分屏', closeSplit: '关闭分屏', filter: '过滤', closeTab: '关闭标签页', filterText: '过滤文本...', matchCase: '区分大小写', useRegex: '使用正则表达式', sendInputPlaceholder: '输入要发送的内容...', send: '发送', addToQuickSend: '加入快捷发送', addQuickSendShort: '+快捷', contextCopy: '复制', contextCopyAll: '复制全部', contextFindSelection: '查找选中内容', contextClearTerminal: '清空终端', contextPasteAndSend: '粘贴并发送', contextSendSelection: '发送选中内容', contextCreateFilterFromSelection: '用选中文本新建过滤标签页', contextUseSelectionAsFilter: '用选中文本作为过滤条件', contextAppendSelectionToFilter: '将选中文本追加到过滤条件', contextLocateInMainTerminal: '在主终端中定位', contextToggleMatchCase: '区分大小写', contextToggleRegex: '正则', contextCloseFilterTab: '关闭过滤标签页', quickSendDefaultLabel: '新指令', sendOnEnterToggle: '按回车发送', appendCrLfToggle: '末尾追加 CRLF', inputSettings: '输入框设置', autoSendToggle: '自动发送', shortcutSendToggle: '快捷键发送', lastSentNone: '上一条发送：暂无', lastSent: '上一条发送：{value}', shellStarting: '正在启动 Shell...', shellClosed: '已关闭 Shell 标签页', shellExited: 'Shell 已退出：{code}', shellStartFailed: '启动 Shell 失败：{error}', connectedTo: '--- 已连接到 {path}，波特率 {baudRate} ({dataBits}N{stopBits}) ---', failedToConnect: '连接失败：{error}', serialDisconnected: '串口已断开', errorPrefix: '[错误] {error}', rx: '接收', tx: '发送'
     },
     prefs: {
