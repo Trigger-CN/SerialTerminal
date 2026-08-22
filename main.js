@@ -95,6 +95,18 @@ const SIDEBAR_TAB_IDS = new Set(['tab-settings', 'tab-search', 'tab-send']);
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const MENU_ICON_DIRECTORY = path.join(__dirname, 'assets', 'menu-icons');
 const APP_ICON_PATH = path.join(__dirname, 'assets', process.platform === 'win32' ? 'app.ico' : 'icon-512x512.png');
+const WINDOWS_TITLE_BAR_HEIGHT = 32;
+
+function themedTitleBar(backgroundColor) {
+  return process.platform === 'win32' ? {
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: backgroundColor,
+      symbolColor: '#cccccc',
+      height: WINDOWS_TITLE_BAR_HEIGHT
+    }
+  } : {};
+}
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.serialterminal.app');
@@ -1165,7 +1177,9 @@ function getMainWindowTitle() {
 
 function updateMainWindowTitle() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.setTitle(getMainWindowTitle());
+    const title = getMainWindowTitle();
+    mainWindow.setTitle(title);
+    mainWindow.webContents.send('window-title-updated', title);
   }
 }
 
@@ -1190,6 +1204,7 @@ function createWindow() {
     title: getMainWindowTitle(),
     icon: APP_ICON_PATH,
     backgroundColor: '#1e1e1e',
+    ...themedTitleBar('#1e1e1e'),
     autoHideMenuBar: true, // Hide the menu bar
     webPreferences: {
       nodeIntegration: true,
@@ -1273,6 +1288,7 @@ function createPrefsWindow(focusTab = null) {
     title: 'Preferences',
     icon: APP_ICON_PATH,
     backgroundColor: '#252526',
+    ...themedTitleBar('#252526'),
     autoHideMenuBar: true, // Hide the menu bar
     webPreferences: {
       nodeIntegration: true,
@@ -1344,6 +1360,7 @@ function createUpdateDownloadWindow(info) {
     title: tr('updateDialog.softwareUpdateTitle'),
     icon: APP_ICON_PATH,
     backgroundColor: '#252526',
+    ...themedTitleBar('#252526'),
     autoHideMenuBar: true,
     minimizable: true,
     closable: false,

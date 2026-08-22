@@ -4,10 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Software Update</title>
+    <script src="window-titlebar.js"></script>
     <style>
         :root { color-scheme: dark; }
         * { box-sizing: border-box; }
         body { margin: 0; padding: 24px; background: #252526; color: #f1f1f1; font: 13px "Segoe UI", sans-serif; }
+        html.custom-titlebar body { padding-top: 56px; }
+        .window-titlebar { display: none; }
+        html.custom-titlebar .window-titlebar { -webkit-app-region: drag; align-items: center; background: #252526; color: #cccccc; display: flex; font-size: 12px; height: 32px; left: 0; padding: 0 144px 0 12px; position: fixed; right: 0; top: 0; z-index: 10000; }
+        .window-titlebar-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         #status { margin-bottom: 14px; }
         #progress-track { height: 8px; overflow: hidden; border-radius: 4px; background: #404040; }
         #progress-fill { width: 0; height: 100%; background: #4da3ff; transition: width 120ms linear; }

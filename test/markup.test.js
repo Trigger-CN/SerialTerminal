@@ -307,6 +307,27 @@ test('full and compact quick-send clicks share one lightweight result pulse', ()
   assert.doesNotMatch(renderer, /pressFeedbackReady|quickSendPressTimers/);
 });
 
+test('Windows title bars match each window theme while preserving native controls', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const updateProgress = fs.readFileSync(path.join(root, 'update-progress.html'), 'utf8');
+  const titlebar = fs.readFileSync(path.join(root, 'window-titlebar.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(main, /function themedTitleBar\(backgroundColor\)/);
+  assert.match(main, /titleBarStyle: 'hidden'/);
+  assert.match(main, /titleBarOverlay:\s*\{[\s\S]*color: backgroundColor,[\s\S]*symbolColor: '#cccccc',[\s\S]*height: WINDOWS_TITLE_BAR_HEIGHT/);
+  assert.equal((main.match(/\.\.\.themedTitleBar\('#252526'\)/g) || []).length, 2);
+  assert.match(main, /\.\.\.themedTitleBar\('#1e1e1e'\)/);
+  [html, preferences, updateProgress].forEach(markup => assert.match(markup, /<script src="window-titlebar\.js"><\/script>/));
+  assert.match(titlebar, /process\.platform === 'win32'/);
+  assert.match(titlebar, /new MutationObserver\(updateTitle\)/);
+  assert.match(titlebar, /ipcRenderer\.on\('window-title-updated'/);
+  assert.match(main, /mainWindow\.webContents\.send\('window-title-updated', title\)/);
+  assert.match(styles, /-webkit-app-region:\s*drag/);
+});
+
 test('chart tabs discover sample fields and consume raw serial bytes independently', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');

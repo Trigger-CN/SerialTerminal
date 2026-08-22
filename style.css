@@ -313,6 +313,37 @@ label:hover {
     color: var(--text-primary);
 }
 
+.window-titlebar {
+    display: none;
+}
+
+html.custom-titlebar body {
+    box-sizing: border-box;
+    padding-top: 32px;
+}
+
+html.custom-titlebar .window-titlebar {
+    -webkit-app-region: drag;
+    align-items: center;
+    background: var(--titlebar-background, var(--bg-primary));
+    color: var(--text-primary);
+    display: flex;
+    font-size: 12px;
+    height: 32px;
+    left: 0;
+    padding: 0 144px 0 12px;
+    position: fixed;
+    right: 0;
+    top: 0;
+    z-index: 10000;
+}
+
+.window-titlebar-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .quick-send-heading-btn svg[data-material-icon],
 .quick-send-group-action svg[data-material-icon],
 .quick-send-group-handle svg[data-material-icon] {
