@@ -1,4 +1,6 @@
 const { ipcRenderer } = require('electron');
+const fs = require('fs');
+const { pathToFileURL } = require('url');
 
 window.addEventListener('error', (event) => {
     ipcRenderer.send('renderer-diagnostic-log', {
@@ -153,12 +155,38 @@ function hexToAnsiBackground(hex) {
 
 function getTerminalTheme(config) {
     return {
-        background: config.background,
+        background: getTerminalWallpaperPath(config) ? 'rgba(0, 0, 0, 0)' : config.background,
         foreground: config.foreground,
         cursor: config.foreground,
         selectionBackground: config.highlightColors.selection.background,
         selectionForeground: config.highlightColors.selection.foreground
     };
+}
+
+function getTerminalWallpaperPath(config) {
+    const wallpaperPath = config.terminalWallpaper?.path;
+    return typeof wallpaperPath === 'string' && wallpaperPath && fs.existsSync(wallpaperPath) ? wallpaperPath : '';
+}
+
+let terminalWallpaperLoadId = 0;
+
+function applyTerminalWallpaper(config) {
+    const wallpaperPath = getTerminalWallpaperPath(config);
+    const loadId = ++terminalWallpaperLoadId;
+    document.documentElement.style.setProperty('--terminal-background-color', config.background || '#000000');
+    document.documentElement.style.setProperty('--terminal-wallpaper-image', 'none');
+    document.documentElement.style.setProperty('--terminal-wallpaper-overlay', '0');
+    if (!wallpaperPath) return;
+
+    const imageUrl = pathToFileURL(wallpaperPath).href;
+    const image = new Image();
+    image.onload = () => {
+        if (loadId !== terminalWallpaperLoadId) return;
+        const overlayOpacity = Math.min(100, Math.max(0, Number(config.terminalWallpaper?.overlayOpacity) || 0)) / 100;
+        document.documentElement.style.setProperty('--terminal-wallpaper-image', `url("${imageUrl}")`);
+        document.documentElement.style.setProperty('--terminal-wallpaper-overlay', String(overlayOpacity));
+    };
+    image.src = imageUrl;
 }
 
 const showTimestampCb = document.getElementById('show-timestamp');
@@ -1231,6 +1259,7 @@ term.open(document.getElementById('terminal-container'));
 const serialTerm = new Terminal({ 
     cursorBlink: true,
     allowProposedApi: true,
+    allowTransparency: true,
     scrollback: 20000
 });
 const serialFitAddon = new FitAddon();
@@ -1880,6 +1909,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     const term = new Terminal({
         cursorBlink: true,
         allowProposedApi: true,
+        allowTransparency: true,
         scrollback: currentConfig ? (currentConfig.scrollbackLimit || 20000) : 20000
     });
     const fitAddon = new FitAddon();
@@ -2095,6 +2125,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     const term = new Terminal({
         cursorBlink: true,
         allowProposedApi: true,
+        allowTransparency: true,
         scrollback: currentConfig ? (currentConfig.scrollbackLimit || 20000) : 20000
     });
     const fitAddon = new FitAddon();
@@ -3913,6 +3944,7 @@ function applyConfig(config) {
         scrollback: config.scrollbackLimit || 20000,
         theme: getTerminalTheme(config)
     };
+    applyTerminalWallpaper(config);
     serialTerm.options = options;
     
     // Apply options to all filter tabs

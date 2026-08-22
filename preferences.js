@@ -41,6 +41,11 @@ const elements = {
   background: document.getElementById('background'),
   foregroundHex: document.getElementById('foreground-hex'),
   backgroundHex: document.getElementById('background-hex'),
+  terminalWallpaperPath: document.getElementById('terminalWallpaperPath'),
+  terminalWallpaperBrowseBtn: document.getElementById('terminal-wallpaper-browse-btn'),
+  terminalWallpaperClearBtn: document.getElementById('terminal-wallpaper-clear-btn'),
+  terminalWallpaperOverlay: document.getElementById('terminalWallpaperOverlay'),
+  terminalWallpaperOverlayValue: document.getElementById('terminalWallpaperOverlayValue'),
   
   timestampColor: document.getElementById('timestampColor'),
   timestampColorHex: document.getElementById('timestampColor-hex'),
@@ -459,6 +464,9 @@ async function init() {
   elements.background.value = config.background;
   elements.foregroundHex.textContent = config.foreground;
   elements.backgroundHex.textContent = config.background;
+  elements.terminalWallpaperPath.value = config.terminalWallpaper?.path || '';
+  elements.terminalWallpaperOverlay.value = String(config.terminalWallpaper?.overlayOpacity ?? 55);
+  elements.terminalWallpaperOverlayValue.textContent = `${elements.terminalWallpaperOverlay.value}%`;
 
   elements.timestampColor.value = config.timestampColor || '#808080';
   elements.timestampColorHex.textContent = config.timestampColor || '#808080';
@@ -719,6 +727,9 @@ if (elements.resetShortcutsBtn) {
 
 elements.foreground.oninput = (e) => elements.foregroundHex.textContent = e.target.value;
 elements.background.oninput = (e) => elements.backgroundHex.textContent = e.target.value;
+elements.terminalWallpaperOverlay.oninput = () => {
+    elements.terminalWallpaperOverlayValue.textContent = `${elements.terminalWallpaperOverlay.value}%`;
+};
 elements.timestampColor.oninput = (e) => elements.timestampColorHex.textContent = e.target.value;
 elements.lineNoColor.oninput = (e) => elements.lineNoColorHex.textContent = e.target.value;
 [elements.searchHighlightBackground, elements.searchHighlightForeground, elements.filterHighlightBackground,
@@ -757,6 +768,15 @@ elements.browseBtn.onclick = async () => {
   }
 };
 
+elements.terminalWallpaperBrowseBtn.onclick = async () => {
+  const path = await ipcRenderer.invoke('select-terminal-wallpaper');
+  if (path) elements.terminalWallpaperPath.value = path;
+};
+
+elements.terminalWallpaperClearBtn.onclick = () => {
+  elements.terminalWallpaperPath.value = '';
+};
+
 elements.saveBtn.onclick = async () => {
   const rules = [];
   Array.from(elements.highlightRulesList.children).forEach(div => {
@@ -781,6 +801,10 @@ elements.saveBtn.onclick = async () => {
     fontWeight: normalizeFontWeight(elements.fontWeight.value),
     foreground: elements.foreground.value,
     background: elements.background.value,
+    terminalWallpaper: {
+      path: elements.terminalWallpaperPath.value,
+      overlayOpacity: Number(elements.terminalWallpaperOverlay.value)
+    },
     timestampColor: elements.timestampColor.value,
     lineNoColor: elements.lineNoColor.value,
     highlightColors: {

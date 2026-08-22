@@ -128,6 +128,35 @@
             line-height: 1;
         }
 
+        .wallpaper-settings {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .wallpaper-path-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto auto;
+            gap: 8px;
+        }
+
+        .wallpaper-path-row input {
+            min-width: 0;
+        }
+
+        .wallpaper-overlay-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 48px;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .wallpaper-overlay-row output {
+            color: var(--text-secondary);
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
         @media (max-width: 680px) {
             .content {
                 padding-right: 24px;
@@ -136,6 +165,14 @@
 
             .font-settings-grid {
                 grid-template-columns: 1fr;
+            }
+
+            .wallpaper-path-row {
+                grid-template-columns: minmax(0, 1fr) auto;
+            }
+
+            .wallpaper-path-row input {
+                grid-column: 1 / -1;
             }
         }
         
@@ -326,6 +363,23 @@
                         <div class="color-picker">
                             <input type="color" id="lineNoColor">
                             <span id="lineNoColor-hex">#67986f</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="wallpaper-settings">
+                    <div class="form-group">
+                        <label for="terminalWallpaperPath" data-i18n="prefs.terminalWallpaper">Terminal Wallpaper</label>
+                        <div class="wallpaper-path-row">
+                            <input type="text" id="terminalWallpaperPath" readonly data-i18n-placeholder="prefs.noTerminalWallpaper" placeholder="No wallpaper selected">
+                            <button type="button" class="secondary" id="terminal-wallpaper-browse-btn"><span class="material-icon-placeholder" data-material-icon="browse"></span><span data-i18n="prefs.browse">Browse...</span></button>
+                            <button type="button" class="secondary" id="terminal-wallpaper-clear-btn"><span class="material-icon-placeholder" data-material-icon="close"></span><span data-i18n="prefs.clearTerminalWallpaper">Clear</span></button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="terminalWallpaperOverlay" data-i18n="prefs.wallpaperDarkOverlay">Dark Overlay</label>
+                        <div class="wallpaper-overlay-row">
+                            <input type="range" id="terminalWallpaperOverlay" min="0" max="100" step="1">
+                            <output id="terminalWallpaperOverlayValue" for="terminalWallpaperOverlay">55%</output>
                         </div>
                     </div>
                 </div>

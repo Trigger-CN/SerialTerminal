@@ -396,8 +396,21 @@ const fontWeightTranslations = {
   de: 'Schriftstärke'
 };
 
+const terminalWallpaperTranslations = {
+  en: { terminalWallpaper: 'Terminal Wallpaper', selectTerminalWallpaper: 'Select Terminal Wallpaper', noTerminalWallpaper: 'No wallpaper selected', clearTerminalWallpaper: 'Clear', wallpaperDarkOverlay: 'Dark Overlay' },
+  'zh-CN': { terminalWallpaper: '终端壁纸', selectTerminalWallpaper: '选择终端壁纸', noTerminalWallpaper: '未选择壁纸', clearTerminalWallpaper: '清除', wallpaperDarkOverlay: '暗色遮罩' },
+  'zh-TW': { terminalWallpaper: '終端桌布', selectTerminalWallpaper: '選擇終端桌布', noTerminalWallpaper: '未選擇桌布', clearTerminalWallpaper: '清除', wallpaperDarkOverlay: '深色遮罩' },
+  fr: { terminalWallpaper: 'Fond d’écran du terminal', selectTerminalWallpaper: 'Choisir le fond d’écran du terminal', noTerminalWallpaper: 'Aucun fond d’écran sélectionné', clearTerminalWallpaper: 'Effacer', wallpaperDarkOverlay: 'Voile sombre' },
+  ru: { terminalWallpaper: 'Фоновое изображение терминала', selectTerminalWallpaper: 'Выбрать фоновое изображение терминала', noTerminalWallpaper: 'Фоновое изображение не выбрано', clearTerminalWallpaper: 'Очистить', wallpaperDarkOverlay: 'Тёмное затемнение' },
+  de: { terminalWallpaper: 'Terminal-Hintergrundbild', selectTerminalWallpaper: 'Terminal-Hintergrundbild auswählen', noTerminalWallpaper: 'Kein Hintergrundbild ausgewählt', clearTerminalWallpaper: 'Löschen', wallpaperDarkOverlay: 'Dunkle Überlagerung' }
+};
+
 for (const [language, value] of Object.entries(fontWeightTranslations)) {
   translations[language].prefs.fontWeight = value;
+}
+
+for (const [language, values] of Object.entries(terminalWallpaperTranslations)) {
+  Object.assign(translations[language].prefs, values);
 }
 
 for (const [language, values] of Object.entries(quickSendGroupTranslations)) {

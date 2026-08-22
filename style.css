@@ -1799,8 +1799,31 @@ html.custom-titlebar .window-titlebar {
 
 .terminal-wrapper {
     flex: 1;
-    background: #000;
+    position: relative;
+    background-color: var(--terminal-background-color, #000);
+    background-image: var(--terminal-wallpaper-image, none);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: cover;
     overflow: hidden;
+}
+
+.terminal-wrapper::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: rgba(0, 0, 0, var(--terminal-wallpaper-overlay, 0));
+}
+
+.terminal-wrapper > .xterm {
+    position: relative;
+    z-index: 1;
+}
+
+.terminal-wrapper .xterm-viewport {
+    background-color: transparent !important;
 }
 
 /* Main Tabs Styling */

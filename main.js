@@ -77,7 +77,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 9;
+const CONFIG_VERSION = 10;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -249,6 +249,16 @@ function normalizeConfig(config, defaults) {
         : defaults.highlightColors[type].foreground
     };
   }
+  const oldTerminalWallpaper = source.terminalWallpaper && typeof source.terminalWallpaper === 'object'
+    ? source.terminalWallpaper
+    : {};
+  const wallpaperOpacity = Number(oldTerminalWallpaper.overlayOpacity);
+  normalized.terminalWallpaper = {
+    path: typeof oldTerminalWallpaper.path === 'string' ? oldTerminalWallpaper.path.trim() : '',
+    overlayOpacity: Number.isFinite(wallpaperOpacity)
+      ? Math.min(100, Math.max(0, Math.round(wallpaperOpacity)))
+      : defaults.terminalWallpaper.overlayOpacity
+  };
   normalized.sidebarCollapsed = normalizeBoolean(source.sidebarCollapsed, false);
   normalized.activeSidebarTab = oneOf(source.activeSidebarTab, SIDEBAR_TAB_IDS, defaults.activeSidebarTab);
   normalized.lastWelcomeVersion = typeof source.lastWelcomeVersion === 'string'
@@ -433,6 +443,10 @@ function loadConfig() {
     fontFamilyZh: '"Microsoft YaHei"',
     foreground: '#cccccc',
     background: '#000000',
+    terminalWallpaper: {
+      path: '',
+      overlayOpacity: 55
+    },
     timestampColor: '#808080',
     lineNoColor: '#67986f',
     highlightColors: {
@@ -978,7 +992,7 @@ function startLogCleanupTimer() {
 
 function saveConfig(config) {
   const merged = { ...currentConfig, ...config };
-  for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'autoSendSettings', 'highlightColors']) {
+  for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'autoSendSettings', 'highlightColors', 'terminalWallpaper']) {
     if (config && config[key] && typeof config[key] === 'object') {
       merged[key] = { ...currentConfig[key], ...config[key] };
     }
@@ -1717,6 +1731,17 @@ ipcMain.handle('get-config', () => {
 
 ipcMain.on('open-prefs', (event, options = {}) => {
   createPrefsWindow(typeof options.focusTab === 'string' ? options.focusTab : null);
+});
+
+ipcMain.handle('select-terminal-wallpaper', async () => {
+  const result = await dialog.showOpenDialog(prefsWindow || mainWindow, {
+    title: tr('prefs.selectTerminalWallpaper'),
+    filters: [
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }
+    ],
+    properties: ['openFile']
+  });
+  return result.canceled ? null : result.filePaths[0];
 });
 
 ipcMain.on('update-display-settings', (event, settings) => {

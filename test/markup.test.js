@@ -158,7 +158,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 9/);
+  assert.match(main, /const CONFIG_VERSION = 10/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
@@ -403,6 +403,29 @@ test('font weight preferences persist and apply to every terminal type', () => {
   assert.match(main, /fontWeight: 400/);
   assert.match(preferences, /fontWeight: normalizeFontWeight\(elements\.fontWeight\.value\)/);
   assert.equal((renderer.match(/fontWeight: (?:currentConfig|config)\.fontWeight/g) || []).length, 3);
+});
+
+test('terminal wallpaper applies to log and shell terminals with a solid fallback', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(main, /terminalWallpaper:\s*\{\s*path: '',\s*overlayOpacity: 55/s);
+  assert.match(main, /normalized\.terminalWallpaper = \{[\s\S]*Math\.min\(100, Math\.max\(0, Math\.round\(wallpaperOpacity\)\)\)/);
+  assert.match(main, /ipcMain\.handle\('select-terminal-wallpaper'[\s\S]*extensions: \['png', 'jpg', 'jpeg', 'webp'\]/);
+  assert.match(html, /id="terminalWallpaperPath"[\s\S]*id="terminalWallpaperOverlay" min="0" max="100"/);
+  assert.match(preferences, /invoke\('select-terminal-wallpaper'\)/);
+  assert.match(preferences, /terminalWallpaper:\s*\{\s*path: elements\.terminalWallpaperPath\.value,\s*overlayOpacity: Number\(elements\.terminalWallpaperOverlay\.value\)/s);
+  assert.equal((renderer.match(/allowTransparency: true/g) || []).length, 3);
+  assert.match(renderer, /function getTerminalWallpaperPath\(config\)[\s\S]*fs\.existsSync\(wallpaperPath\)/);
+  assert.match(renderer, /image\.onload = \(\) => \{[\s\S]*--terminal-wallpaper-image[\s\S]*--terminal-wallpaper-overlay/);
+  assert.match(renderer, /applyTerminalWallpaper\(config\);\s*serialTerm\.options = options/);
+  assert.match(styles, /\.terminal-wrapper\s*\{[^}]*background-image:\s*var\(--terminal-wallpaper-image, none\);/s);
+  assert.match(styles, /\.terminal-wrapper::before\s*\{[^}]*background:\s*rgba\(0, 0, 0, var\(--terminal-wallpaper-overlay, 0\)\);/s);
+  assert.match(styles, /\.terminal-wrapper \.xterm-viewport\s*\{[^}]*background-color:\s*transparent !important;/s);
+  assert.match(styles, /\.chart-tab\s*\{[^}]*background:\s*var\(--chart-log-background, #000\);/s);
 });
 
 test('all xterm terminals use Unicode 11 width rules and emoji font fallbacks', () => {
