@@ -62,6 +62,7 @@ const elements = {
   historyBufferSize: document.getElementById('historyBufferSize'),
   mouseWheelScrollLines: document.getElementById('mouseWheelScrollLines'),
   mainInputHistoryLimit: document.getElementById('mainInputHistoryLimit'),
+  searchHistoryLimit: document.getElementById('searchHistoryLimit'),
   hexBytesPerLine: document.getElementById('hexBytesPerLine'),
   hexShowOffset: document.getElementById('hexShowOffset'),
   hexShowAscii: document.getElementById('hexShowAscii'),
@@ -157,6 +158,10 @@ function normalizeLogAutoFlushMB(value) {
 
 function normalizeMainInputHistoryLimit(value) {
     return normalizeIntegerSetting(value, 'mainInputHistoryLimit');
+}
+
+function normalizeSearchHistoryLimit(value) {
+    return normalizeIntegerSetting(value, 'searchHistoryLimit');
 }
 
 function normalizeHexDisplaySettings(settings = {}) {
@@ -487,6 +492,7 @@ async function init() {
   elements.historyBufferSize.value = String(normalizeIntegerSetting(config.historyBufferSize, 'historyBufferSize'));
   elements.mouseWheelScrollLines.value = String(normalizeIntegerSetting(config.mouseWheelScrollLines, 'mouseWheelScrollLines'));
   elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(config.mainInputSettings?.historyLimit));
+  elements.searchHistoryLimit.value = String(normalizeSearchHistoryLimit(config.searchSettings?.historyLimit));
 
   const hexDisplaySettings = normalizeHexDisplaySettings(config.hexDisplaySettings);
   elements.hexBytesPerLine.value = String(hexDisplaySettings.bytesPerLine);
@@ -750,6 +756,9 @@ elements.rawBufferAutoFlushMB.onchange = () => {
 elements.mainInputHistoryLimit.onchange = () => {
     elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(elements.mainInputHistoryLimit.value));
 };
+elements.searchHistoryLimit.onchange = () => {
+    elements.searchHistoryLimit.value = String(normalizeSearchHistoryLimit(elements.searchHistoryLimit.value));
+};
 [
     [elements.fontSize, 'fontSize'],
     [elements.scrollbackLimit, 'scrollbackLimit'],
@@ -791,7 +800,10 @@ elements.saveBtn.onclick = async () => {
       idleFlushMs: elements.hexIdleFlushMs.value
   });
   const rawLogFileNameFormat = normalizeRawLogFileNameFormat(elements.rawLogFileNameFormat.value);
-  const existingMainInputSettings = await ipcRenderer.invoke('get-config').then(cfg => cfg.mainInputSettings || {}).catch(() => ({}));
+  const existingSettings = await ipcRenderer.invoke('get-config').then(cfg => ({
+      mainInput: cfg.mainInputSettings || {},
+      search: cfg.searchSettings || {}
+  })).catch(() => ({ mainInput: {}, search: {} }));
 
   const config = {
         language: elements.languageSelect.value,
@@ -816,8 +828,12 @@ elements.saveBtn.onclick = async () => {
     historyBufferSize: normalizeIntegerSetting(elements.historyBufferSize.value, 'historyBufferSize'),
     mouseWheelScrollLines: normalizeIntegerSetting(elements.mouseWheelScrollLines.value, 'mouseWheelScrollLines'),
     mainInputSettings: {
-        ...existingMainInputSettings,
+        ...existingSettings.mainInput,
         historyLimit: normalizeMainInputHistoryLimit(elements.mainInputHistoryLimit.value)
+    },
+    searchSettings: {
+        ...existingSettings.search,
+        historyLimit: normalizeSearchHistoryLimit(elements.searchHistoryLimit.value)
     },
     hexDisplaySettings,
     logEnabled: elements.logEnabled.checked,

@@ -6,6 +6,7 @@ const INTEGER_SETTINGS = Object.freeze({
   historyBufferSize: Object.freeze({ min: 10000, max: 100000000, fallback: 5000000 }),
   mouseWheelScrollLines: Object.freeze({ min: 1, max: 50, fallback: 3 }),
   mainInputHistoryLimit: Object.freeze({ min: 0, max: 200, fallback: 20 }),
+  searchHistoryLimit: Object.freeze({ min: 0, max: 200, fallback: 20 }),
   hexIdleFlushMs: Object.freeze({ min: 0, max: 1000, fallback: 50 }),
   rawBufferAutoFlushMB: Object.freeze({ min: 1, max: 1024, fallback: 10 })
 });

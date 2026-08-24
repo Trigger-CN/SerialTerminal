@@ -158,7 +158,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 10/);
+  assert.match(main, /const CONFIG_VERSION = 11/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
@@ -591,8 +591,9 @@ test('passive search changes refresh results without selecting a match', () => {
   assert.match(searchInputHandler, /scheduleSearchRefresh\(\)/);
   assert.doesNotMatch(renderer, /scheduleSearchSelection|selectFirstSearchResult/);
   assert.doesNotMatch(tabChangedHandler, /selectSearchMatch/);
-  assert.match(renderer, /findNextBtn\.addEventListener\('click',[\s\S]*?selectSearchMatch\(nextIndex\)/);
-  assert.match(renderer, /findPrevBtn\.addEventListener\('click',[\s\S]*?selectSearchMatch\(previousIndex\)/);
+  assert.match(renderer, /function navigateSearch\(direction\)[\s\S]*?selectSearchMatch\(index\)/);
+  assert.match(renderer, /findNextBtn\.addEventListener\('click', \(\) => navigateSearch\('next'\)\)/);
+  assert.match(renderer, /findPrevBtn\.addEventListener\('click', \(\) => navigateSearch\('previous'\)\)/);
 });
 
 test('active search results are scrolled near the terminal center', () => {
@@ -747,6 +748,32 @@ test('text filter tabs do not display a TXT mode badge', () => {
   assert.doesNotMatch(renderer, /tab\.dataMode === 'hex' \? 'HEX' : 'TXT'/);
 });
 
+test('search history records explicit searches and exposes pin, delete, replay, and limit controls', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /id="search-history-list"/);
+  assert.match(html, /data-i18n="main\.searchHistory"/);
+  assert.match(preferencesHtml, /id="searchHistoryLimit" min="0" max="200"/);
+  assert.match(preferences, /normalizeIntegerSetting\(value, 'searchHistoryLimit'\)/);
+  assert.match(preferences, /searchSettings:\s*\{[\s\S]*historyLimit: normalizeSearchHistoryLimit/);
+  assert.match(main, /searchSettings:\s*\{\s*historyLimit: 20/);
+  assert.match(main, /normalized\.searchHistory = normalizeSearchHistory/);
+  assert.match(renderer, /function recordCurrentSearch\(\)/);
+  assert.match(renderer, /function navigateSearch\(direction\)\s*\{\s*recordCurrentSearch\(\);\s*refreshSearchCount\(\)/);
+  assert.match(renderer, /findNextBtn\.addEventListener\('click', \(\) => navigateSearch\('next'\)\)/);
+  assert.match(renderer, /navigateSearch\(e\.shiftKey \? 'previous' : 'next'\)/);
+  assert.match(renderer, /function applySearchHistoryItem\(item\)/);
+  assert.match(renderer, /function applySearchHistoryItem\(item\)[\s\S]*?navigateSearch\('next'\)/);
+  assert.match(renderer, /createMaterialIcon\('push_pin'\)/);
+  assert.match(renderer, /createMaterialIcon\('delete'\)/);
+  assert.match(styles, /\.search-history-item\.pinned/);
+});
+
 test('DOM command icons use shared local Material Symbols paths', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
@@ -786,6 +813,7 @@ test('DOM command icons use shared local Material Symbols paths', () => {
   assert.doesNotMatch(preferencesHtml, iconGlyphs);
   assert.doesNotMatch(html, /<option[^>]*>\s*✎/);
   const registeredIcons = new Set([...icons.matchAll(/^\s{8}([a-z_]+):\s*'/gm)].map(match => match[1]));
+  assert.ok(registeredIcons.has('push_pin'));
   const usedIcons = [html, preferencesHtml, fs.readFileSync(path.join(root, 'renderer.js'), 'utf8'), fs.readFileSync(path.join(root, 'preferences.js'), 'utf8')]
     .flatMap(source => [
       ...[...source.matchAll(/data-material-icon="([a-z_]+)"/g)].map(match => match[1]),

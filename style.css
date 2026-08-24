@@ -344,6 +344,114 @@ html.custom-titlebar .window-titlebar {
     white-space: nowrap;
 }
 
+.search-history-section {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.search-history-heading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.search-history-heading svg[data-material-icon] {
+    width: 16px;
+    height: 16px;
+    color: var(--text-secondary);
+}
+
+.search-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.search-history-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 26px 26px;
+    min-height: 34px;
+    border-left: 2px solid transparent;
+}
+
+.search-history-item.pinned {
+    border-left-color: var(--accent-color);
+}
+
+.search-history-replay,
+.search-history-action {
+    min-width: 0;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.search-history-replay {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 6px;
+    text-align: left;
+}
+
+.search-history-query {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.search-history-options {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 2px;
+}
+
+.search-history-option-icon,
+.search-history-action svg[data-material-icon] {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+}
+
+.search-history-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.search-history-replay:hover,
+.search-history-action:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.search-history-pin.active {
+    color: var(--accent-color);
+}
+
+.search-history-delete:hover {
+    color: var(--danger-color);
+}
+
+.search-history-empty {
+    min-height: 34px;
+    padding: 8px 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
 .quick-send-heading-btn svg[data-material-icon],
 .quick-send-group-action svg[data-material-icon],
 .quick-send-group-handle svg[data-material-icon] {

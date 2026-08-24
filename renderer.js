@@ -37,6 +37,12 @@ const { ChartDataModel } = require('./chart-data-model');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
+    deleteSearchHistoryItem,
+    normalizeSearchHistory,
+    recordSearchHistory,
+    setSearchHistoryPinned
+} = require('./search-history');
+const {
     getVerticalInsertionIndex,
     reorderQuickSendItems,
     moveQuickSendGroup,
@@ -3983,6 +3989,7 @@ function applyConfig(config) {
         const translated = tr(el.dataset.i18nAriaLabel);
         if (translated !== el.dataset.i18nAriaLabel) el.setAttribute('aria-label', translated);
     });
+    applySearchHistoryConfig(config);
     
     // Restore Serial Settings
     if (config.lastSerialOptions) {
@@ -4737,7 +4744,9 @@ const searchRegex = document.getElementById('search-regex');
 const searchCase = document.getElementById('search-case');
 const searchWord = document.getElementById('search-word');
 const searchResultCount = document.getElementById('search-result-count');
+const searchHistoryList = document.getElementById('search-history-list');
 let searchDebounceTimer = null;
+let searchHistory = [];
 const searchState = {
     key: '',
     total: 0,
@@ -4996,27 +5005,130 @@ function getSearchOptions() {
     };
 }
 
-findNextBtn.addEventListener('click', () => {
-    refreshSearchCount();
-    if (searchState.regexError || !searchState.total) return;
-    const nextIndex = searchState.current >= searchState.total ? 1 : searchState.current + 1;
-    selectSearchMatch(nextIndex);
-});
+function getSearchHistoryLimit() {
+    return currentConfig?.searchSettings?.historyLimit ?? 20;
+}
 
-findPrevBtn.addEventListener('click', () => {
+function applySearchHistoryConfig(config) {
+    searchHistory = normalizeSearchHistory(config?.searchHistory, config?.searchSettings?.historyLimit ?? 20);
+    renderSearchHistory();
+}
+
+function persistSearchHistory(nextHistory) {
+    searchHistory = nextHistory;
+    if (currentConfig) currentConfig.searchHistory = searchHistory;
+    renderSearchHistory();
+    ipcRenderer.send('save-config', { searchHistory });
+}
+
+function recordCurrentSearch() {
+    if (!searchInput.value) return;
+    persistSearchHistory(recordSearchHistory(searchHistory, {
+        query: searchInput.value,
+        regex: searchRegex.checked,
+        caseSensitive: searchCase.checked,
+        wholeWord: searchWord.checked
+    }, getSearchHistoryLimit()));
+}
+
+function applySearchHistoryItem(item) {
+    searchInput.value = item.query;
+    searchRegex.checked = item.regex;
+    searchCase.checked = item.caseSensitive;
+    searchWord.checked = item.wholeWord;
+    resetSearchState();
+    clearSearchSelection();
+    navigateSearch('next');
+    searchInput.focus();
+}
+
+function createSearchHistoryOptionIcon(name, title) {
+    const icon = createMaterialIcon(name, 'search-history-option-icon');
+    icon.title = title;
+    return icon;
+}
+
+function renderSearchHistory() {
+    if (!searchHistoryList) return;
+    searchHistoryList.replaceChildren();
+    if (!searchHistory.length) {
+        const empty = document.createElement('div');
+        empty.className = 'search-history-empty';
+        empty.textContent = tr('main.searchHistoryEmpty');
+        searchHistoryList.appendChild(empty);
+        return;
+    }
+
+    searchHistory.forEach(item => {
+        const row = document.createElement('div');
+        row.className = `search-history-item${item.pinned ? ' pinned' : ''}`;
+
+        const replayBtn = document.createElement('button');
+        replayBtn.type = 'button';
+        replayBtn.className = 'search-history-replay';
+        replayBtn.title = item.query;
+        replayBtn.onclick = () => applySearchHistoryItem(item);
+        const query = document.createElement('span');
+        query.className = 'search-history-query';
+        query.textContent = item.query;
+        replayBtn.appendChild(query);
+        const options = document.createElement('span');
+        options.className = 'search-history-options';
+        if (item.regex) options.appendChild(createSearchHistoryOptionIcon('regular_expression', tr('main.regex')));
+        if (item.caseSensitive) options.appendChild(createSearchHistoryOptionIcon('match_case', tr('main.caseSensitive')));
+        if (item.wholeWord) options.appendChild(createSearchHistoryOptionIcon('match_word', tr('main.wholeWord')));
+        replayBtn.appendChild(options);
+
+        const pinBtn = document.createElement('button');
+        pinBtn.type = 'button';
+        pinBtn.className = 'search-history-action search-history-pin';
+        pinBtn.classList.toggle('active', item.pinned);
+        const pinLabel = tr(item.pinned ? 'main.unpinSearchHistory' : 'main.pinSearchHistory', { query: item.query });
+        pinBtn.title = pinLabel;
+        pinBtn.setAttribute('aria-label', pinLabel);
+        pinBtn.appendChild(createMaterialIcon('push_pin'));
+        pinBtn.onclick = () => persistSearchHistory(setSearchHistoryPinned(
+            searchHistory,
+            item.id,
+            !item.pinned,
+            getSearchHistoryLimit()
+        ));
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'search-history-action search-history-delete';
+        const deleteLabel = tr('main.deleteSearchHistory', { query: item.query });
+        deleteBtn.title = deleteLabel;
+        deleteBtn.setAttribute('aria-label', deleteLabel);
+        deleteBtn.appendChild(createMaterialIcon('delete'));
+        deleteBtn.onclick = () => persistSearchHistory(deleteSearchHistoryItem(
+            searchHistory,
+            item.id,
+            getSearchHistoryLimit()
+        ));
+
+        row.append(replayBtn, pinBtn, deleteBtn);
+        searchHistoryList.appendChild(row);
+    });
+}
+
+function navigateSearch(direction) {
+    recordCurrentSearch();
     refreshSearchCount();
     if (searchState.regexError || !searchState.total) return;
-    const previousIndex = searchState.current <= 1 ? searchState.total : searchState.current - 1;
-    selectSearchMatch(previousIndex);
-});
+    const index = direction === 'previous'
+        ? (searchState.current <= 1 ? searchState.total : searchState.current - 1)
+        : (searchState.current >= searchState.total ? 1 : searchState.current + 1);
+    selectSearchMatch(index);
+}
+
+findNextBtn.addEventListener('click', () => navigateSearch('next'));
+findPrevBtn.addEventListener('click', () => navigateSearch('previous'));
 
 searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-        if (e.shiftKey) {
-             findPrevBtn.click();
-        } else {
-             findNextBtn.click();
-        }
+        e.preventDefault();
+        navigateSearch(e.shiftKey ? 'previous' : 'next');
     }
 });
 

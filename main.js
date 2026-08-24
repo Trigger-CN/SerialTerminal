@@ -13,6 +13,7 @@ const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
+const { normalizeSearchHistory } = require('./search-history');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const { formatLocalDate, getLogDirectory } = require('./log-directory');
 const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
@@ -77,7 +78,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 10;
+const CONFIG_VERSION = 11;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -232,6 +233,12 @@ function normalizeConfig(config, defaults) {
     appendCrLf: normalizeBoolean(oldMainInput.appendCrLf, normalizeBoolean(oldSerial.appendCrLf, false)),
     historyLimit: normalizeMainInputHistoryLimit(oldMainInput.historyLimit)
   };
+  const oldSearch = source.searchSettings && typeof source.searchSettings === 'object'
+    ? source.searchSettings
+    : {};
+  normalized.searchSettings = {
+    historyLimit: normalizeIntegerSetting(oldSearch.historyLimit, 'searchHistoryLimit')
+  };
   const oldHighlightColors = source.highlightColors && typeof source.highlightColors === 'object'
     ? source.highlightColors
     : {};
@@ -271,6 +278,7 @@ function normalizeConfig(config, defaults) {
     ? source.lastUpdatePromptAt
     : defaults.lastUpdatePromptAt;
   normalized.mainInputHistory = normalizeMainInputHistory(source.mainInputHistory, normalized.mainInputSettings.historyLimit);
+  normalized.searchHistory = normalizeSearchHistory(source.searchHistory, normalized.searchSettings.historyLimit);
   normalized.shortcuts = normalizeShortcuts(source.shortcuts);
   normalized.fontSize = normalizeIntegerSetting(source.fontSize, 'fontSize');
   normalized.fontWeight = normalizeFontWeight(source.fontWeight);
@@ -527,12 +535,16 @@ function loadConfig() {
       appendCrLf: false,
       historyLimit: 20
     },
+    searchSettings: {
+      historyLimit: 20
+    },
     sidebarCollapsed: false,
     activeSidebarTab: 'tab-settings',
     lastWelcomeVersion: '',
     lastUpdatePromptVersion: '',
     lastUpdatePromptAt: 0,
     mainInputHistory: [],
+    searchHistory: [],
     shortcuts: DEFAULT_SHORTCUTS,
     autoSendSettings: {
       enabled: false,
@@ -992,7 +1004,7 @@ function startLogCleanupTimer() {
 
 function saveConfig(config) {
   const merged = { ...currentConfig, ...config };
-  for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'autoSendSettings', 'highlightColors', 'terminalWallpaper']) {
+  for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'searchSettings', 'autoSendSettings', 'highlightColors', 'terminalWallpaper']) {
     if (config && config[key] && typeof config[key] === 'object') {
       merged[key] = { ...currentConfig[key], ...config[key] };
     }

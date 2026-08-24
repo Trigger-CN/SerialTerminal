@@ -88,6 +88,16 @@ test('scheduled update toast directs users to update settings', () => {
   assert.equal(t('zh-CN', 'main.updateToastMessage', { version: '1.2.3' }), '新版本 1.2.3 已发布，请前往“设置 > 关于”进行更新。');
 });
 
+test('search history actions and limit help are translated', () => {
+  Object.keys(translations).forEach(language => {
+    assert.notEqual(t(language, 'main.searchHistory'), 'main.searchHistory');
+    assert.match(t(language, 'main.pinSearchHistory', { query: 'ready' }), /ready/);
+    assert.notEqual(t(language, 'prefs.searchHistoryLimit'), 'prefs.searchHistoryLimit');
+  });
+  assert.equal(t('zh-CN', 'main.searchHistory'), '搜索历史');
+  assert.match(t('en', 'prefs.searchHistoryHelp'), /Pinned searches are always kept/);
+});
+
 test('shell context menu labels never expose translation keys', () => {
   const keys = [
     'main.moveToOtherPane',

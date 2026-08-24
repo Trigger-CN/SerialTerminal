@@ -563,6 +563,43 @@ Object.assign(translations.de.prefs, {
   logAutoCleanup: 'Automatische Protokollbereinigung', logCleanupOff: 'Aus', logCleanupOneWeek: 'Eine Woche behalten', logCleanupOneMonth: 'Einen Monat behalten', logCleanupTwoMonths: 'Zwei Monate behalten', logAutoCleanupHelp: 'Löscht abgelaufene .txt-, .log- und .bin-Dateien im Protokollordner. Unterordner werden nicht durchsucht.'
 });
 
+Object.assign(translations.en.main, {
+  searchHistory: 'Search History', searchHistoryEmpty: 'No saved searches', pinSearchHistory: 'Pin search: {query}', unpinSearchHistory: 'Unpin search: {query}', deleteSearchHistory: 'Delete search: {query}'
+});
+Object.assign(translations.en.prefs, {
+  searchHistoryLimit: 'Search History Limit', searchHistoryHelp: 'Maximum number of saved searches. Pinned searches are always kept; use 0 to keep pinned searches only.'
+});
+Object.assign(translations['zh-CN'].main, {
+  searchHistory: '搜索历史', searchHistoryEmpty: '暂无搜索历史', pinSearchHistory: '置顶搜索：{query}', unpinSearchHistory: '取消置顶搜索：{query}', deleteSearchHistory: '删除搜索：{query}'
+});
+Object.assign(translations['zh-CN'].prefs, {
+  searchHistoryLimit: '搜索历史保存数量', searchHistoryHelp: '搜索历史最多保存的条数。置顶搜索始终保留；设为 0 时仅保留置顶搜索。'
+});
+Object.assign(translations['zh-TW'].main, {
+  searchHistory: '搜尋歷史', searchHistoryEmpty: '暫無搜尋歷史', pinSearchHistory: '置頂搜尋：{query}', unpinSearchHistory: '取消置頂搜尋：{query}', deleteSearchHistory: '刪除搜尋：{query}'
+});
+Object.assign(translations['zh-TW'].prefs, {
+  searchHistoryLimit: '搜尋歷史儲存數量', searchHistoryHelp: '搜尋歷史最多儲存的筆數。置頂搜尋會一律保留；設為 0 時只保留置頂搜尋。'
+});
+Object.assign(translations.fr.main, {
+  searchHistory: 'Historique de recherche', searchHistoryEmpty: 'Aucune recherche enregistrée', pinSearchHistory: 'Épingler la recherche : {query}', unpinSearchHistory: 'Désépingler la recherche : {query}', deleteSearchHistory: 'Supprimer la recherche : {query}'
+});
+Object.assign(translations.fr.prefs, {
+  searchHistoryLimit: 'Limite de l’historique de recherche', searchHistoryHelp: 'Nombre maximal de recherches enregistrées. Les recherches épinglées sont toujours conservées ; utilisez 0 pour ne conserver qu’elles.'
+});
+Object.assign(translations.ru.main, {
+  searchHistory: 'История поиска', searchHistoryEmpty: 'Нет сохранённых запросов', pinSearchHistory: 'Закрепить запрос: {query}', unpinSearchHistory: 'Открепить запрос: {query}', deleteSearchHistory: 'Удалить запрос: {query}'
+});
+Object.assign(translations.ru.prefs, {
+  searchHistoryLimit: 'Лимит истории поиска', searchHistoryHelp: 'Максимальное число сохранённых запросов. Закреплённые запросы сохраняются всегда; укажите 0, чтобы оставить только их.'
+});
+Object.assign(translations.de.main, {
+  searchHistory: 'Suchverlauf', searchHistoryEmpty: 'Keine gespeicherten Suchen', pinSearchHistory: 'Suche anheften: {query}', unpinSearchHistory: 'Suche lösen: {query}', deleteSearchHistory: 'Suche löschen: {query}'
+});
+Object.assign(translations.de.prefs, {
+  searchHistoryLimit: 'Limit für Suchverlauf', searchHistoryHelp: 'Maximale Anzahl gespeicherter Suchen. Angeheftete Suchen bleiben immer erhalten; mit 0 bleiben nur diese erhalten.'
+});
+
 const translationCompletions = {
   'zh-TW': require('./locales/zh-TW-completion'),
   fr: require('./locales/fr-completion'),
