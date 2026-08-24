@@ -324,6 +324,7 @@ test('Windows title bars match each window theme while preserving native control
   assert.match(titlebar, /process\.platform === 'win32'/);
   assert.match(titlebar, /new MutationObserver\(updateTitle\)/);
   assert.match(titlebar, /ipcRenderer\.on\('window-title-updated'/);
+  assert.match(styles, /html\.custom-titlebar \.main-container\s*\{[^}]*height:\s*100%;/s);
   assert.match(main, /mainWindow\.webContents\.send\('window-title-updated', title\)/);
   assert.match(styles, /-webkit-app-region:\s*drag/);
 });

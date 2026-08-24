@@ -322,6 +322,10 @@ html.custom-titlebar body {
     padding-top: 32px;
 }
 
+html.custom-titlebar .main-container {
+    height: 100%;
+}
+
 html.custom-titlebar .window-titlebar {
     -webkit-app-region: drag;
     align-items: center;
