@@ -32,9 +32,17 @@ stages:
             npm config set registry https://registry.npmmirror.com
             npm ci --ignore-scripts
             git fetch --force origin 'refs/tags/*:refs/tags/*'
-            TAG="$(git tag --points-at "$GITEE_COMMIT" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' | sed -n '1p')"
-            test -n "$TAG"
+            TAGS="$(git tag --points-at "$GITEE_COMMIT" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || true)"
+            test "$(printf '%s\n' "$TAGS" | sed '/^$/d' | wc -l)" -eq 1
+            TAG="$TAGS"
+            node scripts/validate-release-tag.js "$TAG"
             GITEE_ACCESS_TOKEN="$CI_GITEE_ACCESS_TOKEN" node scripts/mirror-github-release-to-gitee.js --github-owner Trigger-CN --github-repo SerialTerminal --gitee-owner trigger-cn --gitee-repo SerialTerminal --tag "$TAG" --target "$GITEE_COMMIT" --cos-releases-root "https://tst-update-package-1316411824.cos.ap-hongkong.myqcloud.com/releases"
+            VERSION="${TAG#v}"
+            GITEE_RELEASE_ROOT="https://gitee.com/trigger-cn/SerialTerminal/releases/download/$TAG"
+            curl --fail --location --silent --show-error --retry 3 --max-time 600 --output /tmp/latest.yml "$GITEE_RELEASE_ROOT/latest.yml"
+            curl --fail --location --silent --show-error --retry 3 --max-time 1800 --output "/tmp/SerialTerminal-Setup-$VERSION.exe" "$GITEE_RELEASE_ROOT/SerialTerminal-Setup-$VERSION.exe"
+            node scripts/update-artifact-integrity.js --metadata /tmp/latest.yml --installer "/tmp/SerialTerminal-Setup-$VERSION.exe" --version "$VERSION"
+            curl --fail --location --silent --show-error --retry 3 --max-time 600 --range 0-0 --output /dev/null "$GITEE_RELEASE_ROOT/SerialTerminal-Setup-$VERSION.exe.blockmap"
         caches:
           - ~/.npm
         notify: []

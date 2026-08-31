@@ -27,6 +27,9 @@
       "!scripts/publish-cos-release.js",
       "!scripts/publish-gitee-release.js",
       "!scripts/mirror-github-release-to-gitee.js",
+      "!scripts/update-artifact-integrity.js",
+      "!scripts/validate-github-release.js",
+      "!scripts/validate-release-tag.js",
       "!telemetry-server/**",
       "package.json",
       "**/*"

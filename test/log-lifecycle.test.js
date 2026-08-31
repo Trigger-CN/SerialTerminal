@@ -48,7 +48,7 @@ test('application diagnostics capture main and renderer process failures', () =>
 });
 
 test('local Electron crash dumps are enabled without uploading data', () => {
-  assert.match(main, /const \{ app,[\s\S]*crashReporter \} = require\('electron'\)/);
+  assert.match(main, /const \{ app,[^\n]*crashReporter \} = require\('electron'\)/);
   assert.match(main, /app\.setPath\('crashDumps', crashDumpsPath\)/);
   assert.match(main, /crashReporter\.start\(\{[\s\S]*uploadToServer: false,[\s\S]*compress: true/);
   assert.match(main, /crashDumpsPath/);

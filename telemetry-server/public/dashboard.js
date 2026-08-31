@@ -2,6 +2,8 @@
 
 const base = '/serialterminal/admin';
 let selectedDays = 30;
+let updatePolicies = [];
+let editingPolicyId = '';
 
 function cookie(name) {
   return document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`))?.slice(name.length + 1) || '';
@@ -153,41 +155,235 @@ async function loadMetrics() {
   }
 }
 
-async function loadUpdateSource() {
-  const response = await fetch(`${base}/api/update-source`, { credentials: 'same-origin' });
-  if (response.status === 401) return location.assign(`${base}/login`);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const source = await response.json();
-  document.getElementById('update-source-url').value = source.metadataUrl;
-  document.getElementById('update-source-updated').textContent = source.updatedAt
-    ? `${source.updatedBy || '管理员'} 更新于 ${new Date(source.updatedAt).toLocaleString('zh-CN')}`
-    : '尚未更新';
+function csrfToken() {
+  try {
+    return decodeURIComponent(cookie('serialterminal_csrf'));
+  } catch {
+    return '';
+  }
 }
 
-document.getElementById('update-source-form').addEventListener('submit', async event => {
+function formatPolicyDate(value) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '-';
+}
+
+function policyVersionRange(policy) {
+  if (!policy.minClientVersion && !policy.maxClientVersion) return '所有版本';
+  return `${policy.minClientVersion || '不限'} 至 ${policy.maxClientVersion || '不限'}`;
+}
+
+function appendTextCell(row, value, className = '') {
+  const cell = document.createElement('td');
+  cell.textContent = value;
+  if (className) cell.className = className;
+  row.append(cell);
+  return cell;
+}
+
+function renderUpdatePolicies() {
+  const root = document.getElementById('update-policies');
+  root.replaceChildren();
+  document.getElementById('update-policies-summary').textContent = `${updatePolicies.length} 条策略`;
+  if (!updatePolicies.length) {
+    const row = document.createElement('tr');
+    const cell = appendTextCell(row, '暂无更新策略', 'empty-cell');
+    cell.colSpan = 6;
+    root.append(row);
+    return;
+  }
+  updatePolicies.forEach(policy => {
+    const row = document.createElement('tr');
+    row.classList.toggle('editing', String(policy.id) === editingPolicyId);
+
+    const stateCell = document.createElement('td');
+    const state = document.createElement('span');
+    state.className = `policy-state${policy.enabled ? '' : ' disabled'}`;
+    state.textContent = policy.enabled ? '已启用' : '已停用';
+    stateCell.append(state);
+    if (policy.legacy) {
+      const legacy = document.createElement('span');
+      legacy.className = 'legacy-label';
+      legacy.textContent = '旧客户端';
+      stateCell.append(legacy);
+    }
+    row.append(stateCell);
+
+    const scopeCell = document.createElement('td');
+    scopeCell.className = 'policy-scope';
+    const channel = document.createElement('strong');
+    channel.textContent = policy.channel || '全部渠道';
+    const versions = document.createElement('span');
+    versions.textContent = policyVersionRange(policy);
+    scopeCell.append(channel, versions);
+    row.append(scopeCell);
+
+    appendTextCell(row, policy.priority, 'policy-priority');
+    const urlCell = document.createElement('td');
+    const link = document.createElement('a');
+    link.className = 'policy-url';
+    link.href = policy.metadataUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = policy.metadataUrl;
+    link.textContent = policy.metadataUrl;
+    urlCell.append(link);
+    row.append(urlCell);
+
+    const updatedCell = document.createElement('td');
+    updatedCell.className = 'policy-updated';
+    const updatedAt = document.createElement('span');
+    updatedAt.textContent = formatPolicyDate(policy.updatedAt);
+    const updatedBy = document.createElement('small');
+    updatedBy.textContent = policy.updatedBy || '-';
+    updatedCell.append(updatedAt, updatedBy);
+    row.append(updatedCell);
+
+    const actionCell = document.createElement('td');
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'policy-edit';
+    edit.dataset.policyId = policy.id;
+    edit.textContent = '编辑';
+    actionCell.append(edit);
+    row.append(actionCell);
+    root.append(row);
+  });
+}
+
+function updateLegacyPolicyNote() {
+  const form = document.getElementById('update-policy-form');
+  const legacyPolicy = updatePolicies.find(policy => policy.legacy && String(policy.id) !== editingPolicyId);
+  form.elements.legacy.disabled = Boolean(legacyPolicy);
+  document.getElementById('legacy-policy-note').textContent = legacyPolicy
+    ? `策略 #${legacyPolicy.id} 已用于旧客户端，请先取消该策略的旧客户端标记`
+    : '';
+}
+
+function openPolicyEditor(policy = null) {
+  const form = document.getElementById('update-policy-form');
+  form.hidden = false;
+  form.reset();
+  editingPolicyId = policy ? String(policy.id) : '';
+  form.elements.policyId.value = editingPolicyId;
+  form.elements.metadataUrl.value = policy?.metadataUrl || '';
+  form.elements.channel.value = policy?.channel || '';
+  form.elements.priority.value = policy?.priority ?? 0;
+  form.elements.minClientVersion.value = policy?.minClientVersion || '';
+  form.elements.maxClientVersion.value = policy?.maxClientVersion || '';
+  form.elements.enabled.checked = policy?.enabled ?? true;
+  form.elements.legacy.checked = policy?.legacy ?? false;
+  document.getElementById('policy-editor-title').textContent = policy ? `编辑策略 #${policy.id}` : '新建策略';
+  document.getElementById('policy-editor-meta').textContent = policy?.createdAt
+    ? `创建于 ${formatPolicyDate(policy.createdAt)}`
+    : '';
+  form.querySelector('button[type="submit"]').textContent = policy ? '保存更改' : '创建策略';
+  const status = document.getElementById('policy-form-status');
+  status.className = 'form-status';
+  status.textContent = '';
+  updateLegacyPolicyNote();
+  renderUpdatePolicies();
+}
+
+function closePolicyEditor() {
+  editingPolicyId = '';
+  document.getElementById('update-policy-form').hidden = true;
+  renderUpdatePolicies();
+}
+
+async function updatePolicyError(response) {
+  const payload = await response.json().catch(() => ({}));
+  const messages = {
+    forbidden: '请求验证失败，请刷新页面后重试',
+    invalid_update_policy: '请检查地址、渠道、版本范围和优先级',
+    legacy_policy_conflict: '只能启用一条旧客户端默认策略',
+    policy_not_found: '策略不存在或已被修改'
+  };
+  return new Error(messages[payload.error] || payload.message || `HTTP ${response.status}`);
+}
+
+async function loadUpdatePolicies() {
+  const response = await fetch(`${base}/api/update-policies`, { credentials: 'same-origin' });
+  if (response.status === 401) return location.assign(`${base}/login`);
+  if (!response.ok) throw await updatePolicyError(response);
+  const data = await response.json();
+  if (!Array.isArray(data.policies)) throw new Error('服务器返回的策略列表无效');
+  updatePolicies = data.policies;
+  renderUpdatePolicies();
+}
+
+document.getElementById('new-policy').addEventListener('click', () => {
+  openPolicyEditor();
+  document.getElementById('update-policy-form').elements.metadataUrl.focus();
+});
+
+document.getElementById('cancel-policy').addEventListener('click', closePolicyEditor);
+
+document.getElementById('update-policies').addEventListener('click', event => {
+  const button = event.target.closest('[data-policy-id]');
+  if (!button) return;
+  const policy = updatePolicies.find(item => String(item.id) === button.dataset.policyId);
+  if (policy) openPolicyEditor(policy);
+});
+
+document.getElementById('update-policy-form').elements.legacy.addEventListener('change', updateLegacyPolicyNote);
+document.getElementById('update-policy-form').elements.metadataUrl.addEventListener('input', event => event.currentTarget.setCustomValidity(''));
+document.getElementById('update-policy-form').elements.priority.addEventListener('input', event => event.currentTarget.setCustomValidity(''));
+
+document.getElementById('update-policy-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]');
-  const status = document.getElementById('update-source-status');
+  const form = event.currentTarget;
+  const metadataInput = form.elements.metadataUrl;
+  try {
+    const url = new URL(metadataInput.value.trim());
+    metadataInput.setCustomValidity(url.protocol === 'https:' && !url.username && !url.password && !url.hash
+      && (!url.port || url.port === '443') && /\/latest\.yml$/i.test(url.pathname)
+      ? ''
+      : '请输入 HTTPS latest.yml 地址');
+  } catch {
+    metadataInput.setCustomValidity('请输入 HTTPS latest.yml 地址');
+  }
+  if (!form.reportValidity()) return;
+
+  const priority = Number(form.elements.priority.value);
+  if (!Number.isSafeInteger(priority)) {
+    form.elements.priority.setCustomValidity('优先级必须是整数');
+    form.reportValidity();
+    return;
+  }
+  form.elements.priority.setCustomValidity('');
+  const id = form.elements.policyId.value;
+  const payload = {
+    metadataUrl: metadataInput.value.trim(),
+    channel: form.elements.channel.value.trim() || null,
+    minClientVersion: form.elements.minClientVersion.value.trim() || null,
+    maxClientVersion: form.elements.maxClientVersion.value.trim() || null,
+    enabled: form.elements.enabled.checked,
+    legacy: form.elements.legacy.checked,
+    priority
+  };
+  const button = form.querySelector('button[type="submit"]');
+  const status = document.getElementById('policy-form-status');
   button.disabled = true;
   status.className = 'form-status';
   status.textContent = '正在保存';
   try {
-    const response = await fetch(`${base}/api/update-source`, {
-      method: 'PUT',
+    const response = await fetch(`${base}/api/update-policies${id ? `/${encodeURIComponent(id)}` : ''}`, {
+      method: id ? 'PUT' : 'POST',
       credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRF-Token': decodeURIComponent(cookie('serialterminal_csrf'))
+        'X-CSRF-Token': csrfToken()
       },
-      body: JSON.stringify({ metadataUrl: document.getElementById('update-source-url').value.trim() })
+      body: JSON.stringify(payload)
     });
     if (response.status === 401) return location.assign(`${base}/login`);
-    if (!response.ok) throw new Error(response.status === 400 ? '地址必须是标准 HTTPS latest.yml 地址' : `HTTP ${response.status}`);
-    const source = await response.json();
-    document.getElementById('update-source-url').value = source.metadataUrl;
-    document.getElementById('update-source-updated').textContent = `${source.updatedBy || '管理员'} 更新于 ${new Date(source.updatedAt).toLocaleString('zh-CN')}`;
+    if (!response.ok) throw await updatePolicyError(response);
+    const saved = await response.json();
+    editingPolicyId = String(saved.id);
+    await loadUpdatePolicies();
+    openPolicyEditor(updatePolicies.find(policy => String(policy.id) === editingPolicyId) || saved);
     status.classList.add('success');
-    status.textContent = '更新源已保存，新版客户端下次检查更新时生效';
+    status.textContent = id ? '策略已更新' : '策略已创建';
   } catch (cause) {
     status.classList.add('failure');
     status.textContent = `保存失败：${cause.message}`;
@@ -206,12 +402,12 @@ document.getElementById('logout').addEventListener('click', async () => {
   await fetch(`${base}/logout`, {
     method: 'POST',
     credentials: 'same-origin',
-    headers: { 'X-CSRF-Token': decodeURIComponent(cookie('serialterminal_csrf')) }
+    headers: { 'X-CSRF-Token': csrfToken() }
   });
   location.assign(`${base}/login`);
 });
 
-Promise.all([loadMetrics(), loadUpdateSource()]).catch(cause => {
+Promise.all([loadMetrics(), loadUpdatePolicies()]).catch(cause => {
   const error = document.getElementById('error');
   error.textContent = `加载管理数据失败：${cause.message}`;
   error.hidden = false;

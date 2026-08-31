@@ -2,11 +2,17 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { Readable } = require('node:stream');
 const {
   createGiteePublisher,
   createMultipartUpload,
+  downloadAndHashAttachment,
   formatError,
-  parseArguments
+  parseArguments,
+  validateAttachmentUrl
 } = require('../scripts/publish-gitee-release');
 
 function response(status, body) {
@@ -15,6 +21,25 @@ function response(status, body) {
     ok: status >= 200 && status < 300,
     async json() { return body; },
     async text() { return typeof body === 'string' ? body : JSON.stringify(body); }
+  };
+}
+
+function downloadResponse(body) {
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  return {
+    status: 200,
+    ok: true,
+    headers: { get(name) { return name.toLowerCase() === 'content-length' ? String(buffer.length) : null; } },
+    body: Readable.from([buffer])
+  };
+}
+
+function redirectResponse(location) {
+  return {
+    status: 302,
+    ok: false,
+    headers: { get(name) { return name.toLowerCase() === 'location' ? location : null; } },
+    body: Readable.from([])
   };
 }
 
@@ -47,7 +72,7 @@ test('Gitee publisher creates a missing release and uploads attachments', async 
       if (options.method === 'GET' && url.pathname.endsWith('/tags/v1.2.3')) return response(404, {});
       if (options.method === 'POST' && url.pathname.endsWith('/releases')) return response(201, { id: 7, tag_name: 'v1.2.3' });
       if (options.method === 'GET' && url.pathname.endsWith('/attach_files')) return response(200, []);
-      return response(201, { id: 8 });
+      return response(201, { id: 8, browser_download_url: 'https://gitee.com/download/gitee-release.test.js' });
     }
   });
 
@@ -62,16 +87,20 @@ test('Gitee publisher creates a missing release and uploads attachments', async 
   assert.doesNotMatch(requests.map(item => item.url.toString().replace('secret', '')).join('\n'), /undefined/);
 });
 
-test('Gitee publisher updates an existing release and replaces same-name attachments', async () => {
+test('Gitee publisher reuses an identical existing attachment without deleting it', async () => {
   const methods = [];
   const publisher = createGiteePublisher({
     token: 'secret',
+    downloadImpl: async () => downloadResponse(await fs.promises.readFile(__filename)),
     async fetchImpl(url, options) {
       methods.push(options.method);
       if (url.pathname.endsWith('/tags/v1.2.3')) return response(200, { id: 7 });
       if (options.method === 'PATCH') return response(200, { id: 7, tag_name: 'v1.2.3' });
-      if (options.method === 'GET') return response(200, [{ id: 9, name: 'gitee-release.test.js' }]);
-      if (options.method === 'DELETE') return response(204, null);
+      if (options.method === 'GET') return response(200, [{
+        id: 9,
+        name: 'gitee-release.test.js',
+        browser_download_url: 'https://gitee.com/download/gitee-release.test.js'
+      }]);
       return response(201, { id: 10 });
     }
   });
@@ -81,7 +110,136 @@ test('Gitee publisher updates an existing release and replaces same-name attachm
     notes: 'Changes', files: [__filename]
   });
 
-  assert.deepEqual(methods, ['GET', 'PATCH', 'GET', 'DELETE', 'POST', 'GET']);
+  assert.deepEqual(methods, ['GET', 'GET', 'PATCH']);
+});
+
+test('Gitee attachment verification bounds redirects to Gitee-controlled hosts', async () => {
+  assert.equal(validateAttachmentUrl('https://gitee.com/trigger-cn/SerialTerminal/releases/download/v1.2.3/file.exe'), 'https://gitee.com/trigger-cn/SerialTerminal/releases/download/v1.2.3/file.exe');
+  assert.equal(validateAttachmentUrl('https://foruda.gitee.com/attach_file/file.exe'), 'https://foruda.gitee.com/attach_file/file.exe');
+  assert.throws(() => validateAttachmentUrl('https://example.com/file.exe'), /unexpected host/);
+
+  const requests = [];
+  const result = await downloadAndHashAttachment('https://gitee.com/download/file.exe', 4, {
+    dispatcher: undefined,
+    async downloadImpl(url) {
+      requests.push(url);
+      if (requests.length === 1) return redirectResponse('https://gitee.com/attach_files/1/download/file.exe');
+      if (requests.length === 2) return redirectResponse('https://foruda.gitee.com/attach_file/file.exe');
+      return downloadResponse('data');
+    }
+  });
+  assert.equal(result.size, 4);
+  assert.deepEqual(requests, [
+    'https://gitee.com/download/file.exe',
+    'https://gitee.com/attach_files/1/download/file.exe',
+    'https://foruda.gitee.com/attach_file/file.exe'
+  ]);
+  await assert.rejects(() => downloadAndHashAttachment('https://gitee.com/download/file.exe', 4, {
+    dispatcher: undefined,
+    async downloadImpl() { return redirectResponse('https://evil.example/file.exe'); }
+  }), /unexpected host/);
+});
+
+test('Gitee publisher rejects a changed same-tag attachment without mutating the release', async () => {
+  const methods = [];
+  const publisher = createGiteePublisher({
+    token: 'secret',
+    downloadImpl: async () => downloadResponse('different bytes'),
+    async fetchImpl(url, options) {
+      methods.push(options.method);
+      if (url.pathname.endsWith('/tags/v1.2.3')) return response(200, { id: 7 });
+      return response(200, [{
+        id: 9,
+        name: 'gitee-release.test.js',
+        browser_download_url: 'https://gitee.com/download/gitee-release.test.js'
+      }]);
+    }
+  });
+
+  await assert.rejects(() => publisher.publish({
+    owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3', target: 'abc123',
+    notes: 'Changes', files: [__filename]
+  }), /immutable attachment differs/);
+  assert.deepEqual(methods, ['GET', 'GET']);
+});
+
+test('Gitee marks every semantic prerelease identifier as prerelease', async () => {
+  let releaseBody;
+  const publisher = createGiteePublisher({
+    token: 'secret',
+    async fetchImpl(url, options) {
+      if (options.method === 'GET') return response(404, {});
+      releaseBody = JSON.parse(options.body);
+      return response(201, { id: 7, tag_name: releaseBody.tag_name });
+    }
+  });
+  await publisher.publish({
+    owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3-preview.1', target: 'abc123', notes: 'Changes'
+  });
+  assert.equal(releaseBody.prerelease, true);
+});
+
+test('Gitee publisher uploads updater assets before metadata and rewrites installer URLs', async () => {
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'serialterminal-gitee-'));
+  const installerPath = path.join(directory, 'SerialTerminal-Setup-1.2.3.exe');
+  const blockmapPath = `${installerPath}.blockmap`;
+  const metadataPath = path.join(directory, 'latest.yml');
+  const uploads = [];
+  const attachments = [];
+  try {
+    await fs.promises.writeFile(installerPath, 'installer');
+    await fs.promises.writeFile(blockmapPath, 'blockmap');
+    await fs.promises.writeFile(metadataPath, [
+      'version: 1.2.3',
+      'files:',
+      '  - url: https://cos.example/releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe',
+      '    sha512: checksum',
+      'path: https://cos.example/releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe',
+      'sha512: checksum',
+      ''
+    ].join('\n'));
+
+    const publisher = createGiteePublisher({
+      token: 'secret',
+      async fetchImpl(url, options) {
+        if (url.pathname.endsWith('/tags/v1.2.3')) return response(200, { id: 7 });
+        if (options.method === 'PATCH') return response(200, { id: 7, tag_name: 'v1.2.3' });
+        if (options.method === 'GET') return response(200, [...attachments]);
+        if (options.method === 'POST') {
+          const chunks = [];
+          for await (const chunk of options.body) chunks.push(Buffer.from(chunk));
+          const body = Buffer.concat(chunks).toString('utf8');
+          const name = /filename="([^"]+)"/.exec(body)?.[1];
+          uploads.push({ name, body });
+          const attachment = {
+            id: uploads.length,
+            name,
+            browser_download_url: `https://gitee.com/trigger-cn/SerialTerminal/releases/download/v1.2.3/${name}`
+          };
+          attachments.push(attachment);
+          return response(201, attachment);
+        }
+        return response(204, null);
+      }
+    });
+
+    await publisher.publish({
+      owner: 'trigger-cn', repo: 'SerialTerminal', tag: 'v1.2.3', target: 'abc123',
+      notes: 'Changes', files: [metadataPath, blockmapPath, installerPath]
+    });
+
+    assert.deepEqual(uploads.map(upload => upload.name), [
+      'SerialTerminal-Setup-1.2.3.exe.blockmap',
+      'SerialTerminal-Setup-1.2.3.exe',
+      'latest.yml'
+    ]);
+    const metadataUpload = uploads.at(-1).body;
+    const installerUrl = 'https://gitee.com/trigger-cn/SerialTerminal/releases/download/v1.2.3/SerialTerminal-Setup-1.2.3.exe';
+    assert.equal((metadataUpload.match(new RegExp(installerUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 2);
+    assert.doesNotMatch(metadataUpload, /cos\.example/);
+  } finally {
+    await fs.promises.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('Gitee publisher retries temporary network failures with request context', async () => {
@@ -98,7 +256,7 @@ test('Gitee publisher retries temporary network failures with request context', 
       }
       if (options.method === 'PATCH') return response(200, { id: 7, tag_name: 'v1.2.3' });
       if (options.method === 'GET') return response(200, []);
-      return response(201, { id: 10 });
+      return response(201, { id: 10, browser_download_url: 'https://gitee.com/download/gitee-release.test.js' });
     }
   });
 
@@ -133,6 +291,7 @@ test('Gitee publisher recovers when a timed-out attachment upload completed remo
   const publisher = createGiteePublisher({
     token: 'secret',
     wait: async milliseconds => waits.push(milliseconds),
+    downloadImpl: async () => downloadResponse(await fs.promises.readFile(__filename)),
     async fetchImpl(url, options) {
       methods.push(options.method);
       if (url.pathname.endsWith('/tags/v1.2.3')) return response(200, { id: 7 });
@@ -142,7 +301,7 @@ test('Gitee publisher recovers when a timed-out attachment upload completed remo
       }
       attachmentChecks++;
       return response(200, attachmentChecks >= 2
-        ? [{ id: 10, name: 'gitee-release.test.js', browser_download_url: 'https://gitee.test/file' }]
+        ? [{ id: 10, name: 'gitee-release.test.js', browser_download_url: 'https://gitee.com/download/gitee-release.test.js' }]
         : []);
     }
   });
@@ -152,7 +311,7 @@ test('Gitee publisher recovers when a timed-out attachment upload completed remo
     notes: 'Changes', files: [__filename]
   });
 
-  assert.deepEqual(methods, ['GET', 'PATCH', 'GET', 'POST', 'GET', 'GET']);
+  assert.deepEqual(methods, ['GET', 'GET', 'POST', 'GET', 'GET', 'PATCH']);
   assert.deepEqual(waits, [2000]);
 });
 

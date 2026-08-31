@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>SerialTerminal 活跃度统计</title>
-  <link rel="stylesheet" href="/serialterminal/admin/dashboard.css">
-  <script src="/serialterminal/admin/dashboard.js" defer></script>
+  <link rel="stylesheet" href="/serialterminal/admin/dashboard.css?v=3">
+  <script src="/serialterminal/admin/dashboard.js?v=3" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -30,18 +30,55 @@
       <article><span>总装机数</span><strong id="total">-</strong><small>唯一安装实例</small></article>
       <article><span>今日新增</span><strong id="new-today">-</strong><small>首次上报</small></article>
     </section>
-    <section class="update-source-section" aria-labelledby="update-source-title">
+    <section class="update-policies-section" aria-labelledby="update-policies-title">
       <div class="section-heading">
-        <div><p class="eyebrow">Update Delivery</p><h2 id="update-source-title">客户端更新源</h2></div>
-        <span id="update-source-updated">正在加载</span>
-      </div>
-      <form id="update-source-form">
-        <label for="update-source-url">更新元数据地址</label>
-        <div class="update-source-controls">
-          <input id="update-source-url" name="metadataUrl" type="url" inputmode="url" required spellcheck="false" autocomplete="off" placeholder="https://example.com/releases/latest/latest.yml">
-          <button type="submit">保存</button>
+        <div><p class="eyebrow">Update Delivery</p><h2 id="update-policies-title">动态更新策略</h2></div>
+        <div class="policy-heading-actions">
+          <span id="update-policies-summary">正在加载</span>
+          <button id="new-policy" type="button">新建策略</button>
         </div>
-        <p id="update-source-status" class="form-status" aria-live="polite"></p>
+      </div>
+      <div class="policy-table-wrap">
+        <table class="policy-table">
+          <thead>
+            <tr><th>状态</th><th>匹配范围</th><th>优先级</th><th>元数据地址</th><th>最后更新</th><th><span class="visually-hidden">操作</span></th></tr>
+          </thead>
+          <tbody id="update-policies"></tbody>
+        </table>
+      </div>
+      <form id="update-policy-form" class="policy-editor" hidden>
+        <input name="policyId" type="hidden">
+        <div class="policy-editor-heading">
+          <h3 id="policy-editor-title">新建策略</h3>
+          <span id="policy-editor-meta"></span>
+        </div>
+        <div class="policy-form-grid">
+          <label class="full-field">更新元数据地址
+            <input name="metadataUrl" type="url" inputmode="url" required spellcheck="false" autocomplete="off" placeholder="https://example.com/releases/latest/latest.yml">
+          </label>
+          <label>渠道
+            <input name="channel" type="text" maxlength="80" spellcheck="false" autocomplete="off" placeholder="全部渠道">
+          </label>
+          <label>优先级
+            <input name="priority" type="number" min="-2147483648" max="2147483647" step="1" required value="0">
+          </label>
+          <label>最低客户端版本
+            <input name="minClientVersion" type="text" inputmode="text" pattern="[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?" spellcheck="false" autocomplete="off" placeholder="不限制">
+          </label>
+          <label>最高客户端版本
+            <input name="maxClientVersion" type="text" inputmode="text" pattern="[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?" spellcheck="false" autocomplete="off" placeholder="不限制">
+          </label>
+        </div>
+        <div class="policy-toggles">
+          <label><input name="enabled" type="checkbox" checked><span>启用策略</span></label>
+          <label><input name="legacy" type="checkbox"><span>旧客户端默认策略</span></label>
+          <span id="legacy-policy-note" class="policy-note"></span>
+        </div>
+        <div class="policy-form-actions">
+          <button type="submit">创建策略</button>
+          <button id="cancel-policy" class="inline-secondary" type="button">取消</button>
+          <p id="policy-form-status" class="form-status" aria-live="polite"></p>
+        </div>
       </form>
     </section>
     <section class="trend-section">

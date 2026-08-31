@@ -243,20 +243,24 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
   - 暂不更新
   - 跳过此版本
 - 下载完成后支持重启安装或稍后安装
-- 自动更新元数据、安装包和差分文件均从腾讯云 COS 下载
-- 新版客户端先访问 `https://trigger-cn.top/serialterminal/api/v1/update-source` 获取集中配置的 `latest.yml` 地址；该地址不可用时依次回退服务器 `https://trigger-cn.top/serialterminal/latest.yml`、COS 和 GitHub Release 的 `latest.yml`，重复地址会自动跳过
-- 活跃度管理后台的“客户端更新源”可以修改 PostgreSQL 中的更新元数据地址，要求使用 HTTPS 且路径必须以 `latest.yml` 结尾；更新源切换不需要重新发布客户端
-- 旧版 `0.3.7` 通过 `https://trigger-cn.top/serialterminal/latest.yml` 兼容入口读取同一份 COS 元数据，升级后改为直接访问 COS
+- Windows 新版客户端优先请求 `https://trigger-cn.top/serialterminal/latest.yml`，并附带当前版本和稳定渠道；服务端按管理后台中的启用策略选择实际更新源。Linux 客户端直接使用 GitHub Release 的 `latest-linux.yml`
+- 动态入口不可用时，Windows 客户端按 Gitee、腾讯云 COS、GitHub Release 的顺序检查外部元数据；元数据请求均限制为 5 秒和 512 KiB，安装包下载失败后仅在版本和 SHA-512 均一致时切换来源
+- 稳定渠道拒绝预发布版本；严格 SemVer 预发布 Tag 只发布版本化 COS 元数据，不覆盖稳定的 `releases/latest/latest.yml`
+- `https://trigger-cn.top/serialterminal/api/v1/update-source` 固定指向动态入口，继续兼容仍使用更新源发现的客户端
+- 未附带版本和渠道的旧客户端只使用后台标记为“旧客户端”的策略；部署期间必须保留一条启用的旧客户端策略
 - 更新提示会尝试显示 Gitee Release 正文；获取不到时提示网络异常
 - 使用 `electron-builder` 打包 Windows 与 Linux 发布物
 - 推送 `v*` Git tag 后，GitHub Actions 会使用同一 lockfile 并行构建 Windows/Linux 发布物；构建前执行测试和 native rebuild，构建后校验 lockfile 未变化
+- 发布 Tag 必须是无 build metadata 的严格 SemVer（例如 `v0.4.0` 或 `v0.4.0-preview.1`），并遵守 npm SemVer 的长度和安全整数限制
 - GitHub Release 正文会自动列出上一个 tag 到当前 tag 之间的提交，每个提交只出现一次，不按提交类型分类
-- 发布任务将 Windows 和 Linux 安装包、更新元数据统一上传到 GitHub Releases
+- 发布任务先将 Windows/Linux 安装包和更新元数据上传到 GitHub draft Release；COS 版本化对象公开下载并通过版本、大小和 SHA-512 校验后，再次逐项校验 GitHub 资产并发布 draft。稳定版此时才成为 GitHub latest，预发布版不会抢占 latest
+- 同一 Tag 的 GitHub、COS 和 Gitee 资产视为不可变内容：重试只复用名称、大小和 SHA-512 完全一致的远端资产，发现多余、重复或内容变化的资产会在覆盖或更新 Release 正文前终止
 - GitHub Actions 仅向 COS 上传 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`；Linux 产物只保留在 GitHub Release
-- GitHub Release 和 COS 下载验证成功后，GitHub Actions 将发布提交和不可变 Tag 同步到 Gitee；不会在 GitHub 侧直接修改 Gitee Release
-- `.workflow/gitee-release.yml` 由版本 Tag 触发，Windows `.exe` 优先从 COS 下载，每个来源按 `2s/5s/10s` 间隔重试三次；COS 仍失败时改从 GitHub Release 下载，并用 GitHub 附件记录校验文件名和大小，最后复用 GitHub Release 正文创建或更新同 Tag 的 Gitee Release
+- GitHub Release 和 COS 下载验证成功后，GitHub Actions 将发布提交和不可变 Tag 同步到 Gitee；Gitee Tag 流水线负责创建对应 Release
+- `.workflow/gitee-release.yml` 由严格 SemVer 版本 Tag 触发，完整镜像 Windows `.exe`、`.exe.blockmap` 和 `latest.yml`；安装包优先从 COS 下载并在失败时回退 GitHub，blockmap 与元数据直接使用 GitHub 原始资产，镜像前后均按 `latest.yml` 校验安装包版本、大小和 SHA-512
+- Gitee 已存在附件的校验下载最多跟随三次重定向，且只允许 `gitee.com` 及其子域名；下载请求不携带 Release API 令牌
 - Gitee Go 流水线需要配置加密变量 `CI_GITEE_ACCESS_TOKEN`，流水线会将其映射为发布脚本读取的 `GITEE_ACCESS_TOKEN`；令牌需具备该仓库 Release 创建、更新和附件上传权限，企业流水线可复用同一条镜像命令
-- 所有发布和公开下载验证成功后，发布任务会永久保留 `releases/latest/`，并按语义版本仅保留最新三个 `releases/v*/` 版本；COS 发布身份需具备列举桶对象和批量删除对象权限
+- 所有发布和公开下载验证成功后，发布任务会永久保留 `releases/latest/`，并按语义版本分别保留最新三个稳定版本和最新三个预发布版本；当前稳定 latest 引用的版本始终受保护。COS 发布身份需具备列举桶对象和批量删除对象权限
 
 ## 项目结构
 

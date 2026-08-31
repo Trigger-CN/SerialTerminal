@@ -25,16 +25,49 @@ main { width: min(1240px, calc(100% - 56px)); margin: 28px auto 56px; }
 .metrics article:last-child { border-right: 0; }
 .metrics span, .metrics small { display: block; color: #687681; font-size: 12px; }
 .metrics strong { display: block; margin: 6px 0 2px; font-size: 32px; line-height: 1; font-variant-numeric: tabular-nums; }
-.trend-section, .update-source-section { margin-top: 22px; padding: 24px; background: #fff; border: 1px solid #d8dde2; }
+.trend-section, .update-policies-section { margin-top: 22px; padding: 24px; background: #fff; border: 1px solid #d8dde2; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
 #updated-at { color: #687681; font-size: 12px; }
-.update-source-section .section-heading > span { color: #687681; font-size: 12px; }
-.update-source-section form { margin-top: 18px; }
-.update-source-section label { display: block; margin-bottom: 7px; color: #55636e; font-size: 13px; }
-.update-source-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
-.update-source-controls input { min-width: 0; height: 42px; padding: 8px 10px; border: 1px solid #b9c2c9; border-radius: 0; }
-.update-source-controls button { min-width: 84px; height: 42px; padding: 0 18px; color: #fff; background: #168f6a; border: 0; }
-.update-source-controls button:disabled { cursor: wait; opacity: .65; }
+.policy-heading-actions { display: flex; align-items: center; gap: 14px; }
+.policy-heading-actions span { color: #687681; font-size: 12px; }
+.policy-heading-actions button, .policy-form-actions button[type="submit"] { min-height: 36px; padding: 0 16px; color: #fff; background: #168f6a; border: 0; }
+.policy-table-wrap { margin-top: 18px; overflow-x: auto; }
+.policy-table { min-width: 920px; table-layout: fixed; }
+.policy-table th:nth-child(1) { width: 112px; }
+.policy-table th:nth-child(2) { width: 210px; }
+.policy-table th:nth-child(3) { width: 76px; }
+.policy-table th:nth-child(5) { width: 176px; }
+.policy-table th:nth-child(6) { width: 72px; }
+.policy-table tr.editing td { background: #f0faf6; }
+.policy-state { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; }
+.policy-state::before { width: 8px; height: 8px; content: ""; background: #168f6a; }
+.policy-state.disabled { color: #77838c; }
+.policy-state.disabled::before { background: #9ca6ad; }
+.legacy-label { display: block; margin-top: 5px; color: #9a6412; font-size: 11px; font-weight: 700; }
+.policy-scope strong, .policy-scope span { display: block; }
+.policy-scope strong { font-size: 13px; font-weight: 650; }
+.policy-scope span { margin-top: 4px; color: #687681; font-size: 11px; }
+.policy-priority { font-variant-numeric: tabular-nums; }
+.policy-url { display: block; overflow: hidden; color: #176b55; text-overflow: ellipsis; white-space: nowrap; }
+.policy-updated span { display: block; }
+.policy-updated small { display: block; margin-top: 3px; color: #687681; }
+.policy-edit { min-height: 30px; padding: 0 11px; color: #25333d; background: #fff; border: 1px solid #aeb8c0; }
+.policy-editor { margin-top: 18px; padding-top: 20px; border-top: 2px solid #d9e3df; }
+.policy-editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.policy-editor-heading h3 { margin: 0; font-size: 16px; }
+.policy-editor-heading span { color: #687681; font-size: 12px; }
+.policy-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin-top: 16px; }
+.policy-form-grid label { min-width: 0; color: #55636e; font-size: 13px; }
+.policy-form-grid .full-field { grid-column: 1 / -1; }
+.policy-form-grid input { display: block; width: 100%; height: 40px; margin-top: 6px; padding: 8px 10px; border: 1px solid #b9c2c9; border-radius: 0; }
+.policy-toggles { min-height: 32px; display: flex; align-items: center; gap: 22px; margin-top: 16px; }
+.policy-toggles label { display: inline-flex; align-items: center; gap: 8px; color: #34434e; font-size: 13px; cursor: pointer; }
+.policy-toggles input { width: 17px; height: 17px; margin: 0; accent-color: #168f6a; }
+.policy-note { color: #9a6412; font-size: 12px; }
+.policy-form-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+.policy-form-actions .inline-secondary { min-height: 36px; padding: 0 16px; color: #34434e; background: #fff; border: 1px solid #aeb8c0; }
+.policy-form-actions .form-status { flex: 1; margin: 0 0 0 4px; }
+.policy-form-actions button:disabled, .policy-heading-actions button:disabled { cursor: wait; opacity: .65; }
 .form-status { min-height: 20px; margin-top: 8px; color: #687681; font-size: 12px; }
 .form-status.success { color: #117352; }
 .form-status.failure { color: #9f2929; }
@@ -71,7 +104,8 @@ tbody tr:last-child td { border-bottom: 0; }
 .login-panel label { display: block; margin: 16px 0 6px; color: #55636e; font-size: 13px; }
 .login-panel input { width: 100%; height: 42px; padding: 8px 10px; border: 1px solid #b9c2c9; border-radius: 0; }
 .login-panel button { width: 100%; height: 42px; margin-top: 24px; color: #fff; background: #168f6a; border: 0; }
-button:focus-visible, input:focus-visible { outline: 3px solid #e3a53b; outline-offset: 2px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid #e3a53b; outline-offset: 2px; }
 @media (max-width: 820px) {
   .topbar { align-items: flex-start; flex-direction: column; }
   .toolbar { width: 100%; justify-content: space-between; }
@@ -79,6 +113,12 @@ button:focus-visible, input:focus-visible { outline: 3px solid #e3a53b; outline-
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .metrics article { border-bottom: 1px solid #e0e4e8; }
   .breakdowns { grid-template-columns: 1fr; }
-  .update-source-controls { grid-template-columns: 1fr; }
-  .update-source-controls button { width: 100%; }
+  .update-policies-section { padding: 18px; }
+  .update-policies-section .section-heading { align-items: flex-start; }
+  .policy-heading-actions { align-items: flex-end; flex-direction: column-reverse; gap: 7px; }
+  .policy-form-grid { grid-template-columns: 1fr; }
+  .policy-form-grid .full-field { grid-column: auto; }
+  .policy-toggles { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .policy-form-actions { align-items: stretch; flex-wrap: wrap; }
+  .policy-form-actions .form-status { flex-basis: 100%; margin-left: 0; }
 }

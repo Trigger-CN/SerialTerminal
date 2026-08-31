@@ -60,26 +60,66 @@ function createStore(pool) {
       await pool.query('DELETE FROM admin_sessions WHERE token_hash = $1', [tokenHash]);
     },
 
-    async getUpdateSource() {
+    async getUpdatePolicies() {
       const result = await pool.query(`
-        SELECT setting_value AS metadata_url, updated_at, updated_by
-        FROM service_settings
-        WHERE setting_key = 'update_metadata_url'
+        SELECT id, channel, min_client_version, max_client_version, metadata_url, enabled, legacy, priority,
+          created_at, updated_at, updated_by
+        FROM update_policies
+        ORDER BY legacy DESC, priority DESC, id ASC
       `);
-      return result.rows[0] || null;
+      return result.rows;
     },
 
-    async setUpdateSource(metadataUrl, updatedBy, now) {
+    async createUpdatePolicy(policy, updatedBy, now) {
       const result = await pool.query(`
-        INSERT INTO service_settings (setting_key, setting_value, updated_at, updated_by)
-        VALUES ('update_metadata_url', $1, $3, $2)
-        ON CONFLICT (setting_key) DO UPDATE SET
-          setting_value = EXCLUDED.setting_value,
-          updated_at = EXCLUDED.updated_at,
-          updated_by = EXCLUDED.updated_by
-        RETURNING setting_value AS metadata_url, updated_at, updated_by
-      `, [metadataUrl, updatedBy, now]);
+        INSERT INTO update_policies (
+          channel, min_client_version, max_client_version, metadata_url, enabled, legacy, priority,
+          created_at, updated_at, updated_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)
+        RETURNING id, channel, min_client_version, max_client_version, metadata_url, enabled, legacy, priority,
+          created_at, updated_at, updated_by
+        `, [
+        policy.channel,
+        policy.minClientVersion,
+        policy.maxClientVersion,
+        policy.metadataUrl,
+        policy.enabled,
+        policy.legacy,
+        policy.priority,
+        now,
+        updatedBy
+      ]);
       return result.rows[0];
+    },
+
+    async updateUpdatePolicy(id, policy, updatedBy, now) {
+      const result = await pool.query(`
+        UPDATE update_policies
+        SET channel = $2,
+          min_client_version = $3,
+          max_client_version = $4,
+          metadata_url = $5,
+          enabled = $6,
+          legacy = $7,
+          priority = $8,
+          updated_at = $9,
+          updated_by = $10
+        WHERE id = $1
+        RETURNING id, channel, min_client_version, max_client_version, metadata_url, enabled, legacy, priority,
+          created_at, updated_at, updated_by
+        `, [
+        id,
+        policy.channel,
+        policy.minClientVersion,
+        policy.maxClientVersion,
+        policy.metadataUrl,
+        policy.enabled,
+        policy.legacy,
+        policy.priority,
+        now,
+        updatedBy
+      ]);
+      return result.rows[0] || null;
     },
 
     async getMetrics(days, today) {

@@ -2,8 +2,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { Agent, fetch: undiciFetch } = require('undici');
 const yaml = require('js-yaml');
+const { parseReleaseTag } = require('./validate-release-tag');
 
 const API_ROOT = 'https://gitee.com/api/v5';
 const RETRY_DELAYS_MS = [2000, 5000, 10000];
@@ -31,6 +33,7 @@ function parseArguments(args) {
 function createGiteePublisher({
   token,
   fetchImpl = undiciFetch,
+  downloadImpl = undiciFetch,
   apiRoot = API_ROOT,
   wait = delay,
   dispatcher = new Agent({ headersTimeout: GITEE_TIMEOUT_MS, bodyTimeout: GITEE_TIMEOUT_MS }),
@@ -79,26 +82,42 @@ function createGiteePublisher({
   }
 
   async function publish({ owner, repo, tag, target, name, notes, files = [] }) {
+    const releaseTag = parseReleaseTag(tag);
     const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases`;
     const releaseBody = {
       tag_name: tag,
       target_commitish: target,
       name: name || tag,
       body: notes,
-      prerelease: /-(?:alpha|beta|rc)(?:\.|$)/i.test(tag)
+      prerelease: releaseTag.prerelease
     };
     let release = await request('GET', `${base}/tags/${encodeURIComponent(tag)}`, { allowNotFound: true });
-    if (release) {
-      release = await request('PATCH', `${base}/${release.id}`, { body: releaseBody });
-    } else {
+    const releaseExists = Boolean(release);
+    if (!release) {
       release = await request('POST', base, { body: releaseBody });
     }
 
-    if (files.length === 0) return release;
+    if (files.length === 0) {
+      return releaseExists ? request('PATCH', `${base}/${release.id}`, { body: releaseBody }) : release;
+    }
 
     const attachmentsEndpoint = `${base}/${release.id}/attach_files`;
     let attachments = await request('GET', attachmentsEndpoint);
     const assetUrls = new Map();
+
+    async function verifyExistingAttachment(attachment, source, fileName) {
+      const downloadUrl = validateAttachmentUrl(getAttachmentUrl(attachment));
+      const expectedHash = source.sha512 || (source.buffer ? hashBuffer(source.buffer) : await hashFile(source.filePath));
+      const remote = await downloadAndHashAttachment(downloadUrl, source.size, {
+        downloadImpl,
+        dispatcher
+      });
+      if (remote.size !== source.size || remote.sha512 !== expectedHash) {
+        throw new Error(`Gitee immutable attachment differs from local release: ${fileName}`);
+      }
+      logger.log(`[gitee] immutable attachment already matches: ${fileName}`);
+      return attachment;
+    }
 
     async function uploadAttachment(source, fileName) {
       const upload = createMultipartUpload(source, fileName, {
@@ -125,6 +144,7 @@ function createGiteePublisher({
           const uploaded = attachments.find(item => item.name === fileName);
           logger.log(`[gitee] remote attachment check: ${attachments.length} attachment(s), ${fileName} ${uploaded ? 'found' : 'not found'}`);
           if (uploaded) {
+            await verifyExistingAttachment(uploaded, source, fileName);
             logger.log(`[gitee] upload recovered from remote state: ${fileName}`);
             return uploaded;
           }
@@ -140,35 +160,66 @@ function createGiteePublisher({
       const rightIsMetadata = /(?:^|[\\/])latest(?:-linux)?\.yml$/i.test(right);
       return Number(leftIsMetadata) - Number(rightIsMetadata);
     });
+    const artifactSources = [];
+    const metadataPaths = [];
     for (const filePath of uploadFiles) {
       const fileName = path.basename(filePath);
-      let uploadPath = filePath;
       if (/^latest(?:-linux)?\.yml$/i.test(fileName)) {
-        const source = yaml.load(await fs.promises.readFile(filePath, 'utf8'));
-        for (const file of source.files || []) {
-          const assetUrl = assetUrls.get(file.url);
-          if (assetUrl) file.url = assetUrl;
-        }
-        uploadPath = null;
-        const metadata = Buffer.from(yaml.dump(source), 'utf8');
-        const existing = attachments.find(item => item.name === fileName);
-        if (existing) await request('DELETE', `${attachmentsEndpoint}/${existing.id}`);
-        const uploaded = await uploadAttachment({ buffer: metadata, size: metadata.length }, fileName);
-        const assetUrl = getAttachmentUrl(uploaded);
-        if (assetUrl) assetUrls.set(fileName, assetUrl);
-        attachments = await request('GET', attachmentsEndpoint);
+        metadataPaths.push(filePath);
         continue;
       }
+      const { size } = await fs.promises.stat(filePath);
+      const source = { filePath, size, sha512: await hashFile(filePath) };
       const existing = attachments.find(item => item.name === fileName);
       if (existing) {
-        await request('DELETE', `${attachmentsEndpoint}/${existing.id}`);
+        await verifyExistingAttachment(existing, source, fileName);
+        assetUrls.set(fileName, validateAttachmentUrl(getAttachmentUrl(existing)));
       }
-      const { size } = await fs.promises.stat(uploadPath);
-      const uploaded = await uploadAttachment({ filePath: uploadPath, size }, fileName);
-      const assetUrl = getAttachmentUrl(uploaded);
-      if (assetUrl) assetUrls.set(fileName, assetUrl);
+      artifactSources.push({ fileName, source, existing });
+    }
+
+    const existingMetadata = metadataPaths
+      .map(filePath => attachments.find(item => item.name === path.basename(filePath)))
+      .filter(Boolean);
+    if (existingMetadata.length > 0 && artifactSources.some(item => !item.existing)) {
+      throw new Error('Gitee release has metadata but is missing one or more immutable artifacts');
+    }
+    const preparedMetadata = [];
+    if (artifactSources.every(item => item.existing)) {
+      for (const filePath of metadataPaths) {
+        const fileName = path.basename(filePath);
+        const source = await createMetadataSource(filePath, assetUrls);
+        const existing = attachments.find(item => item.name === fileName);
+        if (existing) await verifyExistingAttachment(existing, source, fileName);
+        preparedMetadata.push({ fileName, source, existing });
+      }
+    }
+
+    for (const item of artifactSources) {
+      if (item.existing) continue;
+      const uploaded = await uploadAttachment(item.source, item.fileName);
+      assetUrls.set(item.fileName, validateAttachmentUrl(getAttachmentUrl(uploaded)));
       attachments = await request('GET', attachmentsEndpoint);
     }
+    if (preparedMetadata.length === 0) {
+      for (const filePath of metadataPaths) {
+        preparedMetadata.push({
+          fileName: path.basename(filePath),
+          source: await createMetadataSource(filePath, assetUrls),
+          existing: null
+        });
+      }
+    }
+    for (const item of preparedMetadata) {
+      if (item.existing) {
+        assetUrls.set(item.fileName, validateAttachmentUrl(getAttachmentUrl(item.existing)));
+        continue;
+      }
+      const uploaded = await uploadAttachment(item.source, item.fileName);
+      assetUrls.set(item.fileName, validateAttachmentUrl(getAttachmentUrl(uploaded)));
+      attachments = await request('GET', attachmentsEndpoint);
+    }
+    if (releaseExists) release = await request('PATCH', `${base}/${release.id}`, { body: releaseBody });
     return release;
   }
 
@@ -177,6 +228,88 @@ function createGiteePublisher({
 
 function getAttachmentUrl(attachment) {
   return attachment?.browser_download_url || attachment?.download_url || attachment?.url || '';
+}
+
+async function createMetadataSource(filePath, assetUrls) {
+  const metadata = yaml.load(await fs.promises.readFile(filePath, 'utf8'));
+  for (const file of metadata.files || []) {
+    const assetUrl = assetUrls.get(path.basename(String(file.url || '')));
+    if (assetUrl) file.url = assetUrl;
+  }
+  const installerUrl = assetUrls.get(path.basename(String(metadata.path || '')));
+  if (installerUrl) metadata.path = installerUrl;
+  const buffer = Buffer.from(yaml.dump(metadata), 'utf8');
+  return { buffer, size: buffer.length, sha512: hashBuffer(buffer) };
+}
+
+function validateAttachmentUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || ''));
+  } catch {
+    throw new Error('Gitee attachment URL is invalid');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.port || url.hostname.endsWith('.')) {
+    throw new Error('Gitee attachment URL must use safe HTTPS');
+  }
+  if (!isGiteeHostname(url.hostname)) throw new Error('Gitee attachment URL has an unexpected host');
+  return url.toString();
+}
+
+function isGiteeHostname(hostname) {
+  const normalized = String(hostname || '').toLowerCase();
+  return normalized === 'gitee.com' || normalized.endsWith('.gitee.com');
+}
+
+async function downloadAndHashAttachment(value, maxBytes, { downloadImpl, dispatcher }) {
+  let currentUrl = validateAttachmentUrl(value);
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    const response = await downloadImpl(currentUrl, {
+      method: 'GET',
+      headers: { Accept: 'application/octet-stream', 'User-Agent': 'SerialTerminal-Gitee-Publisher' },
+      redirect: 'manual',
+      dispatcher
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers?.get?.('location');
+      if (!location || redirects === 3) throw new Error('Gitee attachment redirect is invalid');
+      currentUrl = validateAttachmentUrl(new URL(location, currentUrl).toString());
+      continue;
+    }
+    if (!response.ok) throw new Error(`Gitee attachment download failed: HTTP ${response.status}`);
+    return hashResponse(response, maxBytes);
+  }
+  throw new Error('Too many Gitee attachment redirects');
+}
+
+function hashBuffer(buffer) {
+  return createHash('sha512').update(buffer).digest('hex');
+}
+
+async function hashFile(filePath) {
+  const hash = createHash('sha512');
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function hashResponse(response, maxBytes) {
+  const contentLength = Number(response.headers?.get?.('content-length') || 0);
+  if (contentLength > maxBytes) throw new Error('Gitee attachment is larger than the local release');
+  const hash = createHash('sha512');
+  let size = 0;
+  if (response.body) {
+    for await (const chunk of response.body) {
+      size += chunk.length;
+      if (size > maxBytes) throw new Error('Gitee attachment is larger than the local release');
+      hash.update(chunk);
+    }
+  } else {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    size = buffer.length;
+    if (size > maxBytes) throw new Error('Gitee attachment is larger than the local release');
+    hash.update(buffer);
+  }
+  return { size, sha512: hash.digest('hex') };
 }
 
 function createMultipartUpload(source, fileName, { logger, now, progressIntervalMs }) {
@@ -285,4 +418,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createGiteePublisher, createMultipartUpload, formatError, parseArguments };
+module.exports = {
+  createGiteePublisher,
+  createMultipartUpload,
+  downloadAndHashAttachment,
+  formatError,
+  parseArguments,
+  validateAttachmentUrl
+};

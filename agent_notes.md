@@ -100,7 +100,7 @@ SerialTerminal/
 - 向渲染进程发送串口输出、错误、吞吐量数据
 - 自动更新逻辑
 - 启动时自动检查更新与用户确认安装逻辑
-- 新版客户端每次更新检查先从 `https://trigger-cn.top/serialterminal/api/v1/update-source` 获取集中配置的 `latest.yml` 地址；该地址失效后按服务器 `latest.yml`、COS、GitHub Release `latest.yml` 顺序检查并去重，中间错误不提示，全部失败才报告错误。更新提示仍通过 Gitee Release API 读取对应 tag 的正文
+- Windows 新版客户端优先检查动态 manifest，失败时按 Gitee、COS、GitHub Release 顺序回退；动态检查成功后外部来源仅作为同版本、同 EXE SHA-512 的下载备份。Linux 直接使用 GitHub `latest-linux.yml`。所有元数据请求限制为 5 秒和 512 KiB，稳定渠道拒绝预发布版本；更新提示仍通过 Gitee Release API 读取对应 tag 的正文
 - 更新弹窗文案跟随当前界面语言显示
 - 系统 shell 会话的创建、输入、resize、关闭与退出事件转发
 - shellProfiles 配置管理、profile 查找与 shell 路径/参数解析
@@ -125,12 +125,12 @@ SerialTerminal/
 - 开发、测试和打包使用 Node.js `>=22.12.0`，与当前 electron-builder 间接依赖的 engine 要求一致；CI 固定 Node 22.12
 - `.github/workflows/checks.yml` 在 push/PR 上执行 `npm ci --ignore-scripts`、`npm test`、全仓库 JavaScript 语法检查和官方 registry 生产依赖审计；简中 i18n 必须覆盖英语基线键，其他语言允许回退英语
 - `.github/workflows/release.yml` 仅响应 `v*` tag；Windows/Linux 使用同一 Node 22.12、官方 registry lockfile、`npm ci --ignore-scripts`、显式 `npm run rebuild` 和打包命令，并检查构建不修改 lockfile
-- 客户端自动更新默认回退到腾讯云 COS 的 `releases/latest/latest.yml`；COS 只保存 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`，Linux 产物只保留在 GitHub Release。GitHub Release 和 COS 验证成功后，GitHub Actions 以非强制方式同步 main/Tag 到 Gitee；Gitee Tag 流水线再运行 `scripts/mirror-github-release-to-gitee.js`，Windows `.exe` 优先从 COS 下载，每个来源首次请求后按 `2s/5s/10s` 再重试三次，COS 全部失败才回退 GitHub，并以 GitHub Release 附件名和大小校验下载结果。Gitee 流水线需单独配置加密变量 `CI_GITEE_ACCESS_TOKEN`，调用脚本时映射为 `GITEE_ACCESS_TOKEN`。最后的 `--prune-only` 永久保留 `releases/latest/`，按语义版本仅保留最新三个 `releases/v*/` 前缀；COS CAM 身份需具备 `cos:GetBucket` 和批量删除对象权限。
-- `v0.3.7` 将更新源固定为 `https://trigger-cn.top/serialterminal/`；服务器通过 `telemetry-server/deploy/serialterminal-update-compat-nginx.conf` 将旧 `latest.yml` 路径反向代理到 COS。该兼容路由需长期保留，安装包由元数据中的 COS 绝对 URL 下载。
+- Windows 客户端自动更新先请求 `https://trigger-cn.top/serialterminal/latest.yml`，仅该请求附带客户端版本和 `stable` 渠道；服务端按数据库策略返回规范化 manifest。动态入口失败时按 Gitee、腾讯云 COS、GitHub 回退，并且只有版本、目标安装包类型和 SHA-512 与选定版本一致的来源可参与下载；`DebUpdater` 校验 `.deb`，其他 Linux updater 校验 `.AppImage`，Windows 校验 `.exe`。Linux 客户端直接使用 GitHub `latest-linux.yml`。COS 和 Gitee 均保存 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`，Linux 产物只保留在 GitHub Release。严格 SemVer 预发布 Tag 不得覆盖 COS `releases/latest/`，稳定客户端也必须拒绝预发布 manifest。GitHub Actions 先上传 draft Release，再发布并验证 COS 版本化对象，最后重新按大小和 SHA-512 校验全部 GitHub 资产并发布 draft；稳定版只在该阶段成为 GitHub latest。GitHub、COS、Gitee 的同 Tag 资产不可覆盖，重试只能复用完全一致的对象或附件。之后工作流以非强制方式同步 main/Tag 到 Gitee；Gitee Tag 流水线运行 `scripts/mirror-github-release-to-gitee.js`，EXE 优先从 COS 下载，blockmap 和元数据使用 GitHub 原始资产，每个来源首次请求后按 `2s/5s/10s` 再重试三次，COS 全部失败才回退 GitHub，并按元数据版本、文件大小和 SHA-512 校验 EXE。Gitee 已存在附件使用无令牌下载并手动跟随最多三次重定向，只允许 `gitee.com` 及其子域名。Gitee 流水线需单独配置加密变量 `CI_GITEE_ACCESS_TOKEN`，调用脚本时映射为 `GITEE_ACCESS_TOKEN`，发布后必须重新下载 manifest 和 EXE 做 SHA-512 校验，并确认 blockmap 可公开下载。Gitee 当前忽略 Range 请求，因此客户端在 Gitee 源直接下载完整 EXE，COS/GitHub 仍可使用差分更新。最后的 `--prune-only` 永久保留 `releases/latest/`，分别保留最新三个稳定和三个预发布前缀，并保护当前稳定 latest 引用的版本；COS CAM 身份需具备 `cos:GetBucket` 和批量删除对象权限。
+- `v0.3.7` 将更新源固定为 `https://trigger-cn.top/serialterminal/`；无版本/渠道头的请求由 telemetry 服务中的唯一 legacy 策略处理。部署脚本会清空旧静态兼容 snippet，不能再并存另一条 `/serialterminal/latest.yml` location。
 - Release 的 Windows native rebuild 固定使用 `windows-2022`、MSBuild 和 VS developer environment，避免旧版 Electron node-gyp 无法识别 VS 18；构建矩阵必须传 `--publish never`，产物统一交由独立 publish job 上传 GitHub Release
 - Release artifact 必须使用安装包白名单，仅上传 Windows `.exe`/`.blockmap`/`latest.yml` 与 Linux `.AppImage`/`.deb`/`latest-linux.yml`；禁止使用 `dist/**`，避免把 unpacked 目录和 native build 中间文件发布到 GitHub
 - Windows NSIS `artifactName` 固定为 `${productName}-Setup-${version}.${ext}`，GitHub Release、镜像和 `latest.yml` 均不得出现空格或由 GitHub 转义成点号的安装包文件名
-- GitHub Actions 的 checkout/setup-node 使用 v6，GitHub Release 使用 softprops/action-gh-release v3，避免已弃用的 Node 20 action runtime
+- GitHub Actions 的 checkout/setup-node 使用 v6；GitHub Release action 必须固定到经核对的 `softprops/action-gh-release` commit SHA，不能改回可移动的主版本 Tag
 - 主终端 tab 不使用 inline `onclick`；所有主工作区 tab 切换统一由 renderer 绑定并调用 workspace manager，避免重复事件和持久化
 - 窄侧边栏采用顶部吞吐区、中间 `.sidebar-tool-scroll` 可滚动操作区和底部固定展开按钮；新增工具按钮必须放入中间区，不能挤出展开入口
 - sidebar/footer 和 workspace tab 的主要操作使用原生 button；tab 需保持 `role=tab`、`aria-controls`、`aria-selected` 与对应 tabpanel 同步，确保 Enter/Space 和焦点提示可用
@@ -875,8 +875,8 @@ Hex 相关配置结构：
 - `ipcMain.on('show-terminal-context-menu')`：终端右键菜单入口
 - `checkForAppUpdates()`：统一的自动/手动检查更新入口
 - `promptForAvailableUpdate()`：新版提示与用户选择
-- `promptToInstallDownloadedUpdate()`：下载完成后的安装提示
-- `configureCosUpdateFeed()`：将自定义更新 Provider 指向腾讯云 COS 的稳定元数据地址
+- `downloadUpdateWithFallback()`：下载时按已验证的同版本、同校验和来源回退
+- `configureUpdateFeed()`：将自定义更新 Provider 指向当前动态入口、Gitee、COS 或 GitHub 元数据地址
 - `fetchGiteeReleaseNotes()`：通过 Gitee Release API 拉取版本正文
 
 ### `renderer.js`

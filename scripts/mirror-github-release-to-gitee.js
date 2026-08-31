@@ -4,7 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
 const { Agent, fetch: undiciFetch } = require('undici');
+const yaml = require('js-yaml');
 const { createGiteePublisher, formatError } = require('./publish-gitee-release');
+const { parseReleaseTag } = require('./validate-release-tag');
+const { getArtifactName, verifyUpdateArtifacts } = require('./update-artifact-integrity');
 
 const GITHUB_API_ROOT = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
@@ -21,9 +24,7 @@ function parseArguments(args) {
   for (const name of ['github-owner', 'github-repo', 'gitee-owner', 'gitee-repo', 'tag', 'target']) {
     if (!options[name]) throw new Error(`Missing --${name}`);
   }
-  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(options.tag)) {
-    throw new Error(`Invalid release tag: ${options.tag}`);
-  }
+  parseReleaseTag(options.tag);
   return options;
 }
 
@@ -75,14 +76,20 @@ function createGitHubReleaseClient({
   return { download, getRelease };
 }
 
-function selectWindowsInstaller(release, tag) {
+function selectWindowsUpdateAssets(release, tag) {
   const version = tag.replace(/^v/, '');
-  const expectedName = `SerialTerminal-Setup-${version}.exe`;
-  const matches = (release.assets || []).filter(asset => asset.name === expectedName);
-  if (matches.length !== 1) {
-    throw new Error(`Expected exactly one GitHub release asset named ${expectedName}, found ${matches.length}`);
-  }
-  return matches[0];
+  const expectedNames = [
+    `SerialTerminal-Setup-${version}.exe`,
+    `SerialTerminal-Setup-${version}.exe.blockmap`,
+    'latest.yml'
+  ];
+  return expectedNames.map(expectedName => {
+    const matches = (release.assets || []).filter(asset => asset.name === expectedName);
+    if (matches.length !== 1) {
+      throw new Error(`Expected exactly one GitHub release asset named ${expectedName}, found ${matches.length}`);
+    }
+    return matches[0];
+  });
 }
 
 async function mirrorRelease(options, {
@@ -92,20 +99,47 @@ async function mirrorRelease(options, {
   downloadOptions = {}
 } = {}) {
   const release = await githubClient.getRelease(options['github-owner'], options['github-repo'], options.tag);
-  const installer = selectWindowsInstaller(release, options.tag);
+  const assets = selectWindowsUpdateAssets(release, options.tag);
   await fs.promises.mkdir(outputDirectory, { recursive: true });
-  const installerPath = path.join(outputDirectory, installer.name);
-  const cosUrl = `${options['cos-releases-root'].replace(/\/$/, '')}/${encodeURIComponent(options.tag)}/${encodeURIComponent(installer.name)}`;
+  const [installerAsset, blockmapAsset, metadataAsset] = assets;
+  const metadataPath = path.join(outputDirectory, metadataAsset.name);
   await downloadInstallerWithFallback({
-    sources: [
-      { name: 'COS', url: cosUrl },
-      { name: 'GitHub', url: installer.browser_download_url }
-    ],
-    destination: installerPath,
-    expectedSize: installer.size,
+    sources: [{ name: 'GitHub', url: metadataAsset.browser_download_url }],
+    destination: metadataPath,
+    expectedSize: metadataAsset.size,
     download: githubClient.download,
     ...downloadOptions
   });
+  const metadata = yaml.load(await fs.promises.readFile(metadataPath, 'utf8'));
+  const expectedChecksum = (metadata?.files || []).find(file => getArtifactName(file?.url || file?.name) === installerAsset.name)?.sha512
+    || (getArtifactName(metadata?.path) === installerAsset.name ? metadata.sha512 : '');
+  if (typeof expectedChecksum !== 'string' || !/^[A-Za-z0-9+/]{86}==$/.test(expectedChecksum)) {
+    throw new Error(`Update metadata has no valid SHA-512 for ${installerAsset.name}`);
+  }
+  const files = [];
+  for (const asset of [installerAsset, blockmapAsset]) {
+    const destination = path.join(outputDirectory, asset.name);
+    const cosUrl = `${options['cos-releases-root'].replace(/\/$/, '')}/${encodeURIComponent(options.tag)}/${encodeURIComponent(asset.name)}`;
+    const sources = asset === installerAsset ? [
+          { name: 'COS', url: cosUrl },
+          { name: 'GitHub', url: asset.browser_download_url }
+        ] : [{ name: 'GitHub', url: asset.browser_download_url }];
+    await downloadInstallerWithFallback({
+      sources,
+      destination,
+      expectedSize: asset.size,
+      expectedSha512: asset === installerAsset ? expectedChecksum : '',
+      download: githubClient.download,
+      ...downloadOptions
+    });
+    files.push(destination);
+  }
+  await verifyUpdateArtifacts({
+    metadataPath,
+    installerPath: path.join(outputDirectory, installerAsset.name),
+    expectedVersion: parseReleaseTag(options.tag).version
+  });
+  files.push(metadataPath);
   return giteePublisher.publish({
     owner: options['gitee-owner'],
     repo: options['gitee-repo'],
@@ -113,7 +147,7 @@ async function mirrorRelease(options, {
     target: options.target,
     name: release.name || `SerialTerminal ${options.tag.replace(/^v/, '')}`,
     notes: release.body || '',
-    files: [installerPath]
+    files
   });
 }
 
@@ -121,6 +155,7 @@ async function downloadInstallerWithFallback({
   sources,
   destination,
   expectedSize,
+  expectedSha512,
   download,
   retryDelays = RETRY_DELAYS_MS,
   wait = delay,
@@ -142,6 +177,10 @@ async function downloadInstallerWithFallback({
         if (stat.size !== expectedSize) {
           throw new Error(`size mismatch: expected ${expectedSize}, received ${stat.size}`);
         }
+        if (expectedSha512) {
+          const actual = await sha512File(temporaryPath);
+          if (actual !== expectedSha512) throw new Error('SHA-512 mismatch');
+        }
         await fs.promises.rm(destination, { force: true });
         await fs.promises.rename(temporaryPath, destination);
         logger.log(`[mirror] download accepted from ${source.name}: ${stat.size} bytes`);
@@ -155,6 +194,12 @@ async function downloadInstallerWithFallback({
   }
   await fs.promises.rm(temporaryPath, { force: true });
   throw new Error(`All installer download sources failed: ${failures.join('; ')}`);
+}
+
+async function sha512File(filePath) {
+  const hash = require('node:crypto').createHash('sha512');
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
+  return hash.digest('base64');
 }
 
 function delay(milliseconds) {
@@ -180,5 +225,5 @@ module.exports = {
   downloadInstallerWithFallback,
   mirrorRelease,
   parseArguments,
-  selectWindowsInstaller
+  selectWindowsUpdateAssets
 };

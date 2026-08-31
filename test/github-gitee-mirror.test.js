@@ -5,11 +5,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
+const yaml = require('js-yaml');
 const {
   downloadInstallerWithFallback,
   mirrorRelease,
   parseArguments,
-  selectWindowsInstaller
+  selectWindowsUpdateAssets
 } = require('../scripts/mirror-github-release-to-gitee');
 
 test('release mirror arguments require an exact semantic version tag', () => {
@@ -29,19 +31,36 @@ test('release mirror arguments require an exact semantic version tag', () => {
     'cos-releases-root': 'https://cos.example/releases'
   });
   assert.throws(() => parseArguments(args.map(value => value === 'v1.2.3-rc.1' ? 'release-test' : value)), /Invalid release tag/);
+  assert.throws(() => parseArguments(args.map(value => value === 'v1.2.3-rc.1' ? 'v1.2.3+build.1' : value)), /Invalid release tag/);
+  assert.throws(() => parseArguments(args.map(value => value === 'v1.2.3-rc.1' ? 'v1.2.3-01' : value)), /Invalid release tag/);
 });
 
-test('release mirror selects only the exact Windows installer name', () => {
-  const expected = { name: 'SerialTerminal-Setup-1.2.3.exe', size: 42 };
-  const release = { assets: [expected, { name: 'SerialTerminal-Setup-1.2.3.exe.blockmap' }] };
-  assert.equal(selectWindowsInstaller(release, 'v1.2.3'), expected);
-  assert.throws(() => selectWindowsInstaller({ assets: [] }, 'v1.2.3'), /found 0/);
+test('release mirror selects the exact Windows updater assets', () => {
+  const expected = [
+    { name: 'SerialTerminal-Setup-1.2.3.exe', size: 42 },
+    { name: 'SerialTerminal-Setup-1.2.3.exe.blockmap', size: 43 },
+    { name: 'latest.yml', size: 44 }
+  ];
+  assert.deepEqual(selectWindowsUpdateAssets({ assets: expected }, 'v1.2.3'), expected);
+  assert.throws(() => selectWindowsUpdateAssets({ assets: expected.slice(0, 2) }, 'v1.2.3'), /latest\.yml, found 0/);
 });
 
-test('release mirror downloads the COS installer first and publishes the GitHub body to Gitee', async () => {
+test('release mirror downloads updater assets from COS first and publishes them to Gitee', async () => {
   const outputDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'serialterminal-mirror-'));
   const calls = [];
-  const installer = { name: 'SerialTerminal-Setup-1.2.3.exe', size: 9, browser_download_url: 'https://example.test/setup.exe' };
+  const installer = 'installer';
+  const sha512 = createHash('sha512').update(installer).digest('base64');
+  const metadata = yaml.dump({
+    version: '1.2.3',
+    files: [{ url: 'SerialTerminal-Setup-1.2.3.exe', sha512, size: Buffer.byteLength(installer) }],
+    path: 'SerialTerminal-Setup-1.2.3.exe',
+    sha512
+  });
+  const assets = [
+    { name: 'SerialTerminal-Setup-1.2.3.exe', size: 9, browser_download_url: 'https://example.test/setup.exe' },
+    { name: 'SerialTerminal-Setup-1.2.3.exe.blockmap', size: 9, browser_download_url: 'https://example.test/setup.exe.blockmap' },
+    { name: 'latest.yml', size: Buffer.byteLength(metadata), browser_download_url: 'https://example.test/latest.yml' }
+  ];
   try {
     const result = await mirrorRelease({
       'github-owner': 'Trigger-CN',
@@ -56,11 +75,11 @@ test('release mirror downloads the COS installer first and publishes the GitHub 
       githubClient: {
         async getRelease(owner, repo, tag) {
           calls.push({ type: 'get', owner, repo, tag });
-          return { name: 'SerialTerminal 1.2.3', body: 'Release changes', assets: [installer] };
+          return { name: 'SerialTerminal 1.2.3', body: 'Release changes', assets };
         },
         async download(url, destination) {
           calls.push({ type: 'download', url, destination });
-          await fs.promises.writeFile(destination, 'installer');
+          await fs.promises.writeFile(destination, url.endsWith('latest.yml') ? metadata : installer);
         }
       },
       giteePublisher: {
@@ -73,10 +92,15 @@ test('release mirror downloads the COS installer first and publishes the GitHub 
 
     assert.equal(result.tag_name, 'v1.2.3');
     assert.deepEqual(calls[0], { type: 'get', owner: 'Trigger-CN', repo: 'SerialTerminal', tag: 'v1.2.3' });
-    assert.equal(calls[1].url, 'https://cos.example/releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe');
-    assert.equal(calls[2].options.notes, 'Release changes');
-    assert.equal(calls[2].options.target, 'abc123');
-    assert.deepEqual(calls[2].options.files, [path.join(outputDirectory, installer.name)]);
+    assert.deepEqual(calls.filter(call => call.type === 'download').map(call => call.url), [
+      'https://example.test/latest.yml',
+      'https://cos.example/releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe',
+      'https://example.test/setup.exe.blockmap'
+    ]);
+    const publish = calls.find(call => call.type === 'publish').options;
+    assert.equal(publish.notes, 'Release changes');
+    assert.equal(publish.target, 'abc123');
+    assert.deepEqual(publish.files, assets.map(asset => path.join(outputDirectory, asset.name)));
   } finally {
     await fs.promises.rm(outputDirectory, { recursive: true, force: true });
   }
@@ -93,7 +117,11 @@ test('release mirror rejects downloads with the wrong size from every source', a
       outputDirectory,
       githubClient: {
         async getRelease() {
-          return { assets: [{ name: 'SerialTerminal-Setup-1.2.3.exe', size: 100, browser_download_url: 'https://example.test' }] };
+          return { assets: [
+            { name: 'SerialTerminal-Setup-1.2.3.exe', size: 100, browser_download_url: 'https://example.test/setup.exe' },
+            { name: 'SerialTerminal-Setup-1.2.3.exe.blockmap', size: 100, browser_download_url: 'https://example.test/setup.exe.blockmap' },
+            { name: 'latest.yml', size: 100, browser_download_url: 'https://example.test/latest.yml' }
+          ] };
         },
         async download(url, destination) {
           await fs.promises.writeFile(destination, 'short');

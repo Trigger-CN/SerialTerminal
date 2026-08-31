@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, crashReporter } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, net, crashReporter } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { createTelemetryReporter, UUID_PATTERN } = require('./telemetry-reporter');
@@ -18,10 +18,18 @@ const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const { formatLocalDate, getLogDirectory } = require('./log-directory');
 const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
 const {
-  SERVER_UPDATE_METADATA_URL,
+  DYNAMIC_UPDATE_METADATA_URL,
   buildUpdateMetadataCandidates,
+  compareUpdateVersions,
   getUpdateChannel,
-  resolveUpdateMetadataUrl
+  isSameUpdate,
+  isStableUpdateVersion,
+  isUpdateSourceConsistent,
+  MAX_UPDATE_METADATA_BYTES,
+  readLimitedResponse,
+  resolveGiteeUpdateMetadataUrl,
+  runUpdateSourceFallback,
+  selectUpdateReleaseCandidates
 } = require('./update-source-resolver');
 const {
   findShellProfile: findConfiguredShellProfile,
@@ -36,20 +44,27 @@ const GITEE_OWNER = 'trigger-cn';
 const GITEE_REPO = 'SerialTerminal';
 const GITEE_API_BASE = `https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}`;
 const GITEE_RELEASE_PAGE = `https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases`;
+const GITHUB_RELEASE_PAGE = `https://github.com/Trigger-CN/${GITEE_REPO}/releases`;
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const UPDATE_PROMPT_INTERVAL_MS = 8 * 60 * 60 * 1000;
+const UPDATE_CHANNEL = 'stable';
+const UPDATE_METADATA_TIMEOUT_MS = 5000;
 const MAIN_WINDOW_TITLE = 'SerialTerminal by Trigger-CN';
+const UPDATE_PACKAGE_TYPE = process.platform === 'linux' && autoUpdater.constructor?.name === 'DebUpdater'
+  ? 'deb'
+  : process.platform === 'linux' ? 'AppImage' : 'exe';
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
-class CosProvider extends Provider {
+class UpdateMetadataProvider extends Provider {
   constructor(configuration, updater, runtimeOptions) {
     super(runtimeOptions);
     this.metadataUrl = new URL(configuration.metadataUrl);
+    this.selectionHeaders = configuration.selectionHeaders || undefined;
   }
 
   async getLatestVersion() {
-    const rawData = await this.httpRequest(this.metadataUrl);
+    const rawData = await fetchUpdateMetadata(this.metadataUrl, this.selectionHeaders);
     return yaml.load(rawData);
   }
 
@@ -62,14 +77,55 @@ class CosProvider extends Provider {
   }
 }
 
+async function fetchUpdateMetadata(metadataUrl, selectionHeaders) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPDATE_METADATA_TIMEOUT_MS);
+  let currentUrl = new URL(metadataUrl);
+  try {
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      if (currentUrl.protocol !== 'https:' || currentUrl.username || currentUrl.password || currentUrl.hash
+        || currentUrl.port || currentUrl.hostname.endsWith('.')) {
+        throw new Error('Update metadata redirect URL is unsafe');
+      }
+      const response = await net.fetch(currentUrl.toString(), {
+        headers: {
+          Accept: 'text/yaml, text/plain',
+          'User-Agent': `${app.getName()}/${app.getVersion()}`,
+          ...(selectionHeaders || {})
+        },
+        redirect: 'manual',
+        signal: controller.signal
+      });
+      if (response.status >= 300 && response.status < 400) {
+        if (selectionHeaders || redirects === 3) throw new Error('Update metadata redirect is not allowed');
+        const location = response.headers.get('location');
+        if (!location) throw new Error('Update metadata redirect has no location');
+        currentUrl = new URL(location, currentUrl);
+        continue;
+      }
+      if (!response.ok) throw new Error(`Update metadata request returned HTTP ${response.status}`);
+      const contentLength = Number(response.headers.get('content-length') || 0);
+      if (contentLength > MAX_UPDATE_METADATA_BYTES) throw new Error('Update metadata response is too large');
+      return await readLimitedResponse(response, MAX_UPDATE_METADATA_BYTES);
+    }
+    throw new Error('Too many update metadata redirects');
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
 let mainWindow;
 let prefsWindow;
 let updateDownloadWindow;
 let updateCheckTimer;
 let updateDownloadToken = null;
 let updateFeedFallbackActive = false;
+let updateDownloadFallbackActive = false;
+let updateMetadataCandidates = buildUpdateMetadataCandidates('', process.platform);
+let updateMetadataCandidatesPromise = Promise.resolve(updateMetadataCandidates);
 const chartParserClients = new Map();
-let activeUpdateMetadataUrl = SERVER_UPDATE_METADATA_URL;
+let activeUpdateMetadataUrl = updateMetadataCandidates[0];
 let updatePromptState = {
   phase: 'idle',
   checkSource: null,
@@ -1347,22 +1403,23 @@ function closeUpdateDownloadWindow() {
 }
 
 function getManualUpdateDownloadUrl(info) {
-  const exeFile = Array.isArray(info?.files)
-    ? info.files.find(file => /\.exe$/i.test(file?.name || file?.url || ''))
+  const artifactPattern = new RegExp(`\\.${UPDATE_PACKAGE_TYPE}(?:$|[?#])`, 'i');
+  const artifactFile = Array.isArray(info?.files)
+    ? info.files.find(file => artifactPattern.test(file?.name || file?.url || ''))
     : null;
-  if (exeFile?.url) {
+  if (artifactFile?.url) {
     try {
-      return new URL(String(exeFile.url)).toString();
+      return new URL(String(artifactFile.url), activeUpdateMetadataUrl).toString();
     } catch (error) {
-      log.warn('Failed to resolve COS update URL:', error);
+      log.warn('Failed to resolve manual update URL:', error);
     }
   }
-  return GITEE_RELEASE_PAGE;
+  return getReleaseUrl();
 }
 
 function withUpdateChannel(info) {
   if (!info || typeof info !== 'object') return info;
-  const updateChannel = getUpdateChannel(activeUpdateMetadataUrl, info)
+  const updateChannel = getUpdateChannel(activeUpdateMetadataUrl, info, process.platform, UPDATE_PACKAGE_TYPE)
     || info.updateChannel
     || updatePromptState.latestInfo?.updateChannel
     || '';
@@ -1410,7 +1467,7 @@ function createUpdateDownloadWindow(info) {
       manualDownload: tr('updateDialog.manualDownload'),
       manualDownloadUrl: getManualUpdateDownloadUrl(info),
       updateChannelLabel: tr('updateDialog.updateChannel'),
-      updateChannel: info?.updateChannel || getUpdateChannel(activeUpdateMetadataUrl, info),
+      updateChannel: info?.updateChannel || getUpdateChannel(activeUpdateMetadataUrl, info, process.platform, UPDATE_PACKAGE_TYPE),
       cancel: tr('prefs.cancelDownload'),
       cancelled: tr('prefs.downloadCancelled')
     });
@@ -1426,27 +1483,114 @@ function createUpdateDownloadWindow(info) {
 }
 
 function getReleaseUrl() {
-  return GITEE_RELEASE_PAGE;
+  return process.platform === 'linux' ? GITHUB_RELEASE_PAGE : GITEE_RELEASE_PAGE;
 }
 
 async function checkUpdateSources() {
   updateFeedFallbackActive = true;
   try {
-    const resolved = await resolveUpdateMetadataUrl({ fallbackUrl: SERVER_UPDATE_METADATA_URL, logger: log });
-    const candidates = buildUpdateMetadataCandidates(resolved.metadataUrl);
     let lastError;
-    for (const [index, metadataUrl] of candidates.entries()) {
+    const validateUpdateInfo = (metadataUrl, info, expectedInfo = info) => {
+      compareUpdateVersions(info?.version, info?.version);
+      if (UPDATE_CHANNEL === 'stable' && !isStableUpdateVersion(info?.version)) {
+        throw new Error('Stable update metadata cannot select a prerelease version');
+      }
+      if (!isSameUpdate(info, info, process.platform, UPDATE_PACKAGE_TYPE)) {
+        throw new Error('Update metadata does not contain a supported installer SHA-512');
+      }
+      if (!isUpdateSourceConsistent(metadataUrl, info, process.platform, UPDATE_PACKAGE_TYPE)) {
+        throw new Error('Update metadata points to an installer on a different source');
+      }
+      if (!isSameUpdate(expectedInfo, info, process.platform, UPDATE_PACKAGE_TYPE)) {
+        throw new Error('Update metadata changed during verification');
+      }
+      if (getUpdateChannel(metadataUrl, expectedInfo, process.platform, UPDATE_PACKAGE_TYPE)
+        !== getUpdateChannel(metadataUrl, info, process.platform, UPDATE_PACKAGE_TYPE)) {
+        throw new Error('Update metadata source changed during verification');
+      }
+      return info;
+    };
+    const checkMetadataSource = async (metadataUrl, description) => {
       try {
-        activeUpdateMetadataUrl = metadataUrl;
-        configureCosUpdateFeed(metadataUrl);
-        log.info(`Checking update metadata source ${index + 1}/${candidates.length}: ${metadataUrl}`);
-        return await autoUpdater.checkForUpdates();
+        log.info(`Checking ${description} update metadata source: ${metadataUrl}`);
+        const provider = new UpdateMetadataProvider(
+          { metadataUrl, selectionHeaders: getUpdateMetadataSelectionHeaders(metadataUrl) },
+          autoUpdater,
+          autoUpdater.createProviderRuntimeOptions()
+        );
+        const info = await provider.getLatestVersion();
+        validateUpdateInfo(metadataUrl, info);
+        return { metadataUrl, info };
       } catch (error) {
         lastError = error;
         log.warn(`Update metadata source failed: ${metadataUrl}`, error);
+        return null;
+      }
+    };
+
+    const dynamicPromise = process.platform === 'win32'
+      ? checkMetadataSource(DYNAMIC_UPDATE_METADATA_URL, 'dynamic')
+      : Promise.resolve(null);
+    const fallbackReleasesPromise = (async () => {
+      const giteeMetadataUrl = process.platform === 'win32'
+        ? await resolveGiteeUpdateMetadataUrl({ logger: log })
+        : '';
+      const candidates = buildUpdateMetadataCandidates(giteeMetadataUrl, process.platform)
+        .filter(metadataUrl => metadataUrl !== DYNAMIC_UPDATE_METADATA_URL);
+      return (await Promise.all(candidates.map(metadataUrl => checkMetadataSource(metadataUrl, 'fallback'))))
+        .filter(Boolean);
+    })();
+    const dynamicRelease = await dynamicPromise;
+    const releases = dynamicRelease ? [dynamicRelease] : await fallbackReleasesPromise;
+    if (!releases.length) throw lastError || new Error('No update metadata source is available');
+
+    const selectedReleases = dynamicRelease
+      ? [dynamicRelease]
+      : selectUpdateReleaseCandidates(releases, process.platform, UPDATE_PACKAGE_TYPE);
+    updateMetadataCandidates = selectedReleases
+      .map(candidate => candidate.metadataUrl);
+    const matchingFallbackReleasesPromise = dynamicRelease
+      ? fallbackReleasesPromise.then(fallbackReleases => fallbackReleases
+          .filter(release => isSameUpdate(dynamicRelease.info, release.info, process.platform, UPDATE_PACKAGE_TYPE)))
+      : Promise.resolve(selectedReleases);
+    updateMetadataCandidatesPromise = matchingFallbackReleasesPromise
+      .then(fallbackReleases => {
+          updateMetadataCandidates = [
+            ...(dynamicRelease ? [dynamicRelease.metadataUrl] : []),
+            ...fallbackReleases.map(candidate => candidate.metadataUrl)
+          ];
+          return updateMetadataCandidates;
+        });
+    const runVerifiedUpdaterCheck = async release => {
+      const { metadataUrl, info: expectedInfo } = release;
+      activeUpdateMetadataUrl = metadataUrl;
+      configureUpdateFeed(metadataUrl);
+      const result = await autoUpdater.checkForUpdates();
+      const info = validateUpdateInfo(metadataUrl, result?.updateInfo || result?.versionInfo, expectedInfo);
+      if (result?.isUpdateAvailable) handleVerifiedUpdateAvailable(info);
+      else handleVerifiedUpdateNotAvailable(info);
+      return result;
+    };
+    for (const release of selectedReleases) {
+      try {
+        return await runVerifiedUpdaterCheck(release);
+      } catch (error) {
+        lastError = error;
+        log.warn(`Verified update metadata source failed during updater check: ${release.metadataUrl}`, error);
       }
     }
-    throw lastError || new Error('No update metadata source is available');
+    if (dynamicRelease) {
+      const fallbackReleases = await matchingFallbackReleasesPromise;
+      for (const release of fallbackReleases) {
+        try {
+          return await runVerifiedUpdaterCheck(release);
+        } catch (error) {
+          lastError = error;
+          log.warn(`Verified fallback metadata source failed during updater check: ${release.metadataUrl}`, error);
+        }
+      }
+    }
+    throw lastError || new Error('No verified update metadata source is available');
   } catch (error) {
     if (updatePromptState.phase === 'checking') {
       sendUpdateStatusToPrefs('error', error.message);
@@ -1459,8 +1603,21 @@ async function checkUpdateSources() {
   }
 }
 
-function configureCosUpdateFeed(metadataUrl) {
-  autoUpdater.setFeedURL({ provider: 'custom', updateProvider: CosProvider, metadataUrl });
+function getUpdateMetadataSelectionHeaders(metadataUrl) {
+  if (metadataUrl !== DYNAMIC_UPDATE_METADATA_URL) return undefined;
+  return {
+    'X-SerialTerminal-Version': app.getVersion(),
+    'X-SerialTerminal-Channel': UPDATE_CHANNEL
+  };
+}
+
+function configureUpdateFeed(metadataUrl) {
+  autoUpdater.setFeedURL({
+    provider: 'custom',
+    updateProvider: UpdateMetadataProvider,
+    metadataUrl,
+    selectionHeaders: getUpdateMetadataSelectionHeaders(metadataUrl)
+  });
 }
 
 async function fetchGiteeReleaseNotes(version) {
@@ -1550,8 +1707,13 @@ function beginUpdateDownload() {
   const token = new CancellationToken();
   updateDownloadToken = token;
 
-  autoUpdater.downloadUpdate(token).catch(error => {
-    if (!token.cancelled) log.error('Failed to download update:', error);
+  downloadUpdateWithFallback(token).catch(error => {
+    if (!token.cancelled) {
+      log.error('Failed to download update:', error);
+      updatePromptState.phase = 'available';
+      sendUpdateStatusToPrefs('error', error.message);
+      sendUpdateDownloadStatus('error', error.message);
+    }
   }).finally(() => {
     if (updateDownloadToken !== token) return;
 
@@ -1563,6 +1725,39 @@ function beginUpdateDownload() {
       closeUpdateDownloadWindow();
     }
   });
+}
+
+async function downloadUpdateWithFallback(token) {
+  const expectedInfo = updatePromptState.latestInfo;
+  updateDownloadFallbackActive = true;
+  try {
+    await updateMetadataCandidatesPromise;
+    return await runUpdateSourceFallback(updateMetadataCandidates, async (metadataUrl, index) => {
+      configureUpdateFeed(metadataUrl);
+      const result = await autoUpdater.checkForUpdates();
+      if (!result?.isUpdateAvailable) throw new Error('Selected update is not available from this source');
+      const sourceInfo = result?.updateInfo || result?.versionInfo;
+      if (!isSameUpdate(expectedInfo, sourceInfo, process.platform, UPDATE_PACKAGE_TYPE)) {
+        throw new Error('Update version or SHA-512 does not match the selected release');
+      }
+      if (UPDATE_CHANNEL === 'stable' && !isStableUpdateVersion(sourceInfo?.version)) {
+        throw new Error('Stable update metadata cannot select a prerelease version');
+      }
+      if (!isUpdateSourceConsistent(metadataUrl, sourceInfo, process.platform, UPDATE_PACKAGE_TYPE)) {
+        throw new Error('Update metadata points to an installer on a different source');
+      }
+      activeUpdateMetadataUrl = metadataUrl;
+      autoUpdater.disableDifferentialDownload = getUpdateChannel(metadataUrl, sourceInfo, process.platform, UPDATE_PACKAGE_TYPE) === 'Gitee';
+      updatePromptState.latestInfo = withUpdateChannel({ ...sourceInfo, updateChannel: '' });
+      log.info(`Downloading update from source ${index + 1}/${updateMetadataCandidates.length}: ${metadataUrl}`);
+      return autoUpdater.downloadUpdate(token);
+    }, {
+      isCancelled: () => token.cancelled,
+      logger: log
+    });
+  } finally {
+    updateDownloadFallbackActive = false;
+  }
 }
 
 function cancelUpdateDownload() {
@@ -2274,10 +2469,11 @@ function sendUpdateStatusToPrefs(status, data) {
 }
 
 autoUpdater.on('checking-for-update', () => {
-    sendUpdateStatusToPrefs('checking');
+  if (updateFeedFallbackActive || updateDownloadFallbackActive) return;
+  sendUpdateStatusToPrefs('checking');
 });
 
-autoUpdater.on('update-available', (info) => {
+function handleVerifiedUpdateAvailable(info) {
   info = withUpdateChannel(info);
   updatePromptState.latestInfo = info;
   updateMainWindowTitle();
@@ -2301,19 +2497,29 @@ autoUpdater.on('update-available', (info) => {
   }
 
   offerAvailableUpdate(info, isStartupPrompt);
-});
+}
 
-autoUpdater.on('update-not-available', (info) => {
+function handleVerifiedUpdateNotAvailable(info) {
   info = withUpdateChannel(info);
   sendUpdateStatusToPrefs('not-available', info);
   updatePromptState.latestInfo = null;
   updatePromptState.phase = 'idle';
   updatePromptState.checkSource = null;
   updateMainWindowTitle();
+}
+
+autoUpdater.on('update-available', (info) => {
+  if (updateFeedFallbackActive || updateDownloadFallbackActive) return;
+  handleVerifiedUpdateAvailable(info);
+});
+
+autoUpdater.on('update-not-available', (info) => {
+  if (updateFeedFallbackActive || updateDownloadFallbackActive) return;
+  handleVerifiedUpdateNotAvailable(info);
 });
 
 autoUpdater.on('error', (err) => {
-  if (updateFeedFallbackActive) return;
+  if (updateFeedFallbackActive || updateDownloadFallbackActive) return;
   sendUpdateStatusToPrefs('error', err.message);
   sendUpdateDownloadStatus('error', err.message);
   updatePromptState.phase = updatePromptState.latestInfo ? 'available' : 'idle';
