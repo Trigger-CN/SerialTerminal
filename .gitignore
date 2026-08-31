@@ -5,4 +5,5 @@ log/
 .DS_Store
 thumbs.db
 .zcode/
+.me/
 release-mirror/
