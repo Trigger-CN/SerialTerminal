@@ -1,8 +1,35 @@
-# Hex 显示与发送功能待办事项
+# Hex 显示与发送功能实施记录
+
+## 0. 当前实施状态
+
+Hex 第一版核心代码已完成，本文现作为设计决策、历史实施记录和剩余实机测试矩阵。正文中的旧 schema 示例和“统一 TX profile”描述是早期方案，当前事实以本节、`main.js`、`renderer.js` 和 `agent_notes.md` 为准。
+
+当前实现：
+
+- RX 独立支持 Text/Hex；Text 使用流式 decoder，Hex 使用跨 chunk 的 `HexStreamFormatter`。
+- TX Text 编码保存于 `lastSerialOptions.sendEncoding`；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`。
+- 自动发送、主终端逐键/Enter、右键粘贴及发送选区固定为 Text；Hex 发送入口是底部输入框和 Hex 快捷指令。
+- 所有发送最终通过 `sendSerialRequest()`、`serial-write` 和 `buildSerialWriteBuffer()`；旧 `serial-input` IPC 已移除。
+- Raw `.bin` 仍是 RX-only 原始字节；显示日志和 Raw 日志语义彼此独立。
+- 当前配置 schema 为 v11，不是本文历史章节中的 v2/v3/v4。
+
+自动化证据：
+
+- `test/serial-codec.test.js` 覆盖严格 Hex 解析、错误码、上限、Text 编码及追加字节。
+- `test/hex-formatter.test.js` 覆盖流式格式化核心行为；`test/markup.test.js` 覆盖相关 UI/配置接线。
+- `npm test` 运行上述测试以及项目其余 Node 测试。
+
+剩余验证：
+
+- Windows/Linux 真实或虚拟串口的 RX/TX 字节一致性、随机 chunk 边界、UTF-8/GBK 跨块与高吞吐长时间测试。
+- Raw `.bin` 与实际 RX 逐字节对比、阈值刷盘、断开/退出残余刷盘。
+- 窄窗口、分屏、六种语言布局和 Shell/过滤/搜索/焦点完整桌面回归。
+
+---
 
 ## 1. 文档目标
 
-本文档用于规划 `SerialTerminal` 的 Hex 接收显示、Hex 发送及相关配套能力。
+本文最初用于规划 `SerialTerminal` 的 Hex 接收显示、Hex 发送及配套能力；现在重点记录既定语义和未完成验证。
 
 核心原则：
 
@@ -31,8 +58,8 @@
 - [x] Hex 输入提供实时校验、标准化和字节数预览。
 - [x] Hex 模式支持追加 `0D 0A`。
 - [x] 快捷发送项独立记录 Text / Hex 模式。
-- [x] 自动发送独立记录 Text / Hex 模式。
-- [x] 发送历史记录输入模式、编码和追加 CRLF 状态。
+- [x] 自动发送固定为 Text，并复用统一发送服务。
+- [x] 发送历史记录底部输入框的 mode/content；编码和追加选项使用当前输入设置。
 - [x] Hex 显示内容支持现有搜索能力。
 - [x] 过滤 tab 支持过滤格式化后的 Hex 行。
 - [x] 支持保存 RX 原始二进制日志 `.bin`。
@@ -72,12 +99,12 @@
 
 ---
 
-## 4. 配置与数据模型
+## 4. 配置与数据模型（历史演进，当前 schema v11）
 
 ### 4.1 配置版本和迁移
 
 - [x] 在配置中新增 `configVersion`。
-- [x] 定义本次配置版本号，例如 `2`。
+- [x] 当前配置版本由后续功能继续递增，现为 v11。
 - [x] 在 `main.js -> loadConfig()` 中集中执行配置迁移。
 - [x] 避免在 `renderer.js` 多处散落旧配置兼容判断。
 - [x] 迁移完成后保存新结构，避免每次启动重复迁移。
@@ -85,7 +112,7 @@
 
 旧 `lastSerialOptions.encoding` 迁移规则：
 
-| 旧值 | RX 模式 | RX 编码 | TX 模式 | TX 编码 |
+| 旧值 | RX 模式 | RX 编码 | 底部输入初始模式 | TX Text 编码 |
 |---|---|---|---|---|
 | `utf8` | `text` | `utf8` | `text` | `utf8` |
 | `ascii` | `text` | `ascii` | `text` | `ascii` |
@@ -106,16 +133,14 @@
     "parity": "none",
     "receiveDisplayMode": "text",
     "receiveEncoding": "utf8",
-    "sendMode": "text",
     "sendEncoding": "utf8",
-    "appendCrLf": false,
     "newlineMode": "crlf"
   }
 }
 ```
 
 - [x] 校验 `receiveDisplayMode` 只允许 `text` / `hex`。
-- [x] 校验 `sendMode` 只允许 `text` / `hex`。
+- [x] 底部输入与快捷指令的 `mode` 只允许 `text` / `hex`。
 - [x] 校验 Text 编码只允许项目支持的编码。
 - [x] 保留最近一次 Text 编码，切换 Hex 时不丢失。
 
@@ -141,9 +166,8 @@
 
 ### 4.4 主输入框配置
 
-- [x] `mainInputSettings` 最终只保留可见状态和按回车发送；发送模式由统一 TX profile 管理。
-- [x] 决定 Text / Hex 双草稿是否只保存在内存中。
-- [ ] 若持久化草稿，增加关闭保存敏感输入的设置选项。
+- [x] `mainInputSettings` 保存可见状态、Enter 发送、`mode`、`appendCrLf` 和历史上限。
+- [x] Text / Hex 双草稿只保存在当前 renderer 会话内，不持久化敏感输入。
 - [x] 发送历史条目改为结构化对象：
 
 ```js
@@ -167,8 +191,8 @@
 }
 ```
 
-- [x] 自动发送始终使用统一 TX profile，配置只保存 enabled、interval、content。
-- [x] 旧自动发送模式/编码/追加字段在规范化时移除，内容保持不变。
+- [x] 自动发送固定使用 Text 和当前 `sendEncoding`，配置只保存 enabled、interval、content。
+- [x] 旧自动发送模式/编码/追加字段在规范化时移除。
 
 ### 4.6 快捷发送配置
 
@@ -178,14 +202,16 @@
 {
   "id": "quick-1",
   "label": "读取寄存器",
+  "mode": "hex",
+  "appendCrLf": false,
   "content": "01 03 00 00 00 02 C4 0B"
 }
 ```
 
 - [x] 为新快捷发送项生成稳定 ID。
-- [x] 快捷发送项只持久化稳定 id、label、content，旧 profile 字段在规范化时移除。
-- [x] 旧快捷发送项保留原始 `content`，不重复追加换行。
-- [x] 拖动排序后保存简化数据模型。
+- [x] 快捷发送项持久化稳定 id、groupId、label、mode、appendCrLf、content、侧栏入口和 autoTrigger。
+- [x] 旧快捷发送项保留原始 `content`，并按配置版本迁移追加语义。
+- [x] 分组、组内顺序、跨组移动和展开/窄侧栏顺序均可持久化。
 
 ### 4.7 Raw 日志配置
 
@@ -203,12 +229,10 @@
 - [x] 从现有 Encoding 下拉框中移除 `Hex` 选项。
 - [x] 新增 RX 显示模式下拉框：Text / Hex。
 - [x] 新增 RX 文本编码下拉框：UTF-8 / ASCII / GBK。
-- [x] TX 发送模式和文本编码移至左侧发送页顶部的统一 profile。
-- [x] 统一 profile 增加追加 CRLF / 0D 0A 开关。
-- [x] 保留现有换行模式下拉框。
-- [x] 串口设置区只保留紧凑 RX 行，统一 TX profile 位于发送页顶部。
-- [x] RX 为 Hex 时禁用 RX 编码控件。
-- [x] TX 为 Hex 时禁用 TX 编码控件。
+- [x] TX Text 编码位于串口设置区。
+- [x] 底部输入和快捷指令分别提供 Text/Hex 与追加 CRLF 选项。
+- [x] 保留现有终端换行模式下拉框。
+- [x] RX 为 Hex 时禁用 RX 编码控件；`sendEncoding` 始终作为 Text 编码保留。
 - [x] 模式控件在连接期间保持可切换。
 - [x] 串口物理参数在连接期间维持现有行为。
 - [x] 模式变化立即保存配置，但避免配置保存/回推形成 UI 回环。
@@ -217,11 +241,11 @@
 
 ```text
 RX  [ Text ▼ ] [ UTF-8 ▼ ]
+TX             [ UTF-8 ▼ ]
 NL  [ CRLF / CRLF       ▼ ]
 
-发送页：
-TX  [ Text ▼ ] [ UTF-8 ▼ ]
-    [x] Append CRLF / 0D 0A
+底部输入：[HEX] [CRLF]
+快捷指令编辑：Text/Hex + Append CRLF
 ```
 
 ### 5.2 Hex 显示选项
@@ -236,15 +260,12 @@ TX  [ Text ▼ ] [ UTF-8 ▼ ]
 
 ### 5.3 底部主输入框
 
-- [x] 移除底部 Text / Hex 控件，模式由统一 TX profile 控制。
-- [x] Text / Hex 分别保留输入草稿。
+- [x] 底部提供 Text / Hex 模式控件并分别保留内存草稿。
 - [x] Text 模式显示字符数和预计编码字节数。
 - [x] Hex 模式显示格式有效性和字节数。
-- [x] Hex 输入无效时禁用发送按钮。
-- [x] Hex 输入无效时显示具体错误位置或 token。
-- [x] Text 模式 placeholder 保持现有语义。
-- [x] Hex 模式 placeholder 改为 `AA 55 01 FF` 一类示例。
-- [x] 移除底部追加控件，追加语义由统一 TX profile 控制。
+- [x] Hex 输入无效时禁用发送按钮并显示具体错误位置或 token。
+- [x] Text/Hex 使用对应 placeholder。
+- [x] 底部追加控件保存到 `mainInputSettings.appendCrLf`。
 - [x] 发送成功状态显示实际写入字节数。
 - [x] 发送失败状态显示结构化错误信息。
 - [x] 保持发送后不清空输入框。
@@ -259,23 +280,19 @@ AA 55 01 00 FF                            [发送] [+快捷] [回车发送]
 
 ### 5.4 自动发送区
 
-- [x] 移除自动发送独立模式/编码/追加控件，统一使用全局 TX profile。
+- [x] 自动发送固定为 Text，使用当前 TX Text 编码且不追加 CRLF。
 - [x] 增加实时输入校验状态。
-- [x] Hex 无效时禁止启用自动发送。
 - [x] 自动发送启用期间修改内容后重新校验。
-- [x] 设置合理的最小发送间隔，例如 10ms 或 20ms。
-- [x] 串口断开时显示“等待连接”，不执行写入。
-- [x] 串口重连后按既定产品决策恢复。
+- [x] 最小发送间隔为 10ms。
+- [x] 串口断开时显示“等待连接”，重连后按 generation token 安全恢复。
 - [x] 串口实际写入失败时停止自动发送并提示。
 
 ### 5.5 快捷发送区
 
-- [x] 移除快捷编辑区独立模式/编码/追加控件，统一使用全局 TX profile。
+- [x] 快捷编辑区提供每条独立的 Text/Hex 与追加 CRLF 控件。
 - [x] Hex 内容无效时禁止添加或保存。
-- [x] 快捷列表不显示 `TXT` / `HEX` 徽标，因为模式来自当前全局 profile。
-- [x] 列表项 tooltip 显示标准化后的发送内容和字节数。
-- [x] 编辑已有项只恢复标签和内容。
-- [x] 主输入框“加入快捷发送”只保存稳定 id、标签和内容。
+- [x] 编辑已有项恢复标签、内容、模式、追加、分组、侧栏入口和自动触发。
+- [x] 主输入框“加入快捷发送”复制当前 mode/appendCrLf。
 - [x] 保持现有快捷发送拖动排序。
 
 ### 5.6 窄窗口和跨平台布局
@@ -333,16 +350,13 @@ AA 55 01 00 FF                            [发送] [+快捷] [回车发送]
 
 ### 6.3 单元测试数据
 
-- [ ] `AA 55` 解析为两个字节。
-- [ ] `AA55` 解析为两个字节。
-- [ ] `0xAA,0x55` 解析为两个字节。
-- [ ] `aa:55-01` 正常解析。
-- [ ] `00 FF` 保留 `00`。
-- [ ] `AA 5` 返回不完整字节错误。
-- [ ] `AA GG` 返回非法字符错误。
-- [ ] `0xA 0x55` 返回无效 token。
-- [ ] 纯分隔符返回空内容错误。
-- [ ] 超过限制的数据被拒绝。
+以下行为已由 `test/serial-codec.test.js` 自动覆盖：
+
+- [x] 空格、连续字符、`0x`、逗号/冒号/连字符及小写输入。
+- [x] `00` 等零字节保留。
+- [x] 奇数位、非法字符、无效 `0x` token 和空内容返回结构化错误。
+- [x] 超过限制的数据被拒绝。
+- [x] Text 编码、不可表示字符与追加 `0D 0A`。
 
 ---
 
@@ -352,31 +366,12 @@ AA 55 01 00 FF                            [发送] [+快捷] [回车发送]
 
 - [x] 新增统一的 `ipcMain.handle('serial-write')`。
 - [x] 使用 `ipcRenderer.invoke()` 获取发送成功或失败结果。
-- [ ] 定义统一请求结构：
-
-```js
-{
-    mode: 'hex',
-    content: 'AA 55 01 FF',
-    encoding: 'utf8',
-    appendCrLf: false,
-    source: 'main-input'
-}
-```
-
-- [ ] 定义成功返回值：
-
-```js
-{
-    ok: true,
-    bytesWritten: 4
-}
-```
-
-- [ ] 定义失败返回值，包含 `code`、`message` 和可选位置。
-- [x] 在主进程进行最终校验，不能只信任渲染层校验。
-- [x] 等待 `SerialPort.write()` 回调后再报告成功。
-- [ ] 需要时调用 `drain()`，明确成功语义是进入系统缓冲还是实际排空。
+- [x] 请求包含 mode、content、encoding、appendCrLf、source 和 sessionId。
+- [x] 成功返回 `{ ok: true, bytesWritten }`。
+- [x] 失败返回 code、message 和可选位置/token。
+- [x] 主进程执行最终校验，不能只信任渲染层校验。
+- [x] 等待 `SerialPort.write()` 回调后报告成功。
+- [x] 当前不调用 `drain()`；成功语义仅为驱动写回调成功，不表示设备已接收。
 
 ### 7.2 Text 发送
 
@@ -404,17 +399,14 @@ AA 55 01 00 FF                            [发送] [+快捷] [回车发送]
 - [x] 自动发送。
 - [x] 右键“粘贴并发送”。
 - [x] 右键“发送选中内容”。
-- [ ] 其他现有直接发送 `serial-input` 的入口。
-- [ ] 清理或废弃旧 `serial-input` IPC，避免两套逻辑长期并存。
+- [x] 旧 `serial-input` IPC 已移除，当前只有 `serial-write`。
 
-### 7.5 主终端键盘策略
+### 7.5 主终端与其它发送入口策略
 
-- [ ] TX Text 模式保持逐键发送和本地回显。
-- [ ] TX Hex 模式拦截普通键盘输入，不直接发送。
-- [ ] TX Hex 模式给出使用底部输入框的提示。
-- [ ] TX Hex 模式粘贴时将内容放入底部输入框并校验。
-- [ ] 右键发送选中内容时根据当前 TX 模式解释选区。
-- [ ] Shell tab 键盘和粘贴逻辑保持不变。
+- [x] 主终端保持逐键 Text 发送和本地回显，Enter 使用 newlineMode。
+- [x] 主终端与右键粘贴/发送选区固定按 Text 处理。
+- [x] Hex 通过底部输入框或 Hex 快捷指令发送。
+- [x] Shell tab 键盘和粘贴走独立 PTY IPC，不复用串口模式。
 
 ### 7.6 发送限制
 
@@ -509,7 +501,7 @@ mainWindow.webContents.send('serial-output-bytes', {
 - [x] Hex 切 Text后创建新 decoder。
 - [x] 模式切换不重放历史数据。
 - [x] 模式切换提示只写显示终端，不写 Raw 二进制日志。
-- [ ] 过滤 tab 根据其数据模式决定暂停或继续接收。
+- [x] 过滤 tab 根据其数据模式决定暂停或继续接收。
 - [x] 切换过程不得触发主输入框抢焦点。
 
 ---
@@ -567,7 +559,7 @@ mainWindow.webContents.send('serial-output-bytes', {
 
 ### 10.2 Raw 二进制缓冲
 
-- [x] 将真正的 Raw Buffer 与当前字符串 `rawSerialBuffer` 区分命名。
+- [x] 将 RX Raw Buffer 与旧版字符串显示日志缓冲明确区分并独立命名。
 - [x] 使用 Buffer 数组保存待刷盘数据。
 - [x] `rawBinaryByteCount` 使用 `data.length` 精确计数。
 - [x] 达到阈值时批量 `Buffer.concat()` 并追加写入。
@@ -613,7 +605,7 @@ mainWindow.webContents.send('serial-output-bytes', {
 - [x] flush Hex 残余行。
 - [x] 调用 Text decoder `end()`。
 - [x] 处理 `SerialDataParser` 未完成内容。
-- [ ] flush 显示日志。
+- [x] flush 显示日志。
 - [x] flush Raw 二进制日志。
 - [x] 清理 idle timer。
 - [x] 清理串口对象和发送中状态。
@@ -633,7 +625,7 @@ mainWindow.webContents.send('serial-output-bytes', {
 - [x] Hex 内容变为无效时暂停发送。
 - [x] 上一次写入未完成时不启动下一次写入。
 - [x] 写入失败时停止 timer 并显示原因。
-- [ ] 应用退出时清理 timer。
+- [x] 应用退出和配置切换时通过 generation/timer 清理自动发送。
 
 ---
 
@@ -690,68 +682,27 @@ mainWindow.webContents.send('serial-output-bytes', {
 
 ---
 
-## 14. 建议代码组织
-
-### 14.1 可新增文件
-
-- [x] 评估新增 `serial-codec.js`。
-- [x] 评估新增 `hex-formatter.js`。
-- [x] 若新增文件，同步更新 `agent_notes.md` 目录结构。
-
-建议职责：
+## 14. 当前代码组织
 
 ```text
-serial-codec.js
-- parseHexInput()
-- normalizeHexInput()
-- validateSerialWriteRequest()
-- formatByteCount()
-
-hex-formatter.js
-- HexStreamFormatter
-- formatHexLine()
-- byteToPrintableAscii()
+serial-codec.js       parseHexInput() / buildSerialWriteBuffer()
+hex-formatter.js      HexStreamFormatter / formatHexLine()
+main.js               config v11 迁移、serial-write、原始 RX IPC、Raw 日志
+renderer.js           RX 模式、输入校验、统一发送、过滤/搜索和生命周期
+preferences.*         Hex dump 与 Raw 日志高级设置
+test/*.test.js        codec、formatter、markup 和相关回归
 ```
 
-### 14.2 `main.js`
+维护要求：
 
-- [ ] 增加配置迁移函数。
-- [ ] 增加 `parseHexInput()` 或复用共享模块。
-- [ ] 增加 `buildSerialWriteBuffer()`。
-- [ ] 增加统一 `writeSerialPayload()`。
-- [x] 增加 Raw 日志缓冲和刷盘函数。
-- [ ] 将串口接收改为原始字节 IPC。
-- [ ] 删除旧 Hex 编码分支。
-
-### 14.3 `renderer.js`
-
-- [ ] 增加模式 UI 状态管理。
-- [ ] 增加 Text 流式 decoder 管理。
-- [ ] 增加 Hex formatter 生命周期管理。
-- [ ] 增加主输入实时校验。
-- [ ] 增加统一发送调用封装。
-- [ ] 改造自动发送和快捷发送。
-- [ ] 改造过滤 tab 数据模式。
-- [ ] 保持 workspace、搜索、焦点和 Shell 行为稳定。
-
-### 14.4 `index.html` / `style.css`
-
-- [ ] 新增 RX/TX 模式控件。
-- [ ] 改造主输入布局。
-- [ ] 改造自动发送和快捷发送编辑区。
-- [ ] 增加模式徽标和校验状态样式。
-- [ ] 清理本次涉及区域的内联样式，优先复用 CSS class。
-
-### 14.5 `preferences.html` / `preferences.js`
-
-- [ ] 增加 Hex 显示高级设置。
-- [x] 增加 Raw 二进制日志设置。
-- [ ] 回填、保存和恢复默认值。
-- [ ] 增加输入范围校验。
-
+- 严格解析和最终 Buffer 构造继续集中在 `serial-codec.js`。
+- `main.js` 必须保留最终校验和 session 隔离。
+- `renderer.js` 不得增加绕过 `sendSerialRequest()` 的串口写入分支。
+- Shell IPC、图表文本流、显示日志和 Raw `.bin` 语义保持相互独立。
+- 配置或行为变化同步更新 `agent_notes.md`、README 和专项测试。
 ---
 
-## 15. 分阶段实施计划
+## 15. 分阶段实施记录
 
 ### 阶段 A：底层模型与解析器（已实现，待硬件回归）
 
@@ -964,20 +915,21 @@ hex-formatter.js
 
 ---
 
-## 19. 完成定义
+## 19. 完成定义与当前结论
 
-只有满足以下条件，Hex 功能才能标记为完成：
+代码层完成：
 
-- [ ] 第一版“必须实现”列表全部完成。
-- [ ] Text / Hex 接收和发送四种组合均通过验证。
-- [ ] 所有发送入口使用统一业务逻辑。
-- [ ] 非法 Hex 输入不会发送任何部分数据。
-- [ ] Raw `.bin` 与实际 RX 字节完全一致。
-- [ ] UTF-8 和 GBK 跨 Buffer 解码测试通过。
-- [ ] 主终端、过滤 tab、分屏、Shell、搜索和焦点无关键回归。
-- [ ] 配置迁移和启动恢复通过验证。
-- [ ] 六种语言完成并检查布局。
-- [ ] Windows 实机测试通过。
-- [ ] Linux 基础测试通过或明确记录未验证项。
-- [ ] `README.md` 和 `agent_notes.md` 已同步更新。
-- [ ] 代码语法检查、现有测试和新增测试通过。
+- [x] 第一版核心收发、显示、过滤、日志、配置迁移和多语言代码已落地。
+- [x] 所有当前发送入口使用 `serial-write` 与统一 Buffer 构造。
+- [x] 非法 Hex 输入不会部分发送。
+- [x] README、`agent_notes.md` 与本文已同步当前模型。
+- [x] 自动化测试覆盖 codec 与 formatter 核心。
+
+发布验收尚未完成：
+
+- [ ] Text/Hex 接收和发送组合通过真实或虚拟串口矩阵。
+- [ ] Raw `.bin` 与实际 RX 字节逐字节一致。
+- [ ] UTF-8 和 GBK 跨 Buffer 实机测试通过。
+- [ ] 主终端、过滤、分屏、Shell、搜索和焦点无关键桌面回归。
+- [ ] Windows 实机与 Linux 基础/打包验证完成。
+- [ ] 高吞吐与长时间内存/刷盘行为形成可复核记录。

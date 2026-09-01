@@ -2,6 +2,13 @@
 
 本文档记录 2026-07-29 全仓库代码审查后确认的待办事项。实施时优先处理行为缺陷和安全问题，再处理性能、测试和长期架构优化。
 
+## 当前状态
+
+- 已完成项保留为审查和实施记录；未勾选项才是当前工程待办。
+- 专项硬件、跨平台和长时间验证分别记录在 `HEX_FEATURE_TODO.md` 与 `CHART_TAB_IMPLEMENTATION_PLAN.md`，本文件只保留全局门禁。
+- 当前配置 schema 为 v11；开发与 CI 使用 Node.js >=22.12.0；`npm test` 同时运行根项目和 `telemetry-server` 测试。
+
+
 ## P0 - 优先修复
 
 - [x] 修复 Shell 标签快速关闭时的 PTY 会话泄漏
@@ -21,7 +28,7 @@
   - 问题：官方 registry 的生产依赖审计报告 3 个 High，涉及 `electron-updater`、`builder-util-runtime` 和 `js-yaml`。
   - 方案：升级到不受影响版本并重新生成 lockfile；CI 增加 `npm audit --registry=https://registry.npmjs.org --omit=dev`。
   - 验收：生产依赖审计无 High/Critical；Windows/Linux 构建和在线更新流程通过。
-  - 结果：`electron-updater` 已升级至 `^6.8.9`，通过 npm override 固定 `js-yaml ^4.3.0`；生产依赖审计为 0 漏洞。打包和在线更新仍需发布前人工验证。
+  - 结果：`electron-updater` 已升级至 `^6.8.9`，生产依赖使用 `builder-util-runtime 9.7.0` 并通过 npm override 固定 `js-yaml ^5.2.3`；生产依赖审计为 0 漏洞。打包和在线更新仍需发布前人工验证。
 
 ## P1 - 行为与性能
 
@@ -86,10 +93,10 @@
 ## P2 - 测试、发布与维护
 
 - [x] 建立自动化测试和 CI 门禁
-  - 使用 Node 内置 `node:test` 覆盖 `serial-codec.js`、`hex-formatter.js`、配置归一化和 i18n key 完整性。
-  - 增加 mock serialport 的 IPC 写入测试，以及 Shell/session 生命周期测试。
-  - 发布 workflow 在打包前必须执行测试。
-  - 进度：已增加 `npm test`，覆盖 codec、formatter、Shell profile ID、设置数值边界、损坏工作区布局恢复和 i18n 基线；GitHub Checks 已执行干净安装、测试、语法和生产审计。完整配置归一化、IPC 与 Shell 生命周期集成测试仍待补齐。
+  - `npm test` 通过 `scripts/run-tests.js` 运行根项目 Node 测试及 `telemetry-server` 测试。
+  - 当前覆盖 codec、formatter、图表解析/Worker/数据模型/视图/CSV、搜索历史、日志、工作区、i18n、遥测和发布链路。
+  - GitHub Checks 执行干净安装、测试、全仓库 JavaScript 语法检查和生产依赖审计；发布 workflow 在打包前重复执行测试。
+  - 完整配置归一化、mock serialport IPC、Shell session 生命周期集成测试和长时间图表性能测试仍待补齐。
 
 - [x] 发布安装改为可复现流程
   - 位置：`.github/workflows/release.yml`。
@@ -98,8 +105,8 @@
   - 结果：新增 tag 发布 workflow，Windows/Linux 共用 Node 22.12 和同一 lockfile，安装使用 `npm ci --ignore-scripts`，显式执行 native rebuild、测试、打包和 lockfile 不变检查。
 
 - [x] 修正文档和 Node 版本约束
-  - `README.md` 当前写 Node.js 16+，但 `serialport@13` 要求 Node 20+。
-  - README 与 `package.json.engines` 统一声明 Node `>=20`，CI 固定受支持版本。
+  - 审查时 `README.md` 仍写 Node.js 16+，但 `serialport@13` 和当前构建链要求更高。
+  - README、`package.json.engines` 与 CI 统一声明 Node `>=22.12.0`。
   - 结果：当前构建工具链要求 Node `>=22.12.0`，README、package engines 和 CI 已统一到该版本。
 
 - [ ] 限制大 scrollback 搜索对 UI 的阻塞
@@ -120,18 +127,24 @@
   - 将可点击 `div` 改为 `button`，为 tab 增加 `role="tab"` / `aria-selected`，提供 `button:focus-visible` 焦点样式。
   - 结果：sidebar/footer 与 workspace tab 已使用原生 button，tab/panel 建立 ARIA 关联并同步选中状态，键盘焦点清晰可见。
 
-- [ ] 完善多语言 key
-  - 以 English key 集合为基准增加完整性测试；补齐简中及其他语言的新侧边栏、Shell、分屏和更新文案。
+- [x] 保持多语言 key 完整覆盖
+  - 自动化测试已确认全部配置语言覆盖 English 基线并保留插值参数；新增或修改文案时必须同步所有语言，并继续人工检查不同语言下的布局与截断。
 
 - [ ] 逐步迁移 Electron 安全模型
   - 当前主窗口和设置窗口使用 `nodeIntegration: true`、`contextIsolation: false`。
   - 长期迁移到 preload + context bridge，并限制 renderer 可调用 IPC。
 
+- [ ] 扩大高风险集成测试
+  - 覆盖完整 config v11 归一化与历史迁移、mock serialport `serial-write`/session 隔离、Shell 快速创建关闭及图表 Worker 超时/资源释放。
+
+- [ ] 控制大型维护文档漂移
+  - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
+
 ## 验证基线
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [ ] Windows 和 Linux 打包通过（Windows NSIS 已通过，Linux 待验证；不再生成 portable 版本）。
-- [ ] 真实或虚拟串口覆盖 Text/Hex、UTF-8/ASCII/GBK、自动发送、快捷发送和重连。
-- [ ] 主终端、过滤标签、Shell 标签、分屏、侧边栏收起/展开进行人工交互回归。
+- [ ] Windows 和 Linux 打包通过（Windows NSIS 已有成功记录，Linux 仍待验证；不再生成 portable 版本）。
+- [ ] 真实或虚拟串口覆盖 Text/Hex、UTF-8/ASCII/GBK、自动发送、快捷发送、Raw 日志和重连。
+- [ ] 主终端、过滤标签、图表标签、Shell 标签、分屏、壁纸、搜索历史和侧边栏收起/展开进行人工交互回归。
 - [x] `npm audit --registry=https://registry.npmjs.org --omit=dev` 无 High/Critical。

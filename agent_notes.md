@@ -1,6 +1,19 @@
 # SerialTerminal 项目接手说明 / AI 记忆文档
 
-> Hex 架构说明：本文档较早章节保留了部分历史背景；涉及串口收发、日志和配置时，以第 8 节及第 9.1B 节的 config v3/字节架构说明为准。
+> 当前权威状态：以本文第 0 节、`main.js` 的 `CONFIG_VERSION`/`normalizeConfig()`、实际模块和测试为准。后文 15A、15B、17 节及独立计划文档保留历史设计背景，不代表尚未实现。
+
+## 0. 当前状态快照（维护入口）
+
+- 当前配置 schema：v11；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
+- 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
+- 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
+- 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
+- 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
+- 当前图表能力：三级文本解析、Worker 过载保护、原始数据保留与降采样趋势、主图/时间轴交互、CSV 导出和配置恢复均已落地；不恢复跨重启数据点。
+- 当前测试入口：`npm test` 通过 `scripts/run-tests.js` 运行根项目 Node 测试并继续运行 `telemetry-server` 测试。串口、长时间性能、Linux 打包和桌面交互仍需人工验证。
+- 文档职责：`README.md` 面向用户；本文记录维护不变量；`ToDo.md` 是全局未完成项；Hex/图表计划文档记录设计基线和专项验证。
+
+---
 
 ## 1. 项目概述
 
@@ -8,13 +21,14 @@
 - 类型：基于 Electron 的桌面串口终端工具
 - 目标场景：嵌入式开发、串口调试、设备联调、日志查看、关键字过滤、自动发送与快捷发送
 - 运行平台：Windows / Linux
-- 当前主界面形态：左侧侧边栏 + 中央主终端区 + 主输入框 + 多过滤标签页
+- 当前主界面形态：可折叠左侧侧边栏 + 最多双 pane 工作区 + 主输入框 + 过滤/图表/Shell 标签页 + 可切换右侧 Shell 侧边栏
 
 项目核心能力：
 - 串口连接和参数配置
 - 基于 xterm.js 的终端显示
 - 主终端搜索和过滤标签页
 - 自动发送 / 快捷发送
+- 实时图表解析、趋势查看与 CSV 导出
 - 日志记录与配置持久化
 - 多语言支持
 - 设置窗口与在线更新
@@ -32,7 +46,7 @@
 - Shell 标签页的文本模式只保存在对应的 tab state 中，不得写入配置；文本模式开启时必须阻止 xterm 鼠标报告发送到 PTY，并在标签上显示状态提示，便于使用终端文本选择复制内容。
 - 底部发送框普通 `ArrowUp/ArrowDown` 在多行内容中先保留 textarea 光标移动；只有光标位于第一行/最后一行时才切换历史。带修饰键的历史快捷键仍由全局快捷键处理。
 - 快捷发送条目的编辑/删除动作按钮位于主快捷发送按钮左侧，悬浮/动作按钮聚焦/编辑态显示，竖向排列且删除在上、编辑在下；主快捷发送按钮点击后不应因焦点停留而持续显示动作按钮。
-- 快捷发送支持每条指令独立的 `autoTrigger` 设置（`enabled`、`text`、`useRegex`、`caseSensitive`、`wholeWord`），配置入口在快捷指令编辑窗口，默认关闭；开启后 RX 原始字节按当前接收编码解码，匹配最近 4096 字符窗口，命中后按当前统一 TX 设置自动发送对应快捷指令，同一指令发送未完成时不重复排队，并让对应快捷发送按钮绿色慢速闪烁一次。
+- 快捷发送支持每条指令独立的 `mode`、`appendCrLf` 与 `autoTrigger` 设置（`enabled`、`text`、`useRegex`、`caseSensitive`、`wholeWord`）；RX 原始字节按当前接收编码解码并匹配最近窗口，命中后按该快捷指令自身的发送配置发送，同一指令发送未完成时不重复排队，并让对应按钮绿色慢速闪烁一次。
 - 快捷指令编辑窗口保留 `.app-dialog` modal 外壳，内部字段统一使用首选项窗口同款 `.form-group` 表单结构；不要再新增 `.app-dialog-field` 这类并行表单控件体系。
 - 波特率、数据位、停止位和校验位控件变更时需立即保存 `lastSerialOptions`，避免后续配置回填把未连接时选择的新串口参数覆盖成旧值；自定义波特率只在输入框有值时保存。串口已连接时切换波特率应先走 `disconnectSerial()`，等待 `serial-disconnected` 事件完成后再复用手动连接路径按当前 UI 参数重连，避免旧断开事件覆盖新连接状态。
 - 所有提交信息必须沿用近期提交格式：主题行为“emoji + type(scope): 中文摘要”，主题行后空一行，正文使用 `1.`、`2.`、`3.` 编号逐条说明主要改动，不得只提交主题行。修复示例：`🐛 fix(shortcuts): 修复 Log 选中文本快捷搜索`；功能示例：`✨ feat(ui): 添加可配置快捷键`。正文应覆盖实现行为、兼容性影响、测试或文档更新等实际改动。
@@ -56,7 +70,7 @@
 - `electron-updater`：应用更新
 - `electron-log`：更新/日志输出
 - `font-list`：系统字体读取
-- `node-pty`：历史遗留依赖，目前主流程以串口为核心，不是当前重点
+- `node-pty`：Shell 标签页的独立系统终端会话
 
 ### 2.3 打包相关
 - `electron-builder`
@@ -68,23 +82,30 @@
 
 ```text
 SerialTerminal/
-├─ assets/                    图标、截图资源
-├─ test/                      Node 自动化测试与 Python 串口测试脚本
-├─ index.html                 主窗口 HTML
-├─ workspace-manager.js       主工作区 pane/tab 状态与 DOM 编排管理
-├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、主输入框、侧边栏）
-├─ serial-codec.js             严格 Hex 解析、Text 编码和统一发送 Buffer 构造
-├─ config-values.js            设置数值范围和主进程/设置窗口共享归一化
-├─ shell-profiles.js           Shell Profile ID 归一化、迁移与查找
-├─ hex-formatter.js            流式 Hex dump 行对象、偏移和空闲刷新
-├─ main.js                    主进程逻辑（窗口、配置、串口、日志、更新）
-├─ preferences.html           设置窗口 HTML
-├─ preferences.js             设置窗口逻辑
-├─ style.css                  主界面和公共样式
-├─ i18n.js                    多语言字典与翻译函数
-├─ README.md                  对外项目说明
-├─ package.json               脚本、依赖、打包配置
-└─ agent_notes.md             本文档，AI 接手记忆文件
+├─ assets/                     图标、截图和菜单图标
+├─ scripts/                    测试、发布、镜像和 native 准备脚本
+├─ test/                       Node 自动化测试与 Python 串口联调脚本
+├─ telemetry-server/           匿名活跃统计与动态更新 manifest 服务
+├─ index.html                  主窗口 HTML
+├─ renderer.js                 主窗口渲染与业务编排
+├─ workspace-manager.js        pane/tab 状态、恢复和 DOM 编排
+├─ serial-codec.js             严格 Hex 解析与统一发送 Buffer 构造
+├─ serial-text-stream.js       图表独立文本流解码和分行
+├─ hex-formatter.js            流式 Hex dump 格式化
+├─ chart-parser.js             图表三级解析与字段发现
+├─ chart-parser-worker*.js     图表 Worker 与客户端
+├─ chart-data-model.js         图表保留、统计和降采样
+├─ chart-view.js               主图、时间轴和视口交互
+├─ chart-csv.js                UTF-8 BOM CSV 导出
+├─ search-history.js           搜索历史归一化、置顶和淘汰
+├─ config-values.js            共享数值范围归一化
+├─ shell-profiles.js           Shell Profile 迁移与查找
+├─ main.js                     窗口、配置、串口、日志、更新和 Shell PTY
+├─ preferences.html/js         设置窗口
+├─ i18n.js                     多语言字典与翻译函数
+├─ README.md                   对外项目说明
+├─ ToDo.md                     全局工程待办与验证基线
+└─ agent_notes.md              本文档
 ```
 
 ### 3.1 主文件说明
@@ -113,13 +134,13 @@ SerialTerminal/
 - 左侧边栏可通过 `sidebarCollapsed` 持久化为 48px 窄工具栏；顶部 RX/TX 速率复用 `updateThroughputPanel()` 数据，底部按钮转发现有连接、清空日志、设置、输入栏和 Shell 栏按钮行为，不要复制对应业务逻辑。折叠状态切换后需调用 `fitWorkspaceTerminals()`
 - 全仓库审查后的已确认问题、优化顺序和验收标准集中记录在根目录 `ToDo.md`；实施完成后应同步勾选对应条目并更新本文档中的架构约定
 - P0 优化已落地：Shell tab 保存 `sessionCreateTimer`/`closed` 防止快速关闭后创建孤儿 PTY；主窗口 `save-config` 只合并落盘，不再把完整配置回广播给自身，首选项 `save-config-request` 仍广播；过滤条件输入按 250ms debounce 持久化
-- 生产更新依赖已升级到 `electron-updater ^6.8.9`，并通过 npm `overrides` 固定 `js-yaml ^4.3.0`；使用官方 registry 执行 `npm audit --omit=dev` 应保持 0 High/Critical
+- 生产更新依赖使用 `electron-updater ^6.8.9`、`builder-util-runtime 9.7.0` 和 `js-yaml ^5.2.3`；使用官方 registry 执行 `npm audit --omit=dev` 应保持 0 High/Critical
 - 主按钮、快捷键、右键菜单和窄工具栏清空动作统一按活动/目标 `tabId` 调用 `clearTerminalByTabId()`，Shell 标签不得回退清空主终端
 - `fitWorkspaceTerminals()` 使用单一 `requestAnimationFrame` 合并请求，Shell 仅在 cols/rows 变化时发送 resize；pane `flex-basis` 和 sidebar `width` 过渡结束后均需触发 fit
 - Text 发送校验与最终发送均复用 `buildSerialWriteBuffer()`；ASCII/GBK 对无法表示的字符返回 `UNREPRESENTABLE_CHARACTER`，不得静默替换为 `?`。`parseHexInput()` 在扫描/累计超过 `maxBytes` 时应提前失败，避免超大输入构造完整副本
-- `npm test` 当前使用 Node 内置 test runner，首批测试位于 `test/serial-codec.test.js`；新增 codec 行为必须同步测试
+- `npm test` 通过 `scripts/run-tests.js` 执行根项目 Node 测试与 `telemetry-server` 测试；codec、formatter、图表、搜索历史、日志、工作区、i18n、发布链路等行为变化必须同步相关测试
 - Shell profile 参数在设置窗口中逐项编辑并始终以 argv 字符串数组保存；不得通过空格 join/split 往返转换
-- 配置版本为 4；Shell profile 使用稳定 `id`，默认项保存为 `defaultShellProfileId`。旧版名称引用由主进程归一化迁移，renderer 创建 profile 会话时应传 profile ID
+- 配置版本为 11；历史配置统一由 `normalizeConfig()` 迁移并在变化后写回。Shell profile 使用稳定 `id`；主输入与快捷指令发送模型、搜索历史、图表、壁纸和遥测字段均以当前 schema 为准
 - 字体大小、scrollback、历史缓冲、滚轮行数、输入历史上限、Hex 空闲刷新和日志自动刷盘大小统一通过 `config-values.js` 的整数范围规则校验；主进程和设置窗口不得各自维护不同 clamp 逻辑
 - 工作区布局通过 `workspace-manager.js` 的 `normalizeWorkspaceLayoutShape()` 全局去重 tab ID；DOM 可渲染检查必须在目标 pane 内同时找到 tab 按钮和内容。任一 pane 变空时自动关闭分屏，若唯一非空的是 `pane-2`，需按原顺序整体迁移到 `pane-1` 并保持活动标签和 pane 内 index 不变
 - 开发、测试和打包使用 Node.js `>=22.12.0`，与当前 electron-builder 间接依赖的 engine 要求一致；CI 固定 Node 22.12
@@ -138,24 +159,21 @@ SerialTerminal/
 - 未启用全标签页日志时，每次串口连接使用独立的主日志会话；断开通知后由 renderer 刷新尾部数据并发送 `flush-tab-logs`，主进程随后清空 `mainLogFilePath`，切换到全标签页日志时也需结束主日志会话；写入失败时保留路径以便重试
 - 左侧手动保存按钮导出当前活动 pane 的活动标签页 xterm 缓冲区，通过系统另存为对话框选择路径和文件名，默认名称包含标签名与日期时间并使用 UTF-8；成功保存后以独立的 `manualExportDirectory` 记住目录，取消或失败不更新；该流程不得读取或修改自动日志配置
 - 过滤标签页和 Shell 标签页支持双击标签通过统一弹窗自定义标题；标题写入对应 tab 配置，清空后恢复默认标题，日志文件标签名和手动导出名称使用自定义标题
+- 图表标签页可在任一 pane 创建、关闭、重命名、拖动和恢复；解析、数据模型、时间轴、导出及资源释放规则详见 `CHART_TAB_IMPLEMENTATION_PLAN.md` 顶部状态区
+- 搜索历史保存查询及三类搜索选项，支持置顶和删除；置顶项可超过普通历史上限，相关纯逻辑集中在 `search-history.js`
+- 终端壁纸通过 `terminalWallpaper.path` 与 `overlayOpacity` 保存；渲染前验证本地文件存在，加载失败或路径无效时保持纯色背景
 
 #### `renderer.js`
 负责：
-- 主终端初始化（xterm）
-- shell tab 初始化与输出渲染
-- 原始 RX 字节的 Text 流式解码或 Hex 流式格式化与渲染
-- 主终端 / 过滤 tab / shell tab 的独立日志采集（使用固定英文标题）与关闭时 flush
-- 过滤标签页创建、关闭、ID 持久化与恢复
-- 过滤历史
-- 搜索逻辑与结果计数显示
-- 主输入框发送逻辑
-- 快捷发送、自动发送、吞吐量 UI 等
-- 清空日志 + 打开日志文件夹按钮事件绑定
-- 当前也承担多语言在主窗口中的部分应用逻辑
-- 管理独立 RX/TX 模式、主输入双草稿、结构化发送历史、Hex 实时校验
-- 自动发送、快捷发送和过滤 tab 均保存各自的 Text/Hex 数据模式
-- 右侧 shell 侧边栏的动态 profile 加载、会话列表管理
-- 已移除串口连接状态 indicator（statusDot / statusDiv）
+- 主终端、过滤 tab、Shell tab 和图表 tab 的创建、恢复、激活及销毁编排
+- 原始 RX 字节的 Text 流式解码或 Hex 流式格式化与批量渲染
+- 过滤、搜索、搜索历史、主输入框、快捷发送、自动发送和吞吐量 UI
+- 图表文本流 fan-out、Worker 解析结果接收、数据模型更新和 CSV 导出
+- 主终端 / 过滤 tab / Shell tab 的独立日志采集与关闭时 flush
+- Text/Hex 双草稿、结构化发送历史、严格 Hex 实时校验
+- 右侧 Shell 侧边栏、动态 profile 和会话列表管理
+- 多语言在主窗口中的应用及终端壁纸加载
+- `renderer.js` 仍是高耦合核心；新增纯逻辑应优先拆到可测试模块，而不是继续扩大该文件
 
 #### `workspace-manager.js`
 负责：
@@ -182,6 +200,19 @@ SerialTerminal/
 - Shell Profiles 标签页的 CRUD 编辑界面
 - 日志文件名格式（含扩展名）配置，不再单独设置后缀
 - Hex dump 设置和 RX 原始 `.bin` 日志设置的回填、归一化与保存
+
+#### 图表模块
+- `serial-text-stream.js`：按图表页编码独立流式解码 RX 字节并生成文本记录，不依赖主终端显示模式
+- `chart-parser.js`：自动键值、格式模板、正则解析、字段发现和单位换算
+- `chart-parser-worker.js` / 客户端：批量解析、队列边界、超时与过载恢复
+- `chart-data-model.js`：原始点保留、裁剪、统计、查询及降采样历史
+- `chart-view.js`：uPlot 主图、完整时间轴、视口平移/缩放和实时跟随
+- `chart-csv.js`：导出当前窗口或全部保留原始数据
+
+#### `search-history.js`
+- 以查询文本及 Regex/大小写/整词选项组成搜索身份
+- 归一化稳定 ID、时间和置顶状态，合并重复项
+- 普通条目按上限淘汰，置顶条目保留；提供置顶、取消置顶和删除操作
 
 #### `serial-codec.js`
 负责：
@@ -238,111 +269,71 @@ npm run dist:linux
 
 ---
 
-## 5. 当前配置文件结构（用户目录 config.json）
+## 5. 当前配置模型（用户目录 `config.json`）
 
-配置由 `main.js -> loadConfig()` 提供默认值，并通过 `saveConfig()` 合并写回。
+配置由 `main.js -> loadConfig()` 提供默认值，`normalizeConfig()` 按 schema v11 归一化和迁移，`saveConfig()` 合并写回。不要复制整份默认配置到文档；字段增加或语义变化时，应同时更新默认值、归一化、设置窗口、测试和本节。
 
-当前重要配置项包括：
+### 5.1 主要配置分组
+
+- 外观：`fontSize`、`fontWeight`、字体、前景/背景色、`highlightColors`、`highlightRules`、`terminalWallpaper`。
+- 终端：`showTimestamp`、`showLineNumbers`、`scrollbackLimit`、`historyBufferSize`、`mouseWheelScrollLines`。
+- 串口：`lastSerialOptions` 保存端口、物理参数、RX 模式/编码、TX Text 编码和终端换行模式。
+- 底部输入：`mainInputSettings` 保存可见、Enter 发送、Text/Hex 模式、追加 CRLF 和历史上限；`mainInputHistory` 仅保存 `{ mode, content }`。
+- 搜索：`searchSettings.historyLimit` 默认 20、范围 0-200；`searchHistory` 保存查询、三个选项、置顶和时间元数据。
+- 快捷发送：`quickSendList` 每项保存稳定 ID、分组、`mode`、`appendCrLf`、内容、窄侧栏入口和自动触发；分组与两个侧栏顺序分别持久化。
+- 自动发送：`autoSendSettings` 仅保存 enabled、interval、content；当前自动发送固定为 Text。
+- 标签与工作区：`filterTabs`、`shellTabs`、`chartTabs` 与 `workspaceLayout` 分别保存 tab 配置和 pane 布局。
+- 日志：普通/全部 tab/Raw 开关、独立前缀、缓存阈值、目录、日期子目录、保留天数、文件名、编码和手动导出目录。
+- Shell：`shellProfiles` 使用稳定 ID 和 argv 数组，`defaultShellProfileId` 精确引用默认项。
+- 应用状态：窗口大小、侧边栏状态、快捷键、欢迎/更新提示版本和跳过版本。
+- 遥测：开关、随机安装 ID、上次成功上报日期与版本。
+
+### 5.2 关键当前结构
 
 ```json
 {
-  "fontSize": 14,
-  "fontFamily": "Consolas",
-  "fontFamilyZh": "\"Microsoft YaHei\"",
-  "foreground": "#cccccc",
-  "background": "#000000",
-  "timestampColor": "#00ff00",
-  "lineNoColor": "#ffff00",
-  "logEnabled": false,
-  "saveAllTabsLogToFiles": false,
-  "stripAnsiInLog": true,
-  "rawBufferAutoFlushMB": 10,
-  "logPath": ".../SerialTerminalLogs",
-  "logFileNameFormat": "log_%Y-%m-%d_%H-%M-%S.txt",
-  "logFileSuffix": ".txt",
-  "logEncoding": "utf8",
-  "highlightRules": [],
-  "showTimestamp": false,
-  "showLineNumbers": false,
-  "scrollbackLimit": 100000,
-  "historyBufferSize": 5000000,
-  "filterHistory": [],
-  "windowBounds": {
-    "width": 1000,
-    "height": 700
-  },
-  "filterTabs": [],
-  "shellTabs": [],
-  "shellProfiles": [
-    {
-      "id": "shell-cmd",
-      "name": "CMD",
-      "executable": "cmd.exe",
-      "args": [],
-      "shellType": "cmd"
-    },
-    {
-      "id": "shell-powershell",
-      "name": "PowerShell",
-      "executable": "powershell.exe",
-      "args": ["-NoLogo"],
-      "shellType": "powershell"
-    }
-  ],
-  "defaultShellProfileId": "shell-powershell",
-  "workspaceLayout": {
-    "splitEnabled": false,
-    "orientation": "horizontal",
-    "activePaneId": "pane-1",
-    "paneSizes": {
-      "pane-1": 0.5,
-      "pane-2": 0.5
-    },
-    "panes": [
-      {
-        "id": "pane-1",
-        "activeTabId": "tab-main",
-        "tabIds": ["tab-main"]
-      },
-      {
-        "id": "pane-2",
-        "activeTabId": null,
-        "tabIds": []
-      }
-    ]
+  "configVersion": 11,
+  "terminalWallpaper": { "path": "", "overlayOpacity": 55 },
+  "lastSerialOptions": {
+    "receiveDisplayMode": "text",
+    "receiveEncoding": "utf8",
+    "sendEncoding": "utf8",
+    "newlineMode": "crlf"
   },
   "mainInputSettings": {
     "visible": true,
     "sendOnEnter": true,
-    "appendCrLf": false
+    "mode": "text",
+    "appendCrLf": false,
+    "historyLimit": 20
   },
-  "skippedUpdateVersion": "",
-  "lastSerialOptions": {
-    "path": "",
-    "baudRate": "9600",
-    "dataBits": "8",
-    "stopBits": "1",
-    "parity": "none",
-    "encoding": "utf8",
-    "newlineMode": "crlf"
+  "searchSettings": { "historyLimit": 20 },
+  "mainInputHistory": [],
+  "searchHistory": [],
+  "filterTabs": [],
+  "shellTabs": [],
+  "chartTabs": [],
+  "workspaceLayout": {
+    "splitEnabled": false,
+    "orientation": "horizontal",
+    "activePaneId": "pane-1",
+    "paneSizes": { "pane-1": 0.5, "pane-2": 0.5 },
+    "panes": [
+      { "id": "pane-1", "activeTabId": "tab-main", "tabIds": ["tab-main"] },
+      { "id": "pane-2", "activeTabId": null, "tabIds": [] }
+    ]
   }
 }
 ```
 
-### 重要说明
-- `filterHistory`：过滤输入框的历史记录
-- `saveAllTabsLogToFiles`：是否将主终端、过滤 tab、shell tab 分别保存为独立日志文件（独立于 `logEnabled`）
-- `stripAnsiInLog`：是否从日志文件中剥离 ANSI 颜色控制码（默认 true，可通过设置页关闭以保留原始控制序列）
-- `rawBufferAutoFlushMB`：raw 日志缓冲区达到多少 MB 后自动写入磁盘（默认 10），同时适用于主终端 raw 缓冲和各 tab 独立缓冲
-- `filterTabs`：过滤标签页恢复所需状态（id、过滤文本、大小写、正则、所属 pane 等）
-- `logFileNameFormat`：日志文件名格式，可直接包含扩展名；支持 `%tab` 占位符；未使用 `%tab` 时自动在文件名开头追加 tab 标题前缀
-- `logFileSuffix`：已废弃字段，旧配置仍兼容但不再影响最终文件名
-- `workspaceLayout`：主工作区分屏布局、pane 激活状态、各 tab 所属 pane
-- `workspaceLayout.paneSizes`：两个 pane 的分区比例，用于拖动分隔条后恢复尺寸
-- `windowBounds`：主窗口大小恢复
-- `mainInputSettings`：主输入框显示、按回车发送、末尾追加 CRLF
-- `skippedUpdateVersion`：用户选择跳过的更新版本号
-- `lastSerialOptions`：上次串口连接参数
+### 5.3 配置约束
+
+- `logFileSuffix` 是废弃兼容字段，不再决定最终日志文件名。
+- `workspaceLayout` 只描述 pane 和 tab 归属；各标签自身配置保存在对应数组中。
+- 图表、过滤和 Shell 只恢复 UI/配置状态；Shell 进程重新创建，图表数据点不跨重启恢复。
+- 主输入模式和追加选项不属于 `lastSerialOptions`；快捷指令也不继承底部输入框模式。
+- 配置字段的数值范围统一从 `config-values.js` 读取；主进程与设置窗口不能维护不同 clamp。
+- 配置版本只是迁移标记，不等于应用发布版本。
 
 ---
 
@@ -363,6 +354,7 @@ npm run dist:linux
 - 主终端标签页 `tab-main`
 - 多个过滤标签页 `tab-filter-*`
 - 系统终端标签页 `tab-shell-*`
+- 实时图表标签页 `tab-chart-*`
 - 下方主输入框面板 `main-input-panel`
 
 ### 6.2.1 当前分屏能力（首版）
@@ -375,6 +367,7 @@ npm run dist:linux
 - 分屏操作入口已从顶部工具栏收敛到终端右键菜单，便于明确当前操作目标 tab / pane
 - 每个 pane 的 tabs header 右侧都带独立“新建过滤标签页”按钮，用于明确在当前 pane 中创建新 tab
 - 每个 pane 的 tabs header 右侧当前也带独立“新建 shell 标签页”按钮
+- 每个 pane 的 header 也提供新建图表入口；过滤、图表和 Shell 可拖动排序或跨 pane 移动
 - 搜索目标跟随当前 active pane 的 active tab
 - 分屏布局会写入 `config.workspaceLayout` 并在启动后恢复
 
@@ -387,8 +380,8 @@ npm run dist:linux
 - 可选“按回车发送”
   - 开启：Enter 直接发送
   - 关闭：Enter 在输入框中插入换行
-- 可选“末尾自动追加 CRLF”
-  - 发送时将 `text` 变为 `text + \r\n`
+- 可选“末尾追加 CRLF / 0D 0A”
+  - Text 发送追加 `\r\n`，Hex 发送追加真实字节 `0D 0A`
 - 发送后**不主动清空**输入框（这是当前用户明确要求）
 - 输入框显示状态持久化
 
@@ -435,7 +428,7 @@ npm run dist:linux
 
 ---
 
-## 8. 串口收发实现原理（config v3 / Hex 当前实现）
+## 8. 串口收发实现原理（config v11 / 原始字节架构）
 
 ### 8.1 主进程接收流程
 `main.js`
@@ -453,7 +446,7 @@ npm run dist:linux
 - Hex 使用严格 parser 生成实际字节，不把输入字符串作为待发数据
 - `appendCrLf` 对 Text/Hex 整段消息发送都追加真实 `0D 0A`，即使内容已以该字节序列结尾也会再次追加；主终端 Text 逐键输入不应用该选项，Enter 只服从 `newlineMode`
 - `SerialPort.write()` 回调成功后返回 `{ ok: true, bytesWritten }`，TX 吞吐量按最终 Buffer 长度统计；当前不调用 `drain()`
-- 旧 `serial-input` IPC 仍作为 Text 兼容入口存在，新增入口应使用 `serial-write`
+- `serial-write` 是当前唯一串口写 IPC；新增入口必须复用 `sendSerialRequest()`，不得恢复旧 `serial-input` 分支
 
 ### 8.3 渲染进程显示流程
 `renderer.js`
@@ -475,78 +468,29 @@ npm run dist:linux
 }
 ```
 
-### 8.5 模式、输入和过滤
-- `receiveDisplayMode` 与全局 `sendMode` 独立；对应 Text 编码分别保存在 `receiveEncoding` / `sendEncoding`
-- RX/TX 为 Hex 时各自的编码控件禁用，但最近 Text 编码不会丢失；连接期间模式可切换并立即持久化
-- TX Hex 时主终端逐键输入被拦截并提示使用底部输入框；Ctrl+V 填入底部 Hex 输入而不直接发送
-- 左侧“发送”页顶部是唯一 TX profile：`sendMode`、`sendEncoding`、`appendCrLf`。底部输入、自动发送、快捷发送和右键整段发送在实际发送时读取这些运行时值；主终端 Text 逐键发送保持交互式终端语义，不逐键追加 CRLF
-- 统一发送设置使用侧栏平面布局，不使用卡片背景、圆角或外框，通过底部分割线与自动发送区域区分
-- 串口主操作按钮按动作显示状态色：未连接时“连接”为浅绿色，已连接时“断开”为浅红色；连接成功、主动断开和异常掉线统一通过 `updateSerialConnectionState()` 切换 class，并同步更新 `#connect-btn-label` 的文本与 `data-i18n` key，以保留按钮原有 emoji 且防止语言刷新覆盖当前状态
-- 快捷发送条目的编辑/删除按钮位于条目右侧悬浮层，仅在 hover、条目内 focus 或编辑状态显示；两个操作横向排列且不常驻占用标签宽度
-- 快捷发送列表下方只保留添加按钮；新增和编辑共用页面内模态框，支持取消、右上角关闭、点击遮罩和 Escape 关闭，内容校验继续使用当前共享 TX profile
-- 搜索页显示当前搜索目标；搜索计数使用 query/options/target/buffer 版本缓存并对输入做 200ms debounce。搜索会维护自己的匹配数组（buffer 行、列、长度），Prev/Next 直接按该数组 `scrollToLine()` + `select()`，不再依赖 search addon 的 active match 状态。查询、目标或 Regex/大小写/整词选项变化后会清理旧高亮并重新定位新结果集的首个匹配；无效正则会显示独立错误提示并禁用搜索按钮；清空输入时尝试清除 search addon decorations
-- 连接建立期间若设备立即上报数据，renderer 会先接纳新 `sessionId` 再处理首批 RX，避免打开串口后的 banner 被旧 session 过滤
-- 串口端口刷新会优先保留用户当前下拉框选择；只有当前无选择时才回退到 `lastSerialOptions.path`，避免 `config-updated -> applyConfig -> refreshPorts()` 把未连接前刚选择的新端口覆盖回旧端口
-- 串口已连接时如果用户切换端口下拉框，会立即主动断开当前串口，复用按钮断开的 session/write queue/自动发送清理逻辑；刷新端口列表时的程序化赋值不触发额外断开
-- 断开、重连和开始新连接时会切换到新的写队列；旧驱动回调即使悬挂，也不会阻塞新连接发送
-- 清空 Text RX 会丢弃 decoder 和 parser 中尚未完成的数据，避免清空前的半个多字节字符出现在清空后的终端
-- 主输入框保存 Text/Hex 内存草稿；历史条目只需保存 mode/content，恢复历史模式时同步切换全局 TX，追加和编码不形成历史条目的独立语义
-- 发送上限：主输入、快捷发送、粘贴和终端 1 MiB；自动发送 64 KiB。自动发送最小间隔 10ms，并以 promise chain/in-flight 标记防重入
-- 每次串口连接分配 `serialSessionId`；渲染层排队请求和主进程写入都会校验该 ID，防止断开前排队的数据在重连后误发到新设备
-- 自动发送使用 generation token 取消断开、重配或重连前尚未完成的异步 tick，避免旧任务创建重复 timer 或关闭新会话
-- 自动发送断线时等待，重连后继续；输入无效或实际写入失败时停止
-- 快捷发送项只保存稳定 id、label、content，不显示模式 badge；编辑只恢复标签和内容，校验、tooltip、点击发送都使用当前全局 TX profile
-- 自动发送只保存 enabled、interval、content；全局 TX profile 变化时重新校验并用 generation token 安全重启，内容在新 profile 下无效时会停止
-- 过滤 tab 创建时保存 `dataMode`；仅消费同模式行，模式不一致时显示 paused。Hex 普通/正则过滤都作用于单条格式化 Hex 行，不支持跨行或字节通配符
-- 搜索仍由 xterm SearchAddon 完成，因此 Hex 模式可搜索偏移、Hex 文本和 ASCII 预览，并遵循现有大小写选项
+### 8.5 模式、输入、过滤与搜索
+- `receiveDisplayMode` 与发送入口模式独立；Text 编码分别由 `receiveEncoding` / `sendEncoding` 保存。
+- 底部输入框以 `mainInputSettings.mode` 保存 Text/Hex，以 `appendCrLf` 保存追加选项；Text/Hex 草稿仅驻留当前 renderer 会话。
+- 快捷指令各自保存 `mode` 和 `appendCrLf`，手动点击和自动触发均使用该指令自身配置。
+- 自动发送固定为 Text，只保存 enabled、interval、content；主终端逐键、终端 Enter、右键粘贴和发送选区也固定为 Text。
+- 所有串口发送入口最终进入 `sendSerialRequest()` / `serial-write`，主进程再次执行 `buildSerialWriteBuffer()` 最终校验。
+- 主输入、快捷发送、粘贴和终端单次上限 1 MiB；自动发送上限 64 KiB、最小间隔 10ms，并以 generation/in-flight 状态防重入。
+- 每次连接分配 `serialSessionId`；renderer 队列和主进程写入同时校验，防止旧会话排队数据发往新设备。
+- 过滤 tab 固定保存创建时的 `dataMode`，只消费同模式记录；模式不一致显示 paused。Hex 过滤作用于单条格式化行，不支持跨行或字节通配符。
+- 搜索由 renderer 扫描活动 xterm buffer 并维护 `{ line, column, length }` 匹配数组；Prev/Next 直接滚动并装饰目标。SearchAddon 仅保留兼容性清理能力，不承担结果计数。
+- 搜索历史以 query + Regex/大小写/整词选项去重，支持置顶和删除；默认上限 20，配置范围 0-200。
+- 连接、端口切换、写队列和模式切换必须继续遵守 session、generation、decoder/formatter flush 与焦点保护规则。
 
-### 8.6 config v4 与迁移
-- `main.js` 的 `CONFIG_VERSION = 4`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，并在规范化结果变化时写回磁盘
-- 旧 `lastSerialOptions.encoding=hex` 迁移为 RX/TX mode 均为 `hex`、Text 编码为 `utf8`；其他旧编码迁移为 Text 模式并保留编码
-- 旧快捷发送项的 mode/encoding/appendCrLf 和自动发送的同类字段会在规范化时移除，不根据内容猜测 Hex；旧版主输入启用 append 时，由“加入快捷发送”生成的内容已内嵌 CRLF，因此迁移到共享 append 时会移除一个末尾 CRLF，避免再次发送造成重复
-- 旧过滤标签未保存 `dataMode` 时继承迁移后的 RX 模式；缺失或重复的快捷 ID 会生成唯一稳定 ID
-- Shell profile 缺失或重复的 ID 会生成唯一稳定 ID；旧 `defaultShellProfile` 名称引用会迁移为 `defaultShellProfileId`
-- 关闭 Raw 日志或修改日志目录/Raw 文件名格式前先刷盘；偏好设置使用可返回错误的 IPC，刷盘失败时保留窗口并提示错误
-- Hex formatter 对大块 `Uint8Array` 使用分段视图处理，不通过参数展开追加字节；已用 1 MiB 单块输入做模块级回归验证
+### 8.6 config v11 与迁移
+- `CONFIG_VERSION = 11`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，规范化结果变化时写回磁盘。
+- 旧 `lastSerialOptions.encoding` 仍迁移为 RX 模式/编码与 TX Text 编码；当前主输入模式和追加选项归属 `mainInputSettings`。
+- config v7 之前快捷指令的追加语义会迁移为每条 `appendCrLf`；快捷项补齐稳定 ID、分组、模式、侧栏入口和自动触发。
+- Shell profile 缺失或重复 ID 会生成稳定 ID；旧默认名称引用迁移为 `defaultShellProfileId`。
+- 旧 100000 默认 scrollback 在 v5 迁移为当前默认 20000；数值字段统一经 `config-values.js` 限制。
+- 搜索历史、图表配置、终端壁纸、遥测、日志保留与日期目录等后续字段均由当前归一化逻辑兜底。
+- 关闭 Raw 日志或修改日志目录/文件名配置前必须先刷盘；失败时保留设置窗口并提示。
+- 配置迁移必须向前兼容历史用户文件；修改 schema 时递增版本并补自动化测试。
 
-Hex 相关配置结构：
-```json
-{
-  "configVersion": 4,
-  "lastSerialOptions": {
-    "receiveDisplayMode": "text",
-    "receiveEncoding": "utf8",
-    "sendMode": "text",
-    "sendEncoding": "utf8",
-    "appendCrLf": false,
-    "newlineMode": "crlf"
-  },
-  "hexDisplaySettings": {
-    "bytesPerLine": 16,
-    "showOffset": true,
-    "showAscii": true,
-    "uppercase": true,
-    "idleFlushMs": 50
-  },
-  "mainInputSettings": {
-    "visible": true,
-    "sendOnEnter": true
-  },
-  "autoSendSettings": {
-    "enabled": false,
-    "interval": 1000,
-    "content": ""
-  },
-  "quickSendList": [{
-    "id": "quick-1",
-    "label": "Command",
-    "content": "AA 55"
-  }],
-  "filterTabs": [{ "id": "tab-filter-1", "dataMode": "hex" }],
-  "saveRawSerialToFile": false,
-  "rawLogFileNameFormat": "raw_%Y-%m-%d_%H-%M-%S.bin"
-}
-```
 
 ---
 
@@ -560,19 +504,19 @@ Hex 相关配置结构：
 ### 9.1A 日志文件命名与多 tab 日志
 
 #### 日志数据来源
-- **主终端日志**（`tab-main`）：取自主进程 `handleSerialData()` 中接收到的原始串口数据（`rawSerialBuffer`），不经渲染进程格式化，不含时间戳/行号/ANSI 颜色
-- **过滤 tab 日志**：取自渲染进程 `writeFilterTabLog()` 发送的已过滤数据，主进程端用 `stripAnsi()` 剥离颜色码
-- **Shell tab 日志**：取自渲染进程 `writeShellTabLog()` 发送的 shell 输出，主进程端用 `stripAnsi()` 剥离颜色码
+- **主终端显示日志**（`tab-main`）：renderer 在 `writeTextLines()` / `writeHexLines()` 中生成与当前显示模式一致的文本，通过 `writeMainTabLog()` → `write-tab-log` 发送到主进程
+- **过滤 tab 日志**：renderer 将匹配后的格式化行通过 `writeFilterTabLog()` → `write-tab-log` 发送到主进程
+- **Shell tab 日志**：renderer 将 shell 输出通过 `writeShellTabLog()` → `write-tab-log` 发送到主进程
+- **通用主日志**：未启用 `saveAllTabsLogToFiles` 时，`main.js::writeTabLog()` 将 `tab-main` 内容转交 `writeLog()`；启用后，主终端与其他 tab 一样进入独立条目
+- **RX Raw 日志**：仅 `port.on('data')` 的原始 Buffer 进入 `bufferRawSerialBytes()`，与上述显示日志完全独立
 
 #### 缓冲与落盘机制
-- `rawSerialBuffer`：主进程在 `handleSerialData()` 中持续追加原始数据，用 `str.length` 近似计数字节数
-- 各 tab 独立缓冲：`tabLogBuffers` Map，每个条目包含 `{ title, buffer[], filePath, byteCount }`
-- **自动刷盘**：`triggerRawAutoFlush()` 在每次 `handleSerialData` 回调中检查，当 `rawBufferByteCount >= rawBufferAutoFlushMB × 1024 × 1024` 时调用 `autoFlushRawBufferSync()`
-- 过滤/shell tab 同样有自动刷盘：`writeTabLog()` 中 `existing.byteCount >= getAutoFlushThreshold()` 时触发 `appendToTabLogSync()`
-- 双缓冲保护：`autoFlushRawBufferSync()` 先 swap 出 `rawSerialBuffer` 副本再清空原数组，通过 `rawBufferFlushing` 布尔锁防重入
-- 全部使用同步 `fs.appendFileSync`，无异步并发风险
-- **filePath 缓存**：`ensureTabLogFile()` 首次调用时生成文件名并缓存，后续追加到同一文件，不会产生碎片文件
-- **tab-main 预注册**：`connect-serial` 成功时主进程主动注册 `tab-main` 条目并预创建 filePath，避免 auto-flush 在渲染进程注册前触发导致数据丢失
+- 显示日志经主进程 `writeTabLog()` 统一按 `stripAnsiInLog` 配置处理 SGR 序列，再写入 `logBuffer` 或 `tabLogBuffers`；字节数使用 `Buffer.byteLength()` 统计
+- `tabLogBuffers` 的每个条目包含 `{ title, buffer[], filePath, byteCount }`；`logBuffer` 保存未启用全部 tab 日志时的主终端显示日志
+- `rawBinaryBuffers` 保存 RX-only Buffer，并用 `rawBinaryByteCount` 按真实字节数计数；达到阈值后由 `flushRawBinaryLogSync()` 追加到 `.bin`
+- 各显示日志缓冲达到 `getAutoFlushThreshold()` 后同步追加落盘；5 秒定时器还会静默刷盘所有待处理日志，降低异常退出的丢失窗口
+- `ensureMainLogFilePath()`、`ensureTabLogFile()` 和 `ensureRawBinaryLogPath()` 按日志会话延迟创建并缓存路径，后续持续追加，避免产生碎片文件
+- `connect-serial` 在启用全部 tab 日志时预注册 `tab-main` 条目；实际文件路径仍在首次写入时创建
 
 #### 日志标题命名
 - 日志标题使用固定英文名，不受界面语言切换影响：
@@ -582,16 +526,17 @@ Hex 相关配置结构：
 - `buildLogFileName()` 在未使用 `%tab` 时自动在文件名开头追加 tab 标题（空格转下划线）
 
 #### 落盘时机
-- 自动刷盘：缓冲区超过 `rawBufferAutoFlushMB` 阈值
-- 串口断开：`cleanupSerialConnection()` → 渲染层 `flush-tab-logs` → `saveAllTabLogs()`
-- 单个 tab 关闭：渲染层 `flush-tab-log` → 主进程 `appendToTabLogSync()` + 清理
-- 应用退出：`before-quit` → `saveLog()` + `saveAllTabLogs()`
-- 启用 `saveAllTabsLogToFiles` 时，`saveLog()` 自动跳过（不生成重复的主日志文件）
+- 缓冲区达到 `rawBufferAutoFlushMB` 阈值时立即刷盘
+- 5 秒定时器：`flushPendingLogs()` 静默刷盘但保留活动 tab 条目
+- 串口断开：主进程先 flush RX Raw；renderer 收到 `serial-disconnected` 后发送 `flush-tab-logs`，保存并关闭显示日志条目
+- 单个 tab 关闭：renderer 发送 `flush-tab-log`，主进程保存该条目
+- 应用退出：`before-quit` 刷盘显示日志与 RX Raw 日志
+- 启用 `saveAllTabsLogToFiles` 时，`writeLog()` / `saveLog()` 不重复维护主日志，`tab-main` 由 `tabLogBuffers` 统一处理
 
 #### ANSI 剥离
-- `stripAnsi()` 仅剥离 SGR 序列（`\x1b[数字;数字m`），不触碰其他 CSI 命令，降低对原始二进制数据的误伤风险
+- `stripAnsi()` 仅剥离 SGR 序列（`\x1b[数字;数字m`），不触碰其他 CSI 命令
 - 可通过设置页 `stripAnsiInLog` 选项关闭此行为
-- 只在过滤/shell tab 的 `writeTabLog` 路径中调用；主终端原始数据不经 `stripAnsi`
+- 主进程对所有经 `write-tab-log` 到达的显示日志统一调用；RX Raw `.bin` 不经过字符串处理
 
 ### 9.1B Hex 显示日志与 RX raw 日志
 - 显示日志来自渲染层实际写入终端的内容：Text 保存解码/格式化文本，Hex 保存当前 Hex dump；过滤日志保存命中的格式化行
@@ -792,14 +737,11 @@ Hex 相关配置结构：
   - `applyConfig()` 恢复顺序调整为：先创建 filterTabs / shellTabs，再恢复 workspaceLayout
   - 新增 `layoutTabToPaneMap` 和 `paneFilterQueue` / `paneShellQueue`，兼容旧配置中缺少 `id` 的场景
 
-### 11.12 多 tab 日志保存不生效
-- 根因 1：`writeTabLog()` 要求 `logEnabled` 和 `saveAllTabsLogToFiles` 同时为 true，但用户可能只勾"保存全部 tab 日志"而未勾"启用自动日志"
-  - 修正：`writeTabLog()` 只依赖 `saveAllTabsLogToFiles`，不再要求 `logEnabled`
-- 根因 2：`cleanupSerialConnection()` 中未调用 `saveAllTabLogs()`，断开串口时 tab 日志缓冲未落盘
-  - 修正：`cleanupSerialConnection()` 中增加 `saveAllTabLogs()` 调用
-- 根因 3：同时启用两个开关时，`saveLog()` 和 `saveAllTabLogs()` 都会在 disconnect 时触发，导致多生成一个冗余的主日志文件
-  - 修正：`saveLog()` 在 `saveAllTabsLogToFiles` 启用时自动跳过
-- 重要设计决策：tab 日志采用**缓冲后统一落盘**，不在每条数据到达时同步写磁盘（避免高频串口 I/O 卡顿）
+### 11.12 多 tab 日志保存不生效（历史问题）
+- 旧实现曾把 `saveAllTabsLogToFiles` 错误绑定到 `logEnabled`，并在断开时遗漏全部 tab 的刷盘。
+- 当前实现中 `writeTabLog()` 独立判断两个开关：`tab-main` 可进入通用主日志，全部 tab 日志则进入 `tabLogBuffers`。
+- renderer 收到 `serial-disconnected` 后发送 `flush-tab-logs`；主进程据配置调用 `saveAllTabLogs()` 或关闭通用主日志会话，避免遗漏或重复文件。
+- 显示日志先在内存中缓冲，达到阈值或定时器触发时同步追加，而不是每条串口数据都直接写磁盘。
 
 ### 11.13 多 tab 日志文件名冲突
 - 默认 `logFileNameFormat` 不含 `%tab`，多个 tab 同一秒落盘会写入同一文件互相覆盖
@@ -807,67 +749,52 @@ Hex 相关配置结构：
 - 日志标题使用固定英文名（`Main_Terminal` / `Filter_1` / `Shell_1`），不受界面语言影响
 - 文件名中空格自动替换为下划线
 
-### 11.14 日志文件中存在 ANSI 颜色控制码
-- 渲染进程传来的数据已包含 xterm 格式化后的 ANSI 序列（`\x1b[38;2;...m`），直接写入日志文件产生大量可读性差的控制字符
-- 修正：
-  - 主进程新增 `stripAnsi()` 函数，仅剥离 SGR 序列（`\x1b[...m`）
-  - `writeTabLog()` 中对过滤/shell tab 数据调用 `stripAnsi()`
-  - 主终端日志走 `rawSerialBuffer` 原始数据路径，天然不含 ANSI
-  - 新增 `stripAnsiInLog` 配置项（默认 true），允许用户关闭此行为以保留完整控制序列
+### 11.14 日志文件中存在 ANSI 颜色控制码（历史问题）
+- renderer 生成的终端内容可能包含 xterm SGR 序列（例如 `\x1b[38;2;...m`）。
+- 当前主进程在所有显示日志进入缓冲前统一调用 `stripAnsi()`；该函数只剥离 SGR，且受 `stripAnsiInLog` 配置控制。
+- RX Raw `.bin` 不经过字符串转换或 ANSI 处理。
 
-### 11.15 日志文件包含渲染格式化内容（时间戳、行号）
-- 渲染进程的 `writeFilterTabLog`/`writeShellTabLog` 传回的是已经 `formatLineForTerminal()` 格式化后的文本，包含时间戳、行号等前缀
-- 修正：
-  - 主终端日志改为取主进程 `handleSerialData()` 中的原始数据（`rawSerialBuffer`）
-  - `writeTabLog('tab-main', ...)` 忽略 data 参数，主终端日志完全从 raw buffer 写入
-  - 过滤/shell tab 仍保留格式化数据（因其需要过滤后内容），但剥离了 ANSI
-  - 连接/断开通知直接注入 `rawSerialBuffer`
+### 11.15 显示日志内容与原始字节混淆（历史问题）
+- 旧方案试图让主终端日志直接复用主进程原始串口缓冲，导致显示日志语义、格式化选项和原始字节保存职责混杂。
+- 当前显示日志由 renderer 生成：Text 保存解码后的显示行，Hex 保存 Hex dump；`logIncludeTimestamp` / `logIncludeLineNumbers` 控制独立日志前缀。
+- 连接、断开和错误提示也可进入显示日志；需要逐字节证据时必须使用独立 RX Raw `.bin`，其不包含 TX 或界面提示。
 
-### 11.16 日志缓冲区无限增长导致内存问题
-- 长时间串口连接下 `rawSerialBuffer` 和各 tab 的 `buffer` 数组持续增长，可能占用数百 MB 甚至 GB 内存
-- 修正：
-  - 新增 `rawBufferAutoFlushMB` 配置项（默认 10MB）
-  - `triggerRawAutoFlush()` 在每次 `handleSerialData` 回调中检查阈值，超限时触发 `autoFlushRawBufferSync()`
-  - 双缓冲 swap 机制：先复制 `rawSerialBuffer` 引用，再清空原数组，避免并发丢数据
-  - `rawBufferFlushing` 布尔锁防重入
-  - 过滤/shell tab 同样在 `writeTabLog()` 中检查各自 `byteCount`，超限时同步刷盘
-  - 全部使用同步 `fs.appendFileSync`，无异步竞态
+### 11.16 日志缓冲区无限增长导致内存问题（历史问题）
+- 长时间连接下，通用主日志、各 tab 显示日志和 RX Raw 日志都可能持续占用内存。
+- 当前三类缓冲均受 `rawBufferAutoFlushMB` 阈值约束：显示日志按 `Buffer.byteLength()` 计数，Raw 按 Buffer 的真实字节数计数。
+- 达到阈值会同步追加落盘，5 秒定时器还会调用 `flushPendingLogs()`；持续写盘失败时会停止继续缓存对应日志类型并通知 renderer。
 
-### 11.17 auto-flush 文件碎片化与覆盖问题
-- 初版方案中每次 auto-flush 调用 `buildLogFileName()` 生成新文件名（含时间戳），导致一次连接产生几十个碎片文件；且断开时 `saveBufferToFile` 用 `writeFileSync` 覆盖了 auto-flush 已写入的内容
-- 修正：
-  - `ensureTabLogFile()` 首次生成 filePath 后缓存在 `tabLogBuffers` 条目中，后续全部追加到同一文件
-  - `saveAllTabLogs()` 和 `flush-tab-log` 统一改为 `appendFileSync` 追加模式，不再覆盖
-  - `connect-serial` 时预注册 `tab-main` 条目 + 预创建 filePath，避免首次 auto-flush 时未注册导致静默丢数据
-  - 删除了异步 `asyncAppendToTabLog`，全部统一为同步追加
+### 11.17 auto-flush 文件碎片化与覆盖问题（历史问题）
+- 初版 auto-flush 每次重新生成文件名，且最终保存可能覆盖此前追加的数据。
+- 当前主日志、tab 日志和 Raw 日志都在一个日志会话内缓存文件路径，后续统一使用追加写入。
+- `connect-serial` 仅预注册 `tab-main` 条目；`ensureTabLogFile()` 在首次实际写入时创建路径。
+- `saveAllTabLogs()`、`flush-tab-log` 和定时刷盘复用同一同步 flush 逻辑，避免异步竞态和覆盖。
 
 ---
 
 ## 12. 关键函数与关注点清单
 
 ### `main.js`
-- `normalizeConfig()`：config v3 归一化、统一 TX profile、旧 encoding/快捷项/自动发送迁移及 Hex/raw 字段校验
+- `normalizeConfig()`：config v11 归一化、历史迁移、快捷/搜索/图表/壁纸/遥测及日志字段校验
 - `loadConfig()`：配置默认值来源
 - `saveConfig()`：配置合并写回
 - `bufferRawSerialBytes()` / `flushRawBinaryLogSync()` / `ensureRawBinaryLogPath()`：RX-only Buffer 缓冲、追加刷盘和单连接文件路径
 - `writeSerialPayload()`：主进程发送最终校验、`SerialPort.write()` 和真实字节吞吐量统计
 - `createWindow()`：主窗口大小恢复与 resize 持久化
-- `handleSerialData(str)`：串口文本接收主入口，同时将原始数据推入 `rawSerialBuffer` 并触发 auto-flush 检查
-- `stripAnsi(str)`：剥离 ANSI SGR 序列（仅 `\x1b[...m`），受 `stripAnsiInLog` 配置控制
-- `formatFileName(format, extra)`：日志文件名格式化，支持 `%tab`
-- `buildLogFileName(extra)`：基于 `logFileNameFormat` 生成最终日志文件名；未使用 `%tab` 时自动在文件名开头追加 tab 标题前缀
-- `ensureTabLogFile(tabId)`：首次调用时生成并缓存 filePath，后续复用
-- `appendToTabLogSync(tabId, data)`：同步追加数据到指定 tab 的日志文件
-- `autoFlushRawBufferSync()`：swap raw buffer 后同步追加到 tab-main 文件
-- `triggerRawAutoFlush()`：检查 raw buffer 是否超 `rawBufferAutoFlushMB` 阈值
-- `getAutoFlushThreshold()`：从配置读取阈值并转为字节数
-- `saveLog()`：保存通用日志（仅在未启用 `saveAllTabsLogToFiles` 时生效）
-- `saveAllTabLogs()`：统一刷盘所有 tab 的残余缓冲并清理
-- `writeLog(data)`：写入通用日志缓冲 `logBuffer`
-- `writeTabLog(tabId, title, data)`：写入单个 tab 的日志缓冲（主终端走 raw buffer，过滤/shell 走各自 buffer）
-- `cleanupSerialConnection()`：清理串口连接，注入断开通知到 raw buffer，最后触发渲染层 flush
+- `queueSerialOutput()` / `port.on('data')`：保留原始 RX Buffer、统计吞吐、Raw 缓冲并批量发送 `serial-output-bytes`
+- `stripAnsi(str)`：按配置剥离显示日志中的 ANSI SGR 序列
+- `formatFileName(format, extra)` / `buildLogFileName(extra)`：格式化日志文件名并处理 `%tab`
+- `ensureMainLogFilePath()` / `ensureTabLogFile(tabId)` / `ensureRawBinaryLogPath()`：为三类日志延迟创建并缓存路径
+- `flushTabLogEntrySync()` / `saveAllTabLogs()`：追加刷盘并管理各 tab 日志条目
+- `writeLog(data)` / `saveLog()`：维护未启用全部 tab 日志时的通用主日志缓冲
+- `writeTabLog(tabId, title, data)`：接收 renderer 的显示日志，统一处理 ANSI，并分流到通用主日志或 `tabLogBuffers`
+- `flushPendingLogs()` / `startLogAutoFlushTimer()`：每 5 秒静默刷盘显示日志与 RX Raw 日志
+- `cleanupSerialConnection()`：清理串口状态并刷盘 RX Raw；显示日志由 renderer 的断开事件处理继续触发 flush
+- `ipcMain.handle('connect-serial')`：串口连接入口；启用全部 tab 日志时预注册 `tab-main`
+- `ipcMain.handle('serial-write')`：唯一串口发送入口
+- `ipcMain.on('save-config')`：渲染层配置保存
 - `ipcMain.handle('connect-serial')`：串口连接入口，预注册 `tab-main` 条目
-- `ipcMain.handle('serial-write')`：当前统一串口发送入口；`serial-input` 仅保留 Text 兼容路径
+- `ipcMain.handle('serial-write')`：唯一串口发送入口
 - `ipcMain.on('save-config')`：渲染层配置保存
 - `ipcMain.on('write-tab-log')`：接收渲染层 tab 日志写入请求
 - `ipcMain.on('flush-tab-log')`：保存单个 tab 日志
@@ -888,10 +815,8 @@ Hex 相关配置结构：
 - `formatLineForTerminal()`
 - `writeTabLog()` / `writeMainTabLog()` / `writeFilterTabLog()` / `writeShellTabLog()`
 - `getMainTabTitle()` / `getFilterTabLogTitle()` / `getShellTabLogTitle()`：生成固定英文日志标题
-- `createFilterTab()` / `createShellTab()`
-- `closeFilterTab()` / `closeShellTab()`
-- `persistFilterTabs()` / `persistShellTabs()`
-- `syncNextFilterTabId()` / `syncNextShellTabId()`：恢复时同步自增计数器避免 ID 冲突
+- `createFilterTab()` / `createShellTab()` / `createChartTab()`
+- 对应 close/persist/sync ID 函数：管理三类动态 tab 生命周期、恢复和稳定 ID
 - `bindTerminalContextMenu()`
 - `handleTerminalContextMenuAction()`
 - `getTerminalPlainText()`
@@ -900,7 +825,17 @@ Hex 相关配置结构：
 - `navigateMainInputHistory()`
 - `updateAutoSendValidation()` / `runAutoSendTick()`：自动发送校验、断线等待、防重入和失败停止
 - `normalizeQuickSendItem()` / `renderQuickSendList()`：快捷项 v2 字段、badge、tooltip 和拖动持久化
+- `refreshSearchCount()` / `selectSearchMatch()` / `renderSearchHistory()`：buffer 扫描、定位和历史 UI
+- `clearChartDataSession()` / `persistChartTabs()` / `exportChartSamples()`：图表会话、配置和 CSV 导出
 - `applyConfig()`
+
+### 图表与搜索模块
+- `serial-text-stream.js`：图表文本记录流
+- `chart-parser.js` / `chart-parser-worker*.js`：字段发现与隔离解析
+- `chart-data-model.js`：原始样本、统计和降采样
+- `chart-view.js`：uPlot 主图与时间轴
+- `chart-csv.js`：CSV 生成
+- `search-history.js`：搜索历史纯逻辑
 
 ### `serial-codec.js`
 - `parseHexInput()`：严格语法、结构化错误、标准化 Hex 和 byte count
@@ -989,14 +924,7 @@ Hex 相关配置结构：
    - [`index.html`](index.html)
    - [`i18n.js`](i18n.js)
    - [`preferences.js`](preferences.js)
-3. 明确本次修改属于哪一类：
-   - 串口收发
-   - 主终端显示
-   - 过滤标签页
-   - 主输入框
-   - 设置窗口
-   - 多语言
-   - 配置持久化
+3. 明确本次修改属于串口收发、终端显示、过滤、图表、Shell、主输入、设置、多语言、日志、更新/发布、遥测服务或配置迁移中的哪一类。
 4. 若改动输入框逻辑，必须验证：
    - 主终端逐键发送是否仍正常
    - 过滤输入焦点是否正常
@@ -1006,7 +934,10 @@ Hex 相关配置结构：
    - 主终端显示是否正常
    - 不会截断/缺失/错行
    - 过滤历史保存/恢复是否正常
-6. 若改动配置逻辑，必须验证：
+6. 若改动图表逻辑，必须验证解析 Worker、数据保留、主图/时间轴同步、CSV、重连清空和关闭资源释放。
+7. 若改动搜索逻辑，必须验证主/过滤/Shell 目标切换、选区快捷搜索、搜索历史和大 scrollback 响应。
+8. 若改动更新或遥测服务，必须同时运行根测试与 `telemetry-server` 测试，并核对 README、workflow 和部署说明。
+9. 若改动配置逻辑，必须验证：
    - 启动恢复
    - 保存 JSON 结构
    - 设置窗口/主窗口读取是否一致
@@ -1015,30 +946,19 @@ Hex 相关配置结构：
 
 ## 15. 推荐后续改进方向
 
-1. 将 `renderer.js` 拆分为多个模块：
-   - terminal-core
-   - filter-tabs
-   - main-input
-   - throughput
-   - sidebar-send
-   - i18n-apply
-
-2. 为过滤标签页建立更清晰的数据模型
-
-3. 为主输入框和主终端输入建立明确的职责边界
-
-4. 为配置结构建立版本字段，方便以后迁移
-
-5. 建立最小测试用例，至少覆盖：
-   - 串口文本完整性
-   - 过滤标签页恢复
-   - 输入框发送历史
-   - 多语言切换
-  - 更新跳过版本的持久化与启动检查行为
+1. 按 `ToDo.md` 优先解决大 scrollback 搜索的同步阻塞，增加分批扫描、generation 取消和匹配上限。
+2. 逐步把 `renderer.js` 中可独立测试的 terminal/filter/main-input/sidebar/i18n 编排拆出模块。
+3. 补齐完整配置归一化、mock serialport IPC、Shell session 生命周期及图表长时间行为测试。
+4. 逐步迁移 Electron 到 preload + contextBridge，并收窄 renderer 可调用 IPC。
+5. 完成 Linux 打包、真实/虚拟串口矩阵和主窗口完整人工交互回归。
+6. 继续补齐非英语语言的新功能键；CI 目前仅强制简中覆盖英语基线，其它语言允许回退英语。
 
 ---
 
-## 15A. 分屏工作区方案 A 实施计划
+
+## 15A. 分屏工作区方案 A（历史实施记录，功能已落地）
+
+> 本节保留最初设计与验收思路。当前实现以 `workspace-manager.js`、`renderer.js` 和测试为准，不要按本节“计划新增”的措辞重复实现。
 
 ### 15A.1 目标定义
 

@@ -2,6 +2,21 @@
 
 Private active-installation dashboard and pseudonymous daily activity endpoint.
 
+## Scope and prerequisites
+
+This directory is a private Node.js 22.12+ service for two separate responsibilities: pseudonymous activity metrics and the policy-driven Windows update manifest endpoint. It is not packaged into the Electron application (`package.json` excludes `telemetry-server/**`).
+
+Runtime dependencies are PostgreSQL, `pg`, and `js-yaml`; production should run the service on loopback behind HTTPS Nginx. Never commit the environment file, administrator password hash, database credentials, or `TELEMETRY_SECRET`.
+
+Common commands:
+
+```bash
+npm install
+npm test
+npm start
+npm run prune
+```
+
 ## Data collected
 
 - Random installation UUID generated while activity statistics are enabled; users can disable reporting in settings
@@ -17,11 +32,17 @@ Dashboard DAU, WAU, and MAU values count unique installations active in their UT
 
 The public endpoint can be imitated by third parties because a desktop application cannot securely contain a shared API secret. Dashboard values are product estimates, not suitable for billing, licensing, or security decisions. Use Nginx rate limits and monitor abnormal bursts of new installation IDs.
 
+## Environment
+
+Required variables are documented in `.env.example`: `DATABASE_URL`, a persistent `TELEMETRY_SECRET` of at least 32 random characters, `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and `PUBLIC_ORIGIN`. `UPDATE_METADATA_HOSTS` controls the HTTPS metadata/asset allowlist; `HOST` and `PORT` default to loopback deployment values.
+
+Run `npm run password -- "your password"` to generate the scrypt administrator hash. Keep the resulting environment file readable only by the service account and root.
+
 ## Setup
 
 1. Create a PostgreSQL database and restricted database user.
 2. Apply `db/001-init.sql`, `db/002-update-source.sql`, and `db/003-update-policies.sql` in that order. All migrations are idempotent and should also be applied when upgrading an existing deployment. Migration `003` uses the existing `service_settings.update_metadata_url` value for its one-time legacy and modern policy seeds, then records a marker so later deployments do not recreate policies.
-3. Run `npm install`.
+3. Run `npm ci` for a lockfile-reproducible deployment (`npm install` is acceptable only while intentionally updating dependencies).
 4. Generate an administrator password hash with `npm run password -- "your password"`.
 5. Copy `.env.example` values into a protected systemd environment file. `UPDATE_METADATA_HOSTS` optionally replaces the default trusted metadata/asset host list; entries also allow their subdomains.
 6. Start with `npm start` behind an HTTPS reverse proxy.
@@ -46,6 +67,12 @@ Manifest fetching is fail-closed: policy URLs and redirects must remain on the c
 `GET /serialterminal/api/v1/update-source` remains available for clients that use update-source discovery. It returns the fixed compatibility document `{ "schemaVersion": 1, "metadataUrl": "https://trigger-cn.top/serialterminal/latest.yml" }`, directing them to the dynamic endpoint. Older `0.3.7` clients already request that URL directly and are handled by the legacy policy. Clients with a hard-coded third-party origin continue to bypass this service and depend on that origin remaining available.
 
 For production, clone `https://github.com/Trigger-CN/SerialTerminal.git` to `/home/ubuntu/ws/SerialTerminal` and keep the environment file readable only by root and the service account. The verified Node 22 runtime remains under `/home/ubuntu/ws/SerialTerminalTelemetry/runtime`; application code and `node_modules` live in the GitHub checkout. Run `telemetry-server/deploy/deploy-from-github.sh` as `ubuntu` to pull `main` with `--ff-only`, install dependencies, run tests and migrations `001` through `003`, update systemd/Nginx configuration, and restart the service. The script replaces historical static compatibility snippets with empty include files, then health-checks both modern header-based and headerless legacy manifest requests through local HTTPS Nginx. Enable both `serialterminal-telemetry.service` and `serialterminal-telemetry-prune.timer`.
+
+## Verification and operations
+
+Before deployment, run `npm test`; the root repository's `npm test` also invokes this suite through `scripts/run-tests.js`. After migrations and restart, verify the activity endpoint, header-selected modern manifest, headerless legacy manifest, dashboard login, and the prune timer. The checked-in deployment script performs tests, migrations, service/Nginx installation, restart, and local HTTPS health checks.
+
+Back up PostgreSQL and `TELEMETRY_SECRET` together. Monitor systemd logs, Nginx rate-limit responses, update-origin failures, unexpected growth in new installation IDs, and whether the daily prune timer succeeds. Access logs contain client IP addresses even though the application database does not; keep their retention short.
 
 ## Nginx
 
