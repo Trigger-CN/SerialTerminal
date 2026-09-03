@@ -135,7 +135,7 @@
   - 长期迁移到 preload + context bridge，并限制 renderer 可调用 IPC。
 
 - [ ] 扩大高风险集成测试
-  - 覆盖完整 config v11 归一化与历史迁移、mock serialport `serial-write`/session 隔离、Shell 快速创建关闭及图表 Worker 超时/资源释放。
+  - 覆盖完整 config v12 归一化与历史迁移、mock serialport `serial-write`/session 隔离、Shell 快速创建关闭及图表 Worker 超时/资源释放。
 
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。

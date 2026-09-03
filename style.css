@@ -144,6 +144,29 @@ button.secondary:hover {
     color: #fff;
 }
 
+.sidebar-clear-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 34px;
+    gap: 4px;
+}
+
+.sidebar-clear-actions button {
+    min-width: 0;
+}
+
+#clear-all-logs-btn {
+    display: grid;
+    grid-template-columns: repeat(2, 12px);
+    place-content: center;
+    gap: 1px;
+    padding: 4px;
+}
+
+#clear-all-logs-btn .dual-log-clear-icon {
+    width: 12px;
+    height: 12px;
+}
+
 .sidebar-log-actions {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 34px;
@@ -3296,14 +3319,58 @@ input[type="color"] {
     color: #fff;
 }
 
-.shell-session-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-height: 40px;
+.shell-profile-empty {
+    padding: 8px 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-style: italic;
+    text-align: center;
 }
 
-.shell-session-empty {
+.shell-quick-command-section {
+    min-height: 0;
+}
+
+.shell-quick-command-heading {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 26px;
+    align-items: center;
+    gap: 6px;
+}
+
+.shell-quick-command-heading .shell-sidebar-section-title {
+    min-width: 0;
+}
+
+.shell-quick-command-add,
+.shell-quick-command-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    background: var(--bg-input);
+    color: var(--text-secondary);
+}
+
+.shell-quick-command-add {
+    width: 26px;
+    height: 24px;
+}
+
+.shell-quick-command-add svg[data-material-icon],
+.shell-quick-command-action svg[data-material-icon] {
+    width: 14px;
+    height: 14px;
+}
+
+.shell-quick-command-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.shell-quick-command-empty {
     font-size: 12px;
     color: var(--text-secondary);
     text-align: center;
@@ -3311,62 +3378,76 @@ input[type="color"] {
     font-style: italic;
 }
 
-.shell-session-item {
+.shell-quick-command-empty.hidden {
+    display: none;
+}
+
+.shell-quick-command-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px;
+    align-items: stretch;
+}
+
+.shell-quick-command-send {
+    min-width: 0;
+    min-height: 32px;
+    padding: 5px 7px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px;
+    gap: 5px;
+    text-align: left;
     background: var(--bg-input);
     border: 1px solid var(--border-color);
-    border-radius: 4px;
-    font-size: 12px;
-    transition: all 0.2s;
 }
 
-.shell-session-item:hover {
+.shell-quick-command-send:hover,
+.shell-quick-command-add:hover,
+.shell-quick-command-action:hover {
     border-color: var(--accent-color);
+    color: var(--text-primary);
 }
 
-.shell-session-item.active {
-    border-color: var(--accent-color);
-    background: rgba(0, 122, 204, 0.15);
-}
-
-.shell-session-item-name {
-    flex: 1;
+.shell-quick-command-label {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--text-primary);
-    cursor: pointer;
 }
 
-.shell-session-item-close {
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    font-size: 10px;
-    line-height: 18px;
+.shell-quick-command-enter-badge {
+    flex: 0 0 auto;
+    font-size: 8px;
+    color: var(--text-secondary);
+}
+
+.shell-quick-command-actions {
+    display: grid;
+    grid-template-columns: 26px;
+    grid-template-rows: repeat(2, 1fr);
+    gap: 2px;
+}
+
+.shell-quick-command-action {
+    width: 26px;
+    min-height: 15px;
+}
+
+.shell-quick-command-action.delete:hover {
+    border-color: var(--danger-color);
+    color: var(--danger-color);
+}
+
+.shell-quick-command-dialog .form-group {
+    margin-bottom: 14px;
+}
+
+.shell-quick-command-enter {
     display: flex;
     align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: none;
-    color: var(--text-secondary);
-    cursor: pointer;
-    border-radius: 50%;
-    flex-shrink: 0;
-    opacity: 0;
-    transition: all 0.2s;
-}
-
-.shell-session-item:hover .shell-session-item-close {
-    opacity: 1;
-}
-
-.shell-session-item-close:hover {
-    background: var(--danger-color);
-    color: #fff;
+    gap: 8px;
+    font-size: 12px;
 }
 
 .shell-options-group {

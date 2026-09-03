@@ -135,18 +135,19 @@ SerialTerminal/
 - 全仓库审查后的已确认问题、优化顺序和验收标准集中记录在根目录 `ToDo.md`；实施完成后应同步勾选对应条目并更新本文档中的架构约定
 - P0 优化已落地：Shell tab 保存 `sessionCreateTimer`/`closed` 防止快速关闭后创建孤儿 PTY；主窗口 `save-config` 只合并落盘，不再把完整配置回广播给自身，首选项 `save-config-request` 仍广播；过滤条件输入按 250ms debounce 持久化
 - 生产更新依赖使用 `electron-updater ^6.8.9`、`builder-util-runtime 9.7.0` 和 `js-yaml ^5.2.3`；使用官方 registry 执行 `npm audit --omit=dev` 应保持 0 High/Critical
-- 主按钮、快捷键、右键菜单和窄工具栏清空动作统一按活动/目标 `tabId` 调用 `clearTerminalByTabId()`，Shell 标签不得回退清空主终端
+- 主按钮、快捷键、右键菜单和窄工具栏清空动作统一按活动/目标 `tabId` 调用 `clearTerminalByTabId()`，Shell 标签不得回退清空主终端；展开侧栏的 `clear-all-logs-btn` 调用 `clearAllLogTabs()`，依次清空主终端、全部过滤标签和全部 Shell 标签的终端显示，不受 pane 可见性影响，图表页跳过且不修改磁盘日志
 - `fitWorkspaceTerminals()` 使用单一 `requestAnimationFrame` 合并请求，Shell 仅在 cols/rows 变化时发送 resize；pane `flex-basis` 和 sidebar `width` 过渡结束后均需触发 fit
 - Text 发送校验与最终发送均复用 `buildSerialWriteBuffer()`；ASCII/GBK 对无法表示的字符返回 `UNREPRESENTABLE_CHARACTER`，不得静默替换为 `?`。`parseHexInput()` 在扫描/累计超过 `maxBytes` 时应提前失败，避免超大输入构造完整副本
 - `npm test` 通过 `scripts/run-tests.js` 执行根项目 Node 测试与 `telemetry-server` 测试；codec、formatter、图表、搜索历史、日志、工作区、i18n、发布链路等行为变化必须同步相关测试
 - Shell profile 参数在设置窗口中逐项编辑并始终以 argv 字符串数组保存；不得通过空格 join/split 往返转换
-- 配置版本为 11；历史配置统一由 `normalizeConfig()` 迁移并在变化后写回。Shell profile 使用稳定 `id`；主输入与快捷指令发送模型、搜索历史、图表、壁纸和遥测字段均以当前 schema 为准
+- 配置版本为 12；历史配置统一由 `normalizeConfig()` 迁移并在变化后写回。Shell profile 和 Shell 快捷指令使用稳定 `id`；主输入与串口快捷指令发送模型、搜索历史、图表、壁纸和遥测字段均以当前 schema 为准
+- 右侧 Shell 侧边栏不再维护活跃会话副列表；`shellQuickCommands` 独立保存 `id`、`label`、`command`、`appendEnter`。点击快捷指令只能向 `getActiveTabInfo()` 指向且 `sessionReady` 的 Shell 标签发送 `shell-tab-input`，不得回退发送到其他 Shell 或串口
 - 字体大小、scrollback、历史缓冲、滚轮行数、输入历史上限、Hex 空闲刷新和日志自动刷盘大小统一通过 `config-values.js` 的整数范围规则校验；主进程和设置窗口不得各自维护不同 clamp 逻辑
 - 工作区布局通过 `workspace-manager.js` 的 `normalizeWorkspaceLayoutShape()` 全局去重 tab ID；DOM 可渲染检查必须在目标 pane 内同时找到 tab 按钮和内容。任一 pane 变空时自动关闭分屏，若唯一非空的是 `pane-2`，需按原顺序整体迁移到 `pane-1` 并保持活动标签和 pane 内 index 不变
 - 开发、测试和打包使用 Node.js `>=22.12.0`，与当前 electron-builder 间接依赖的 engine 要求一致；CI 固定 Node 22.12
 - `.github/workflows/checks.yml` 在 push/PR 上执行 `npm ci --ignore-scripts`、`npm test`、全仓库 JavaScript 语法检查和官方 registry 生产依赖审计；简中 i18n 必须覆盖英语基线键，其他语言允许回退英语
 - `.github/workflows/release.yml` 仅响应 `v*` tag；Windows/Linux 使用同一 Node 22.12、官方 registry lockfile、`npm ci --ignore-scripts`、显式 `npm run rebuild` 和打包命令，并检查构建不修改 lockfile
-- Windows 客户端自动更新先请求 `https://trigger-cn.top/serialterminal/latest.yml`，仅该请求附带客户端版本和 `stable` 渠道；服务端按数据库策略返回规范化 manifest。动态入口失败时按 Gitee、腾讯云 COS、GitHub 回退，并且只有版本、目标安装包类型和 SHA-512 与选定版本一致的来源可参与下载；`DebUpdater` 校验 `.deb`，其他 Linux updater 校验 `.AppImage`，Windows 校验 `.exe`。Linux 客户端直接使用 GitHub `latest-linux.yml`。COS 和 Gitee 均保存 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`，Linux 产物只保留在 GitHub Release。严格 SemVer 预发布 Tag 不得覆盖 COS `releases/latest/`，稳定客户端也必须拒绝预发布 manifest。GitHub Actions 先上传 draft Release，再发布并验证 COS 版本化对象，最后重新按大小和 SHA-512 校验全部 GitHub 资产并发布 draft；稳定版只在该阶段成为 GitHub latest。GitHub、COS、Gitee 的同 Tag 资产不可覆盖，重试只能复用完全一致的对象或附件。之后工作流以非强制方式同步 main/Tag 到 Gitee；Gitee Tag 流水线运行 `scripts/mirror-github-release-to-gitee.js`，EXE 优先从 COS 下载，blockmap 和元数据使用 GitHub 原始资产，每个来源首次请求后按 `2s/5s/10s` 再重试三次，COS 全部失败才回退 GitHub，并按元数据版本、文件大小和 SHA-512 校验 EXE。Gitee 已存在附件使用无令牌下载并手动跟随最多三次重定向，只允许 `gitee.com` 及其子域名。Gitee 流水线需单独配置加密变量 `CI_GITEE_ACCESS_TOKEN`，调用脚本时映射为 `GITEE_ACCESS_TOKEN`，发布后必须重新下载 manifest 和 EXE 做 SHA-512 校验，并确认 blockmap 可公开下载。Gitee 当前忽略 Range 请求，因此客户端在 Gitee 源直接下载完整 EXE，COS/GitHub 仍可使用差分更新。最后的 `--prune-only` 永久保留 `releases/latest/`，分别保留最新三个稳定和三个预发布前缀，并保护当前稳定 latest 引用的版本；COS CAM 身份需具备 `cos:GetBucket` 和批量删除对象权限。
+- Windows 客户端自动更新先请求 `https://trigger-cn.top/serialterminal/latest.yml`，仅该请求附带客户端版本和 `stable` 渠道；服务端按数据库策略返回规范化 manifest。动态入口失败时按 Gitee、腾讯云 COS、GitHub 回退，并且只有版本、目标安装包类型和 SHA-512 与选定版本一致的来源可参与下载；`DebUpdater` 校验 `.deb`，其他 Linux updater 校验 `.AppImage`，Windows 校验 `.exe`。Linux 客户端直接使用 GitHub `latest-linux.yml`。COS 和 Gitee 均保存 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`，Linux 产物只保留在 GitHub Release。严格 SemVer 预发布 Tag 不得覆盖 COS `releases/latest/`，稳定客户端也必须拒绝预发布 manifest。GitHub Actions 先上传 draft Release，再由 COS 脚本从原始元数据在内存中生成 COS URL，仅发布和验证 `releases/<tag>/` 版本化对象，严禁修改 `dist/latest.yml`；随后按大小和 SHA-512 校验全部 GitHub 资产并发布 draft，稳定版此时成为 GitHub latest。GitHub、COS、Gitee 的同 Tag 资产不可覆盖，重试只能复用完全一致的对象或附件。之后工作流同步 main/Tag 到 Gitee并最多轮询 15 分钟，等待 Gitee Tag 流水线完成；该流水线运行 `scripts/mirror-github-release-to-gitee.js`，EXE 优先从 COS 下载，blockmap 和元数据使用 GitHub 原始资产，每个来源首次请求后按 `2s/5s/10s` 再重试三次，COS 全部失败才回退 GitHub，并按元数据版本、文件大小和 SHA-512 校验 EXE。Gitee 已存在附件使用无令牌下载并手动跟随最多三次重定向，只允许 `gitee.com` 及其子域名。Gitee 流水线需单独配置加密变量 `CI_GITEE_ACCESS_TOKEN`，调用脚本时映射为 `GITEE_ACCESS_TOKEN`，发布后主工作流重新下载 Gitee manifest、EXE 和 blockmap 做公开验证。Gitee 当前忽略 Range 请求，因此客户端在 Gitee 源直接下载完整 EXE，COS/GitHub 仍可使用差分更新。只有 GitHub、COS 版本化对象和 Gitee 全部验证成功后，稳定 Tag 才通过独立 `--promote-latest` 将 COS 版本化元数据提升到 `releases/latest/` 并回读验证；预发布永不切换稳定 latest。最后 `--prune-only` 分别保留最新三个稳定和三个预发布前缀，并保护当前稳定 latest 引用的版本；COS CAM 身份需具备 `cos:GetBucket` 和批量删除对象权限。
 - `v0.3.7` 将更新源固定为 `https://trigger-cn.top/serialterminal/`；无版本/渠道头的请求由 telemetry 服务中的唯一 legacy 策略处理。部署脚本会清空旧静态兼容 snippet，不能再并存另一条 `/serialterminal/latest.yml` location。
 - Release 的 Windows native rebuild 固定使用 `windows-2022`、MSBuild 和 VS developer environment，避免旧版 Electron node-gyp 无法识别 VS 18；构建矩阵必须传 `--publish never`，产物统一交由独立 publish job 上传 GitHub Release
 - Release artifact 必须使用安装包白名单，仅上传 Windows `.exe`/`.blockmap`/`latest.yml` 与 Linux `.AppImage`/`.deb`/`latest-linux.yml`；禁止使用 `dist/**`，避免把 unpacked 目录和 native build 中间文件发布到 GitHub
@@ -428,7 +429,7 @@ npm run dist:linux
 
 ---
 
-## 8. 串口收发实现原理（config v11 / 原始字节架构）
+## 8. 串口收发实现原理（config v12 / 原始字节架构）
 
 ### 8.1 主进程接收流程
 `main.js`
@@ -481,11 +482,12 @@ npm run dist:linux
 - 搜索历史以 query + Regex/大小写/整词选项去重，支持置顶和删除；默认上限 20，配置范围 0-200。
 - 连接、端口切换、写队列和模式切换必须继续遵守 session、generation、decoder/formatter flush 与焦点保护规则。
 
-### 8.6 config v11 与迁移
-- `CONFIG_VERSION = 11`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，规范化结果变化时写回磁盘。
+### 8.6 config v12 与迁移
+- `CONFIG_VERSION = 12`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，规范化结果变化时写回磁盘。
 - 旧 `lastSerialOptions.encoding` 仍迁移为 RX 模式/编码与 TX Text 编码；当前主输入模式和追加选项归属 `mainInputSettings`。
 - config v7 之前快捷指令的追加语义会迁移为每条 `appendCrLf`；快捷项补齐稳定 ID、分组、模式、侧栏入口和自动触发。
 - Shell profile 缺失或重复 ID 会生成稳定 ID；旧默认名称引用迁移为 `defaultShellProfileId`。
+- Shell 快捷指令在 v12 加入 `shellQuickCommands`，补齐稳定 ID，并限制标签、命令和 `appendEnter` 类型；该列表与串口 `quickSendList` 完全独立。
 - 旧 100000 默认 scrollback 在 v5 迁移为当前默认 20000；数值字段统一经 `config-values.js` 限制。
 - 搜索历史、图表配置、终端壁纸、遥测、日志保留与日期目录等后续字段均由当前归一化逻辑兜底。
 - 关闭 Raw 日志或修改日志目录/文件名配置前必须先刷盘；失败时保留设置窗口并提示。
@@ -775,7 +777,7 @@ npm run dist:linux
 ## 12. 关键函数与关注点清单
 
 ### `main.js`
-- `normalizeConfig()`：config v11 归一化、历史迁移、快捷/搜索/图表/壁纸/遥测及日志字段校验
+- `normalizeConfig()`：config v12 归一化、历史迁移、串口/Shell 快捷指令、搜索、图表、壁纸、遥测及日志字段校验
 - `loadConfig()`：配置默认值来源
 - `saveConfig()`：配置合并写回
 - `bufferRawSerialBytes()` / `flushRawBinaryLogSync()` / `ensureRawBinaryLogPath()`：RX-only Buffer 缓冲、追加刷盘和单连接文件路径
@@ -1416,7 +1418,7 @@ workspaceLayout = {
 
 - shell tab 焦点在 xterm 时直接输入 shell
 - 复制/粘贴快捷键处理需按终端类型分流，不能继续默认转发到串口
-- 主输入框、快捷发送、自动发送仍仅作用于串口
+- 主输入框、串口快捷发送、自动发送仍仅作用于串口；右栏 `shellQuickCommands` 只作用于当前活动且已就绪的 Shell 标签
 
 #### 15B.8 首版开发范围
 

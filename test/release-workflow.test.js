@@ -80,7 +80,7 @@ test('release publishes updater files to Tencent COS', () => {
   assert.match(workflow, /uses: softprops\/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228/);
 });
 
-test('release synchronizes code to Gitee after publishing Windows updater files to COS', () => {
+test('release promotes COS stable latest only after GitHub and Gitee verification', () => {
   assert.match(workflow, /publish:[\s\S]*uses: actions\/setup-node@v6[\s\S]*node-version: 22\.12\.0[\s\S]*run: npm ci --ignore-scripts/);
   assert.match(workflow, /GITEE_SSH_PRIVATE_KEY: \$\{\{ secrets\.GITEE_SSH_PRIVATE_KEY \}\}/);
   assert.doesNotMatch(workflow, /GITEE_ACCESS_TOKEN|Publish Gitee release notes|publish-gitee-release\.js/);
@@ -93,30 +93,38 @@ test('release synchronizes code to Gitee after publishing Windows updater files 
   assert.match(workflow, /git push gitee "refs\/tags\/\$\{GITHUB_REF_NAME\}"/);
   assert.doesNotMatch(workflow, /git push gitee --force/);
   assert.doesNotMatch(workflow, /git push gitee[^\n]*--mirror/);
-  assert.match(workflow, /node scripts\/publish-cos-release\.js/);
-  assert.match(workflow, /name: Verify public COS downloads/);
-  assert.match(workflow, /node scripts\/validate-release-tag\.js "\$\{\{ github\.ref_name \}\}"/);
-  assert.match(workflow, /name: Validate GitHub release promotion[\s\S]*node scripts\/validate-github-release\.js/);
   assert.match(workflow, /name: Verify local Windows update artifacts[\s\S]*node scripts\/update-artifact-integrity\.js/);
+  assert.match(workflow, /name: Validate GitHub release promotion[\s\S]*node scripts\/validate-github-release\.js/);
   assert.match(workflow, /make_latest: false/);
-  assert.match(workflow, /node scripts\/update-artifact-integrity\.js/);
-  const cosPublish = workflow.slice(workflow.indexOf('name: Publish release artifacts to COS'), workflow.indexOf('name: Verify public COS downloads'));
-  assert.match(cosPublish, /dist\/\*\.exe[\s\S]*dist\/\*\.exe\.blockmap[\s\S]*dist\/latest\.yml/);
-  assert.doesNotMatch(cosPublish, /AppImage|\.deb|latest-linux\.yml/);
-  assert.ok(workflow.indexOf('uses: softprops/action-gh-release@v3') < workflow.indexOf('name: Publish release artifacts to COS'));
-  assert.ok(workflow.indexOf('name: Verify public COS downloads') < workflow.indexOf('name: Synchronize release commit and tag to Gitee'));
-  assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
-  assert.doesNotMatch(workflow, /ssh-keyscan/);
-});
 
-test('release prunes COS versions only after all publication steps succeed', () => {
-  const verifyIndex = workflow.indexOf('name: Verify public COS downloads');
-  const giteeIndex = workflow.indexOf('name: Synchronize release commit and tag to Gitee');
+  const draftIndex = workflow.indexOf('uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228');
+  const cosPublishIndex = workflow.indexOf('name: Publish release artifacts to COS');
+  const cosVerifyIndex = workflow.indexOf('name: Verify public COS downloads');
+  const githubPromoteIndex = workflow.indexOf('name: Promote verified GitHub release');
+  const giteePushIndex = workflow.indexOf('name: Synchronize release commit and tag to Gitee');
+  const giteeVerifyIndex = workflow.indexOf('name: Wait for and verify public Gitee release');
+  const latestPromoteIndex = workflow.indexOf('name: Promote stable COS latest');
+  const latestVerifyIndex = workflow.indexOf('name: Verify stable COS latest');
   const pruneIndex = workflow.indexOf('name: Remove old COS releases');
 
-  assert.ok(verifyIndex >= 0 && verifyIndex < pruneIndex);
-  assert.ok(giteeIndex >= 0 && giteeIndex < pruneIndex);
+  assert.ok(draftIndex < cosPublishIndex);
+  assert.ok(cosPublishIndex < cosVerifyIndex);
+  assert.ok(cosVerifyIndex < githubPromoteIndex);
+  assert.ok(githubPromoteIndex < giteePushIndex);
+  assert.ok(giteePushIndex < giteeVerifyIndex);
+  assert.ok(giteeVerifyIndex < latestPromoteIndex);
+  assert.ok(latestPromoteIndex < latestVerifyIndex);
+  assert.ok(latestVerifyIndex < pruneIndex);
+
+  const cosPublish = workflow.slice(cosPublishIndex, cosVerifyIndex);
+  assert.match(cosPublish, /dist\/\*\.exe[\s\S]*dist\/\*\.exe\.blockmap[\s\S]*dist\/latest\.yml/);
+  assert.doesNotMatch(cosPublish, /AppImage|\.deb|latest-linux\.yml|--promote-latest/);
+  assert.match(workflow.slice(giteeVerifyIndex, latestPromoteIndex), /update-artifact-integrity\.js/);
+  assert.match(workflow.slice(latestPromoteIndex, latestVerifyIndex), /if: \$\{\{ !contains\(github\.ref_name, '-'\) \}\}[\s\S]*--promote-latest --tag/);
+  assert.match(workflow.slice(latestVerifyIndex, pruneIndex), /if: \$\{\{ !contains\(github\.ref_name, '-'\) \}\}[\s\S]*update-artifact-integrity\.js/);
   assert.match(workflow.slice(pruneIndex), /node scripts\/publish-cos-release\.js --prune-only/);
+  assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
+  assert.doesNotMatch(workflow, /ssh-keyscan/);
 });
 
 test('Gitee tag pipeline mirrors and verifies all Windows updater assets', () => {

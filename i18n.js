@@ -387,6 +387,24 @@ const quickSendGroupTranslations = {
   de: { quickSendGroup: 'Gruppe', quickSendUngrouped: 'Nicht gruppiert', quickSendCreateGroup: '+ Neue Gruppe', quickSendNewGroupName: 'Name der neuen Gruppe', quickSendGroupDefault: 'Neue Gruppe', quickSendGroupNameRequired: 'Gruppennamen eingeben', addQuickSendGroup: 'Gruppe hinzufugen', renameQuickSendGroup: 'Gruppe umbenennen', deleteQuickSendGroup: 'Gruppe loschen', quickSendDeleteGroupMessage: '„{name}“ und die {count} Befehle loschen? Dies kann nicht ruckgangig gemacht werden.', quickSendGroupDeleted: 'Gruppe geloscht: {name}', dragToReorder: 'Zum Sortieren ziehen', delete: 'Loschen', edit: 'Bearbeiten', removeQuickSendSidebar: 'Aus Seitenleiste entfernen', deleteQuickSend: 'Schnellbefehl loschen' }
 };
 
+const clearAllLogTranslations = {
+  en: 'Clear All Log Tabs',
+  'zh-CN': '一键清空所有 Log 标签页',
+  'zh-TW': '一鍵清空所有 Log 標籤頁',
+  fr: 'Effacer tous les onglets de journal',
+  ru: 'Очистить все вкладки журналов',
+  de: 'Alle Protokoll-Tabs leeren'
+};
+
+const shellQuickCommandTranslations = {
+  en: { shellQuickCommands: 'Shell Quick Commands', noShellQuickCommands: 'No Shell quick commands', addShellQuickCommand: 'Add Shell Quick Command', editShellQuickCommand: 'Edit Shell Quick Command', deleteShellQuickCommand: 'Delete Shell Quick Command', shellCommand: 'Command', shellQuickCommandAppendEnter: 'Execute immediately (append Enter)', shellCommandRequired: 'Enter a Shell command', shellQuickCommandNeedsShell: 'Activate a Shell tab first', shellQuickCommandNotReady: 'The active Shell is not ready', shellQuickCommandSent: 'Sent Shell command: {label}' },
+  'zh-CN': { shellQuickCommands: 'Shell 快捷指令', noShellQuickCommands: '暂无 Shell 快捷指令', addShellQuickCommand: '添加 Shell 快捷指令', editShellQuickCommand: '编辑 Shell 快捷指令', deleteShellQuickCommand: '删除 Shell 快捷指令', shellCommand: '命令', shellQuickCommandAppendEnter: '立即执行（追加 Enter）', shellCommandRequired: '请输入 Shell 命令', shellQuickCommandNeedsShell: '请先激活一个 Shell 标签页', shellQuickCommandNotReady: '当前 Shell 尚未就绪', shellQuickCommandSent: '已发送 Shell 指令：{label}' },
+  'zh-TW': { shellQuickCommands: 'Shell 快捷指令', noShellQuickCommands: '暫無 Shell 快捷指令', addShellQuickCommand: '新增 Shell 快捷指令', editShellQuickCommand: '編輯 Shell 快捷指令', deleteShellQuickCommand: '刪除 Shell 快捷指令', shellCommand: '命令', shellQuickCommandAppendEnter: '立即執行（附加 Enter）', shellCommandRequired: '請輸入 Shell 命令', shellQuickCommandNeedsShell: '請先啟用一個 Shell 標籤頁', shellQuickCommandNotReady: '目前 Shell 尚未就緒', shellQuickCommandSent: '已傳送 Shell 指令：{label}' },
+  fr: { shellQuickCommands: 'Commandes Shell rapides', noShellQuickCommands: 'Aucune commande Shell rapide', addShellQuickCommand: 'Ajouter une commande Shell rapide', editShellQuickCommand: 'Modifier la commande Shell rapide', deleteShellQuickCommand: 'Supprimer la commande Shell rapide', shellCommand: 'Commande', shellQuickCommandAppendEnter: 'Exécuter immédiatement (ajouter Entrée)', shellCommandRequired: 'Saisissez une commande Shell', shellQuickCommandNeedsShell: 'Activez d’abord un onglet Shell', shellQuickCommandNotReady: 'Le Shell actif n’est pas prêt', shellQuickCommandSent: 'Commande Shell envoyée : {label}' },
+  ru: { shellQuickCommands: 'Быстрые команды Shell', noShellQuickCommands: 'Нет быстрых команд Shell', addShellQuickCommand: 'Добавить быструю команду Shell', editShellQuickCommand: 'Изменить быструю команду Shell', deleteShellQuickCommand: 'Удалить быструю команду Shell', shellCommand: 'Команда', shellQuickCommandAppendEnter: 'Выполнить сразу (добавить Enter)', shellCommandRequired: 'Введите команду Shell', shellQuickCommandNeedsShell: 'Сначала активируйте вкладку Shell', shellQuickCommandNotReady: 'Активный Shell ещё не готов', shellQuickCommandSent: 'Команда Shell отправлена: {label}' },
+  de: { shellQuickCommands: 'Shell-Schnellbefehle', noShellQuickCommands: 'Keine Shell-Schnellbefehle', addShellQuickCommand: 'Shell-Schnellbefehl hinzufügen', editShellQuickCommand: 'Shell-Schnellbefehl bearbeiten', deleteShellQuickCommand: 'Shell-Schnellbefehl löschen', shellCommand: 'Befehl', shellQuickCommandAppendEnter: 'Sofort ausführen (Enter anhängen)', shellCommandRequired: 'Shell-Befehl eingeben', shellQuickCommandNeedsShell: 'Zuerst einen Shell-Tab aktivieren', shellQuickCommandNotReady: 'Die aktive Shell ist noch nicht bereit', shellQuickCommandSent: 'Shell-Befehl gesendet: {label}' }
+};
+
 const fontWeightTranslations = {
   en: 'Font Weight',
   'zh-CN': '字体字重',
@@ -415,6 +433,14 @@ for (const [language, values] of Object.entries(terminalWallpaperTranslations)) 
 
 for (const [language, values] of Object.entries(quickSendGroupTranslations)) {
   Object.assign(translations[language].main, values);
+}
+
+for (const [language, values] of Object.entries(shellQuickCommandTranslations)) {
+  Object.assign(translations[language].main, values);
+}
+
+for (const [language, value] of Object.entries(clearAllLogTranslations)) {
+  translations[language].main.clearAllLogs = value;
 }
 
 Object.assign(translations['zh-CN'].main, {

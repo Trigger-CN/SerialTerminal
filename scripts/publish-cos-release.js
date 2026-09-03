@@ -16,11 +16,15 @@ const COS_IDENTIFIER = '(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)';
 const COS_VERSION_PATTERN = new RegExp(`^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(${COS_IDENTIFIER}(?:\\.${COS_IDENTIFIER})*))?$`);
 
 function parseArguments(args) {
-  const options = { files: [], pruneOnly: false };
+  const options = { files: [], promoteLatest: false, pruneOnly: false };
   for (let index = 0; index < args.length; index++) {
     const name = args[index];
     if (name === '--prune-only') {
       options.pruneOnly = true;
+      continue;
+    }
+    if (name === '--promote-latest') {
+      options.promoteLatest = true;
       continue;
     }
     if (name === '--files') {
@@ -30,9 +34,11 @@ function parseArguments(args) {
     if (!name.startsWith('--') || !args[index + 1]) throw new Error(`Invalid argument: ${name}`);
     options[name.slice(2)] = args[++index];
   }
+  if (options.pruneOnly && options.promoteLatest) throw new Error('Conflicting COS release modes');
   if (!options.pruneOnly && !options.tag) throw new Error('Missing --tag');
   if (!options.pruneOnly) parseReleaseTag(options.tag);
-  if (!options.pruneOnly && options.files.length === 0) throw new Error('Missing --files');
+  if (!options.pruneOnly && !options.promoteLatest && options.files.length === 0) throw new Error('Missing --files');
+  if (options.promoteLatest && options.files.length > 0) throw new Error('--promote-latest does not accept --files');
   return options;
 }
 
@@ -185,6 +191,43 @@ function createCosPublisher({ secretId, secretKey, bucket, region, cos, logger =
     }
   }
 
+  async function promoteLatest({ tag, fileNames = ['latest.yml'] }) {
+    const releaseTag = parseReleaseTag(tag);
+    if (releaseTag.prerelease) throw new Error(`Cannot promote prerelease tag to stable latest: ${tag}`);
+
+    const preparedMetadata = [];
+    for (const fileName of fileNames) {
+      if (!/^latest(?:-linux)?\.yml$/i.test(fileName)) throw new Error(`Invalid update metadata file: ${fileName}`);
+      const versionedKey = `releases/${tag}/${fileName}`;
+      const versioned = await getObjectIfExists(versionedKey);
+      if (!versioned) throw new Error(`COS versioned metadata does not exist: ${versionedKey}`);
+      const content = Buffer.from(versioned.Body || '');
+      const metadata = yaml.load(content.toString('utf8'));
+      if (!metadata || metadata.version !== releaseTag.version) {
+        throw new Error(`COS versioned metadata version must be ${releaseTag.version}: ${versionedKey}`);
+      }
+
+      const current = await getStableLatestMetadata(fileName);
+      if (current) {
+        const comparison = compareVersions(releaseTag.version, current.metadata.version);
+        if (comparison < 0) throw new Error(`Stable latest cannot move backward from ${current.metadata.version} to ${releaseTag.version}`);
+        if (comparison === 0) {
+          if (!current.content.equals(content)) {
+            throw new Error(`Stable latest ${releaseTag.version} differs from the versioned release`);
+          }
+          logger.log(`[cos] stable latest already matches: releases/latest/${fileName}`);
+          continue;
+        }
+      }
+      preparedMetadata.push({ fileName, content });
+    }
+
+    for (const item of preparedMetadata) {
+      await uploadBuffer(item.content, `releases/latest/${item.fileName}`, 'no-cache, no-store, must-revalidate');
+    }
+    return { publicRoot, versionPrefix: `releases/${tag}` };
+  }
+
   async function publish({ tag, files }) {
     const releaseTag = parseReleaseTag(tag);
     const versionPrefix = `releases/${tag}`;
@@ -209,21 +252,7 @@ function createCosPublisher({ secretId, secretKey, bucket, region, cos, logger =
       const content = Buffer.from(yaml.dump(metadata), 'utf8');
       const fileName = path.basename(filePath);
       const versioned = await prepareImmutableObject(`${versionPrefix}/${fileName}`, { buffer: content, filePath });
-      let latestExists = false;
-      if (!releaseTag.prerelease) {
-        const current = await getStableLatestMetadata(fileName);
-        if (current) {
-          const comparison = compareVersions(releaseTag.version, current.metadata.version);
-          if (comparison < 0) throw new Error(`Stable latest cannot move backward from ${current.metadata.version} to ${releaseTag.version}`);
-          if (comparison === 0) {
-            if (!current.content.equals(content)) {
-              throw new Error(`Stable latest ${releaseTag.version} differs from the existing release`);
-            }
-            latestExists = true;
-          }
-        }
-      }
-      preparedMetadata.push({ filePath, fileName, content, versioned, latestExists });
+      preparedMetadata.push({ content, versioned });
     }
 
     for (const artifact of preparedArtifacts) {
@@ -232,18 +261,14 @@ function createCosPublisher({ secretId, secretKey, bucket, region, cos, logger =
       }
     }
     for (const item of preparedMetadata) {
-      await fs.promises.writeFile(item.filePath, item.content);
       if (!item.versioned.exists) {
         await uploadBuffer(item.content, item.versioned.key, 'public, max-age=31536000, immutable', item.versioned.sha512);
-      }
-      if (!releaseTag.prerelease && !item.latestExists) {
-        await uploadBuffer(item.content, `releases/latest/${item.fileName}`, 'no-cache, no-store, must-revalidate');
       }
     }
     return { publicRoot, versionPrefix };
   }
 
-  return { pruneOldVersions, publish };
+  return { promoteLatest, pruneOldVersions, publish };
 }
 
 function callCos(client, method, options) {
@@ -341,6 +366,11 @@ async function main() {
   });
   if (options.pruneOnly) {
     await publisher.pruneOldVersions();
+    return;
+  }
+  if (options.promoteLatest) {
+    await publisher.promoteLatest({ tag: options.tag });
+    console.log(`Promoted ${options.tag} to stable COS latest`);
     return;
   }
   const result = await publisher.publish(options);

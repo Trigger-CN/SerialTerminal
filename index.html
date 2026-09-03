@@ -82,7 +82,10 @@
             </div>
 
             <button id="connect-btn" class="connect-action" style="width: 100%;"><span class="material-icon-placeholder" data-material-icon="power"></span><span id="connect-btn-label" data-i18n="main.connect">Connect</span></button>
-            <button id="clear-btn" class="secondary" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput" style="width: 100%;"><span class="material-icon-placeholder" data-material-icon="delete_sweep"></span><span data-i18n="main.clearLog">Clear Log</span></button>
+            <div class="sidebar-clear-actions">
+                <button id="clear-btn" class="secondary" title="Clear Terminal Output" data-i18n-title="main.clearTerminalOutput"><span class="material-icon-placeholder" data-material-icon="delete_sweep"></span><span data-i18n="main.clearLog">Clear Log</span></button>
+                <button id="clear-all-logs-btn" class="secondary" type="button" title="Clear All Log Tabs" data-i18n-title="main.clearAllLogs" aria-label="Clear All Log Tabs" data-i18n-aria-label="main.clearAllLogs"><span class="material-icon-placeholder dual-log-clear-icon" data-material-icon="delete_sweep"></span><span class="material-icon-placeholder dual-log-clear-icon" data-material-icon="delete_sweep"></span></button>
+            </div>
             <div class="sidebar-log-actions">
                 <button id="open-log-folder-btn" class="secondary" type="button"><span class="material-icon-placeholder" data-material-icon="folder_open"></span><span data-i18n="main.openLogFolder">Open Log Folder</span></button>
                 <button id="save-current-tab-btn" class="secondary" type="button" title="Save Current Tab" data-i18n-title="main.saveCurrentTab" aria-label="Save Current Tab" data-i18n-aria-label="main.saveCurrentTab"><span class="material-icon-placeholder" data-material-icon="save"></span></button>
@@ -319,11 +322,13 @@
                     <span data-i18n="main.manageShellProfiles">Manage Profiles...</span>
                 </button>
             </div>
-            <div class="shell-sidebar-section">
-                <div class="shell-sidebar-section-title" data-i18n="main.activeShellSessions">Active Sessions</div>
-                <div class="shell-session-list" id="shell-session-list">
-                    <div class="shell-session-empty" data-i18n="main.noActiveShellSessions">No active shell sessions</div>
+            <div class="shell-sidebar-section shell-quick-command-section">
+                <div class="shell-quick-command-heading">
+                    <div class="shell-sidebar-section-title" data-i18n="main.shellQuickCommands">Shell Quick Commands</div>
+                    <button id="shell-quick-command-add" class="shell-quick-command-add" type="button" title="Add Shell Quick Command" data-i18n-title="main.addShellQuickCommand" aria-label="Add Shell Quick Command" data-i18n-aria-label="main.addShellQuickCommand"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
                 </div>
+                <div class="shell-quick-command-list" id="shell-quick-command-list" role="list"></div>
+                <div class="shell-quick-command-empty" id="shell-quick-command-empty" data-i18n="main.noShellQuickCommands">No Shell quick commands</div>
             </div>
             <div class="shell-sidebar-section">
                 <div class="shell-sidebar-section-title" data-i18n="main.shellOptions">Shell Options</div>
@@ -339,6 +344,34 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <div id="shell-quick-command-dialog" class="app-dialog-overlay hidden" role="presentation">
+        <section class="app-dialog shell-quick-command-dialog" role="dialog" aria-modal="true" aria-labelledby="shell-quick-command-dialog-title">
+            <header class="app-dialog-header">
+                <h2 id="shell-quick-command-dialog-title" data-i18n="main.addShellQuickCommand">Add Shell Quick Command</h2>
+                <button id="shell-quick-command-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-aria-label="main.close" title="Close" data-i18n-title="main.close"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
+            </header>
+            <div class="app-dialog-body">
+                <div class="form-group">
+                    <label for="shell-quick-command-label" data-i18n="main.label">Label</label>
+                    <input type="text" id="shell-quick-command-label" maxlength="60" autocomplete="off" placeholder="Label" data-i18n-placeholder="main.label">
+                </div>
+                <div class="form-group">
+                    <label for="shell-quick-command-content" data-i18n="main.shellCommand">Command</label>
+                    <textarea id="shell-quick-command-content" class="send-editor-textarea" placeholder="Command" data-i18n-placeholder="main.shellCommand"></textarea>
+                </div>
+                <label class="shell-quick-command-enter" for="shell-quick-command-append-enter">
+                    <input type="checkbox" id="shell-quick-command-append-enter" checked>
+                    <span data-i18n="main.shellQuickCommandAppendEnter">Execute immediately (append Enter)</span>
+                </label>
+                <div id="shell-quick-command-validation" class="input-validation" role="status" aria-live="polite"></div>
+            </div>
+            <footer class="app-dialog-actions">
+                <button id="shell-quick-command-dialog-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
+                <button id="shell-quick-command-save" type="button"><span class="material-icon-placeholder" data-material-icon="add"></span><span data-i18n="main.addToList">Add to List</span></button>
+            </footer>
+        </section>
     </div>
 
     <div id="quick-send-dialog" class="app-dialog-overlay hidden" role="presentation">

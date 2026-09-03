@@ -240,6 +240,55 @@ jobs:
           git remote add gitee git@gitee.com:trigger-cn/SerialTerminal.git
           git push gitee "${GITHUB_SHA}:refs/heads/main"
           git push gitee "refs/tags/${GITHUB_REF_NAME}"
+      - name: Wait for and verify public Gitee release
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          GITEE_RELEASE_ROOT="https://gitee.com/trigger-cn/SerialTerminal/releases/download/${GITHUB_REF_NAME}"
+          for attempt in $(seq 1 60); do
+            if curl --fail --location --silent --show-error --connect-timeout 5 --max-time 10 \
+              --output /tmp/gitee-latest.yml "$GITEE_RELEASE_ROOT/latest.yml"; then
+              break
+            fi
+            rm -f /tmp/gitee-latest.yml
+            if [ "$attempt" -eq 60 ]; then
+              echo "Gitee release did not become available within 15 minutes" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          curl --fail --location --silent --show-error --retry 3 --max-time 1800 \
+            --output "/tmp/SerialTerminal-Setup-$VERSION.exe" \
+            "$GITEE_RELEASE_ROOT/SerialTerminal-Setup-$VERSION.exe"
+          curl --fail --location --silent --show-error --retry 3 --max-time 600 --range 0-0 \
+            --output /dev/null "$GITEE_RELEASE_ROOT/SerialTerminal-Setup-$VERSION.exe.blockmap"
+          node scripts/update-artifact-integrity.js \
+            --metadata /tmp/gitee-latest.yml \
+            --installer "/tmp/SerialTerminal-Setup-$VERSION.exe" \
+            --version "$VERSION"
+      - name: Promote stable COS latest
+        if: ${{ !contains(github.ref_name, '-') }}
+        shell: bash
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+        run: node scripts/publish-cos-release.js --promote-latest --tag "${GITHUB_REF_NAME}"
+      - name: Verify stable COS latest
+        if: ${{ !contains(github.ref_name, '-') }}
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          COS_ROOT="https://${{ secrets.COS_BUCKET }}.cos.${{ secrets.COS_REGION }}.myqcloud.com/releases/latest"
+          curl --fail --silent --show-error --retry 3 --max-time 600 --output /tmp/cos-stable-latest.yml "$COS_ROOT/latest.yml"
+          curl --fail --silent --show-error --retry 3 --max-time 1800 \
+            --output "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            "https://${{ secrets.COS_BUCKET }}.cos.${{ secrets.COS_REGION }}.myqcloud.com/releases/${GITHUB_REF_NAME}/SerialTerminal-Setup-$VERSION.exe"
+          node scripts/update-artifact-integrity.js \
+            --metadata /tmp/cos-stable-latest.yml \
+            --installer "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            --version "$VERSION"
       - name: Remove old COS releases
         shell: bash
         env:

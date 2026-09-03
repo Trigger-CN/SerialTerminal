@@ -97,6 +97,30 @@ test('shell profile buttons pass the configured name to new shell tabs', () => {
   assert.match(renderer, /profile\?\.name\?\.trim\(\) \|\| tr\('main\.shellTitle'/);
 });
 
+test('right sidebar manages persistent quick commands for the active Shell tab', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  const shellSidebar = html.match(/<!-- Right Shell Sidebar -->[\s\S]*?<div id="shell-quick-command-dialog"/)?.[0] || '';
+  assert.match(shellSidebar, /id="shell-quick-command-list"[^>]*role="list"/);
+  assert.match(shellSidebar, /id="shell-quick-command-add"[^>]*data-i18n-title="main\.addShellQuickCommand"[^>]*data-i18n-aria-label="main\.addShellQuickCommand"/);
+  assert.doesNotMatch(shellSidebar, /shell-session-list|activeShellSessions|noActiveShellSessions/);
+  assert.match(html, /id="shell-quick-command-dialog"[\s\S]*aria-labelledby="shell-quick-command-dialog-title"/);
+  assert.match(html, /id="shell-quick-command-append-enter" checked/);
+  assert.match(main, /const CONFIG_VERSION = 12/);
+  assert.match(main, /normalized\.shellQuickCommands = Array\.isArray\(source\.shellQuickCommands\)/);
+  assert.match(main, /shellQuickCommands: \[\]/);
+  assert.match(renderer, /function getActiveShellTab\(\)[\s\S]*getActiveTabInfo\(\)[\s\S]*shellTabs\.find/);
+  assert.match(renderer, /if \(!shellTab\.sessionReady\)/);
+  assert.match(renderer, /const data = `\$\{item\.command\}\$\{item\.appendEnter \? '\\r' : ''\}`/);
+  assert.match(renderer, /ipcRenderer\.send\('shell-tab-input', \{ tabId: shellTab\.id, data \}\)/);
+  assert.match(renderer, /shellQuickCommands: shellQuickCommands\.map\(normalizeShellQuickCommand\)/);
+  assert.doesNotMatch(renderer, /shellSessionList|addShellSessionItem|setActiveShellSessionItem/);
+  assert.match(styles, /\.shell-quick-command-item\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/s);
+});
+
 test('about tab opens the relay recommendation externally with amber styling', () => {
   const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
@@ -130,6 +154,18 @@ test('collapsed sidebar scrolls only quick sends above fixed serial tools', () =
   assert.match(styles, /\.sidebar-tool-icon\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;[^}]*fill:\s*currentColor;/s);
 });
 
+test('expanded sidebar can clear every log terminal tab', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  assert.match(html, /class="sidebar-clear-actions"[\s\S]*id="clear-btn"[\s\S]*id="clear-all-logs-btn"/);
+  assert.match(html, /id="clear-all-logs-btn"[^>]*data-i18n-title="main\.clearAllLogs"[^>]*data-i18n-aria-label="main\.clearAllLogs"/);
+  assert.match(styles, /\.sidebar-clear-actions\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 34px;/s);
+  assert.match(renderer, /function clearAllLogTabs\(\)[\s\S]*clearTerminalByTabId\('tab-main'\)[\s\S]*filterTabs\.forEach\([\s\S]*shellTabs\.forEach\(/);
+  assert.match(renderer, /clearAllLogsBtn\?\.addEventListener\('click', clearAllLogTabs\)/);
+});
+
 test('serial output is batched per animation frame before terminal rendering', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
@@ -158,7 +194,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 11/);
+  assert.match(main, /const CONFIG_VERSION = 12/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);

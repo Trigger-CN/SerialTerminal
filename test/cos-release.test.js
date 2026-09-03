@@ -12,19 +12,24 @@ function missingObject(options, callback) {
   callback({ code: 'NoSuchKey', statusCode: 404, message: 'Not Found' });
 }
 
-test('COS release arguments separate files from named options', () => {
+test('COS release arguments separate versioned publish, latest promotion, and pruning modes', () => {
   assert.deepEqual(parseArguments([
     '--tag', 'v1.2.3', '--files', 'one.exe', 'latest.yml'
   ]), {
-    tag: 'v1.2.3', files: ['one.exe', 'latest.yml'], pruneOnly: false
+    tag: 'v1.2.3', files: ['one.exe', 'latest.yml'], promoteLatest: false, pruneOnly: false
   });
-  assert.deepEqual(parseArguments(['--prune-only']), { files: [], pruneOnly: true });
+  assert.deepEqual(parseArguments(['--promote-latest', '--tag', 'v1.2.3']), {
+    tag: 'v1.2.3', files: [], promoteLatest: true, pruneOnly: false
+  });
+  assert.deepEqual(parseArguments(['--prune-only']), { files: [], promoteLatest: false, pruneOnly: true });
+  assert.throws(() => parseArguments(['--promote-latest', '--tag', 'v1.2.3', '--files', 'latest.yml']), /does not accept --files/);
+  assert.throws(() => parseArguments(['--promote-latest', '--prune-only']), /Conflicting COS release modes/);
   assert.throws(() => parseArguments([
     '--tag', 'v9007199254740992.0.0', '--files', 'one.exe', 'latest.yml'
   ]), /Invalid release tag/);
 });
 
-test('COS publisher uploads versioned artifacts before publishing latest metadata', async t => {
+test('COS versioned publish preserves GitHub metadata bytes and does not expose stable latest', async t => {
   const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'serialterminal-cos-'));
   t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
   const installer = path.join(directory, 'SerialTerminal-Setup-1.2.3.exe');
@@ -36,11 +41,11 @@ test('COS publisher uploads versioned artifacts before publishing latest metadat
     path: 'SerialTerminal-Setup-1.2.3.exe',
     sha512: 'hash'
   }));
+  const originalMetadata = await fs.promises.readFile(metadataPath);
 
   const calls = [];
   const cos = {
     headObject: missingObject,
-    getObject: missingObject,
     uploadFile(options, callback) {
       calls.push({ method: 'uploadFile', options });
       options.onProgress({ percent: 1, loaded: 9, total: 9, speed: 1024 });
@@ -60,20 +65,19 @@ test('COS publisher uploads versioned artifacts before publishing latest metadat
 
   assert.deepEqual(calls.map(call => [call.method, call.options.Key]), [
     ['uploadFile', 'releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe'],
-    ['putObject', 'releases/v1.2.3/latest.yml'],
-    ['putObject', 'releases/latest/latest.yml']
+    ['putObject', 'releases/v1.2.3/latest.yml']
   ]);
   assert.equal(calls[0].options.AsyncLimit, 4);
   assert.equal(calls[0].options.CacheControl, 'public, max-age=31536000, immutable');
-  assert.equal(calls[2].options.CacheControl, 'no-cache, no-store, must-revalidate');
-  const metadata = yaml.load(calls[2].options.Body.toString());
+  assert.equal(calls[1].options.CacheControl, 'public, max-age=31536000, immutable');
+  const metadata = yaml.load(calls[1].options.Body.toString());
   const installerUrl = 'https://bucket-123.cos.ap-hongkong.myqcloud.com/releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe';
   assert.equal(metadata.files[0].url, installerUrl);
   assert.equal(metadata.path, installerUrl);
-  assert.deepEqual(yaml.load(await fs.promises.readFile(metadataPath, 'utf8')), metadata);
+  assert.deepEqual(await fs.promises.readFile(metadataPath), originalMetadata);
 });
 
-test('COS prereleases do not replace stable latest metadata', async t => {
+test('COS prereleases remain versioned and cannot be promoted to stable latest', async t => {
   const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'serialterminal-cos-prerelease-'));
   t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
   const metadataPath = path.join(directory, 'latest.yml');
@@ -91,6 +95,10 @@ test('COS prereleases do not replace stable latest metadata', async t => {
     logger: { log() {} }
   });
   await publisher.publish({ tag: 'v1.2.3-preview.1', files: [metadataPath] });
+  await assert.rejects(
+    () => publisher.promoteLatest({ tag: 'v1.2.3-preview.1' }),
+    /Cannot promote prerelease tag to stable latest/
+  );
   assert.deepEqual(keys, ['releases/v1.2.3-preview.1/latest.yml']);
 });
 
@@ -239,15 +247,15 @@ test('COS publisher reports SDK status and request errors', async () => {
   await fs.promises.rm(directory, { recursive: true, force: true });
 });
 
-test('COS publisher rejects stable rollback before uploading release objects', async t => {
-  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'serialterminal-cos-rollback-'));
-  t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
-  const metadataPath = path.join(directory, 'latest.yml');
-  await fs.promises.writeFile(metadataPath, yaml.dump({ version: '1.2.2', files: [] }));
+test('COS latest promotion rejects rollback before changing the stable pointer', async () => {
+  const versioned = Buffer.from(yaml.dump({ version: '1.2.2', files: [] }));
   const calls = [];
   const cos = {
-    headObject: missingObject,
     getObject(options, callback) {
+      if (options.Key === 'releases/v1.2.2/latest.yml') {
+        callback(null, { Body: versioned });
+        return;
+      }
       if (options.Key === 'releases/latest/latest.yml') {
         callback(null, { Body: Buffer.from(yaml.dump({ version: '1.2.3', files: [] })) });
         return;
@@ -265,8 +273,39 @@ test('COS publisher rejects stable rollback before uploading release objects', a
   });
 
   await assert.rejects(
-    () => publisher.publish({ tag: 'v1.2.2', files: [metadataPath] }),
+    () => publisher.promoteLatest({ tag: 'v1.2.2' }),
     /Stable latest cannot move backward from 1\.2\.3 to 1\.2\.2/
   );
   assert.deepEqual(calls, []);
+});
+
+test('COS latest promotion is idempotent and rejects changed metadata for the same version', async () => {
+  const versioned = Buffer.from(yaml.dump({ version: '1.2.3', files: [{ url: 'https://cos.example/setup.exe' }] }));
+  let current = null;
+  const uploads = [];
+  const cos = {
+    getObject(options, callback) {
+      if (options.Key === 'releases/v1.2.3/latest.yml') return callback(null, { Body: versioned });
+      if (options.Key === 'releases/latest/latest.yml' && current) return callback(null, { Body: current });
+      return missingObject(options, callback);
+    },
+    putObject(options, callback) {
+      uploads.push(options.Key);
+      current = Buffer.from(options.Body);
+      callback(null, {});
+    }
+  };
+  const publisher = createCosPublisher({
+    secretId: 'id', secretKey: 'key', bucket: 'bucket-123', region: 'ap-hongkong', cos,
+    logger: { log() {} }
+  });
+
+  await publisher.promoteLatest({ tag: 'v1.2.3' });
+  await publisher.promoteLatest({ tag: 'v1.2.3' });
+  assert.deepEqual(uploads, ['releases/latest/latest.yml']);
+  current = Buffer.from(yaml.dump({ version: '1.2.3', files: [] }));
+  await assert.rejects(
+    () => publisher.promoteLatest({ tag: 'v1.2.3' }),
+    /differs from the versioned release/
+  );
 });

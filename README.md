@@ -18,7 +18,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 最多 2 个 pane 的分屏工作区
 - 系统 Shell 标签页
 - 左侧侧边栏工具区
-- 左侧边栏支持收起为窄工具栏，顶部显示 RX/TX 实时速率，底部保留展开、连接/断开、清空日志、设置、输入栏和 Shell 栏快捷按钮；折叠状态会自动恢复
+- 左侧边栏支持收起为窄工具栏，顶部显示 RX/TX 实时速率，底部保留展开、连接/断开、清空日志、设置、输入栏和 Shell 栏快捷按钮；展开状态下可用相邻小按钮一键清空主终端及全部过滤/Shell Log 标签页，折叠状态会自动恢复
 - 右侧 Shell 侧边栏
 - 独立设置窗口
 
@@ -127,7 +127,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 支持在工作区中新建系统 Shell 标签页
 - 每个 Shell 标签页对应独立的 `node-pty` 会话
 - 支持在两个 pane 中创建、切换、移动、关闭 Shell 标签页
-- 支持右侧 Shell 侧边栏显示当前活跃会话
+- 右侧 Shell 侧边栏提供独立快捷指令列表，可新增、编辑、删除并持久化；点击后发送到当前活动 Shell 标签页，可选择是否自动追加 Enter 执行
 - 支持自定义 Shell Profiles：
   - 名称
   - 可执行文件路径
@@ -257,14 +257,14 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 推送 `v*` Git tag 后，GitHub Actions 会使用同一 lockfile 并行构建 Windows/Linux 发布物；构建前执行测试和 native rebuild，构建后校验 lockfile 未变化
 - 发布 Tag 必须是无 build metadata 的严格 SemVer（例如 `v0.4.0` 或 `v0.4.0-preview.1`），并遵守 npm SemVer 的长度和安全整数限制
 - GitHub Release 正文会自动列出上一个 tag 到当前 tag 之间的提交，每个提交只出现一次，不按提交类型分类
-- 发布任务先将 Windows/Linux 安装包和更新元数据上传到 GitHub draft Release；COS 版本化对象公开下载并通过版本、大小和 SHA-512 校验后，再次逐项校验 GitHub 资产并发布 draft。稳定版此时才成为 GitHub latest，预发布版不会抢占 latest
+- 发布任务先将 Windows/Linux 安装包和原始更新元数据上传到 GitHub draft Release；COS 发布脚本基于原始元数据在内存中生成 COS URL，仅上传 `releases/<tag>/` 版本化对象且不得修改 `dist/latest.yml`。COS 版本化对象通过版本、大小和 SHA-512 校验后，再次逐项校验 GitHub 资产并发布 draft。稳定版此时成为 GitHub latest，预发布版不会抢占 latest
 - 同一 Tag 的 GitHub、COS 和 Gitee 资产视为不可变内容：重试只复用名称、大小和 SHA-512 完全一致的远端资产，发现多余、重复或内容变化的资产会在覆盖或更新 Release 正文前终止
 - GitHub Actions 仅向 COS 上传 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`；Linux 产物只保留在 GitHub Release
-- GitHub Release 和 COS 下载验证成功后，GitHub Actions 将发布提交和不可变 Tag 同步到 Gitee；Gitee Tag 流水线负责创建对应 Release
+- GitHub Release 和 COS 版本化对象验证成功后，GitHub Actions 将发布提交和不可变 Tag 同步到 Gitee，并等待 Gitee Tag 流水线创建 Release；主工作流最多轮询 15 分钟，重新公开下载并校验 Gitee 的 `.exe`、`.exe.blockmap` 和 `latest.yml`
 - `.workflow/gitee-release.yml` 由严格 SemVer 版本 Tag 触发，完整镜像 Windows `.exe`、`.exe.blockmap` 和 `latest.yml`；安装包优先从 COS 下载并在失败时回退 GitHub，blockmap 与元数据直接使用 GitHub 原始资产，镜像前后均按 `latest.yml` 校验安装包版本、大小和 SHA-512
 - Gitee 已存在附件的校验下载最多跟随三次重定向，且只允许 `gitee.com` 及其子域名；下载请求不携带 Release API 令牌
 - Gitee Go 流水线需要配置加密变量 `CI_GITEE_ACCESS_TOKEN`，流水线会将其映射为发布脚本读取的 `GITEE_ACCESS_TOKEN`；令牌需具备该仓库 Release 创建、更新和附件上传权限，企业流水线可复用同一条镜像命令
-- 所有发布和公开下载验证成功后，发布任务会永久保留 `releases/latest/`，并按语义版本分别保留最新三个稳定版本和最新三个预发布版本；当前稳定 latest 引用的版本始终受保护。COS 发布身份需具备列举桶对象和批量删除对象权限
+- 仅当 GitHub、COS 版本化对象和 Gitee 公开下载全部验证成功后，稳定版才通过独立 `--promote-latest` 操作更新 `releases/latest/latest.yml`，随后再次回读验证；预发布版本永不切换稳定 latest。最后按语义版本分别保留最新三个稳定版本和最新三个预发布版本，并保护当前稳定 latest 引用的版本。COS 发布身份需具备列举桶对象和批量删除对象权限
 
 ## 项目结构
 
@@ -402,6 +402,7 @@ npm run dist:linux
 - 自动发送设置
 - 快捷发送列表
 - 快捷发送分组、折叠状态和窄侧栏顺序
+- Shell 快捷指令列表及 Enter 追加选项
 - Hex 显示设置与 RX 原始二进制日志设置
 - 最近一次串口连接参数
 - 过滤历史

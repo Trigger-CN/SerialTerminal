@@ -687,7 +687,7 @@ mainWindow.webContents.send('serial-output-bytes', {
 ```text
 serial-codec.js       parseHexInput() / buildSerialWriteBuffer()
 hex-formatter.js      HexStreamFormatter / formatHexLine()
-main.js               config v11 迁移、serial-write、原始 RX IPC、Raw 日志
+main.js               config v12 迁移、serial-write、原始 RX IPC、Raw 日志
 renderer.js           RX 模式、输入校验、统一发送、过滤/搜索和生命周期
 preferences.*         Hex dump 与 Raw 日志高级设置
 test/*.test.js        codec、formatter、markup 和相关回归

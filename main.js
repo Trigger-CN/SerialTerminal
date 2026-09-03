@@ -134,7 +134,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 11;
+const CONFIG_VERSION = 12;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -370,6 +370,25 @@ function normalizeConfig(config, defaults) {
       })
     : [];
 
+  const usedShellQuickCommandIds = new Set();
+  normalized.shellQuickCommands = Array.isArray(source.shellQuickCommands)
+    ? source.shellQuickCommands.filter(item => item && typeof item === 'object').map((item, index) => {
+        let id = typeof item.id === 'string' && item.id ? item.id : `shell-quick-${index + 1}`;
+        if (usedShellQuickCommandIds.has(id)) {
+          let suffix = 2;
+          while (usedShellQuickCommandIds.has(`${id}-${suffix}`)) suffix++;
+          id = `${id}-${suffix}`;
+        }
+        usedShellQuickCommandIds.add(id);
+        return {
+          id,
+          label: typeof item.label === 'string' ? item.label.trim().slice(0, 60) : '',
+          command: typeof item.command === 'string' ? item.command.slice(0, 1024 * 1024) : '',
+          appendEnter: normalizeBoolean(item.appendEnter, true)
+        };
+      })
+    : [];
+
   const oldAutoSend = source.autoSendSettings && typeof source.autoSendSettings === 'object'
     ? source.autoSendSettings
     : {};
@@ -557,6 +576,7 @@ function loadConfig() {
     },
     filterTabs: [],
     shellTabs: [],
+    shellQuickCommands: [],
     chartTabs: [],
     shellProfiles: [
       { id: 'shell-cmd', name: 'CMD', executable: 'cmd.exe', args: [], shellType: 'cmd' },

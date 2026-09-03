@@ -212,6 +212,7 @@ const sidebarExpandBtn = document.getElementById('sidebar-expand-btn');
 const sidebarCollapseBtn = document.getElementById('sidebar-collapse-btn');
 const sidebarConnectBtn = document.getElementById('sidebar-connect-btn');
 const sidebarClearBtn = document.getElementById('sidebar-clear-btn');
+const clearAllLogsBtn = document.getElementById('clear-all-logs-btn');
 const sidebarPrefsBtn = document.getElementById('sidebar-prefs-btn');
 const sidebarInputBtn = document.getElementById('sidebar-input-btn');
 const sidebarShellBtn = document.getElementById('sidebar-shell-btn');
@@ -227,11 +228,22 @@ const toggleMainInputBtn = document.getElementById('toggle-main-input');
 const toggleShellSidebarBtn = document.getElementById('toggle-shell-sidebar');
 const shellSidebar = document.getElementById('shell-sidebar');
 const shellSidebarCloseBtn = document.getElementById('shell-sidebar-close-btn');
-const shellSessionList = document.getElementById('shell-session-list');
 const shellProfileBtns = document.getElementById('shell-profile-btns');
 const shellManageProfilesBtn = document.getElementById('shell-manage-profiles-btn');
 const shellAutoCrlfCb = document.getElementById('shell-auto-crlf');
 const shellClearOnRestartCb = document.getElementById('shell-clear-on-restart');
+const shellQuickCommandList = document.getElementById('shell-quick-command-list');
+const shellQuickCommandEmpty = document.getElementById('shell-quick-command-empty');
+const shellQuickCommandAddBtn = document.getElementById('shell-quick-command-add');
+const shellQuickCommandDialog = document.getElementById('shell-quick-command-dialog');
+const shellQuickCommandDialogTitle = document.getElementById('shell-quick-command-dialog-title');
+const shellQuickCommandDialogCloseBtn = document.getElementById('shell-quick-command-dialog-close');
+const shellQuickCommandDialogCancelBtn = document.getElementById('shell-quick-command-dialog-cancel');
+const shellQuickCommandSaveBtn = document.getElementById('shell-quick-command-save');
+const shellQuickCommandLabelInput = document.getElementById('shell-quick-command-label');
+const shellQuickCommandContentInput = document.getElementById('shell-quick-command-content');
+const shellQuickCommandAppendEnterInput = document.getElementById('shell-quick-command-append-enter');
+const shellQuickCommandValidation = document.getElementById('shell-quick-command-validation');
 const workspaceRootEl = document.getElementById('workspace-root');
 const workspaceSplitterEl = document.getElementById('workspace-splitter');
 let suppressMainInputFocus = false;
@@ -3292,73 +3304,153 @@ function toggleShellSidebar() {
     sidebarShellBtn?.classList.toggle('active', isHidden);
 }
 
-function updateShellSessionList() {
-    if (!shellSessionList) return;
-    const items = shellSessionList.querySelectorAll('.shell-session-item');
-    const emptyMsg = shellSessionList.querySelector('.shell-session-empty');
-    if (items.length === 0) {
-        if (!emptyMsg) {
-            const msg = document.createElement('div');
-            msg.className = 'shell-session-empty';
-            msg.setAttribute('data-i18n', 'main.noActiveShellSessions');
-            msg.textContent = tr('main.noActiveShellSessions') || 'No active shell sessions';
-            shellSessionList.appendChild(msg);
-        }
-    } else {
-        if (emptyMsg) emptyMsg.remove();
-    }
+let shellQuickCommands = [];
+let editingShellQuickCommandId = '';
+
+function createShellQuickCommandId() {
+    return `shell-quick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function addShellSessionItem(tabId, title, paneId) {
-    if (!shellSessionList) return;
-    const emptyMsg = shellSessionList.querySelector('.shell-session-empty');
-    if (emptyMsg) emptyMsg.remove();
+function normalizeShellQuickCommand(item = {}) {
+    return {
+        id: typeof item.id === 'string' && item.id ? item.id : createShellQuickCommandId(),
+        label: typeof item.label === 'string' ? item.label.trim().slice(0, 60) : '',
+        command: typeof item.command === 'string' ? item.command : '',
+        appendEnter: item.appendEnter !== false
+    };
+}
 
-    const item = document.createElement('div');
-    item.className = 'shell-session-item';
-    item.dataset.tabId = tabId;
-    item.dataset.paneId = paneId;
-    const itemName = document.createElement('span');
-    itemName.className = 'shell-session-item-name';
-    itemName.title = title;
-    itemName.textContent = title;
-    const itemClose = document.createElement('button');
-    itemClose.className = 'shell-session-item-close';
-    itemClose.title = tr('main.closeTab');
-    itemClose.appendChild(createMaterialIcon('close'));
-    item.append(itemName, itemClose);
-    item.querySelector('.shell-session-item-name').addEventListener('click', () => {
-        if (typeof window.__switchWorkspaceTab === 'function') {
-            window.__switchWorkspaceTab(tabId, paneId);
-        }
+function saveShellQuickCommands() {
+    if (isApplyingConfig) return;
+    ipcRenderer.send('save-config', {
+        shellQuickCommands: shellQuickCommands.map(normalizeShellQuickCommand)
     });
-    item.querySelector('.shell-session-item-close').addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (typeof window.__closeShellTab === 'function') {
-            window.__closeShellTab(tabId, paneId);
+}
+
+function getActiveShellTab() {
+    const { tabId } = getActiveTabInfo();
+    return shellTabs.find(tab => tab.id === tabId) || null;
+}
+
+function sendShellQuickCommand(item) {
+    const shellTab = getActiveShellTab();
+    if (!shellTab) {
+        setActionStatus(trFallback('main.shellQuickCommandNeedsShell', 'Activate a Shell tab first'));
+        return;
+    }
+    if (!shellTab.sessionReady) {
+        setActionStatus(trFallback('main.shellQuickCommandNotReady', 'The active Shell is not ready'));
+        return;
+    }
+    const data = `${item.command}${item.appendEnter ? '\r' : ''}`;
+    if (!data) return;
+    ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data });
+    shellTab.term.focus();
+    setActionStatus(trFallback('main.shellQuickCommandSent', 'Sent Shell command: {label}', {
+        label: item.label || item.command
+    }));
+}
+
+function renderShellQuickCommands() {
+    if (!shellQuickCommandList || !shellQuickCommandEmpty) return;
+    shellQuickCommandList.innerHTML = '';
+    shellQuickCommandEmpty.classList.toggle('hidden', shellQuickCommands.length > 0);
+    shellQuickCommands.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'shell-quick-command-item';
+        row.dataset.commandId = item.id;
+        row.setAttribute('role', 'listitem');
+
+        const sendButton = document.createElement('button');
+        sendButton.type = 'button';
+        sendButton.className = 'shell-quick-command-send';
+        sendButton.title = item.command;
+        const label = document.createElement('span');
+        label.className = 'shell-quick-command-label';
+        label.textContent = item.label || item.command;
+        sendButton.appendChild(label);
+        if (item.appendEnter) {
+            const enterBadge = document.createElement('span');
+            enterBadge.className = 'shell-quick-command-enter-badge';
+            enterBadge.textContent = 'ENTER';
+            sendButton.appendChild(enterBadge);
         }
-        item.remove();
-        updateShellSessionList();
+        sendButton.addEventListener('click', () => sendShellQuickCommand(item));
+
+        const actions = document.createElement('div');
+        actions.className = 'shell-quick-command-actions';
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'shell-quick-command-action';
+        editButton.title = trFallback('main.editShellQuickCommand', 'Edit Shell quick command');
+        editButton.setAttribute('aria-label', editButton.title);
+        editButton.appendChild(createMaterialIcon('edit'));
+        editButton.addEventListener('click', () => openShellQuickCommandDialog(item.id));
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'shell-quick-command-action delete';
+        deleteButton.title = trFallback('main.deleteShellQuickCommand', 'Delete Shell quick command');
+        deleteButton.setAttribute('aria-label', deleteButton.title);
+        deleteButton.appendChild(createMaterialIcon('delete'));
+        deleteButton.addEventListener('click', () => {
+            shellQuickCommands = shellQuickCommands.filter(entry => entry.id !== item.id);
+            saveShellQuickCommands();
+            renderShellQuickCommands();
+        });
+        actions.append(editButton, deleteButton);
+        row.append(sendButton, actions);
+        shellQuickCommandList.appendChild(row);
     });
-    shellSessionList.appendChild(item);
 }
 
-function removeShellSessionItem(tabId) {
-    if (!shellSessionList) return;
-    const item = shellSessionList.querySelector(`.shell-session-item[data-tab-id="${tabId}"]`);
-    if (item) {
-        item.remove();
-        updateShellSessionList();
+function updateShellQuickCommandValidation() {
+    const valid = Boolean(shellQuickCommandContentInput?.value);
+    if (shellQuickCommandSaveBtn) shellQuickCommandSaveBtn.disabled = !valid;
+    if (shellQuickCommandValidation) {
+        shellQuickCommandValidation.textContent = valid
+            ? ''
+            : trFallback('main.shellCommandRequired', 'Enter a Shell command');
     }
 }
 
-function setActiveShellSessionItem(tabId) {
-    if (!shellSessionList) return;
-    shellSessionList.querySelectorAll('.shell-session-item').forEach(el => el.classList.remove('active'));
-    if (tabId) {
-        const item = shellSessionList.querySelector(`.shell-session-item[data-tab-id="${tabId}"]`);
-        if (item) item.classList.add('active');
-    }
+function openShellQuickCommandDialog(itemId = '') {
+    const item = shellQuickCommands.find(entry => entry.id === itemId) || null;
+    editingShellQuickCommandId = item?.id || '';
+    shellQuickCommandDialogTitle.textContent = trFallback(
+        item ? 'main.editShellQuickCommand' : 'main.addShellQuickCommand',
+        item ? 'Edit Shell Quick Command' : 'Add Shell Quick Command'
+    );
+    shellQuickCommandLabelInput.value = item?.label || '';
+    shellQuickCommandContentInput.value = item?.command || '';
+    shellQuickCommandAppendEnterInput.checked = item?.appendEnter !== false;
+    const saveLabel = shellQuickCommandSaveBtn.querySelector('span:last-child');
+    if (saveLabel) saveLabel.textContent = trFallback(item ? 'main.updateItem' : 'main.addToList', item ? 'Update Item' : 'Add to List');
+    shellQuickCommandSaveBtn.querySelector('svg[data-material-icon]')?.replaceWith(createMaterialIcon(item ? 'edit' : 'add'));
+    shellQuickCommandDialog.classList.remove('hidden');
+    updateShellQuickCommandValidation();
+    requestAnimationFrame(() => (item ? shellQuickCommandContentInput : shellQuickCommandLabelInput).focus());
+}
+
+function closeShellQuickCommandDialog() {
+    shellQuickCommandDialog?.classList.add('hidden');
+    editingShellQuickCommandId = '';
+}
+
+function saveShellQuickCommandFromDialog() {
+    const command = shellQuickCommandContentInput.value;
+    if (!command) return updateShellQuickCommandValidation();
+    const item = normalizeShellQuickCommand({
+        id: editingShellQuickCommandId || createShellQuickCommandId(),
+        label: shellQuickCommandLabelInput.value || command.split(/\r?\n/, 1)[0],
+        command,
+        appendEnter: shellQuickCommandAppendEnterInput.checked
+    });
+    const index = shellQuickCommands.findIndex(entry => entry.id === editingShellQuickCommandId);
+    if (index >= 0) shellQuickCommands[index] = item;
+    else shellQuickCommands.push(item);
+    saveShellQuickCommands();
+    renderShellQuickCommands();
+    closeShellQuickCommandDialog();
 }
 
 async function loadShellProfiles() {
@@ -3370,7 +3462,7 @@ async function loadShellProfiles() {
         shellProfileBtns.innerHTML = '';
         if (!profiles || !profiles.length) {
             const empty = document.createElement('div');
-            empty.className = 'shell-session-empty';
+            empty.className = 'shell-profile-empty';
             empty.textContent = tr('main.noShellProfiles') || 'No shell profiles configured';
             shellProfileBtns.appendChild(empty);
             return;
@@ -3417,6 +3509,20 @@ function bindShellSidebarEvents() {
 
     shellManageProfilesBtn?.addEventListener('click', () => {
         ipcRenderer.send('open-prefs', { focusTab: 'shell-profiles' });
+    });
+
+    shellQuickCommandAddBtn?.addEventListener('click', () => openShellQuickCommandDialog());
+    shellQuickCommandDialogCloseBtn?.addEventListener('click', closeShellQuickCommandDialog);
+    shellQuickCommandDialogCancelBtn?.addEventListener('click', closeShellQuickCommandDialog);
+    shellQuickCommandSaveBtn?.addEventListener('click', saveShellQuickCommandFromDialog);
+    shellQuickCommandContentInput?.addEventListener('input', updateShellQuickCommandValidation);
+    shellQuickCommandDialog?.addEventListener('click', event => {
+        if (event.target === shellQuickCommandDialog) closeShellQuickCommandDialog();
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !shellQuickCommandDialog?.classList.contains('hidden')) {
+            closeShellQuickCommandDialog();
+        }
     });
 
     shellAutoCrlfCb?.addEventListener('change', () => {
@@ -4058,6 +4164,11 @@ function applyConfig(config) {
         updateAutoSendState();
     }
 
+    shellQuickCommands = Array.isArray(config.shellQuickCommands)
+        ? config.shellQuickCommands.map(normalizeShellQuickCommand)
+        : [];
+    renderShellQuickCommands();
+
     // Preload shell profiles for the sidebar
     loadShellProfiles();
 
@@ -4596,7 +4707,14 @@ function clearActiveTerminal() {
     clearTerminalByTabId(activeTabId);
 }
 
+function clearAllLogTabs() {
+    clearTerminalByTabId('tab-main');
+    filterTabs.forEach(tab => clearTerminalByTabId(tab.id));
+    shellTabs.forEach(tab => clearTerminalByTabId(tab.id));
+}
+
 clearBtn.addEventListener('click', clearActiveTerminal);
+clearAllLogsBtn?.addEventListener('click', clearAllLogTabs);
 
 const openLogFolderBtn = document.getElementById('open-log-folder-btn');
 openLogFolderBtn.addEventListener('click', () => {
