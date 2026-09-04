@@ -405,6 +405,15 @@ const shellQuickCommandTranslations = {
   de: { shellQuickCommands: 'Shell-Schnellbefehle', noShellQuickCommands: 'Keine Shell-Schnellbefehle', addShellQuickCommand: 'Shell-Schnellbefehl hinzufügen', editShellQuickCommand: 'Shell-Schnellbefehl bearbeiten', deleteShellQuickCommand: 'Shell-Schnellbefehl löschen', shellCommand: 'Befehl', shellQuickCommandAppendEnter: 'Sofort ausführen (Enter anhängen)', shellCommandRequired: 'Shell-Befehl eingeben', shellQuickCommandNeedsShell: 'Zuerst einen Shell-Tab aktivieren', shellQuickCommandNotReady: 'Die aktive Shell ist noch nicht bereit', shellQuickCommandSent: 'Shell-Befehl gesendet: {label}' }
 };
 
+const quickAutoTriggerMasterTranslations = {
+  en: 'Enable all auto triggers',
+  'zh-CN': '启用全部自动触发',
+  'zh-TW': '啟用全部自動觸發',
+  fr: 'Activer tous les déclenchements automatiques',
+  ru: 'Включить все автозапуски',
+  de: 'Alle Autoauslöser aktivieren'
+};
+
 const fontWeightTranslations = {
   en: 'Font Weight',
   'zh-CN': '字体字重',
@@ -437,6 +446,10 @@ for (const [language, values] of Object.entries(quickSendGroupTranslations)) {
 
 for (const [language, values] of Object.entries(shellQuickCommandTranslations)) {
   Object.assign(translations[language].main, values);
+}
+
+for (const [language, value] of Object.entries(quickAutoTriggerMasterTranslations)) {
+  translations[language].main.quickAutoTriggerMaster = value;
 }
 
 for (const [language, value] of Object.entries(clearAllLogTranslations)) {

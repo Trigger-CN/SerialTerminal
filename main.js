@@ -419,6 +419,7 @@ function normalizeConfig(config, defaults) {
       })
     : [];
   normalized.quickSendUngroupedCollapsed = normalizeBoolean(source.quickSendUngroupedCollapsed, false);
+  normalized.quickSendAutoTriggerEnabled = normalizeBoolean(source.quickSendAutoTriggerEnabled, true);
   const usedQuickIds = new Set();
   normalized.quickSendList = Array.isArray(source.quickSendList)
     ? source.quickSendList.filter(item => item && typeof item === 'object').map((item, index) => {
@@ -628,6 +629,7 @@ function loadConfig() {
       content: ''
     },
     quickSendList: [],
+    quickSendAutoTriggerEnabled: true,
     quickSendGroups: [],
     quickSendUngroupedCollapsed: false,
     sidebarQuickSendOrder: [],

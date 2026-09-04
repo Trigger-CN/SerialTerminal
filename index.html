@@ -202,7 +202,12 @@
                 <!-- Quick Send -->
                 <div class="quick-send-list-heading">
                     <span data-i18n="main.quickSendList">Quick Send List</span>
-                    <button id="add-quick-send-group-btn" class="quick-send-heading-btn" type="button" title="Add group" data-i18n-title="main.addQuickSendGroup" aria-label="Add group" data-i18n-aria-label="main.addQuickSendGroup"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
+                    <div class="quick-send-heading-actions">
+                        <label class="quick-send-master-check" for="quick-send-auto-trigger-enable" title="Enable all auto triggers" data-i18n-title="main.quickAutoTriggerMaster">
+                            <input type="checkbox" id="quick-send-auto-trigger-enable" checked aria-label="Enable all auto triggers" data-i18n-aria-label="main.quickAutoTriggerMaster">
+                        </label>
+                        <button id="add-quick-send-group-btn" class="quick-send-heading-btn" type="button" title="Add group" data-i18n-title="main.addQuickSendGroup" aria-label="Add group" data-i18n-aria-label="main.addQuickSendGroup"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
+                    </div>
                 </div>
                 <div id="quick-send-list" class="quick-send-list-container">
                     <!-- Items will be added here -->

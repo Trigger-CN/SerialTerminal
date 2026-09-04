@@ -311,6 +311,25 @@ label:hover {
     font-size: 13px;
 }
 
+.quick-send-heading-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.quick-send-master-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+}
+
+.quick-send-master-check input {
+    margin: 0;
+}
+
 .quick-send-heading-btn,
 .quick-send-group-action {
     display: inline-flex;

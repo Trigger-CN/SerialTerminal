@@ -326,6 +326,26 @@ test('collapsed quick-send shortcuts persist an independent order', () => {
   assert.match(styles, /\.quick-send-item\.quick-send-removing\s*\{[^}]*pointer-events:\s*none;/s);
   assert.match(styles, /\.quick-send-item\.quick-send-removing\s*\{[^}]*will-change:\s*opacity;/s);
 });
+test('quick-send auto triggers have a persistent master switch', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  const masterToggle = html.match(/<input[^>]*id="quick-send-auto-trigger-enable"[^>]*>/)?.[0] || '';
+  assert.match(masterToggle, /type="checkbox"/);
+  assert.match(masterToggle, /\schecked(?:\s|>)/);
+  assert.match(styles, /\.quick-send-master-check\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;/s);
+  assert.doesNotMatch(styles, /quick-send-master-switch-track/);
+  assert.match(main, /quickSendAutoTriggerEnabled: true/);
+  assert.match(main, /normalized\.quickSendAutoTriggerEnabled = normalizeBoolean\(source\.quickSendAutoTriggerEnabled, true\)/);
+  assert.match(renderer, /applyQuickSendAutoTriggerConfig\(config\.quickSendAutoTriggerEnabled\)/);
+  assert.match(renderer, /if \(!quickSendAutoTriggerEnabled\) return;\s*const triggerItems/);
+  assert.match(renderer, /if \(quickSendAutoTriggerEnabled && !nextEnabled\) resetQuickTriggerReceive\(\)/);
+  assert.match(renderer, /ipcRenderer\.send\('save-config', \{ quickSendAutoTriggerEnabled \}\)/);
+  assert.doesNotMatch(renderer, /quickSendList\.map\([^\n]*autoTrigger[^\n]*enabled/);
+});
+
 
 test('full and compact quick-send clicks share one lightweight result pulse', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');

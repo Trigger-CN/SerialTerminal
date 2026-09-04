@@ -4174,6 +4174,7 @@ function applyConfig(config) {
     hexFormatter.configure(config.hexDisplaySettings || {});
     appliedHexSettingsKey = hexSettingsKey;
     const autoSendChanged = applyAutoSendConfig(config.autoSendSettings || {});
+    applyQuickSendAutoTriggerConfig(config.quickSendAutoTriggerEnabled);
     quickSendGroups = Array.isArray(config.quickSendGroups) ? config.quickSendGroups.map(normalizeQuickSendGroup) : [];
     quickSendUngroupedCollapsed = config.quickSendUngroupedCollapsed === true;
     quickSendList = Array.isArray(config.quickSendList) ? config.quickSendList.map(normalizeQuickSendItem) : [];
@@ -5403,6 +5404,7 @@ const autoSendValidation = document.getElementById('auto-send-validation');
 
 const quickSendListEl = document.getElementById('quick-send-list');
 const sidebarQuickSendListEl = document.getElementById('sidebar-quick-send-list');
+const quickSendAutoTriggerEnableInput = document.getElementById('quick-send-auto-trigger-enable');
 const openQuickSendDialogBtn = document.getElementById('open-quick-send-dialog-btn');
 const quickSendDialog = document.getElementById('quick-send-dialog');
 const quickSendDialogTitle = document.getElementById('quick-send-dialog-title');
@@ -5442,6 +5444,7 @@ const quickSendValidation = document.getElementById('quick-send-validation');
 let quickSendList = [];
 let quickSendGroups = [];
 let sidebarQuickSendOrder = [];
+let quickSendAutoTriggerEnabled = true;
 let deletingQuickSendGroupId = '';
 let quickSendGroupDeleteTrigger = null;
 let editingQuickSendGroupId = '';
@@ -6036,6 +6039,18 @@ function normalizeQuickSendItem(item = {}) {
     };
 }
 
+function applyQuickSendAutoTriggerConfig(enabled) {
+    const nextEnabled = enabled !== false;
+    if (quickSendAutoTriggerEnabled && !nextEnabled) resetQuickTriggerReceive();
+    quickSendAutoTriggerEnabled = nextEnabled;
+    quickSendAutoTriggerEnableInput.checked = nextEnabled;
+}
+
+function saveQuickSendAutoTriggerConfig() {
+    if (isApplyingConfig) return;
+    ipcRenderer.send('save-config', { quickSendAutoTriggerEnabled });
+}
+
 function buildQuickTriggerRegex(trigger = {}) {
     const text = typeof trigger.text === 'string' ? trigger.text : '';
     if (!text) return { ok: true, regex: null };
@@ -6289,6 +6304,7 @@ function flashQuickSendItem(itemId, className = 'auto-trigger-flash', duration =
 }
 
 function processQuickSendAutoTriggers(bytes) {
+    if (!quickSendAutoTriggerEnabled) return;
     const triggerItems = quickSendList.filter(item => item.autoTrigger?.enabled === true && item.autoTrigger.text);
     if (!triggerItems.length) return;
     if (!quickTriggerDecoder) createQuickTriggerDecoder();
@@ -6818,6 +6834,10 @@ quickSendSidebarEnableInput.addEventListener('change', () => {
 quickSendSidebarTextInput.addEventListener('input', updateQuickSendValidation);
 quickSendSidebarColorInput.addEventListener('input', updateQuickSendValidation);
 openQuickSendDialogBtn.addEventListener('click', () => openQuickSendDialog());
+quickSendAutoTriggerEnableInput.addEventListener('change', () => {
+    applyQuickSendAutoTriggerConfig(quickSendAutoTriggerEnableInput.checked);
+    saveQuickSendAutoTriggerConfig();
+});
 addQuickSendGroupBtn.addEventListener('click', () => {
     openQuickSendGroupDialog('', addQuickSendGroupBtn);
 });
