@@ -43,6 +43,11 @@ const {
     setSearchHistoryPinned
 } = require('./search-history');
 const {
+    createTerminalRevisionTracker,
+    findAnchoredMatchIndex,
+    resolveNavigationIndex
+} = require('./terminal-search-state');
+const {
     getVerticalInsertionIndex,
     reorderQuickSendItems,
     moveQuickSendGroup,
@@ -51,6 +56,8 @@ const {
     disableSidebarQuickSend,
     deleteQuickSendById
 } = require('./quick-send-reorder');
+
+const terminalSearchTrackers = new WeakMap();
 
 const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
 const TERMINAL_FONT_FAMILY = (config) => `${config.fontFamily}, ${config.fontFamilyZh}, "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", "Courier New", monospace`;
@@ -525,6 +532,7 @@ function drainTerminalOutput(term, state) {
             state.writing = false;
             if (state.resetAfterWrite) {
                 state.resetAfterWrite = false;
+                invalidateTerminalSearch(term, 'reset', { clearAnchor: true });
                 term.reset();
             }
             drainTerminalOutput(term, state);
@@ -564,6 +572,7 @@ function clearTerminalOutput(term) {
         state.skipped = false;
         state.resetAfterWrite = state.writing;
     }
+    invalidateTerminalSearch(term, 'reset', { clearAnchor: true });
     term.reset();
 }
 
@@ -1028,6 +1037,7 @@ function clearTerminalByTabId(tabId) {
     }
     const shellTab = getShellTabState(tabId);
     if (shellTab) {
+        invalidateTerminalSearch(shellTab.term, 'clear', { clearAnchor: true });
         shellTab.term.clear();
     }
 }
@@ -1038,6 +1048,7 @@ function restartShellTab(tabId) {
     ipcRenderer.send('close-shell-tab-session', { tabId });
     shellTab.mouseModeSequenceCarry = '';
     shellTab.mouseInputSequenceCarry = '';
+    invalidateTerminalSearch(shellTab.term, 'reset', { clearAnchor: true });
     shellTab.term.reset();
     shellTab.btn?.classList.remove('exited');
     shellTab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
@@ -1936,6 +1947,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     term.loadAddon(searchAddon);
     enableTerminalUnicode11(term);
     term.open(terminalWrapper);
+    observeTerminalSearchChanges(term);
 
     if (currentConfig) {
         term.options = {
@@ -2027,6 +2039,7 @@ function closeShellTab(tabId) {
         tab.sessionCreateTimer = null;
     }
     ipcRenderer.send('flush-tab-log', { tabId });
+    unobserveTerminalSearchChanges(tab.term);
     tab.term.dispose();
     tab.element.remove();
     tab.btn.remove();
@@ -2048,6 +2061,7 @@ function closeShellTab(tabId) {
 function restoreShellSessions() {
     shellTabs.forEach(tab => {
         tab.mouseModeSequenceCarry = '';
+        invalidateTerminalSearch(tab.term, 'reset', { clearAnchor: true });
         tab.term.reset();
         tab.term.writeln(`\r\n[${tr('main.shellStarting')}]\r\n`);
         ipcRenderer.invoke('create-shell-tab-session', { tabId: tab.id, cols: tab.term.cols, rows: tab.term.rows, profileId: tab.profileId || '' })
@@ -2152,6 +2166,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     term.loadAddon(searchAddon);
     enableTerminalUnicode11(term);
     term.open(terminalWrapper);
+    observeTerminalSearchChanges(term);
     
     if (currentConfig) {
         term.options = {
@@ -2390,6 +2405,7 @@ function closeFilterTab(tabId) {
     if (index > -1) {
         const tab = filterTabs[index];
         ipcRenderer.send('flush-tab-log', { tabId });
+        unobserveTerminalSearchChanges(tab.term);
         tab.term.dispose();
         if (tab.outsideClickListener) {
             document.removeEventListener('click', tab.outsideClickListener);
@@ -3293,6 +3309,9 @@ function setSidebarCollapsed(collapsed, persist = true) {
     if (persist && !isApplyingConfig) {
         ipcRenderer.send('save-config', { sidebarCollapsed: isCollapsed });
     }
+    if (!isCollapsed && document.getElementById('tab-search')?.classList.contains('active') && searchInput?.value) {
+        refreshSearchCount();
+    }
     fitWorkspaceTerminals();
 }
 
@@ -3553,6 +3572,9 @@ function showSidebarTab(tabId, persist = true) {
     });
     if (currentConfig) currentConfig.activeSidebarTab = normalizedTabId;
     if (persist && !isApplyingConfig) ipcRenderer.send('save-config', { activeSidebarTab: normalizedTabId });
+    if (normalizedTabId === 'tab-search' && !sidebar?.classList.contains('sidebar-collapsed') && searchInput?.value) {
+        refreshSearchCount();
+    }
     return true;
 }
 
@@ -4058,20 +4080,22 @@ function applyConfig(config) {
     };
     applyTerminalWallpaper(config);
     serialTerm.options = options;
+    invalidateTerminalSearch(serialTerm, 'options');
     
     // Apply options to all filter tabs
     filterTabs.forEach(tab => {
         tab.term.options = options;
+        invalidateTerminalSearch(tab.term, 'options');
         tab.fitAddon.fit();
     });
     shellTabs.forEach(tab => {
         tab.term.options = options;
+        invalidateTerminalSearch(tab.term, 'options');
         tab.fitAddon.fit();
     });
     chartTabs.forEach(tab => tab.view?.resize());
-    if (searchState.current > 0 && searchState.matches[searchState.current - 1]) {
-        decorateActiveSearchMatch(getActiveSearchTarget().term, searchState.matches[searchState.current - 1]);
-    }
+    refreshSearchCount();
+    redrawActiveSearchDecoration();
     
     document.body.style.background = config.background;
     document.documentElement.style.setProperty('--chart-log-background', config.background || '#000000');
@@ -4866,13 +4890,51 @@ const searchHistoryList = document.getElementById('search-history-list');
 let searchDebounceTimer = null;
 let searchHistory = [];
 const searchState = {
-    key: '',
+    queryKey: '',
+    cacheKey: '',
     total: 0,
     current: 0,
     regexError: '',
     matches: []
 };
 let activeSearchDecoration = null;
+
+function isSearchPanelVisible() {
+    const sidebarElement = document.getElementById('sidebar');
+    const searchPane = document.getElementById('tab-search');
+    return Boolean(searchPane?.classList.contains('active') && !sidebarElement?.classList.contains('sidebar-collapsed'));
+}
+
+function observeTerminalSearchChanges(term) {
+    unobserveTerminalSearchChanges(term);
+    const tracker = createTerminalRevisionTracker(term, changedTerm => {
+        const target = getActiveSearchTarget();
+        if (target.term === changedTerm && searchInput.value && isSearchPanelVisible()) {
+            scheduleSearchRefresh();
+        }
+    });
+    terminalSearchTrackers.set(term, tracker);
+    return tracker;
+}
+
+function unobserveTerminalSearchChanges(term) {
+    const tracker = terminalSearchTrackers.get(term);
+    tracker?.dispose();
+    terminalSearchTrackers.delete(term);
+    if (activeSearchDecoration?.term === term) clearSearchSelection();
+}
+
+function invalidateTerminalSearch(term, reason, { clearAnchor = false } = {}) {
+    terminalSearchTrackers.get(term)?.invalidate(reason);
+    if (clearAnchor && activeSearchDecoration?.term === term) {
+        clearSearchSelection();
+        searchState.current = 0;
+    }
+}
+
+function getTerminalSearchRevision(term) {
+    return terminalSearchTrackers.get(term)?.revision || 0;
+}
 
 function getActiveSearchTarget() {
     const activeTabId = getActiveTabId();
@@ -4929,36 +4991,65 @@ function clearSearchDecorations(addon) {
     else if (typeof addon?.clearActiveDecoration === 'function') addon.clearActiveDecoration();
 }
 
-function clearSearchSelection(target = getActiveSearchTarget()) {
+function disposeActiveSearchDecoration() {
     activeSearchDecoration?.decoration?.dispose();
     activeSearchDecoration?.marker?.dispose();
     activeSearchDecoration = null;
+}
+
+function clearSearchSelection(target = getActiveSearchTarget()) {
+    disposeActiveSearchDecoration();
     clearSearchDecorations(target.addon);
     if (typeof target.term?.clearSelection === 'function') target.term.clearSelection();
 }
 
-function decorateActiveSearchMatch(term, match) {
-    activeSearchDecoration?.decoration?.dispose();
-    activeSearchDecoration?.marker?.dispose();
-    activeSearchDecoration = null;
-    if (typeof term?.registerMarker !== 'function' || typeof term?.registerDecoration !== 'function') return;
-    const buffer = term.buffer?.active;
-    const cursorLine = (buffer?.baseY || 0) + (buffer?.cursorY || 0);
-    const marker = term.registerMarker(match.line - cursorLine);
-    if (!marker) return;
-    const decoration = term.registerDecoration({
+function createActiveSearchDecoration(term, marker, column, length) {
+    if (typeof term?.registerDecoration !== 'function') return null;
+    return term.registerDecoration({
         marker,
-        x: match.column,
-        width: match.length,
+        x: column,
+        width: length,
         backgroundColor: highlightColors.search.background,
         foregroundColor: highlightColors.search.foreground,
         layer: 'top'
-    });
+    }) || null;
+}
+
+function decorateActiveSearchMatch(term, match) {
+    disposeActiveSearchDecoration();
+    const buffer = term.buffer?.active;
+    if (buffer?.type !== 'normal' || typeof term?.registerMarker !== 'function') return false;
+    const cursorLine = (buffer.baseY || 0) + (buffer.cursorY || 0);
+    const marker = term.registerMarker(match.line - cursorLine);
+    if (!marker) return false;
+    const decoration = createActiveSearchDecoration(term, marker, match.column, match.length);
     if (!decoration) {
         marker.dispose();
+        return false;
+    }
+    activeSearchDecoration = {
+        term,
+        queryKey: searchState.queryKey,
+        bufferType: buffer.type,
+        decoration,
+        marker,
+        column: match.column,
+        length: match.length
+    };
+    return true;
+}
+
+function redrawActiveSearchDecoration() {
+    const active = activeSearchDecoration;
+    if (!active) return;
+    if (active.marker.isDisposed || active.marker.line < 0) {
+        disposeActiveSearchDecoration();
+        searchState.current = 0;
         return;
     }
-    activeSearchDecoration = { decoration, marker };
+    active.decoration?.dispose();
+    active.decoration = createActiveSearchDecoration(active.term, active.marker, active.column, active.length);
+    if (!active.decoration) disposeActiveSearchDecoration();
 }
 
 function updateSearchResultCount(current = 0, resultCount = 0, regexError = '') {
@@ -5012,48 +5103,60 @@ function buildSearchRegex() {
     }
 }
 
-function getSearchBufferVersion(term) {
-    const buffer = term?.buffer?.active;
-    if (!buffer) return '0:0:0:';
-    const lastLine = buffer.length > 0 ? buffer.getLine(buffer.length - 1)?.translateToString(true) || '' : '';
-    return `${buffer.length}:${buffer.baseY || 0}:${buffer.cursorY || 0}:${lastLine.length}:${lastLine.slice(-64)}`;
-}
-
-function buildSearchKey(target) {
+function buildSearchQueryKey(target) {
     return JSON.stringify({
         query: searchInput.value,
         regex: searchRegex.checked,
         caseSensitive: searchCase.checked,
         wholeWord: searchWord.checked,
         target: target.id,
-        buffer: getSearchBufferVersion(target.term)
+        bufferType: target.term?.buffer?.active?.type || 'normal'
     });
+}
+
+function buildSearchCacheKey(target, queryKey) {
+    return `${queryKey}:${getTerminalSearchRevision(target.term)}`;
+}
+
+function getActiveSearchAnchor(target, queryKey) {
+    const active = activeSearchDecoration;
+    if (!active || active.term !== target.term || active.queryKey !== queryKey) return null;
+    if (active.bufferType !== target.term?.buffer?.active?.type) return null;
+    if (active.marker.isDisposed || active.marker.line < 0) return null;
+    return { line: active.marker.line, column: active.column, length: active.length };
+}
+
+function clearSearchResults(target, regexError = '') {
+    searchState.total = 0;
+    searchState.current = 0;
+    searchState.regexError = regexError;
+    searchState.matches = [];
+    clearSearchSelection(target);
+    updateSearchResultCount(0, 0, regexError);
+    return searchState;
 }
 
 function refreshSearchCount({ force = false } = {}) {
     updateSearchTargetLabel();
     const target = getActiveSearchTarget();
-    const key = buildSearchKey(target);
-    if (!force && key === searchState.key) {
+    const queryKey = buildSearchQueryKey(target);
+    const cacheKey = buildSearchCacheKey(target, queryKey);
+    if (!force && cacheKey === searchState.cacheKey) {
         updateSearchResultCount(searchState.current, searchState.total, searchState.regexError);
         return searchState;
     }
 
-    searchState.key = key;
+    const anchor = getActiveSearchAnchor(target, queryKey);
+    searchState.queryKey = queryKey;
+    searchState.cacheKey = cacheKey;
     const { regex, error } = buildSearchRegex();
     searchState.regexError = error;
-    if (!regex) {
-        searchState.total = 0;
-        searchState.current = 0;
-        updateSearchResultCount(0, 0, error);
-        return searchState;
-    }
+    if (!regex) return clearSearchResults(target, error);
 
-    const term = target.term;
-    const bufferLines = term.buffer.active.length;
+    const buffer = target.term.buffer.active;
     const matches = [];
-    for (let i = 0; i < bufferLines; i++) {
-        const line = term.buffer.active.getLine(i);
+    for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
         const text = line ? line.translateToString(true) : '';
         regex.lastIndex = 0;
         let match;
@@ -5066,26 +5169,23 @@ function refreshSearchCount({ force = false } = {}) {
 
     searchState.matches = matches;
     searchState.total = matches.length;
-    if (!searchState.total) {
-        searchState.current = 0;
-        updateSearchResultCount(0, 0);
-        return searchState;
-    }
+    if (!searchState.total) return clearSearchResults(target);
 
-    if (searchState.current > searchState.total) {
-        searchState.current = 0;
-    }
+    const anchoredIndex = findAnchoredMatchIndex(matches, anchor);
+    searchState.current = anchoredIndex >= 0 ? anchoredIndex + 1 : 0;
+    if (anchoredIndex < 0 && activeSearchDecoration) clearSearchSelection(target);
     updateSearchResultCount(searchState.current, searchState.total);
     return searchState;
 }
 
 function scheduleSearchRefresh() {
     clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => refreshSearchCount({ force: true }), 200);
+    searchDebounceTimer = setTimeout(() => refreshSearchCount(), 200);
 }
 
 function resetSearchState() {
-    searchState.key = '';
+    searchState.queryKey = '';
+    searchState.cacheKey = '';
     searchState.total = 0;
     searchState.current = 0;
     searchState.regexError = '';
@@ -5234,9 +5334,7 @@ function navigateSearch(direction) {
     recordCurrentSearch();
     refreshSearchCount();
     if (searchState.regexError || !searchState.total) return;
-    const index = direction === 'previous'
-        ? (searchState.current <= 1 ? searchState.total : searchState.current - 1)
-        : (searchState.current >= searchState.total ? 1 : searchState.current + 1);
+    const index = resolveNavigationIndex(direction, searchState.current, searchState.total);
     selectSearchMatch(index);
 }
 
@@ -5269,21 +5367,23 @@ searchInput.addEventListener('input', () => {
             updateSearchResultCount(0, 0);
             return;
         }
-        refreshSearchCount({ force: true });
+        refreshSearchCount();
     });
 });
 
 window.addEventListener('main-tab-changed', () => {
     clearTimeout(searchDebounceTimer);
     resetSearchState();
+    clearSearchSelection();
     updateSearchTargetLabel();
     if (!searchInput.value) {
         updateSearchResultCount(0, 0);
         return;
     }
-    refreshSearchCount({ force: true });
+    refreshSearchCount();
 });
 
+observeTerminalSearchChanges(serialTerm);
 updateSearchTargetLabel();
 updateSearchResultCount(0, 0);
 

@@ -624,13 +624,30 @@ test('passive search changes refresh results without selecting a match', () => {
   const tabChangedHandler = renderer.match(/window\.addEventListener\('main-tab-changed', \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
   const searchInputHandler = renderer.match(/searchInput\.addEventListener\('input', \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
 
-  assert.match(tabChangedHandler, /refreshSearchCount\(\{ force: true \}\)/);
+  assert.match(tabChangedHandler, /refreshSearchCount\(\)/);
   assert.match(searchInputHandler, /scheduleSearchRefresh\(\)/);
   assert.doesNotMatch(renderer, /scheduleSearchSelection|selectFirstSearchResult/);
   assert.doesNotMatch(tabChangedHandler, /selectSearchMatch/);
   assert.match(renderer, /function navigateSearch\(direction\)[\s\S]*?selectSearchMatch\(index\)/);
   assert.match(renderer, /findNextBtn\.addEventListener\('click', \(\) => navigateSearch\('next'\)\)/);
   assert.match(renderer, /findPrevBtn\.addEventListener\('click', \(\) => navigateSearch\('previous'\)\)/);
+});
+
+test('terminal search invalidates cached coordinates and re-anchors active results', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(renderer, /observeTerminalSearchChanges\(serialTerm\)/);
+  assert.equal((renderer.match(/^\s{4}observeTerminalSearchChanges\(term\);$/gm) || []).length, 2);
+  assert.equal((renderer.match(/^\s{4,8}unobserveTerminalSearchChanges\(tab\.term\);$/gm) || []).length, 2);
+  assert.match(renderer, /createTerminalRevisionTracker\(term,/);
+  assert.match(renderer, /buildSearchCacheKey[\s\S]*?getTerminalSearchRevision\(target\.term\)/);
+  assert.match(renderer, /getActiveSearchAnchor[\s\S]*?active\.marker\.line/);
+  assert.match(renderer, /findAnchoredMatchIndex\(matches, anchor\)/);
+  assert.match(renderer, /searchState\.current = anchoredIndex >= 0 \? anchoredIndex \+ 1 : 0/);
+  assert.match(renderer, /invalidateTerminalSearch\(term, 'reset', \{ clearAnchor: true \}\)/);
+  assert.match(renderer, /invalidateTerminalSearch\(shellTab\.term, 'clear', \{ clearAnchor: true \}\)/);
+  assert.match(renderer, /invalidateTerminalSearch\(serialTerm, 'options'\)/);
+  assert.doesNotMatch(renderer, /function getSearchBufferVersion/);
 });
 
 test('active search results are scrolled near the terminal center', () => {
@@ -774,7 +791,7 @@ test('shell terminals preserve xterm keyboard, paste, and mouse input handling',
   assert.match(renderer, /const action = getShortcutAction\(combo\);\s*if \(!action\) return;[\s\S]*?event\.preventDefault\(\)/);
   assert.doesNotMatch(renderer, /terminalType === 'shell'[\s\S]{0,180}shell-tab-input/);
   assert.equal((renderer.match(/bindTerminalWheel\(term, terminalWrapper\)/g) || []).length, 1);
-  assert.match(renderer, /if \(shellTab\) \{\s*shellTab\.term\.clear\(\)/);
+  assert.match(renderer, /if \(shellTab\) \{\s*invalidateTerminalSearch\(shellTab\.term, 'clear',[\s\S]*?shellTab\.term\.clear\(\)/);
 });
 
 test('text filter tabs do not display a TXT mode badge', () => {
