@@ -150,13 +150,14 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           GITEE_RELEASE_ROOT="https://gitee.com/trigger-cn/SerialTerminal/releases/download/$TAG"
-          for attempt in $(seq 1 60); do
+          deadline=$((SECONDS + 900))
+          while true; do
             if curl --fail --location --silent --show-error --connect-timeout 5 --max-time 10 \
               --output /tmp/gitee-latest.yml "$GITEE_RELEASE_ROOT/latest.yml"; then
               break
             fi
             rm -f /tmp/gitee-latest.yml
-            if [ "$attempt" -eq 60 ]; then
+            if [ "$SECONDS" -ge "$deadline" ]; then
               echo "Gitee release did not become available within 15 minutes" >&2
               exit 1
             fi
@@ -193,11 +194,11 @@ jobs:
           COS_ROOT="https://$COS_BUCKET.cos.$COS_REGION.myqcloud.com/releases/latest"
           curl --fail --silent --show-error --retry 3 --max-time 600 --output /tmp/cos-stable-latest.yml "$COS_ROOT/latest.yml"
           curl --fail --silent --show-error --retry 3 --max-time 1800 \
-            --output "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            --output "/tmp/SerialTerminal-Setup-$VERSION.exe" \
             "https://$COS_BUCKET.cos.$COS_REGION.myqcloud.com/releases/$TAG/SerialTerminal-Setup-$VERSION.exe"
           node scripts/update-artifact-integrity.js \
             --metadata /tmp/cos-stable-latest.yml \
-            --installer "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            --installer "/tmp/SerialTerminal-Setup-$VERSION.exe" \
             --version "$VERSION"
       - name: Remove old COS releases
         shell: bash

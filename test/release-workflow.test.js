@@ -141,10 +141,17 @@ test('release recovery validates and reuses an exact failed run before promotion
   const syncGiteeIndex = recoveryWorkflow.indexOf('name: Synchronize release commit and tag to Gitee');
   const verifyGiteeIndex = recoveryWorkflow.indexOf('name: Wait for and verify public Gitee release');
   const promoteCosIndex = recoveryWorkflow.indexOf('name: Promote stable COS latest');
+  const verifyStableCosIndex = recoveryWorkflow.indexOf('name: Verify stable COS latest');
+  const pruneCosIndex = recoveryWorkflow.indexOf('name: Remove old COS releases');
   assert.ok(verifyCosIndex < promoteGitHubIndex);
   assert.ok(promoteGitHubIndex < syncGiteeIndex);
   assert.ok(syncGiteeIndex < verifyGiteeIndex);
   assert.ok(verifyGiteeIndex < promoteCosIndex);
+  assert.match(recoveryWorkflow.slice(verifyGiteeIndex, promoteCosIndex), /deadline=\$\(\(SECONDS \+ 900\)\)[\s\S]*while true/);
+  assert.doesNotMatch(recoveryWorkflow.slice(verifyGiteeIndex, promoteCosIndex), /seq 1 60/);
+  const verifyStableCos = recoveryWorkflow.slice(verifyStableCosIndex, pruneCosIndex);
+  assert.match(verifyStableCos, /--output "\/tmp\/SerialTerminal-Setup-\$VERSION\.exe"[\s\S]*--installer "\/tmp\/SerialTerminal-Setup-\$VERSION\.exe"/);
+  assert.doesNotMatch(verifyStableCos, /cos-stable-SerialTerminal/);
   assert.match(recoveryWorkflow, /git push gitee "\$TAG_SHA:refs\/heads\/main"/);
   assert.doesNotMatch(recoveryWorkflow, /git push[^\n]*--force/);
 });
