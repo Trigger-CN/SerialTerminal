@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
 const giteeWorkflow = fs.readFileSync(path.join(__dirname, '..', '.workflow', 'gitee-release.yml'), 'utf8');
+const recoveryWorkflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'recover-release.yml'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 
 test('release builds use a supported Windows toolchain', () => {
@@ -126,6 +127,28 @@ test('release promotes COS stable latest only after GitHub and Gitee verificatio
   assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
   assert.doesNotMatch(workflow, /ssh-keyscan/);
 });
+
+test('release recovery validates and reuses an exact failed run before promotion', () => {
+  assert.match(recoveryWorkflow, /workflow_dispatch:/);
+  assert.match(recoveryWorkflow, /actions: read/);
+  assert.match(recoveryWorkflow, /contents: write/);
+  assert.match(recoveryWorkflow, /name: Validate recovery source[\s\S]*head_branch: tag[\s\S]*head_sha: tagSha[\s\S]*conclusion: 'failure'/);
+  assert.match(recoveryWorkflow, /uses: actions\/download-artifact@v4[\s\S]*run-id: \$\{\{ inputs\.run_id \}\}[\s\S]*github-token: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+  assert.match(recoveryWorkflow, /name: Verify recovered Windows update artifacts[\s\S]*update-artifact-integrity\.js/);
+  assert.doesNotMatch(recoveryWorkflow, /softprops\/action-gh-release|publish-cos-release\.js[\s\S]*--files/);
+  const verifyCosIndex = recoveryWorkflow.indexOf('name: Verify public COS downloads');
+  const promoteGitHubIndex = recoveryWorkflow.indexOf('name: Promote verified GitHub release');
+  const syncGiteeIndex = recoveryWorkflow.indexOf('name: Synchronize release commit and tag to Gitee');
+  const verifyGiteeIndex = recoveryWorkflow.indexOf('name: Wait for and verify public Gitee release');
+  const promoteCosIndex = recoveryWorkflow.indexOf('name: Promote stable COS latest');
+  assert.ok(verifyCosIndex < promoteGitHubIndex);
+  assert.ok(promoteGitHubIndex < syncGiteeIndex);
+  assert.ok(syncGiteeIndex < verifyGiteeIndex);
+  assert.ok(verifyGiteeIndex < promoteCosIndex);
+  assert.match(recoveryWorkflow, /git push gitee "\$TAG_SHA:refs\/heads\/main"/);
+  assert.doesNotMatch(recoveryWorkflow, /git push[^\n]*--force/);
+});
+
 
 test('Gitee tag pipeline mirrors and verifies all Windows updater assets', () => {
   assert.match(giteeWorkflow, /tags:[\s\S]*include:[\s\S]*\^v\\d\+\\\.\\d\+\\\.\\d\+/);

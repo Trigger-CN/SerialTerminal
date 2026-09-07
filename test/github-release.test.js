@@ -8,6 +8,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const {
   createGitHubReleaseValidator,
+  hashGitHubAsset,
   parseArguments,
   validateGitHubDownloadUrl
 } = require('../scripts/validate-github-release');
@@ -137,6 +138,36 @@ test('GitHub release promotion rejects a draft with missing assets', async () =>
     owner: 'Trigger-CN', repo: 'SerialTerminal', tag: 'v1.2.3', files: [__filename], promote: true
   }), /missing required asset/);
 });
+
+test('GitHub asset hashing waits for the complete response before aborting cleanup', async () => {
+  const chunks = [Buffer.from('first '), Buffer.from('second')];
+  const expected = Buffer.concat(chunks);
+  const asset = { url: 'https://api.github.com/assets/1' };
+  const result = await hashGitHubAsset(asset, expected.length, {
+    token: 'secret',
+    apiHostname: 'api.github.com',
+    dispatcher: {},
+    async fetchImpl(_url, options) {
+      return {
+        status: 200,
+        ok: true,
+        headers: { get: name => name === 'content-length' ? String(expected.length) : null },
+        body: (async function* () {
+          for (const chunk of chunks) {
+            await new Promise(resolve => setImmediate(resolve));
+            if (options.signal.aborted) throw new Error('response aborted before hashing completed');
+            yield chunk;
+          }
+        })()
+      };
+    }
+  });
+  assert.deepEqual(result, {
+    size: expected.length,
+    sha512: createHash('sha512').update(expected).digest('hex')
+  });
+});
+
 
 test('GitHub asset URLs reject credentials, custom ports, and unrelated redirects', () => {
   assert.equal(

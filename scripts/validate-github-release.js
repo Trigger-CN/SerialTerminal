@@ -157,7 +157,7 @@ async function hashGitHubAsset(asset, maxBytes, { token, fetchImpl, dispatcher, 
         continue;
       }
       if (!response.ok) throw new Error(`GitHub asset download returned HTTP ${response.status}`);
-      return hashResponse(response, maxBytes);
+      return await hashResponse(response, maxBytes);
     }
     throw new Error('Too many GitHub asset redirects');
   } finally {

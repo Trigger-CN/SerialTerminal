@@ -1,0 +1,209 @@
+name: Recover Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to recover
+        required: true
+        type: string
+      run_id:
+        description: Failed Release workflow run containing verified build artifacts
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: serialterminal-release-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Validate recovery source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          RUN_ID: ${{ inputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/validate-release-tag.js "$TAG"
+          case "$RUN_ID" in
+            ''|*[!0-9]*) echo "Invalid Release run ID: $RUN_ID" >&2; exit 1 ;;
+          esac
+          TAG_SHA="$(git rev-list -n 1 "$TAG")"
+          curl --fail --silent --show-error \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID" \
+            --output /tmp/source-run.json
+          node - "$TAG" "$TAG_SHA" "$RUN_ID" <<'NODE'
+          const fs = require('node:fs');
+          const [tag, tagSha, runId] = process.argv.slice(2);
+          const run = JSON.parse(fs.readFileSync('/tmp/source-run.json', 'utf8'));
+          const expected = {
+            id: Number(runId),
+            name: 'Release',
+            event: 'push',
+            head_branch: tag,
+            head_sha: tagSha,
+            conclusion: 'failure'
+          };
+          for (const [key, value] of Object.entries(expected)) {
+            if (run[key] !== value) throw new Error(`Release run ${key} mismatch: expected ${value}, received ${run[key]}`);
+          }
+          NODE
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: '*'
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify recovered Windows update artifacts
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          node scripts/update-artifact-integrity.js \
+            --metadata dist/latest.yml \
+            --installer "dist/SerialTerminal-Setup-$VERSION.exe" \
+            --version "$VERSION"
+      - name: Verify public COS downloads
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+        run: |
+          VERSION="${TAG#v}"
+          RELEASE_ROOT="https://$COS_BUCKET.cos.$COS_REGION.myqcloud.com/releases/$TAG"
+          curl --fail --silent --show-error --retry 3 --max-time 600 --output /tmp/latest.yml "$RELEASE_ROOT/latest.yml"
+          curl --fail --silent --show-error --retry 3 --max-time 1800 \
+            --output "/tmp/SerialTerminal-Setup-$VERSION.exe" \
+            "$RELEASE_ROOT/SerialTerminal-Setup-$VERSION.exe"
+          node scripts/update-artifact-integrity.js \
+            --metadata /tmp/latest.yml \
+            --installer "/tmp/SerialTerminal-Setup-$VERSION.exe" \
+            --version "$VERSION"
+      - name: Promote verified GitHub release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          node scripts/validate-github-release.js \
+            --owner "${GITHUB_REPOSITORY_OWNER}" \
+            --repo "${GITHUB_REPOSITORY#*/}" \
+            --tag "$TAG" \
+            --promote \
+            --files \
+              dist/*.exe \
+              dist/*.exe.blockmap \
+              dist/*.AppImage \
+              dist/*.deb \
+              dist/latest.yml \
+              dist/latest-linux.yml
+      - name: Configure Gitee SSH
+        shell: bash
+        env:
+          GITEE_SSH_PRIVATE_KEY: ${{ secrets.GITEE_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$GITEE_SSH_PRIVATE_KEY" > ~/.ssh/gitee_ed25519
+          chmod 600 ~/.ssh/gitee_ed25519
+          printf '%s\n' \
+            'Host gitee.com' \
+            '  HostName gitee.com' \
+            '  User git' \
+            '  IdentityFile ~/.ssh/gitee_ed25519' \
+            '  IdentitiesOnly yes' > ~/.ssh/config
+          printf '%s\n' 'gitee.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB/OvYN' > ~/.ssh/known_hosts
+      - name: Synchronize release commit and tag to Gitee
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          TAG_SHA="$(git rev-list -n 1 "$TAG")"
+          git remote add gitee git@gitee.com:trigger-cn/SerialTerminal.git
+          git push gitee "$TAG_SHA:refs/heads/main"
+          git push gitee "refs/tags/$TAG"
+      - name: Wait for and verify public Gitee release
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          GITEE_RELEASE_ROOT="https://gitee.com/trigger-cn/SerialTerminal/releases/download/$TAG"
+          for attempt in $(seq 1 60); do
+            if curl --fail --location --silent --show-error --connect-timeout 5 --max-time 10 \
+              --output /tmp/gitee-latest.yml "$GITEE_RELEASE_ROOT/latest.yml"; then
+              break
+            fi
+            rm -f /tmp/gitee-latest.yml
+            if [ "$attempt" -eq 60 ]; then
+              echo "Gitee release did not become available within 15 minutes" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          curl --fail --location --silent --show-error --retry 3 --max-time 1800 \
+            --output "/tmp/SerialTerminal-Setup-$VERSION.exe" \
+            "$GITEE_RELEASE_ROOT/SerialTerminal-Setup-$VERSION.exe"
+          curl --fail --location --silent --show-error --retry 3 --max-time 600 --range 0-0 \
+            --output /dev/null "$GITEE_RELEASE_ROOT/SerialTerminal-Setup-$VERSION.exe.blockmap"
+          node scripts/update-artifact-integrity.js \
+            --metadata /tmp/gitee-latest.yml \
+            --installer "/tmp/SerialTerminal-Setup-$VERSION.exe" \
+            --version "$VERSION"
+      - name: Promote stable COS latest
+        if: ${{ !contains(inputs.tag, '-') }}
+        shell: bash
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+          TAG: ${{ inputs.tag }}
+        run: node scripts/publish-cos-release.js --promote-latest --tag "$TAG"
+      - name: Verify stable COS latest
+        if: ${{ !contains(inputs.tag, '-') }}
+        shell: bash
+        env:
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          COS_ROOT="https://$COS_BUCKET.cos.$COS_REGION.myqcloud.com/releases/latest"
+          curl --fail --silent --show-error --retry 3 --max-time 600 --output /tmp/cos-stable-latest.yml "$COS_ROOT/latest.yml"
+          curl --fail --silent --show-error --retry 3 --max-time 1800 \
+            --output "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            "https://$COS_BUCKET.cos.$COS_REGION.myqcloud.com/releases/$TAG/SerialTerminal-Setup-$VERSION.exe"
+          node scripts/update-artifact-integrity.js \
+            --metadata /tmp/cos-stable-latest.yml \
+            --installer "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            --version "$VERSION"
+      - name: Remove old COS releases
+        shell: bash
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+        run: node scripts/publish-cos-release.js --prune-only
