@@ -396,6 +396,15 @@ const clearAllLogTranslations = {
   de: 'Alle Protokoll-Tabs leeren'
 };
 
+const logScopePreferenceTranslations = {
+  en: { clearAllLogsIncludesShell: 'Include Shell tabs when clearing all Log tabs', clearAllLogsIncludesShellHelp: 'When off, Clear All Log Tabs only clears the main serial terminal and filter terminals.', saveAllTabsLogToFiles: 'Save serial Log tabs to separate files', saveShellTabsLogToFiles: 'Save Shell tab logs automatically', saveShellTabsLogToFilesHelp: 'Requires separate serial Log tab files. When off, Shell output is not saved automatically.' },
+  'zh-CN': { clearAllLogsIncludesShell: '清空所有 Log 标签页时包含 Shell', clearAllLogsIncludesShellHelp: '关闭时，一键清空只清理主串口终端和过滤终端。', saveAllTabsLogToFiles: '将串口 Log 标签页分别保存到文件', saveShellTabsLogToFiles: '自动保存 Shell 标签页日志', saveShellTabsLogToFilesHelp: '需要先开启串口 Log 标签页独立保存；关闭时不会自动保存 Shell 输出。' },
+  'zh-TW': { clearAllLogsIncludesShell: '清空所有 Log 標籤頁時包含 Shell', clearAllLogsIncludesShellHelp: '關閉時，一鍵清空只會清理主串口終端和過濾終端。', saveAllTabsLogToFiles: '將串口 Log 標籤頁分別儲存到檔案', saveShellTabsLogToFiles: '自動儲存 Shell 標籤頁日誌', saveShellTabsLogToFilesHelp: '需要先開啟串口 Log 標籤頁獨立儲存；關閉時不會自動儲存 Shell 輸出。' },
+  fr: { clearAllLogsIncludesShell: 'Inclure les onglets Shell lors de l’effacement de tous les journaux', clearAllLogsIncludesShellHelp: 'Si désactivé, seuls le terminal série principal et les filtres sont effacés.', saveAllTabsLogToFiles: 'Enregistrer les journaux série dans des fichiers séparés', saveShellTabsLogToFiles: 'Enregistrer automatiquement les journaux Shell', saveShellTabsLogToFilesHelp: 'Nécessite des fichiers séparés pour les journaux série. Si désactivé, la sortie Shell n’est pas enregistrée automatiquement.' },
+  ru: { clearAllLogsIncludesShell: 'Включать вкладки Shell при очистке всех журналов', clearAllLogsIncludesShellHelp: 'Если выключено, очищаются только основной последовательный терминал и фильтры.', saveAllTabsLogToFiles: 'Сохранять последовательные журналы в отдельные файлы', saveShellTabsLogToFiles: 'Автоматически сохранять журналы Shell', saveShellTabsLogToFilesHelp: 'Требует отдельных файлов последовательных журналов. Если выключено, вывод Shell не сохраняется автоматически.' },
+  de: { clearAllLogsIncludesShell: 'Shell-Tabs beim Leeren aller Log-Tabs einbeziehen', clearAllLogsIncludesShellHelp: 'Wenn deaktiviert, werden nur das serielle Hauptterminal und Filterterminals geleert.', saveAllTabsLogToFiles: 'Serielle Log-Tabs in getrennten Dateien speichern', saveShellTabsLogToFiles: 'Shell-Tab-Protokolle automatisch speichern', saveShellTabsLogToFilesHelp: 'Erfordert getrennte Dateien für serielle Log-Tabs. Wenn deaktiviert, wird die Shell-Ausgabe nicht automatisch gespeichert.' }
+};
+
 const shellQuickCommandTranslations = {
   en: { shellQuickCommands: 'Shell Quick Commands', noShellQuickCommands: 'No Shell quick commands', addShellQuickCommand: 'Add Shell Quick Command', editShellQuickCommand: 'Edit Shell Quick Command', deleteShellQuickCommand: 'Delete Shell Quick Command', shellCommand: 'Command', shellQuickCommandAppendEnter: 'Execute immediately (append Enter)', shellCommandRequired: 'Enter a Shell command', shellQuickCommandNeedsShell: 'Activate a Shell tab first', shellQuickCommandNotReady: 'The active Shell is not ready', shellQuickCommandSent: 'Sent Shell command: {label}' },
   'zh-CN': { shellQuickCommands: 'Shell 快捷指令', noShellQuickCommands: '暂无 Shell 快捷指令', addShellQuickCommand: '添加 Shell 快捷指令', editShellQuickCommand: '编辑 Shell 快捷指令', deleteShellQuickCommand: '删除 Shell 快捷指令', shellCommand: '命令', shellQuickCommandAppendEnter: '立即执行（追加 Enter）', shellCommandRequired: '请输入 Shell 命令', shellQuickCommandNeedsShell: '请先激活一个 Shell 标签页', shellQuickCommandNotReady: '当前 Shell 尚未就绪', shellQuickCommandSent: '已发送 Shell 指令：{label}' },
@@ -450,6 +459,10 @@ for (const [language, values] of Object.entries(shellQuickCommandTranslations)) 
 
 for (const [language, value] of Object.entries(quickAutoTriggerMasterTranslations)) {
   translations[language].main.quickAutoTriggerMaster = value;
+}
+
+for (const [language, values] of Object.entries(logScopePreferenceTranslations)) {
+  Object.assign(translations[language].prefs, values);
 }
 
 for (const [language, value] of Object.entries(clearAllLogTranslations)) {

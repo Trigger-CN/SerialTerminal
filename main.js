@@ -134,7 +134,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 12;
+const CONFIG_VERSION = 13;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -497,6 +497,8 @@ function normalizeConfig(config, defaults) {
         yMargin: Math.max(0, Math.min(1, Number.isFinite(Number(tab.yMargin)) ? Number(tab.yMargin) : 0.08))
       }))
     : [];
+  normalized.clearAllLogsIncludesShell = normalizeBoolean(source.clearAllLogsIncludesShell, false);
+  normalized.saveShellTabsLogToFiles = normalizeBoolean(source.saveShellTabsLogToFiles, false);
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
   normalized.manualExportDirectory = typeof source.manualExportDirectory === 'string' && source.manualExportDirectory.trim()
     ? source.manualExportDirectory
@@ -540,6 +542,8 @@ function loadConfig() {
     },
     logEnabled: false,
     saveAllTabsLogToFiles: false,
+    clearAllLogsIncludesShell: false,
+    saveShellTabsLogToFiles: false,
     logIncludeTimestamp: false,
     logIncludeLineNumbers: false,
     rawBufferAutoFlushMB: 10,
@@ -978,6 +982,19 @@ function saveAllTabLogs({ notify = true, closeEntries = true } = {}) {
   }
 }
 
+function closeShellTabLogSessions({ notify = true } = {}) {
+  const savedPaths = [];
+  for (const [tabId, entry] of tabLogBuffers.entries()) {
+    if (!tabId.startsWith('tab-shell-')) continue;
+    if (!flushTabLogEntrySync(tabId, entry)) continue;
+    if (entry.filePath && fs.existsSync(entry.filePath)) savedPaths.push(entry.filePath);
+    tabLogBuffers.delete(tabId);
+  }
+  if (notify && savedPaths.length && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('all-tabs-log-saved', { paths: savedPaths });
+  }
+}
+
 function stripAnsi(str) {
   if (typeof str !== 'string' || !str) return str || '';
   if (currentConfig.stripAnsiInLog === false) return str;
@@ -1003,6 +1020,7 @@ function writeLog(data) {
 
 function writeTabLog(tabId, title, data) {
   if (!tabId || typeof data !== 'string' || !data) return;
+  if (tabId.startsWith('tab-shell-') && !currentConfig.saveShellTabsLogToFiles) return;
   const clean = stripAnsi(data);
   if (tabId === 'tab-main' && currentConfig.logEnabled) {
     writeLog(clean);
@@ -1128,6 +1146,9 @@ function saveConfig(config) {
   if (normalized.logCreateDateFolder !== currentConfig.logCreateDateFolder) {
     activeLogDate = '';
     tabLogBuffers.forEach(entry => { entry.filePath = ''; });
+  }
+  if (currentConfig.saveShellTabsLogToFiles && !normalized.saveShellTabsLogToFiles) {
+    closeShellTabLogSessions();
   }
   if (currentConfig.saveAllTabsLogToFiles && !normalized.saveAllTabsLogToFiles) {
     saveAllTabLogs();

@@ -19,6 +19,13 @@ test('enabling per-tab logs closes the previous main log session', () => {
   assert.match(main, /!currentConfig\.saveAllTabsLogToFiles && normalized\.saveAllTabsLogToFiles\) \{\s*closeMainLogSession\(\);/);
 });
 
+test('Shell tab logging is opt-in and flushes buffered Shell sessions when disabled', () => {
+  assert.match(main, /function writeTabLog\(tabId, title, data\) \{[\s\S]*?tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles/);
+  assert.match(main, /function closeShellTabLogSessions\([\s\S]*?tabId\.startsWith\('tab-shell-'\)[\s\S]*?flushTabLogEntrySync\(tabId, entry\)[\s\S]*?tabLogBuffers\.delete\(tabId\)/);
+  assert.match(main, /currentConfig\.saveShellTabsLogToFiles && !normalized\.saveShellTabsLogToFiles\) \{\s*closeShellTabLogSessions\(\);/);
+});
+
+
 test('date folders apply to main, tab, and raw logs and rotate at midnight', () => {
   assert.match(main, /logCreateDateFolder: false/);
   assert.match(main, /normalized\.logCreateDateFolder = normalizeBoolean\(source\.logCreateDateFolder, false\)/);

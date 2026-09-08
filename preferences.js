@@ -73,9 +73,11 @@ const elements = {
   addRuleBtn: document.getElementById('add-rule-btn'),
   resetHighlightRulesBtn: document.getElementById('reset-highlight-rules-btn'),
   
+  clearAllLogsIncludesShell: document.getElementById('clearAllLogsIncludesShell'),
   logEnabled: document.getElementById('logEnabled'),
-    saveAllTabsLogToFiles: document.getElementById('saveAllTabsLogToFiles'),
-    stripAnsiInLog: document.getElementById('stripAnsiInLog'),
+  saveAllTabsLogToFiles: document.getElementById('saveAllTabsLogToFiles'),
+  saveShellTabsLogToFiles: document.getElementById('saveShellTabsLogToFiles'),
+  stripAnsiInLog: document.getElementById('stripAnsiInLog'),
   logSettings: document.getElementById('log-settings'),
   logPath: document.getElementById('logPath'),
   logCreateDateFolder: document.getElementById('logCreateDateFolder'),
@@ -501,9 +503,12 @@ async function init() {
   elements.hexUppercase.checked = hexDisplaySettings.uppercase;
   elements.hexIdleFlushMs.value = String(hexDisplaySettings.idleFlushMs);
 
+  elements.clearAllLogsIncludesShell.checked = config.clearAllLogsIncludesShell === true;
   elements.logEnabled.checked = config.logEnabled;
-    elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
-    elements.stripAnsiInLog.checked = config.stripAnsiInLog !== false;
+  elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
+  elements.saveShellTabsLogToFiles.checked = config.saveShellTabsLogToFiles === true;
+  elements.saveShellTabsLogToFiles.disabled = !elements.saveAllTabsLogToFiles.checked;
+  elements.stripAnsiInLog.checked = config.stripAnsiInLog !== false;
   elements.logPath.value = config.logPath;
   elements.logCreateDateFolder.checked = config.logCreateDateFolder === true;
   elements.logRetentionDays.value = ['0', '7', '30', '60'].includes(String(config.logRetentionDays))
@@ -558,11 +563,17 @@ async function init() {
   }
 }
 
+function toggleShellLogSetting() {
+  elements.saveShellTabsLogToFiles.disabled = !elements.saveAllTabsLogToFiles.checked;
+}
+
 function toggleLogSettings(enabled) {
   elements.logSettings.style.display = enabled ? 'block' : 'none';
+  toggleShellLogSetting();
 }
 
 elements.logEnabled.onchange = (e) => toggleLogSettings(e.target.checked);
+elements.saveAllTabsLogToFiles.onchange = toggleShellLogSetting;
 
 // Shell Profiles Management
 function renderShellProfiles() {
@@ -836,8 +847,10 @@ elements.saveBtn.onclick = async () => {
         historyLimit: normalizeSearchHistoryLimit(elements.searchHistoryLimit.value)
     },
     hexDisplaySettings,
+    clearAllLogsIncludesShell: elements.clearAllLogsIncludesShell.checked,
     logEnabled: elements.logEnabled.checked,
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,
+    saveShellTabsLogToFiles: elements.saveShellTabsLogToFiles.checked,
     stripAnsiInLog: elements.stripAnsiInLog.checked,
     logPath: elements.logPath.value,
     logCreateDateFolder: elements.logCreateDateFolder.checked,

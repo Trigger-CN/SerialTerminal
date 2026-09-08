@@ -109,7 +109,7 @@ test('right sidebar manages persistent quick commands for the active Shell tab',
   assert.doesNotMatch(shellSidebar, /shell-session-list|activeShellSessions|noActiveShellSessions/);
   assert.match(html, /id="shell-quick-command-dialog"[\s\S]*aria-labelledby="shell-quick-command-dialog-title"/);
   assert.match(html, /id="shell-quick-command-append-enter" checked/);
-  assert.match(main, /const CONFIG_VERSION = 12/);
+  assert.match(main, /const CONFIG_VERSION = 13/);
   assert.match(main, /normalized\.shellQuickCommands = Array\.isArray\(source\.shellQuickCommands\)/);
   assert.match(main, /shellQuickCommands: \[\]/);
   assert.match(renderer, /function getActiveShellTab\(\)[\s\S]*getActiveTabInfo\(\)[\s\S]*shellTabs\.find/);
@@ -154,7 +154,7 @@ test('collapsed sidebar scrolls only quick sends above fixed serial tools', () =
   assert.match(styles, /\.sidebar-tool-icon\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;[^}]*fill:\s*currentColor;/s);
 });
 
-test('expanded sidebar can clear every log terminal tab', () => {
+test('expanded sidebar clears serial logs and includes Shell only when configured', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
@@ -162,8 +162,32 @@ test('expanded sidebar can clear every log terminal tab', () => {
   assert.match(html, /class="sidebar-clear-actions"[\s\S]*id="clear-btn"[\s\S]*id="clear-all-logs-btn"/);
   assert.match(html, /id="clear-all-logs-btn"[^>]*data-i18n-title="main\.clearAllLogs"[^>]*data-i18n-aria-label="main\.clearAllLogs"/);
   assert.match(styles, /\.sidebar-clear-actions\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 34px;/s);
-  assert.match(renderer, /function clearAllLogTabs\(\)[\s\S]*clearTerminalByTabId\('tab-main'\)[\s\S]*filterTabs\.forEach\([\s\S]*shellTabs\.forEach\(/);
+  const clearAllLogTabs = renderer.match(/function clearAllLogTabs\(\) \{[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(clearAllLogTabs, /clearTerminalByTabId\('tab-main'\)/);
+  assert.match(clearAllLogTabs, /filterTabs\.forEach\(tab => clearTerminalByTabId\(tab\.id\)\)/);
+  assert.match(clearAllLogTabs, /currentConfig\?\.clearAllLogsIncludesShell === true/);
+  assert.match(clearAllLogTabs, /shellTabs\.forEach\(tab => clearTerminalByTabId\(tab\.id\)\)/);
   assert.match(renderer, /clearAllLogsBtn\?\.addEventListener\('click', clearAllLogTabs\)/);
+});
+
+test('preferences persist the optional Shell clear and automatic log scopes', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+
+  assert.match(main, /const CONFIG_VERSION = 13/);
+  assert.match(main, /clearAllLogsIncludesShell: false/);
+  assert.match(main, /saveShellTabsLogToFiles: false/);
+  assert.match(main, /normalized\.clearAllLogsIncludesShell = normalizeBoolean\(source\.clearAllLogsIncludesShell, false\)/);
+  assert.match(main, /normalized\.saveShellTabsLogToFiles = normalizeBoolean\(source\.saveShellTabsLogToFiles, false\)/);
+  assert.match(html, /id="clearAllLogsIncludesShell"[\s\S]*?data-i18n="prefs\.clearAllLogsIncludesShell"/);
+  assert.match(html, /id="saveShellTabsLogToFiles"[\s\S]*?data-i18n="prefs\.saveShellTabsLogToFiles"/);
+  assert.match(preferences, /elements\.saveShellTabsLogToFiles\.disabled = !elements\.saveAllTabsLogToFiles\.checked/);
+  assert.match(preferences, /elements\.saveAllTabsLogToFiles\.onchange = toggleShellLogSetting/);
+  assert.match(preferences, /elements\.clearAllLogsIncludesShell\.checked = config\.clearAllLogsIncludesShell === true/);
+  assert.match(preferences, /elements\.saveShellTabsLogToFiles\.checked = config\.saveShellTabsLogToFiles === true/);
+  assert.match(preferences, /clearAllLogsIncludesShell: elements\.clearAllLogsIncludesShell\.checked/);
+  assert.match(preferences, /saveShellTabsLogToFiles: elements\.saveShellTabsLogToFiles\.checked/);
 });
 
 test('serial output is batched per animation frame before terminal rendering', () => {
@@ -194,7 +218,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 12/);
+  assert.match(main, /const CONFIG_VERSION = 13/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);

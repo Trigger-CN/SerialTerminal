@@ -4,7 +4,7 @@
 
 ## 0. 当前状态快照（维护入口）
 
-- 当前配置 schema：v11；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
+- 当前配置 schema：v13；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
@@ -135,12 +135,12 @@ SerialTerminal/
 - 全仓库审查后的已确认问题、优化顺序和验收标准集中记录在根目录 `ToDo.md`；实施完成后应同步勾选对应条目并更新本文档中的架构约定
 - P0 优化已落地：Shell tab 保存 `sessionCreateTimer`/`closed` 防止快速关闭后创建孤儿 PTY；主窗口 `save-config` 只合并落盘，不再把完整配置回广播给自身，首选项 `save-config-request` 仍广播；过滤条件输入按 250ms debounce 持久化
 - 生产更新依赖使用 `electron-updater ^6.8.9`、`builder-util-runtime 9.7.0` 和 `js-yaml ^5.2.3`；使用官方 registry 执行 `npm audit --omit=dev` 应保持 0 High/Critical
-- 主按钮、快捷键、右键菜单和窄工具栏清空动作统一按活动/目标 `tabId` 调用 `clearTerminalByTabId()`，Shell 标签不得回退清空主终端；展开侧栏的 `clear-all-logs-btn` 调用 `clearAllLogTabs()`，依次清空主终端、全部过滤标签和全部 Shell 标签的终端显示，不受 pane 可见性影响，图表页跳过且不修改磁盘日志
+- 主按钮、快捷键、右键菜单和窄工具栏清空动作统一按活动/目标 `tabId` 调用 `clearTerminalByTabId()`，Shell 标签不得回退清空主终端；展开侧栏的 `clear-all-logs-btn` 调用 `clearAllLogTabs()`，固定清空主终端与全部过滤标签，只有 `clearAllLogsIncludesShell` 开启时才清空全部 Shell 标签；该设置默认关闭，图表页始终跳过且不修改磁盘日志
 - `fitWorkspaceTerminals()` 使用单一 `requestAnimationFrame` 合并请求，Shell 仅在 cols/rows 变化时发送 resize；pane `flex-basis` 和 sidebar `width` 过渡结束后均需触发 fit
 - Text 发送校验与最终发送均复用 `buildSerialWriteBuffer()`；ASCII/GBK 对无法表示的字符返回 `UNREPRESENTABLE_CHARACTER`，不得静默替换为 `?`。`parseHexInput()` 在扫描/累计超过 `maxBytes` 时应提前失败，避免超大输入构造完整副本
 - `npm test` 通过 `scripts/run-tests.js` 执行根项目 Node 测试与 `telemetry-server` 测试；codec、formatter、图表、搜索历史、日志、工作区、i18n、发布链路等行为变化必须同步相关测试
 - Shell profile 参数在设置窗口中逐项编辑并始终以 argv 字符串数组保存；不得通过空格 join/split 往返转换
-- 配置版本为 12；历史配置统一由 `normalizeConfig()` 迁移并在变化后写回。Shell profile 和 Shell 快捷指令使用稳定 `id`；主输入与串口快捷指令发送模型、搜索历史、图表、壁纸和遥测字段均以当前 schema 为准
+- 配置版本为 13；历史配置统一由 `normalizeConfig()` 迁移并在变化后写回。Shell profile 和 Shell 快捷指令使用稳定 `id`；主输入与串口快捷指令发送模型、搜索历史、图表、壁纸和遥测字段均以当前 schema 为准
 - 右侧 Shell 侧边栏不再维护活跃会话副列表；`shellQuickCommands` 独立保存 `id`、`label`、`command`、`appendEnter`。点击快捷指令只能向 `getActiveTabInfo()` 指向且 `sessionReady` 的 Shell 标签发送 `shell-tab-input`，不得回退发送到其他 Shell 或串口
 - 字体大小、scrollback、历史缓冲、滚轮行数、输入历史上限、Hex 空闲刷新和日志自动刷盘大小统一通过 `config-values.js` 的整数范围规则校验；主进程和设置窗口不得各自维护不同 clamp 逻辑
 - 工作区布局通过 `workspace-manager.js` 的 `normalizeWorkspaceLayoutShape()` 全局去重 tab ID；DOM 可渲染检查必须在目标 pane 内同时找到 tab 按钮和内容。任一 pane 变空时自动关闭分屏，若唯一非空的是 `pane-2`，需按原顺序整体迁移到 `pane-1` 并保持活动标签和 pane 内 index 不变
@@ -171,7 +171,7 @@ SerialTerminal/
 - 原始 RX 字节的 Text 流式解码或 Hex 流式格式化与批量渲染
 - 过滤、搜索、搜索历史、主输入框、快捷发送、自动发送和吞吐量 UI
 - 图表文本流 fan-out、Worker 解析结果接收、数据模型更新和 CSV 导出
-- 主终端 / 过滤 tab / Shell tab 的独立日志采集与关闭时 flush
+- 主终端 / 过滤 tab / Shell tab 的独立日志采集与关闭时 flush；Shell 自动日志仅在 `saveShellTabsLogToFiles` 开启时进入标签页日志缓冲
 - Text/Hex 双草稿、结构化发送历史、严格 Hex 实时校验
 - 右侧 Shell 侧边栏、动态 profile 和会话列表管理
 - 多语言在主窗口中的应用及终端壁纸加载
@@ -273,7 +273,7 @@ npm run dist:linux
 
 ## 5. 当前配置模型（用户目录 `config.json`）
 
-配置由 `main.js -> loadConfig()` 提供默认值，`normalizeConfig()` 按 schema v11 归一化和迁移，`saveConfig()` 合并写回。不要复制整份默认配置到文档；字段增加或语义变化时，应同时更新默认值、归一化、设置窗口、测试和本节。
+配置由 `main.js -> loadConfig()` 提供默认值，`normalizeConfig()` 按 schema v13 归一化和迁移，`saveConfig()` 合并写回。不要复制整份默认配置到文档；字段增加或语义变化时，应同时更新默认值、归一化、设置窗口、测试和本节。
 
 ### 5.1 主要配置分组
 
@@ -285,8 +285,9 @@ npm run dist:linux
 - 快捷发送：`quickSendList` 每项保存稳定 ID、分组、`mode`、`appendCrLf`、内容、窄侧栏入口和自动触发；分组与两个侧栏顺序分别持久化。
 - 自动发送：`autoSendSettings` 仅保存 enabled、interval、content；当前自动发送固定为 Text。
 - 标签与工作区：`filterTabs`、`shellTabs`、`chartTabs` 与 `workspaceLayout` 分别保存 tab 配置和 pane 布局。
-- 日志：普通/全部 tab/Raw 开关、独立前缀、缓存阈值、目录、日期子目录、保留天数、文件名、编码和手动导出目录。
+- 日志：普通/全部串口 tab/Shell tab/Raw 开关、独立前缀、缓存阈值、目录、日期子目录、保留天数、文件名、编码和手动导出目录；`saveShellTabsLogToFiles` 默认关闭且仅在全部 tab 日志开启时生效。
 - Shell：`shellProfiles` 使用稳定 ID 和 argv 数组，`defaultShellProfileId` 精确引用默认项。
+- 清理范围：`clearAllLogsIncludesShell` 控制“一键清空所有 Log 标签页”是否同步清空 Shell，默认关闭。
 - 应用状态：窗口大小、侧边栏状态、快捷键、欢迎/更新提示版本和跳过版本。
 - 遥测：开关、随机安装 ID、上次成功上报日期与版本。
 
@@ -294,7 +295,10 @@ npm run dist:linux
 
 ```json
 {
-  "configVersion": 11,
+  "configVersion": 13,
+  "clearAllLogsIncludesShell": false,
+  "saveAllTabsLogToFiles": false,
+  "saveShellTabsLogToFiles": false,
   "terminalWallpaper": { "path": "", "overlayOpacity": 55 },
   "lastSerialOptions": {
     "receiveDisplayMode": "text",
@@ -430,7 +434,7 @@ npm run dist:linux
 
 ---
 
-## 8. 串口收发实现原理（config v12 / 原始字节架构）
+## 8. 串口收发实现原理（config v13 / 原始字节架构）
 
 ### 8.1 主进程接收流程
 `main.js`
@@ -483,8 +487,8 @@ npm run dist:linux
 - 搜索历史以 query + Regex/大小写/整词选项去重，支持置顶和删除；默认上限 20，配置范围 0-200。
 - 连接、端口切换、写队列和模式切换必须继续遵守 session、generation、decoder/formatter flush 与焦点保护规则。
 
-### 8.6 config v12 与迁移
-- `CONFIG_VERSION = 12`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，规范化结果变化时写回磁盘。
+### 8.6 config v13 与迁移
+- `CONFIG_VERSION = 13`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，规范化结果变化时写回磁盘。
 - 旧 `lastSerialOptions.encoding` 仍迁移为 RX 模式/编码与 TX Text 编码；当前主输入模式和追加选项归属 `mainInputSettings`。
 - config v7 之前快捷指令的追加语义会迁移为每条 `appendCrLf`；快捷项补齐稳定 ID、分组、模式、侧栏入口和自动触发。
 - Shell profile 缺失或重复 ID 会生成稳定 ID；旧默认名称引用迁移为 `defaultShellProfileId`。
@@ -492,6 +496,7 @@ npm run dist:linux
 - 旧 100000 默认 scrollback 在 v5 迁移为当前默认 20000；数值字段统一经 `config-values.js` 限制。
 - 搜索历史、图表配置、终端壁纸、遥测、日志保留与日期目录等后续字段均由当前归一化逻辑兜底。
 - 关闭 Raw 日志或修改日志目录/文件名配置前必须先刷盘；失败时保留设置窗口并提示。
+- v13 新增 `clearAllLogsIncludesShell` 与 `saveShellTabsLogToFiles`，均归一化为布尔值且默认关闭；前者控制批量清理 Shell，后者控制 Shell 自动日志。
 - 配置迁移必须向前兼容历史用户文件；修改 schema 时递增版本并补自动化测试。
 
 
@@ -509,8 +514,8 @@ npm run dist:linux
 #### 日志数据来源
 - **主终端显示日志**（`tab-main`）：renderer 在 `writeTextLines()` / `writeHexLines()` 中生成与当前显示模式一致的文本，通过 `writeMainTabLog()` → `write-tab-log` 发送到主进程
 - **过滤 tab 日志**：renderer 将匹配后的格式化行通过 `writeFilterTabLog()` → `write-tab-log` 发送到主进程
-- **Shell tab 日志**：renderer 将 shell 输出通过 `writeShellTabLog()` → `write-tab-log` 发送到主进程
-- **通用主日志**：未启用 `saveAllTabsLogToFiles` 时，`main.js::writeTabLog()` 将 `tab-main` 内容转交 `writeLog()`；启用后，主终端与其他 tab 一样进入独立条目
+- **Shell tab 日志**：renderer 仍将 shell 输出通过 `writeShellTabLog()` → `write-tab-log` 发送到主进程；仅 `saveAllTabsLogToFiles` 与 `saveShellTabsLogToFiles` 同时开启时才进入独立缓冲
+- **通用主日志**：未启用 `saveAllTabsLogToFiles` 时，`main.js::writeTabLog()` 将 `tab-main` 内容转交 `writeLog()`；启用后，主终端与过滤 tab 进入独立条目，Shell 是否进入由独立开关决定
 - **RX Raw 日志**：仅 `port.on('data')` 的原始 Buffer 进入 `bufferRawSerialBytes()`，与上述显示日志完全独立
 
 #### 缓冲与落盘机制
@@ -535,6 +540,7 @@ npm run dist:linux
 - 单个 tab 关闭：renderer 发送 `flush-tab-log`，主进程保存该条目
 - 应用退出：`before-quit` 刷盘显示日志与 RX Raw 日志
 - 启用 `saveAllTabsLogToFiles` 时，`writeLog()` / `saveLog()` 不重复维护主日志，`tab-main` 由 `tabLogBuffers` 统一处理
+- 运行中关闭 `saveShellTabsLogToFiles` 时，主进程先刷盘并关闭已存在的 Shell 日志条目，再阻止后续 Shell 输出进入自动日志；主终端和过滤日志不受影响
 
 #### ANSI 剥离
 - `stripAnsi()` 仅剥离 SGR 序列（`\x1b[数字;数字m`），不触碰其他 CSI 命令
@@ -637,9 +643,10 @@ npm run dist:linux
 ### 10.6A 日志保存需求
 - 设置窗口新增"将所有标签页日志保存到文件"开关
 - 文件名格式支持 `%tab` 作为标签页标题占位符，可直接在格式中指定扩展名
-- 主终端、过滤 tab、shell tab 可分别保存为独立日志文件
+- 主终端和过滤 tab 可分别保存为独立日志文件；Shell tab 由默认关闭的 `saveShellTabsLogToFiles` 独立控制
 - `logFileSuffix` 已废弃，`logFileNameFormat` 现在完整控制输出文件名
 
+- 设置窗口“终端”页提供批量清理是否包含 Shell 的开关，默认关闭；“日志”页提供 Shell 自动日志开关，默认关闭。
 ### 10.7 多语言需求
 输入框相关区域必须多语言适配，包括：
 - 输入框 placeholder
@@ -722,7 +729,7 @@ npm run dist:linux
 
 ### 11.9 多 tab 日志保存的实现注意点
 - 多 tab 日志采集应挂在各终端实际写入显示的链路上，避免修改串口主协议链路
-- 主终端、过滤 tab、shell tab 的日志标题取各自当前 tab 标题，用于 `%tab` 文件名替换
+- 主终端和过滤 tab 的日志标题取各自当前 tab 标题；Shell 输出只有在 `saveShellTabsLogToFiles` 开启时进入独立日志，用于 `%tab` 文件名替换
 - 单个 tab 关闭时要先 flush 再销毁终端，避免缓冲丢失
 - 串口断开时要统一 flush 所有 tab 日志，避免只在应用退出时落盘
 
@@ -778,7 +785,7 @@ npm run dist:linux
 ## 12. 关键函数与关注点清单
 
 ### `main.js`
-- `normalizeConfig()`：config v12 归一化、历史迁移、串口/Shell 快捷指令、搜索、图表、壁纸、遥测及日志字段校验
+- `normalizeConfig()`：config v13 归一化、历史迁移、串口/Shell 快捷指令、清理/日志范围、搜索、图表、壁纸、遥测及日志字段校验
 - `loadConfig()`：配置默认值来源
 - `saveConfig()`：配置合并写回
 - `bufferRawSerialBytes()` / `flushRawBinaryLogSync()` / `ensureRawBinaryLogPath()`：RX-only Buffer 缓冲、追加刷盘和单连接文件路径
@@ -790,7 +797,8 @@ npm run dist:linux
 - `ensureMainLogFilePath()` / `ensureTabLogFile(tabId)` / `ensureRawBinaryLogPath()`：为三类日志延迟创建并缓存路径
 - `flushTabLogEntrySync()` / `saveAllTabLogs()`：追加刷盘并管理各 tab 日志条目
 - `writeLog(data)` / `saveLog()`：维护未启用全部 tab 日志时的通用主日志缓冲
-- `writeTabLog(tabId, title, data)`：接收 renderer 的显示日志，统一处理 ANSI，并分流到通用主日志或 `tabLogBuffers`
+- `writeTabLog(tabId, title, data)`：接收 renderer 的显示日志，统一处理 ANSI，并分流到通用主日志或 `tabLogBuffers`；Shell 需额外通过 `saveShellTabsLogToFiles` 开关
+- `closeShellTabLogSessions()`：关闭 Shell 自动日志时刷盘并移除已有 Shell 日志条目
 - `flushPendingLogs()` / `startLogAutoFlushTimer()`：每 5 秒静默刷盘显示日志与 RX Raw 日志
 - `cleanupSerialConnection()`：清理串口状态并刷盘 RX Raw；显示日志由 renderer 的断开事件处理继续触发 flush
 - `ipcMain.handle('connect-serial')`：串口连接入口；启用全部 tab 日志时预注册 `tab-main`
@@ -830,6 +838,7 @@ npm run dist:linux
 - `normalizeQuickSendItem()` / `renderQuickSendList()`：快捷项 v2 字段、badge、tooltip 和拖动持久化
 - `refreshSearchCount()` / `selectSearchMatch()` / `renderSearchHistory()`：buffer 扫描、定位和历史 UI
 - `clearChartDataSession()` / `persistChartTabs()` / `exportChartSamples()`：图表会话、配置和 CSV 导出
+- `clearAllLogTabs()`：始终清理主终端和过滤终端，按 `clearAllLogsIncludesShell` 可选清理 Shell
 - `applyConfig()`
 
 ### 图表与搜索模块

@@ -4735,7 +4735,9 @@ function clearActiveTerminal() {
 function clearAllLogTabs() {
     clearTerminalByTabId('tab-main');
     filterTabs.forEach(tab => clearTerminalByTabId(tab.id));
-    shellTabs.forEach(tab => clearTerminalByTabId(tab.id));
+    if (currentConfig?.clearAllLogsIncludesShell === true) {
+        shellTabs.forEach(tab => clearTerminalByTabId(tab.id));
+    }
 }
 
 clearBtn.addEventListener('click', clearActiveTerminal);

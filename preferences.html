@@ -423,6 +423,12 @@
                         Maximum number of saved searches. Pinned searches are always kept; use 0 to keep pinned searches only.
                     </div>
                 </div>
+                <div class="form-group" style="margin-top: 20px;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="clearAllLogsIncludesShell"> <span data-i18n="prefs.clearAllLogsIncludesShell">Include Shell tabs when clearing all Log tabs</span>
+                    </label>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.clearAllLogsIncludesShellHelp">When off, Clear All Log Tabs only clears the main serial terminal and filter terminals.</small>
+                </div>
                 <h3 style="margin-top: 28px; margin-bottom: 16px; font-size: 16px;" data-i18n="prefs.hexDisplaySettings">Hex Display Settings</h3>
                 <div class="form-group">
                     <label data-i18n="prefs.hexBytesPerLine">Bytes per Line</label>
@@ -562,8 +568,14 @@
                 <div id="log-settings" style="display: none; padding-left: 15px; border-left: 2px solid var(--border-color); margin-left: 5px;">
                     <div class="form-group">
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
-                            <input type="checkbox" id="saveAllTabsLogToFiles"> <span data-i18n="prefs.saveAllTabsLogToFiles">Save logs from all tabs to files</span>
+                            <input type="checkbox" id="saveAllTabsLogToFiles"> <span data-i18n="prefs.saveAllTabsLogToFiles">Save serial Log tabs to separate files</span>
                         </label>
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                            <input type="checkbox" id="saveShellTabsLogToFiles"> <span data-i18n="prefs.saveShellTabsLogToFiles">Save Shell tab logs automatically</span>
+                        </label>
+                        <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.saveShellTabsLogToFilesHelp">Requires separate serial Log tab files. When off, Shell output is not saved automatically.</small>
                     </div>
                     <div class="form-group">
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
