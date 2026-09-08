@@ -109,7 +109,7 @@ test('right sidebar manages persistent quick commands for the active Shell tab',
   assert.doesNotMatch(shellSidebar, /shell-session-list|activeShellSessions|noActiveShellSessions/);
   assert.match(html, /id="shell-quick-command-dialog"[\s\S]*aria-labelledby="shell-quick-command-dialog-title"/);
   assert.match(html, /id="shell-quick-command-append-enter" checked/);
-  assert.match(main, /const CONFIG_VERSION = 13/);
+  assert.match(main, /const CONFIG_VERSION = 14/);
   assert.match(main, /normalized\.shellQuickCommands = Array\.isArray\(source\.shellQuickCommands\)/);
   assert.match(main, /shellQuickCommands: \[\]/);
   assert.match(renderer, /function getActiveShellTab\(\)[\s\S]*getActiveTabInfo\(\)[\s\S]*shellTabs\.find/);
@@ -175,7 +175,7 @@ test('preferences persist the optional Shell clear and automatic log scopes', ()
   const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
 
-  assert.match(main, /const CONFIG_VERSION = 13/);
+  assert.match(main, /const CONFIG_VERSION = 14/);
   assert.match(main, /clearAllLogsIncludesShell: false/);
   assert.match(main, /saveShellTabsLogToFiles: false/);
   assert.match(main, /normalized\.clearAllLogsIncludesShell = normalizeBoolean\(source\.clearAllLogsIncludesShell, false\)/);
@@ -189,6 +189,27 @@ test('preferences persist the optional Shell clear and automatic log scopes', ()
   assert.match(preferences, /clearAllLogsIncludesShell: elements\.clearAllLogsIncludesShell\.checked/);
   assert.match(preferences, /saveShellTabsLogToFiles: elements\.saveShellTabsLogToFiles\.checked/);
 });
+
+test('custom baud rates are normalized, persisted, and restored as reusable options', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  assert.match(main, /const CONFIG_VERSION = 14/);
+  assert.match(main, /customBaudRates: \[\]/);
+  assert.match(main, /normalized\.customBaudRates = normalizeCustomBaudRates/);
+  assert.match(main, /!isStandardBaudRate\(lastBaudRate\)/);
+  assert.match(html, /option value="custom" data-i18n="main\.addCustomBaudRate"/);
+  assert.match(html, /id="baud-custom-input"[^>]*min="1"[^>]*step="1"/);
+  assert.match(html, /id="baud-custom-confirm"[^>]*data-i18n-title="main\.confirmCustomBaudRate"/);
+  assert.match(renderer, /function renderCustomBaudRates\(customBaudRates, selectedBaudRate\)/);
+  assert.match(renderer, /function restoreBaudRateConfig\(config\)/);
+  assert.match(renderer, /function confirmCustomBaudRate\(\)/);
+  assert.match(renderer, /ipcRenderer\.send\('save-config', \{ lastSerialOptions, customBaudRates \}\)/);
+  assert.match(renderer, /baudCustomInput\.addEventListener\('keydown'/);
+  assert.doesNotMatch(renderer, /baudCustomInput\.addEventListener\('(?:change|blur)'/);
+});
+
 
 test('serial output is batched per animation frame before terminal rendering', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
@@ -218,7 +239,7 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = 13/);
+  assert.match(main, /const CONFIG_VERSION = 14/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);

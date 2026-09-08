@@ -13,6 +13,7 @@ const fontList = require('font-list');
 const { t, getLanguage } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
+const { normalizeBaudRate, normalizeCustomBaudRates, isStandardBaudRate } = require('./baud-rates');
 const { normalizeSearchHistory } = require('./search-history');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const { formatLocalDate, getLogDirectory } = require('./log-directory');
@@ -134,7 +135,7 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 13;
+const CONFIG_VERSION = 14;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -245,13 +246,16 @@ function normalizeConfig(config, defaults) {
   const legacyEncoding = oneOf(oldSerial.encoding, new Set(['utf8', 'ascii', 'gbk', 'hex']), 'utf8');
   const migratedMode = legacyEncoding === 'hex' ? 'hex' : 'text';
   const migratedEncoding = legacyEncoding === 'hex' ? 'utf8' : legacyEncoding;
+  const lastBaudRate = normalizeBaudRate(oldSerial.baudRate) || defaults.lastSerialOptions.baudRate;
+  normalized.customBaudRates = normalizeCustomBaudRates([
+    ...normalizeCustomBaudRates(source.customBaudRates),
+    ...(!isStandardBaudRate(lastBaudRate) ? [lastBaudRate] : [])
+  ]);
   normalized.lastSerialOptions = {
     ...defaults.lastSerialOptions,
     ...oldSerial,
     path: typeof oldSerial.path === 'string' ? oldSerial.path : defaults.lastSerialOptions.path,
-    baudRate: typeof oldSerial.baudRate === 'string' || Number.isFinite(oldSerial.baudRate)
-      ? String(oldSerial.baudRate)
-      : defaults.lastSerialOptions.baudRate,
+    baudRate: lastBaudRate,
     dataBits: ['5', '6', '7', '8'].includes(String(oldSerial.dataBits))
       ? String(oldSerial.dataBits)
       : defaults.lastSerialOptions.dataBits,
@@ -645,6 +649,7 @@ function loadConfig() {
       idleFlushMs: 50
     },
     skippedUpdateVersion: '',
+    customBaudRates: [],
     lastSerialOptions: {
         path: '',
         baudRate: '9600',

@@ -24,6 +24,7 @@ const { SearchAddon } = require('@xterm/addon-search');
 const { TerminalUnicodeWidthAddon } = require('./terminal-unicode-width');
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./i18n');
+const { isStandardBaudRate, normalizeBaudRate, normalizeCustomBaudRates } = require('./baud-rates');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./workspace-manager');
 const { getHorizontalInsertionIndex } = require('./tab-reorder');
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
@@ -4000,8 +4001,12 @@ function getSerialOptionsFromUi() {
 function saveSerialModeConfig() {
     if (isApplyingConfig) return;
     const lastSerialOptions = getSerialOptionsFromUi();
-    if (currentConfig) currentConfig.lastSerialOptions = lastSerialOptions;
-    ipcRenderer.send('save-config', { lastSerialOptions });
+    const customBaudRates = normalizeCustomBaudRates(currentConfig?.customBaudRates);
+    if (currentConfig) {
+        currentConfig.lastSerialOptions = lastSerialOptions;
+        currentConfig.customBaudRates = customBaudRates;
+    }
+    ipcRenderer.send('save-config', { lastSerialOptions, customBaudRates });
 }
 
 function switchSendEncoding(nextEncoding, { persist = true, refresh = true } = {}) {
@@ -4124,28 +4129,7 @@ function applyConfig(config) {
     // Restore Serial Settings
     if (config.lastSerialOptions) {
         const previousSendEncoding = sendEncoding;
-        // Elements are defined below, but this function runs async or after load
-        const baud = document.getElementById('baud-select');
-        const baudInput = document.getElementById('baud-custom-input');
-        const baudWrapper = document.getElementById('baud-custom-wrapper');
-        
-        if (baud && config.lastSerialOptions.baudRate) {
-            // Check if saved baud is in standard list
-            const exists = Array.from(baud.options).some(opt => opt.value === config.lastSerialOptions.baudRate);
-            if (exists) {
-                baud.value = config.lastSerialOptions.baudRate;
-                baud.style.display = 'block';
-                if (baudWrapper) baudWrapper.style.display = 'none';
-            } else {
-                // It's a custom baud rate
-                baud.value = 'custom';
-                baud.style.display = 'none';
-                if (baudWrapper) {
-                    baudWrapper.style.display = 'flex';
-                    if (baudInput) baudInput.value = config.lastSerialOptions.baudRate;
-                }
-            }
-        }
+        restoreBaudRateConfig(config);
         
         const db = document.getElementById('data-bits-select');
         if (db) db.value = config.lastSerialOptions.dataBits;
@@ -4627,6 +4611,7 @@ const portSelect = document.getElementById('port-select');
 const baudSelect = document.getElementById('baud-select');
 const baudCustomWrapper = document.getElementById('baud-custom-wrapper');
 const baudCustomInput = document.getElementById('baud-custom-input');
+const baudCustomConfirm = document.getElementById('baud-custom-confirm');
 const baudCustomCancel = document.getElementById('baud-custom-cancel');
 const connectBtn = document.getElementById('connect-btn');
 const clearBtn = document.getElementById('clear-btn');
@@ -4635,8 +4620,60 @@ const throughputRxChart = document.getElementById('throughput-rx-chart');
 const throughputTxChart = document.getElementById('throughput-tx-chart');
 const throughputRxRate = document.getElementById('throughput-rx-rate');
 const throughputTxRate = document.getElementById('throughput-tx-rate');
+let previousBaudRate = '115200';
 
-// Baud Rate Custom Logic
+function renderCustomBaudRates(customBaudRates, selectedBaudRate) {
+    baudSelect.querySelectorAll('option[data-custom-baud-rate]').forEach(option => option.remove());
+    const customAction = baudSelect.querySelector('option[value="custom"]');
+    normalizeCustomBaudRates(customBaudRates).forEach(baudRate => {
+        const option = document.createElement('option');
+        option.value = baudRate;
+        option.textContent = baudRate;
+        option.dataset.customBaudRate = 'true';
+        baudSelect.insertBefore(option, customAction);
+    });
+    const normalizedSelection = normalizeBaudRate(selectedBaudRate);
+    if (normalizedSelection && Array.from(baudSelect.options).some(option => option.value === normalizedSelection)) {
+        baudSelect.value = normalizedSelection;
+    }
+}
+
+function closeCustomBaudInput(selectedBaudRate = previousBaudRate) {
+    baudCustomInput.setCustomValidity('');
+    baudCustomInput.value = '';
+    baudCustomWrapper.style.display = 'none';
+    baudSelect.style.display = 'block';
+    renderCustomBaudRates(currentConfig?.customBaudRates, selectedBaudRate);
+}
+
+function restoreBaudRateConfig(config) {
+    const savedBaudRate = normalizeBaudRate(config.lastSerialOptions?.baudRate) || '9600';
+    const customBaudRates = normalizeCustomBaudRates([
+        ...normalizeCustomBaudRates(config.customBaudRates),
+        ...(!isStandardBaudRate(savedBaudRate) ? [savedBaudRate] : [])
+    ]);
+    config.customBaudRates = customBaudRates;
+    previousBaudRate = savedBaudRate;
+    closeCustomBaudInput(savedBaudRate);
+}
+
+function confirmCustomBaudRate() {
+    const baudRate = normalizeBaudRate(baudCustomInput.value);
+    if (!baudRate) {
+        const message = trFallback('main.invalidCustomBaudRate', 'Enter a positive whole-number baud rate');
+        baudCustomInput.setCustomValidity(message);
+        baudCustomInput.reportValidity();
+        setActionStatus(message);
+        return;
+    }
+    baudCustomInput.setCustomValidity('');
+    const customBaudRates = normalizeCustomBaudRates([...(currentConfig?.customBaudRates || []), baudRate]);
+    if (currentConfig) currentConfig.customBaudRates = customBaudRates;
+    previousBaudRate = baudRate;
+    closeCustomBaudInput(baudRate);
+    applySerialParameterChange({ reconnect: true });
+}
+
 baudSelect.addEventListener('change', () => {
     if (baudSelect.value === 'custom') {
         baudSelect.style.display = 'none';
@@ -4644,24 +4681,22 @@ baudSelect.addEventListener('change', () => {
         baudCustomInput.focus();
         return;
     }
+    previousBaudRate = normalizeBaudRate(baudSelect.value) || previousBaudRate;
     applySerialParameterChange({ reconnect: true });
 });
 
-baudCustomCancel.addEventListener('click', () => {
-    baudCustomWrapper.style.display = 'none';
-    baudSelect.style.display = 'block';
-    baudSelect.value = '115200'; // Reset to default
-    applySerialParameterChange({ reconnect: true });
-});
-
-function saveCustomBaudRate() {
-    if (baudSelect.value === 'custom' && baudCustomInput.value.trim()) {
-        applySerialParameterChange({ reconnect: true });
+baudCustomConfirm.addEventListener('click', confirmCustomBaudRate);
+baudCustomCancel.addEventListener('click', () => closeCustomBaudInput());
+baudCustomInput.addEventListener('input', () => baudCustomInput.setCustomValidity(''));
+baudCustomInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        confirmCustomBaudRate();
+    } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeCustomBaudInput();
     }
-}
-
-baudCustomInput.addEventListener('change', saveCustomBaudRate);
-baudCustomInput.addEventListener('blur', saveCustomBaudRate);
+});
 
 ['data-bits-select', 'stop-bits-select', 'parity-select'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', saveSerialModeConfig);
@@ -4675,10 +4710,7 @@ function applySerialParameterChange({ reconnect = false } = {}) {
 }
 
 function getBaudRate() {
-    if (baudSelect.value === 'custom') {
-        return baudCustomInput.value;
-    }
-    return baudSelect.value;
+    return normalizeBaudRate(baudSelect.value) || previousBaudRate || '115200';
 }
 
 const refreshBtn = document.getElementById('refresh-btn');

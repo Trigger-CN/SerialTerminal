@@ -652,6 +652,19 @@ Object.assign(translations.de.prefs, {
   searchHistoryLimit: 'Limit für Suchverlauf', searchHistoryHelp: 'Maximale Anzahl gespeicherter Suchen. Angeheftete Suchen bleiben immer erhalten; mit 0 bleiben nur diese erhalten.'
 });
 
+
+const baudRateTranslations = {
+  en: { addCustomBaudRate: 'Add custom...', confirmCustomBaudRate: 'Add baud rate', invalidCustomBaudRate: 'Enter a positive whole-number baud rate' },
+  'zh-CN': { addCustomBaudRate: '添加自定义波特率...', confirmCustomBaudRate: '添加波特率', invalidCustomBaudRate: '请输入正整数波特率' },
+  'zh-TW': { addCustomBaudRate: '新增自訂鮑率...', confirmCustomBaudRate: '新增鮑率', invalidCustomBaudRate: '請輸入正整數鮑率' },
+  fr: { addCustomBaudRate: 'Ajouter un débit personnalisé...', confirmCustomBaudRate: 'Ajouter le débit', invalidCustomBaudRate: 'Saisissez un débit entier positif' },
+  ru: { addCustomBaudRate: 'Добавить свою скорость...', confirmCustomBaudRate: 'Добавить скорость', invalidCustomBaudRate: 'Введите положительную целую скорость' },
+  de: { addCustomBaudRate: 'Eigene Baudrate hinzufügen...', confirmCustomBaudRate: 'Baudrate hinzufügen', invalidCustomBaudRate: 'Positive ganzzahlige Baudrate eingeben' }
+};
+
+for (const [language, values] of Object.entries(baudRateTranslations)) {
+  Object.assign(translations[language].main, values);
+}
 const translationCompletions = {
   'zh-TW': require('./locales/zh-TW-completion'),
   fr: require('./locales/fr-completion'),

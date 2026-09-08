@@ -73,11 +73,12 @@
                     <option value="921600">921600</option>
                     <option value="1000000">1000000</option>
                     <option value="2000000">2000000</option>
-                    <option value="custom">Custom...</option>
+                    <option value="custom" data-i18n="main.addCustomBaudRate">Add custom...</option>
                 </select>
-                <div id="baud-custom-wrapper" style="display: none; display: flex; gap: 4px;">
-                    <input type="number" id="baud-custom-input" placeholder="Baud Rate" data-i18n-placeholder="main.customBaudRate" style="flex: 1; width: 0;">
-                    <button id="baud-custom-cancel" class="secondary" style="width: auto; padding: 0 6px;" title="Back to list" data-i18n-title="main.backToList"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
+                <div id="baud-custom-wrapper" style="display: none; gap: 4px;">
+                    <input type="number" id="baud-custom-input" min="1" step="1" inputmode="numeric" placeholder="Baud Rate" data-i18n-placeholder="main.customBaudRate" style="flex: 1; width: 0;">
+                    <button id="baud-custom-confirm" class="secondary" type="button" style="width: auto; padding: 0 6px;" title="Add baud rate" data-i18n-title="main.confirmCustomBaudRate" aria-label="Add baud rate" data-i18n-aria-label="main.confirmCustomBaudRate"><span class="material-icon-placeholder" data-material-icon="check"></span></button>
+                    <button id="baud-custom-cancel" class="secondary" type="button" style="width: auto; padding: 0 6px;" title="Back to list" data-i18n-title="main.backToList"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
                 </div>
             </div>
 

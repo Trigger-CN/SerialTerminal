@@ -4,7 +4,7 @@
 
 ## 0. 当前状态快照（维护入口）
 
-- 当前配置 schema：v13；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
+- 当前配置 schema：v14；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
@@ -48,7 +48,7 @@
 - 快捷发送条目的编辑/删除动作按钮位于主快捷发送按钮左侧，悬浮/动作按钮聚焦/编辑态显示，竖向排列且删除在上、编辑在下；主快捷发送按钮点击后不应因焦点停留而持续显示动作按钮。
 - 快捷发送支持每条指令独立的 `mode`、`appendCrLf` 与 `autoTrigger` 设置（`enabled`、`text`、`useRegex`、`caseSensitive`、`wholeWord`）；RX 原始字节按当前接收编码解码并匹配最近窗口，命中后按该快捷指令自身的发送配置发送，同一指令发送未完成时不重复排队，并让对应按钮绿色慢速闪烁一次。
 - 快捷指令编辑窗口保留 `.app-dialog` modal 外壳，内部字段统一使用首选项窗口同款 `.form-group` 表单结构；不要再新增 `.app-dialog-field` 这类并行表单控件体系。
-- 波特率、数据位、停止位和校验位控件变更时需立即保存 `lastSerialOptions`，避免后续配置回填把未连接时选择的新串口参数覆盖成旧值；自定义波特率只在输入框有值时保存。串口已连接时切换波特率应先走 `disconnectSerial()`，等待 `serial-disconnected` 事件完成后再复用手动连接路径按当前 UI 参数重连，避免旧断开事件覆盖新连接状态。
+- 波特率、数据位、停止位和校验位控件变更时需立即保存 `lastSerialOptions`，避免后续配置回填把未连接时选择的新串口参数覆盖成旧值。自定义波特率必须经 `baud-rates.js` 校验为正安全整数，确认后加入顶层 `customBaudRates` 并永久显示在下拉菜单；标准值、重复值、非法值及取消输入不得加入。串口已连接时切换或确认波特率应先走 `disconnectSerial()`，等待 `serial-disconnected` 事件完成后再复用手动连接路径按当前 UI 参数重连，避免旧断开事件覆盖新连接状态。
 - 所有提交信息必须沿用近期提交格式：主题行为“emoji + type(scope): 中文摘要”，主题行后空一行，正文使用 `1.`、`2.`、`3.` 编号逐条说明主要改动，不得只提交主题行。修复示例：`🐛 fix(shortcuts): 修复 Log 选中文本快捷搜索`；功能示例：`✨ feat(ui): 添加可配置快捷键`。正文应覆盖实现行为、兼容性影响、测试或文档更新等实际改动。
 
 ---
@@ -273,13 +273,13 @@ npm run dist:linux
 
 ## 5. 当前配置模型（用户目录 `config.json`）
 
-配置由 `main.js -> loadConfig()` 提供默认值，`normalizeConfig()` 按 schema v13 归一化和迁移，`saveConfig()` 合并写回。不要复制整份默认配置到文档；字段增加或语义变化时，应同时更新默认值、归一化、设置窗口、测试和本节。
+配置由 `main.js -> loadConfig()` 提供默认值，`normalizeConfig()` 按 schema v14 归一化和迁移，`saveConfig()` 合并写回。不要复制整份默认配置到文档；字段增加或语义变化时，应同时更新默认值、归一化、设置窗口、测试和本节。
 
 ### 5.1 主要配置分组
 
 - 外观：`fontSize`、`fontWeight`、字体、前景/背景色、`highlightColors`、`highlightRules`、`terminalWallpaper`。
 - 终端：`showTimestamp`、`showLineNumbers`、`scrollbackLimit`、`historyBufferSize`、`mouseWheelScrollLines`。
-- 串口：`lastSerialOptions` 保存端口、物理参数、RX 模式/编码、TX Text 编码和终端换行模式。
+- 串口：`lastSerialOptions` 保存端口、当前物理参数、RX 模式/编码、TX Text 编码和终端换行模式；`customBaudRates` 保存可复用的自定义正整数波特率字符串列表。
 - 底部输入：`mainInputSettings` 保存可见、Enter 发送、Text/Hex 模式、追加 CRLF 和历史上限；`mainInputHistory` 仅保存 `{ mode, content }`。
 - 搜索：`searchSettings.historyLimit` 默认 20、范围 0-200；`searchHistory` 保存查询、三个选项、置顶和时间元数据。
 - 快捷发送：`quickSendList` 每项保存稳定 ID、分组、`mode`、`appendCrLf`、内容、窄侧栏入口和自动触发；分组与两个侧栏顺序分别持久化。
@@ -295,7 +295,8 @@ npm run dist:linux
 
 ```json
 {
-  "configVersion": 13,
+  "configVersion": 14,
+  "customBaudRates": ["250000"],
   "clearAllLogsIncludesShell": false,
   "saveAllTabsLogToFiles": false,
   "saveShellTabsLogToFiles": false,
@@ -434,7 +435,7 @@ npm run dist:linux
 
 ---
 
-## 8. 串口收发实现原理（config v13 / 原始字节架构）
+## 8. 串口收发实现原理（config v14 / 原始字节架构）
 
 ### 8.1 主进程接收流程
 `main.js`
@@ -487,8 +488,8 @@ npm run dist:linux
 - 搜索历史以 query + Regex/大小写/整词选项去重，支持置顶和删除；默认上限 20，配置范围 0-200。
 - 连接、端口切换、写队列和模式切换必须继续遵守 session、generation、decoder/formatter flush 与焦点保护规则。
 
-### 8.6 config v13 与迁移
-- `CONFIG_VERSION = 13`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，规范化结果变化时写回磁盘。
+### 8.6 config v14 与迁移
+- `CONFIG_VERSION = 14`；`loadConfig()` 调用 `normalizeConfig()`，类型错误回退默认值，规范化结果变化时写回磁盘。
 - 旧 `lastSerialOptions.encoding` 仍迁移为 RX 模式/编码与 TX Text 编码；当前主输入模式和追加选项归属 `mainInputSettings`。
 - config v7 之前快捷指令的追加语义会迁移为每条 `appendCrLf`；快捷项补齐稳定 ID、分组、模式、侧栏入口和自动触发。
 - Shell profile 缺失或重复 ID 会生成稳定 ID；旧默认名称引用迁移为 `defaultShellProfileId`。
@@ -497,6 +498,7 @@ npm run dist:linux
 - 搜索历史、图表配置、终端壁纸、遥测、日志保留与日期目录等后续字段均由当前归一化逻辑兜底。
 - 关闭 Raw 日志或修改日志目录/文件名配置前必须先刷盘；失败时保留设置窗口并提示。
 - v13 新增 `clearAllLogsIncludesShell` 与 `saveShellTabsLogToFiles`，均归一化为布尔值且默认关闭；前者控制批量清理 Shell，后者控制 Shell 自动日志。
+- v14 新增 `customBaudRates`；使用 `baud-rates.js` 过滤非法、非正整数、重复及标准波特率，并把旧配置中合法的非标准 `lastSerialOptions.baudRate` 自动迁入列表。
 - 配置迁移必须向前兼容历史用户文件；修改 schema 时递增版本并补自动化测试。
 
 
@@ -785,7 +787,7 @@ npm run dist:linux
 ## 12. 关键函数与关注点清单
 
 ### `main.js`
-- `normalizeConfig()`：config v13 归一化、历史迁移、串口/Shell 快捷指令、清理/日志范围、搜索、图表、壁纸、遥测及日志字段校验
+- `normalizeConfig()`：config v14 归一化、历史迁移、自定义波特率、串口/Shell 快捷指令、清理/日志范围、搜索、图表、壁纸、遥测及日志字段校验
 - `loadConfig()`：配置默认值来源
 - `saveConfig()`：配置合并写回
 - `bufferRawSerialBytes()` / `flushRawBinaryLogSync()` / `ensureRawBinaryLogPath()`：RX-only Buffer 缓冲、追加刷盘和单连接文件路径
@@ -840,6 +842,7 @@ npm run dist:linux
 - `clearChartDataSession()` / `persistChartTabs()` / `exportChartSamples()`：图表会话、配置和 CSV 导出
 - `clearAllLogTabs()`：始终清理主终端和过滤终端，按 `clearAllLogsIncludesShell` 可选清理 Shell
 - `applyConfig()`
+- `renderCustomBaudRates()` / `restoreBaudRateConfig()` / `confirmCustomBaudRate()`：恢复持久化自定义项，确认有效输入并保存后沿用串口参数重连流程
 
 ### 图表与搜索模块
 - `serial-text-stream.js`：图表文本记录流
@@ -848,6 +851,9 @@ npm run dist:linux
 - `chart-view.js`：uPlot 主图与时间轴
 - `chart-csv.js`：CSV 生成
 - `search-history.js`：搜索历史纯逻辑
+
+### `baud-rates.js`
+- 统一维护标准波特率、正安全整数规范化，以及自定义波特率去重和标准项过滤；主进程、renderer 与测试不得各自复制判定规则。
 
 ### `serial-codec.js`
 - `parseHexInput()`：严格语法、结构化错误、标准化 Hex 和 byte count
