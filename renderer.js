@@ -108,6 +108,7 @@ let highlightColors = {
     selection: { background: '#073ca8', foreground: '#ffffff' }
 };
 let mouseWheelScrollLines = 3;
+let scrollToBottomOnSend = true;
 
 const DEFAULT_WORKSPACE_LAYOUT = {
     splitEnabled: false,
@@ -518,6 +519,11 @@ const SERIAL_OUTPUT_FRAME_MS = 1000 / SERIAL_OUTPUT_MAX_FPS;
 const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 * 1024;
 const TERMINAL_PENDING_OUTPUT_LIMIT = 2 * 1024 * 1024;
 const terminalWriteStates = new WeakMap();
+
+function scrollMainTerminalToBottom() {
+    if (typeof serialTerm?.scrollToBottom !== 'function') return;
+    requestAnimationFrame(() => serialTerm.scrollToBottom());
+}
 
 function drainTerminalOutput(term, state) {
     if (state.writing || !state.pending.length) return;
@@ -3248,6 +3254,7 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
         });
         serialWriteChain = pendingWrite.catch(() => undefined);
         const result = await pendingWrite;
+        if (result.ok && profileRequest.mode === 'text' && scrollToBottomOnSend) scrollMainTerminalToBottom();
         if (!silent) setActionStatus(result.ok
             ? trFallback('main.bytesSent', 'Sent {count} bytes', { count: result.bytesWritten })
             : trFallback('main.serialWriteFailed', 'Write failed: {error}', { error: result.message || result.code }));
@@ -4067,6 +4074,7 @@ function applyConfig(config) {
     timestampColor = config.timestampColor || '#808080';
     lineNoColor = config.lineNoColor || '#67986f';
     mouseWheelScrollLines = config.mouseWheelScrollLines || 3;
+    scrollToBottomOnSend = config.scrollToBottomOnSend !== false;
     
     // Update Checkboxes
     showTimestamp = config.showTimestamp || false;

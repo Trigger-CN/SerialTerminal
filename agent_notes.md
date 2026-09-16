@@ -49,6 +49,7 @@
 - 快捷发送支持每条指令独立的 `mode`、`appendCrLf` 与 `autoTrigger` 设置（`enabled`、`text`、`useRegex`、`caseSensitive`、`wholeWord`）；RX 原始字节按当前接收编码解码并匹配最近窗口，命中后按该快捷指令自身的发送配置发送，同一指令发送未完成时不重复排队，并让对应按钮绿色慢速闪烁一次。
 - 快捷指令编辑窗口保留 `.app-dialog` modal 外壳，内部字段统一使用首选项窗口同款 `.form-group` 表单结构；不要再新增 `.app-dialog-field` 这类并行表单控件体系。
 - 波特率、数据位、停止位和校验位控件变更时需立即保存 `lastSerialOptions`，避免后续配置回填把未连接时选择的新串口参数覆盖成旧值。自定义波特率必须经 `baud-rates.js` 校验为正安全整数，确认后加入顶层 `customBaudRates` 并永久显示在下拉菜单；标准值、重复值、非法值及取消输入不得加入。串口已连接时切换或确认波特率应先走 `disconnectSerial()`，等待 `serial-disconnected` 事件完成后再复用手动连接路径按当前 UI 参数重连，避免旧断开事件覆盖新连接状态。
+- `scrollToBottomOnSend` 默认 true，只在发送成功且为 Text 模式时把主终端滚动到底部；该行为位于 `sendSerialRequest()` 成功分支，不改变 Hex 发送、终端逐键输入和接收路径的滚动表现。
 - 所有提交信息必须沿用近期提交格式：主题行为“emoji + type(scope): 中文摘要”，主题行后空一行，正文使用 `1.`、`2.`、`3.` 编号逐条说明主要改动，不得只提交主题行。修复示例：`🐛 fix(shortcuts): 修复 Log 选中文本快捷搜索`；功能示例：`✨ feat(ui): 添加可配置快捷键`。正文应覆盖实现行为、兼容性影响、测试或文档更新等实际改动。
 
 ---
@@ -278,7 +279,7 @@ npm run dist:linux
 ### 5.1 主要配置分组
 
 - 外观：`fontSize`、`fontWeight`、字体、前景/背景色、`highlightColors`、`highlightRules`、`terminalWallpaper`。
-- 终端：`showTimestamp`、`showLineNumbers`、`scrollbackLimit`、`historyBufferSize`、`mouseWheelScrollLines`。
+- 终端：`showTimestamp`、`showLineNumbers`、`scrollbackLimit`、`historyBufferSize`、`mouseWheelScrollLines`、`scrollToBottomOnSend`（默认 true，控制发送文本内容后是否自动滚动到底部）。
 - 串口：`lastSerialOptions` 保存端口、当前物理参数、RX 模式/编码、TX Text 编码和终端换行模式；`customBaudRates` 保存可复用的自定义正整数波特率字符串列表。
 - 底部输入：`mainInputSettings` 保存可见、Enter 发送、Text/Hex 模式、追加 CRLF 和历史上限；`mainInputHistory` 仅保存 `{ mode, content }`。
 - 搜索：`searchSettings.historyLimit` 默认 20、范围 0-200；`searchHistory` 保存查询、三个选项、置顶和时间元数据。

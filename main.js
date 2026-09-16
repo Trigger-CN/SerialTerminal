@@ -502,6 +502,7 @@ function normalizeConfig(config, defaults) {
       }))
     : [];
   normalized.clearAllLogsIncludesShell = normalizeBoolean(source.clearAllLogsIncludesShell, false);
+  normalized.scrollToBottomOnSend = normalizeBoolean(source.scrollToBottomOnSend, true);
   normalized.saveShellTabsLogToFiles = normalizeBoolean(source.saveShellTabsLogToFiles, false);
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
   normalized.manualExportDirectory = typeof source.manualExportDirectory === 'string' && source.manualExportDirectory.trim()
@@ -546,6 +547,7 @@ function loadConfig() {
     },
     logEnabled: false,
     saveAllTabsLogToFiles: false,
+    scrollToBottomOnSend: true,
     clearAllLogsIncludesShell: false,
     saveShellTabsLogToFiles: false,
     logIncludeTimestamp: false,

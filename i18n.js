@@ -396,6 +396,19 @@ const clearAllLogTranslations = {
   de: 'Alle Protokoll-Tabs leeren'
 };
 
+const scrollToBottomPreferenceTranslations = {
+  en: { scrollToBottomOnSend: 'Auto-scroll to bottom after sending text', scrollToBottomOnSendHelp: 'When enabled, the main terminal scrolls to the newest output after each text send.' },
+  'zh-CN': { scrollToBottomOnSend: '发送文本后自动滚动到底部', scrollToBottomOnSendHelp: '开启后，每次发送文本内容后主终端会自动滚动到最新输出。' },
+  'zh-TW': { scrollToBottomOnSend: '傳送文字後自動滾動到底部', scrollToBottomOnSendHelp: '開啟後，每次傳送文字內容後主終端會自動滾動到最新輸出。' },
+  fr: { scrollToBottomOnSend: 'Défilement automatique vers le bas après l’envoi de texte', scrollToBottomOnSendHelp: 'Si activé, le terminal principal défile vers la sortie la plus récente après chaque envoi de texte.' },
+  ru: { scrollToBottomOnSend: 'Автопрокрутка вниз после отправки текста', scrollToBottomOnSendHelp: 'Если включено, основной терминал прокручивается к последнему выводу после каждой отправки текста.' },
+  de: { scrollToBottomOnSend: 'Nach dem Senden von Text automatisch nach unten scrollen', scrollToBottomOnSendHelp: 'Wenn aktiviert, scrollt das Hauptterminal nach jedem Textversand zur neuesten Ausgabe.' }
+};
+
+for (const [language, values] of Object.entries(scrollToBottomPreferenceTranslations)) {
+  Object.assign(translations[language].prefs, values);
+}
+
 const logScopePreferenceTranslations = {
   en: { clearAllLogsIncludesShell: 'Include Shell tabs when clearing all Log tabs', clearAllLogsIncludesShellHelp: 'When off, Clear All Log Tabs only clears the main serial terminal and filter terminals.', saveAllTabsLogToFiles: 'Save serial Log tabs to separate files', saveShellTabsLogToFiles: 'Save Shell tab logs automatically', saveShellTabsLogToFilesHelp: 'Requires separate serial Log tab files. When off, Shell output is not saved automatically.' },
   'zh-CN': { clearAllLogsIncludesShell: '清空所有 Log 标签页时包含 Shell', clearAllLogsIncludesShellHelp: '关闭时，一键清空只清理主串口终端和过滤终端。', saveAllTabsLogToFiles: '将串口 Log 标签页分别保存到文件', saveShellTabsLogToFiles: '自动保存 Shell 标签页日志', saveShellTabsLogToFilesHelp: '需要先开启串口 Log 标签页独立保存；关闭时不会自动保存 Shell 输出。' },

@@ -61,6 +61,7 @@ const elements = {
   scrollbackLimit: document.getElementById('scrollbackLimit'),
   historyBufferSize: document.getElementById('historyBufferSize'),
   mouseWheelScrollLines: document.getElementById('mouseWheelScrollLines'),
+  scrollToBottomOnSend: document.getElementById('scrollToBottomOnSend'),
   mainInputHistoryLimit: document.getElementById('mainInputHistoryLimit'),
   searchHistoryLimit: document.getElementById('searchHistoryLimit'),
   hexBytesPerLine: document.getElementById('hexBytesPerLine'),
@@ -493,6 +494,7 @@ async function init() {
   elements.scrollbackLimit.value = String(normalizeIntegerSetting(config.scrollbackLimit, 'scrollbackLimit'));
   elements.historyBufferSize.value = String(normalizeIntegerSetting(config.historyBufferSize, 'historyBufferSize'));
   elements.mouseWheelScrollLines.value = String(normalizeIntegerSetting(config.mouseWheelScrollLines, 'mouseWheelScrollLines'));
+  elements.scrollToBottomOnSend.checked = config.scrollToBottomOnSend !== false;
   elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(config.mainInputSettings?.historyLimit));
   elements.searchHistoryLimit.value = String(normalizeSearchHistoryLimit(config.searchSettings?.historyLimit));
 
@@ -847,6 +849,7 @@ elements.saveBtn.onclick = async () => {
         historyLimit: normalizeSearchHistoryLimit(elements.searchHistoryLimit.value)
     },
     hexDisplaySettings,
+    scrollToBottomOnSend: elements.scrollToBottomOnSend.checked,
     clearAllLogsIncludesShell: elements.clearAllLogsIncludesShell.checked,
     logEnabled: elements.logEnabled.checked,
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,

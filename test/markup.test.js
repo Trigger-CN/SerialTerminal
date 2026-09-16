@@ -210,6 +210,24 @@ test('custom baud rates are normalized, persisted, and restored as reusable opti
   assert.doesNotMatch(renderer, /baudCustomInput\.addEventListener\('(?:change|blur)'/);
 });
 
+test('sending text can auto-scroll the main terminal to the bottom', () => {
+  const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+
+  assert.match(main, /scrollToBottomOnSend: true/);
+  assert.match(main, /normalized\.scrollToBottomOnSend = normalizeBoolean\(source\.scrollToBottomOnSend, true\)/);
+  assert.match(html, /id="scrollToBottomOnSend"[\s\S]*?data-i18n="prefs\.scrollToBottomOnSend"/);
+  assert.match(preferences, /scrollToBottomOnSend: document\.getElementById\('scrollToBottomOnSend'\)/);
+  assert.match(preferences, /elements\.scrollToBottomOnSend\.checked = config\.scrollToBottomOnSend !== false/);
+  assert.match(preferences, /scrollToBottomOnSend: elements\.scrollToBottomOnSend\.checked/);
+  assert.match(renderer, /let scrollToBottomOnSend = true/);
+  assert.match(renderer, /scrollToBottomOnSend = config\.scrollToBottomOnSend !== false/);
+  assert.match(renderer, /function scrollMainTerminalToBottom\(\)[\s\S]*?serialTerm\.scrollToBottom\(\)/);
+  assert.match(renderer, /if \(result\.ok && profileRequest\.mode === 'text' && scrollToBottomOnSend\) scrollMainTerminalToBottom\(\)/);
+});
+
 
 test('serial output is batched per animation frame before terminal rendering', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
