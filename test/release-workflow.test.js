@@ -122,7 +122,11 @@ test('release promotes COS stable latest only after GitHub and Gitee verificatio
   assert.doesNotMatch(cosPublish, /AppImage|\.deb|latest-linux\.yml|--promote-latest/);
   assert.match(workflow.slice(giteeVerifyIndex, latestPromoteIndex), /update-artifact-integrity\.js/);
   assert.match(workflow.slice(latestPromoteIndex, latestVerifyIndex), /if: \$\{\{ !contains\(github\.ref_name, '-'\) \}\}[\s\S]*--promote-latest --tag/);
-  assert.match(workflow.slice(latestVerifyIndex, pruneIndex), /if: \$\{\{ !contains\(github\.ref_name, '-'\) \}\}[\s\S]*update-artifact-integrity\.js/);
+  const verifyStableCos = workflow.slice(latestVerifyIndex, pruneIndex);
+  assert.match(verifyStableCos, /if: \$\{\{ !contains\(github\.ref_name, '-'\) \}\}[\s\S]*update-artifact-integrity\.js/);
+  // 稳定版校验必须用元数据里的真实文件名下载并回传，否则 update-artifact-integrity.js 按 basename 匹配不到条目。
+  assert.match(verifyStableCos, /--output "\/tmp\/SerialTerminal-Setup-\$VERSION\.exe"[\s\S]*--installer "\/tmp\/SerialTerminal-Setup-\$VERSION\.exe"/);
+  assert.doesNotMatch(verifyStableCos, /cos-stable-SerialTerminal/);
   assert.match(workflow.slice(pruneIndex), /node scripts\/publish-cos-release\.js --prune-only/);
   assert.match(workflow, /gitee\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEKxHSJ7084RmkJ4YdEi5tngynE8aZe2uEoVVsB\/OvYN/);
   assert.doesNotMatch(workflow, /ssh-keyscan/);

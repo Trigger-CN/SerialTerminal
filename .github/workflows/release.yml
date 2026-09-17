@@ -283,11 +283,11 @@ jobs:
           COS_ROOT="https://${{ secrets.COS_BUCKET }}.cos.${{ secrets.COS_REGION }}.myqcloud.com/releases/latest"
           curl --fail --silent --show-error --retry 3 --max-time 600 --output /tmp/cos-stable-latest.yml "$COS_ROOT/latest.yml"
           curl --fail --silent --show-error --retry 3 --max-time 1800 \
-            --output "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            --output "/tmp/SerialTerminal-Setup-$VERSION.exe" \
             "https://${{ secrets.COS_BUCKET }}.cos.${{ secrets.COS_REGION }}.myqcloud.com/releases/${GITHUB_REF_NAME}/SerialTerminal-Setup-$VERSION.exe"
           node scripts/update-artifact-integrity.js \
             --metadata /tmp/cos-stable-latest.yml \
-            --installer "/tmp/cos-stable-SerialTerminal-Setup-$VERSION.exe" \
+            --installer "/tmp/SerialTerminal-Setup-$VERSION.exe" \
             --version "$VERSION"
       - name: Remove old COS releases
         shell: bash
