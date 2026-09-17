@@ -103,10 +103,21 @@ async function mirrorRelease(options, {
   await fs.promises.mkdir(outputDirectory, { recursive: true });
   const [installerAsset, blockmapAsset, metadataAsset] = assets;
   const metadataPath = path.join(outputDirectory, metadataAsset.name);
+  // 所有 Windows 更新资产（含 latest.yml 元数据和 blockmap）都以 COS 版本化对象为主源，
+  // GitHub 仅作回退：Gitee 流水线运行器对 github.com release 资产地址经常不可达，
+  // 而元数据一旦取不到就会直接失败退出，连安装包的 COS 备用源都走不到。
+  const sourcesFor = asset => [
+    {
+      name: 'COS',
+      url: `${options['cos-releases-root'].replace(/\/$/, '')}/${encodeURIComponent(options.tag)}/${encodeURIComponent(asset.name)}`
+    },
+    { name: 'GitHub', url: asset.browser_download_url }
+  ];
   await downloadInstallerWithFallback({
-    sources: [{ name: 'GitHub', url: metadataAsset.browser_download_url }],
+    sources: sourcesFor(metadataAsset),
     destination: metadataPath,
-    expectedSize: metadataAsset.size,
+    // 元数据在各镜像上的 URL 形式不同（GitHub 用相对文件名，COS/Gitee 用绝对 URL），
+    // 字节大小必然不同，因此不按 expectedSize 校验；版本与 SHA-512 仍由 verifyUpdateArtifacts() 复核。
     download: githubClient.download,
     ...downloadOptions
   });
@@ -119,11 +130,7 @@ async function mirrorRelease(options, {
   const files = [];
   for (const asset of [installerAsset, blockmapAsset]) {
     const destination = path.join(outputDirectory, asset.name);
-    const cosUrl = `${options['cos-releases-root'].replace(/\/$/, '')}/${encodeURIComponent(options.tag)}/${encodeURIComponent(asset.name)}`;
-    const sources = asset === installerAsset ? [
-          { name: 'COS', url: cosUrl },
-          { name: 'GitHub', url: asset.browser_download_url }
-        ] : [{ name: 'GitHub', url: asset.browser_download_url }];
+    const sources = sourcesFor(asset);
     await downloadInstallerWithFallback({
       sources,
       destination,
@@ -174,7 +181,7 @@ async function downloadInstallerWithFallback({
       try {
         await download(source.url, temporaryPath);
         const stat = await fs.promises.stat(temporaryPath);
-        if (stat.size !== expectedSize) {
+        if (Number.isSafeInteger(expectedSize) && stat.size !== expectedSize) {
           throw new Error(`size mismatch: expected ${expectedSize}, received ${stat.size}`);
         }
         if (expectedSha512) {

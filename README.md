@@ -262,7 +262,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - 同一 Tag 的 GitHub、COS 和 Gitee 资产视为不可变内容：重试只复用名称、大小和 SHA-512 完全一致的远端资产，发现多余、重复或内容变化的资产会在覆盖或更新 Release 正文前终止
 - GitHub Actions 仅向 COS 上传 Windows 自动更新必需的 `.exe`、`.exe.blockmap` 和 `latest.yml`；Linux 产物只保留在 GitHub Release
 - GitHub Release 和 COS 版本化对象验证成功后，GitHub Actions 将发布提交和不可变 Tag 同步到 Gitee，并等待 Gitee Tag 流水线创建 Release；主工作流最多轮询 15 分钟，重新公开下载并校验 Gitee 的 `.exe`、`.exe.blockmap` 和 `latest.yml`
-- `.workflow/gitee-release.yml` 由严格 SemVer 版本 Tag 触发，完整镜像 Windows `.exe`、`.exe.blockmap` 和 `latest.yml`；安装包优先从 COS 下载并在失败时回退 GitHub，blockmap 与元数据直接使用 GitHub 原始资产，镜像前后均按 `latest.yml` 校验安装包版本、大小和 SHA-512
+- `.workflow/gitee-release.yml` 由严格 SemVer 版本 Tag 触发，完整镜像 Windows `.exe`、`.exe.blockmap` 和 `latest.yml`；三类资产均优先从 COS 版本化对象下载并在失败时回退 GitHub，避免 Gitee 运行器无法访问 github.com 资产时连元数据都取不到；元数据因各镜像 URL 形式不同不按字节大小校验，镜像前后均按 `latest.yml` 校验安装包版本、大小和 SHA-512
 - Gitee 已存在附件的校验下载最多跟随三次重定向，且只允许 `gitee.com` 及其子域名；下载请求不携带 Release API 令牌
 - Gitee Go 流水线需要配置加密变量 `CI_GITEE_ACCESS_TOKEN`，流水线会将其映射为发布脚本读取的 `GITEE_ACCESS_TOKEN`；令牌需具备该仓库 Release 创建、更新和附件上传权限，企业流水线可复用同一条镜像命令
 - 仅当 GitHub、COS 版本化对象和 Gitee 公开下载全部验证成功后，稳定版才通过独立 `--promote-latest` 操作更新 `releases/latest/latest.yml`，随后再次回读验证；预发布版本永不切换稳定 latest。最后按语义版本分别保留最新三个稳定版本和最新三个预发布版本，并保护当前稳定 latest 引用的版本。COS 发布身份需具备列举桶对象和批量删除对象权限

@@ -92,11 +92,12 @@ test('release mirror downloads updater assets from COS first and publishes them 
 
     assert.equal(result.tag_name, 'v1.2.3');
     assert.deepEqual(calls[0], { type: 'get', owner: 'Trigger-CN', repo: 'SerialTerminal', tag: 'v1.2.3' });
-    assert.deepEqual(calls.filter(call => call.type === 'download').map(call => call.url), [
-      'https://example.test/latest.yml',
+    assert.deepEqual(calls.filter(call => call.type === 'download' && call.url.includes('cos.example')).map(call => call.url), [
+      'https://cos.example/releases/v1.2.3/latest.yml',
       'https://cos.example/releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe',
-      'https://example.test/setup.exe.blockmap'
+      'https://cos.example/releases/v1.2.3/SerialTerminal-Setup-1.2.3.exe.blockmap'
     ]);
+    assert.equal(calls.filter(call => call.type === 'download' && call.url.includes('example.test')).length, 0);
     const publish = calls.find(call => call.type === 'publish').options;
     assert.equal(publish.notes, 'Release changes');
     assert.equal(publish.target, 'abc123');
@@ -108,6 +109,12 @@ test('release mirror downloads updater assets from COS first and publishes them 
 
 test('release mirror rejects downloads with the wrong size from every source', async () => {
   const outputDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'serialterminal-mirror-'));
+  const metadata = yaml.dump({
+    version: '1.2.3',
+    files: [{ url: 'SerialTerminal-Setup-1.2.3.exe', sha512: createHash('sha512').update('installer').digest('base64'), size: 9 }],
+    path: 'SerialTerminal-Setup-1.2.3.exe',
+    sha512: createHash('sha512').update('installer').digest('base64')
+  });
   try {
     await assert.rejects(() => mirrorRelease({
       'github-owner': 'Trigger-CN', 'github-repo': 'SerialTerminal',
@@ -124,7 +131,7 @@ test('release mirror rejects downloads with the wrong size from every source', a
           ] };
         },
         async download(url, destination) {
-          await fs.promises.writeFile(destination, 'short');
+          await fs.promises.writeFile(destination, url.endsWith('latest.yml') ? metadata : 'short');
         }
       },
       giteePublisher: { async publish() { throw new Error('must not publish'); } },
@@ -193,6 +200,28 @@ test('installer download stops retrying when COS recovers', async () => {
 
     assert.equal(source, 'COS');
     assert.equal(attempts, 3);
+  } finally {
+    await fs.promises.rm(outputDirectory, { recursive: true, force: true });
+  }
+});
+
+test('installer download skips the size check when no expected size is given', async () => {
+  const outputDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'serialterminal-mirror-'));
+  const destination = path.join(outputDirectory, 'latest.yml');
+  try {
+    const source = await downloadInstallerWithFallback({
+      sources: [{ name: 'COS', url: 'https://cos.example/latest.yml' }],
+      destination,
+      expectedSize: undefined,
+      retryDelays: [],
+      logger: { log() {}, warn() {} },
+      async download(url, temporaryPath) {
+        await fs.promises.writeFile(temporaryPath, 'metadata-of-any-size');
+      }
+    });
+
+    assert.equal(source, 'COS');
+    assert.equal(await fs.promises.readFile(destination, 'utf8'), 'metadata-of-any-size');
   } finally {
     await fs.promises.rm(outputDirectory, { recursive: true, force: true });
   }
