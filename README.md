@@ -6,7 +6,9 @@
 
 [Gitee Releases 下载最新版](https://gitee.com/trigger-cn/SerialTerminal/releases)
 
-![Serial Terminal Screenshot](assets/Snipaste_2026-04-18_22-22-44.png)
+![Serial Terminal Screenshot](assets/Snipaste_2026-10-10_14-18-14.png)
+
+![Serial Terminal Filter](assets/Snipaste_2026-10-10_14-27-34.png)
 
 ## 简介
 
