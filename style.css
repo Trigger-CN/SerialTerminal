@@ -2664,6 +2664,8 @@ html.custom-titlebar .window-titlebar {
 
 .filter-dropdown-btn:hover {
     color: var(--text-primary);
+    /* 抵消全局 button:hover 的 transform，保持 translateY(-50%) 垂直居中，避免 hover 时下移半个按钮高度 */
+    transform: translateY(-50%);
 }
 
 .filter-toggle-btn {
