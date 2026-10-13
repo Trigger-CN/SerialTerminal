@@ -2091,6 +2091,12 @@ html.custom-titlebar .window-titlebar {
     color: #84d8c7;
 }
 
+/* 锁定实时：按钮保持高亮，表明滑动窗口比例变化也不会脱离实时。 */
+.chart-toolbar-actions .chart-lock-btn.active {
+    color: #ffca28;
+    background: rgba(255, 202, 40, 0.18);
+}
+
 .chart-main-host {
     flex: 1;
     min-width: 0;

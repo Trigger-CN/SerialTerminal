@@ -209,7 +209,7 @@ SerialTerminal/
 - `chart-parser.js`：自动键值、格式模板、正则解析、字段发现和单位换算
 - `chart-parser-worker.js` / 客户端：批量解析、队列边界、超时与过载恢复
 - `chart-data-model.js`：原始点保留、裁剪、统计、查询及降采样历史
-- `chart-view.js`：uPlot 主图、完整时间轴、视口平移/缩放和实时跟随
+- `chart-view.js`：uPlot 主图、完整时间轴、视口平移/缩放和实时跟随；锁定实时后只采纳滑动窗口比例、始终钉在最新数据边缘
 - `chart-csv.js`：导出当前窗口或全部保留原始数据
 
 #### `search-history.js`

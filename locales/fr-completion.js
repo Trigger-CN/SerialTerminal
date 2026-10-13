@@ -143,6 +143,8 @@ module.exports = {
     chartResume: 'Reprendre',
     chartLive: 'Revenir au direct',
     chartClose: 'Fermer l’onglet de graphique',
+    chartLockLive: 'Verrouiller le direct',
+    chartUnlockLive: 'Déverrouiller le direct',
     chartExport: 'Exporter en CSV',
     chartExported: 'Données du graphique exportées',
     chartNoExportData: 'Aucune donnée brute du graphique à exporter',

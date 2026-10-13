@@ -2658,6 +2658,20 @@ function toggleChartPaused(tab) {
     updateChartStatus(tab);
 }
 
+function updateChartLiveLock(tab, locked) {
+    tab.liveLocked = locked === true;
+    if (!tab.lockButton) return;
+    tab.lockButton.classList.toggle('active', tab.liveLocked);
+    tab.lockButton.setAttribute('aria-pressed', tab.liveLocked ? 'true' : 'false');
+    tab.lockButton.title = tr(tab.liveLocked ? 'main.chartUnlockLive' : 'main.chartLockLive');
+    tab.lockButton.replaceChildren(createMaterialIcon(tab.liveLocked ? 'lock' : 'lock_open'));
+}
+
+function toggleChartLiveLock(tab) {
+    if (!tab.view) return;
+    tab.view.setLocked(!tab.view.locked);
+}
+
 function scheduleChartRender(tab) {
     if (!tab || tab.closed || tab.renderFrame !== null || !isTabActive(tab.id)) return;
     tab.renderFrame = requestAnimationFrame(() => {
@@ -2723,13 +2737,16 @@ function configureChartTab(tab) {
         fields: activeFields,
         windowDurationMs: tab.windowDurationMs,
         yAxis: { mode: tab.yAxisMode, min: tab.yMin, max: tab.yMax, includeZero: tab.yIncludeZero, margin: tab.yMargin },
+        locked: tab.liveLocked,
         onFollowChange: following => tab.liveButton.classList.toggle('hidden', following),
+        onLockChange: locked => updateChartLiveLock(tab, locked),
         onDataModeChange: summaryHistory => {
             tab.summaryHistory = summaryHistory;
             updateChartStatus(tab);
         },
         onViewRangeChange: () => updateChartStats(tab)
     });
+    updateChartLiveLock(tab, tab.liveLocked);
     updateChartStatus(tab);
 }
 
@@ -2770,6 +2787,7 @@ function createChartTab(initialState = {}, targetPaneId = null) {
                 <button class="secondary chart-pause-btn" type="button" title="${tr('main.chartPause')}"><span class="material-icon-placeholder" data-material-icon="pause"></span></button>
                 <button class="secondary chart-clear-btn" type="button" title="${tr('main.chartClear')}"><span class="material-icon-placeholder" data-material-icon="delete_sweep"></span></button>
                 <button class="secondary chart-export-btn" type="button" title="${tr('main.chartExport')}"><span class="material-icon-placeholder" data-material-icon="save"></span></button>
+                <button class="secondary chart-lock-btn" type="button" title="${tr('main.chartLockLive')}"><span class="material-icon-placeholder" data-material-icon="lock_open"></span></button>
                 <button class="secondary chart-live-btn hidden" type="button"><span class="material-icon-placeholder" data-material-icon="update"></span><span>${tr('main.chartLive')}</span></button>
             </div>
         </div>
@@ -2795,7 +2813,7 @@ function createChartTab(initialState = {}, targetPaneId = null) {
         parserWorker: null, parserError: '', parserDropped: 0, summaryHistory: false,
         status: tabPane.querySelector('.chart-status'), stats: tabPane.querySelector('.chart-series-stats'), plotArea: tabPane.querySelector('.chart-main-host'),
         timelineHost: tabPane.querySelector('.chart-timeline-host'), navigator: tabPane.querySelector('.chart-navigator'),
-        liveButton: tabPane.querySelector('.chart-live-btn'), pauseButton: tabPane.querySelector('.chart-pause-btn')
+        liveButton: tabPane.querySelector('.chart-live-btn'), pauseButton: tabPane.querySelector('.chart-pause-btn'), lockButton: tabPane.querySelector('.chart-lock-btn'), liveLocked: false
     };
     tabBtn.onclick = event => {
         if (!event.target.closest('.main-tab-close')) switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
@@ -2809,6 +2827,7 @@ function createChartTab(initialState = {}, targetPaneId = null) {
     };
     tabPane.querySelector('.chart-export-btn').onclick = () => openChartExport(tab);
     tab.liveButton.onclick = () => tab.view?.returnToLive();
+    tab.lockButton.onclick = () => toggleChartLiveLock(tab);
     bindChartContextMenu(tab);
 
     chartTabs.push(tab);

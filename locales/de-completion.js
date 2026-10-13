@@ -143,6 +143,8 @@ module.exports = {
     chartResume: 'Fortsetzen',
     chartLive: 'Zur Live-Ansicht zurückkehren',
     chartClose: 'Diagramm-Tab schließen',
+    chartLockLive: 'Live-Ansicht sperren',
+    chartUnlockLive: 'Live-Sperre aufheben',
     chartExport: 'CSV exportieren',
     chartExported: 'Diagrammdaten exportiert',
     chartNoExportData: 'Keine Diagramm-Rohdaten zum Exportieren',

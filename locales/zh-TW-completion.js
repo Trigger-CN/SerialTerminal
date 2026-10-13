@@ -145,6 +145,8 @@ module.exports = {
     chartResume: '繼續',
     chartLive: '返回即時檢視',
     chartClose: '關閉圖表分頁',
+    chartLockLive: '鎖定即時檢視',
+    chartUnlockLive: '取消鎖定即時檢視',
     chartExport: '匯出 CSV',
     chartExported: '圖表資料已匯出',
     chartNoExportData: '沒有可匯出的原始圖表資料',

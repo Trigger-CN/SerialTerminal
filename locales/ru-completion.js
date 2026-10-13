@@ -145,6 +145,8 @@ module.exports = {
     chartResume: 'Продолжить',
     chartLive: 'Вернуться к реальному времени',
     chartClose: 'Закрыть вкладку графика',
+    chartLockLive: 'Закрепить реальное время',
+    chartUnlockLive: 'Снять закрепление реального времени',
     chartExport: 'Экспортировать CSV',
     chartExported: 'Данные графика экспортированы',
     chartNoExportData: 'Нет исходных данных графика для экспорта',

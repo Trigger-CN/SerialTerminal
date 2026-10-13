@@ -508,6 +508,13 @@ test('chart tabs discover sample fields and consume raw serial bytes independent
   assert.match(styles, /\.chart-timeline-shell\s*\{[^}]*background:\s*var\(--chart-log-background, #000\);/s);
   assert.match(styles, /\.chart-fields-table\s*\{[^}]*overflow-x:\s*auto;/s);
   assert.match(styles, /\.chart-field-columns,\s*\.chart-field-row\s*\{[^}]*min-width:\s*820px;/s);
+  assert.match(renderer, /class="secondary chart-lock-btn" type="button" title="\$\{tr\('main\.chartLockLive'\)\}"><span class="material-icon-placeholder" data-material-icon="lock_open">/);
+  assert.match(renderer, /tab\.lockButton\.onclick = \(\) => toggleChartLiveLock\(tab\)/);
+  assert.match(renderer, /function updateChartLiveLock\(tab, locked\)/);
+  assert.match(renderer, /createMaterialIcon\(tab\.liveLocked \? 'lock' : 'lock_open'\)/);
+  assert.match(renderer, /tr\(tab\.liveLocked \? 'main\.chartUnlockLive' : 'main\.chartLockLive'\)/);
+  assert.match(renderer, /onLockChange: locked => updateChartLiveLock\(tab, locked\)/);
+  assert.match(styles, /\.chart-toolbar-actions \.chart-lock-btn\.active\s*\{/);
 });
 
 test('font weight preferences persist and apply to every terminal type', () => {

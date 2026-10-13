@@ -230,3 +230,45 @@ test('return to live enables following for a single-point range', () => {
     restoreDocument();
   }
 });
+
+test('locked live view keeps following when the sliding window ratio changes', () => {
+  const previousObserver = global.ResizeObserver;
+  const restoreDocument = installFakeDocument();
+  global.ResizeObserver = FakeResizeObserver;
+  try {
+    const locks = [];
+    const view = new ChartView({
+      uPlot: FakePlot, mainHost: element(), timelineHost: element(), navigator: navigatorElement(),
+      fields: [{ key: 'a' }], windowDurationMs: 1000, onLockChange: locked => locks.push(locked)
+    });
+    view.setData([[1, 2, 3, 4], [10, 20, 30, 40]]);
+    view.setViewRange(1000, 2000, { following: false });
+    assert.equal(view.following, false);
+    view.setLocked(true);
+    assert.equal(view.locked, true);
+    assert.equal(view.following, true);
+    assert.deepEqual(view.viewRange, [3000, 4000]);
+    // 锁定后请求更宽的窗口比例：只采纳时长，仍然钉在最新数据边缘。
+    view.setViewRange(1000, 4000, { following: false });
+    assert.equal(view.following, true);
+    assert.deepEqual(view.viewRange, [1000, 4000]);
+    // 锁定后请求更窄的窗口比例同样保持实时。
+    view.setViewRange(2000, 3000, { following: false });
+    assert.equal(view.following, true);
+    assert.deepEqual(view.viewRange, [3000, 4000]);
+    // 新数据到达后继续跟随实时边缘。
+    view.setData([[1, 2, 3, 4, 5], [10, 20, 30, 40, 50]]);
+    assert.equal(view.following, true);
+    assert.deepEqual(view.viewRange, [4000, 5000]);
+    view.setLocked(false);
+    assert.equal(view.locked, false);
+    view.setViewRange(1000, 2000, { following: false });
+    assert.equal(view.following, false);
+    assert.deepEqual(view.viewRange, [1000, 2000]);
+    assert.deepEqual(locks, [true, false]);
+    view.destroy();
+  } finally {
+    global.ResizeObserver = previousObserver;
+    restoreDocument();
+  }
+});

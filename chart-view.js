@@ -1,7 +1,7 @@
 'use strict';
 
 class ChartView {
-  constructor({ uPlot, mainHost, timelineHost, navigator, fields, windowDurationMs = 60000, yAxis = {}, onFollowChange = null, onDataModeChange = null, onViewRangeChange = null }) {
+  constructor({ uPlot, mainHost, timelineHost, navigator, fields, windowDurationMs = 60000, yAxis = {}, locked = false, onFollowChange = null, onLockChange = null, onDataModeChange = null, onViewRangeChange = null }) {
     this.uPlot = uPlot;
     this.mainHost = mainHost;
     this.timelineHost = timelineHost;
@@ -10,7 +10,9 @@ class ChartView {
     this.windowDurationMs = Math.max(1000, Number(windowDurationMs) || 60000);
     this.minWindowDurationMs = 1000;
     this.following = true;
+    this.locked = locked === true;
     this.onFollowChange = onFollowChange;
+    this.onLockChange = onLockChange;
     this.onDataModeChange = onDataModeChange;
     this.onViewRangeChange = onViewRangeChange;
     this.yAxis = {
@@ -256,9 +258,21 @@ class ChartView {
       this.onViewRangeChange?.(this.viewRange, this.summaryHistory);
       return;
     }
-    start = Math.max(this.fullRange[0], Number(start));
-    end = Math.min(this.fullRange[1], Number(end));
-    if (end - start < Math.min(this.minWindowDurationMs, fullDuration)) return;
+    if (this.locked) {
+      // 锁定实时：忽略请求的时间位置，只采纳其窗口时长，并始终把窗口钉在最新数据边缘，
+      // 因此拖动、缩放滑动窗口改变比例后仍然保持实时。
+      const requestedDuration = Number(end) - Number(start);
+      const duration = Number.isFinite(requestedDuration) && requestedDuration > 0
+        ? Math.max(this.minWindowDurationMs, Math.min(fullDuration, requestedDuration))
+        : Math.min(this.windowDurationMs, fullDuration);
+      start = Math.max(this.fullRange[0], this.fullRange[1] - duration);
+      end = this.fullRange[1];
+      following = true;
+    } else {
+      start = Math.max(this.fullRange[0], Number(start));
+      end = Math.min(this.fullRange[1], Number(end));
+      if (end - start < Math.min(this.minWindowDurationMs, fullDuration)) return;
+    }
     this.viewRange = [start, end];
     this.setFollowing(following);
     this.syncingScale = true;
@@ -279,9 +293,19 @@ class ChartView {
   }
 
   setFollowing(following) {
+    // 锁定实时期间不允许脱离实时，任何请求都视为保持跟随。
+    if (this.locked && !following) following = true;
     if (this.following === following) return;
     this.following = following;
     this.onFollowChange?.(following);
+  }
+
+  setLocked(locked) {
+    const next = locked === true;
+    if (this.locked === next) return;
+    this.locked = next;
+    if (next) this.returnToLive();
+    this.onLockChange?.(next);
   }
 
   _updateMainData() {
