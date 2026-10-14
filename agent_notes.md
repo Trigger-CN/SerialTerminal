@@ -466,7 +466,7 @@ npm run dist:linux
 
 ### 8.4 `SerialDataParser` 的作用
 - 累积不完整串口文本到 `incomingBuffer`
-- 遇到 `\r\n / \r / \n` 再切分成完整行对象
+- 用模块级复用正则 `LINE_DELIMITER_RE`（`g` 标志）从上次扫描位置 `lastIndex` 继续单遍 `exec`，遇到 `\r\n / \r / \n` 再切分成完整行对象；不再每个 flush 重新 `split` 整个增长中的缓冲
 - 行对象结构：
 ```js
 {
@@ -512,6 +512,8 @@ npm run dist:linux
 - 时间戳（若启用）
 - 行号（若启用）
 
+时间戳字符串由 `formatTimestamp()` 生成；`flushSerialOutputQueue()` 在每个刷新批次开始时计算一次并放入 `currentBatchTimestamp`，供本批所有行复用，批次结束重置为 `null`（非批次调用即时生成）。因此同一批次内多行共享同一时间戳。`getLogPrefix()` 同样复用该批次时间戳。
+
 ### 9.1A 日志文件命名与多 tab 日志
 
 #### 日志数据来源
@@ -549,6 +551,7 @@ npm run dist:linux
 - `stripAnsi()` 仅剥离 SGR 序列（`\x1b[数字;数字m`），不触碰其他 CSI 命令
 - 可通过设置页 `stripAnsiInLog` 选项关闭此行为
 - 主进程对所有经 `write-tab-log` 到达的显示日志统一调用；RX Raw `.bin` 不经过字符串处理
+- `stripAnsi()` 在字符串不含 `\x1b` 时直接返回，避免对无颜色输出执行正则替换
 
 ### 9.1B Hex 显示日志与 RX raw 日志
 - 显示日志来自渲染层实际写入终端的内容：Text 保存解码/格式化文本，Hex 保存当前 Hex dump；过滤日志保存命中的格式化行
@@ -563,9 +566,9 @@ npm run dist:linux
 - 显示日志和 raw 日志开关彼此独立；raw 日志不受当前 RX Text/Hex 显示模式影响
 
 ### 9.2 高亮逻辑
-`applyHighlighting(text, filterRegex)`：
-- 先应用全局高亮规则 `highlightRules`
-- 再应用过滤命中高亮
+`applyHighlighting(text, filterRegex, globalMatches)`：
+- 先应用全局高亮规则：`highlightRules` 在 `applyConfig()` 时经 `compileHighlightRules()` 预编译为 `compiledHighlightRules`（含 `(?i)`、`caseSensitive`、`useRegex` 处理），逐行只重置 `lastIndex` 后 `exec`，不再逐行逐规则 `new RegExp`
+- 再应用过滤命中高亮：`filterRegex` 本身保持无 `g`（供 `tab.filterRegex.test(text)` 做无状态筛选），带 `g` 的副本按对象缓存在 `globalFilterRegexCache` 中复用
 - 结果通过 ANSI 转义序列写回 xterm
 
 ### 9.3 搜索逻辑
@@ -795,7 +798,7 @@ npm run dist:linux
 - `writeSerialPayload()`：主进程发送最终校验、`SerialPort.write()` 和真实字节吞吐量统计
 - `createWindow()`：主窗口大小恢复与 resize 持久化
 - `queueSerialOutput()` / `port.on('data')`：保留原始 RX Buffer、统计吞吐、Raw 缓冲并批量发送 `serial-output-bytes`
-- `stripAnsi(str)`：按配置剥离显示日志中的 ANSI SGR 序列
+- `stripAnsi(str)`：按配置剥离显示日志中的 ANSI SGR 序列；无 `\x1b` 时短路返回
 - `formatFileName(format, extra)` / `buildLogFileName(extra)`：格式化日志文件名并处理 `%tab`
 - `ensureMainLogFilePath()` / `ensureTabLogFile(tabId)` / `ensureRawBinaryLogPath()`：为三类日志延迟创建并缓存路径
 - `flushTabLogEntrySync()` / `saveAllTabLogs()`：追加刷盘并管理各 tab 日志条目
@@ -821,7 +824,10 @@ npm run dist:linux
 - `fetchGiteeReleaseNotes()`：通过 Gitee Release API 拉取版本正文
 
 ### `renderer.js`
-- `SerialDataParser`
+- `SerialDataParser`：复用 `LINE_DELIMITER_RE` 单遍 `exec` 切分接收文本行
+- `formatTimestamp(now)`：生成批次时间戳字符串
+- `compileHighlightRules(rules)` / `compiledHighlightRules`：配置变更时预编译全局高亮规则
+- `globalFilterRegexCache`：缓存过滤正则的 `g` 副本
 - `switchReceiveMode()` / `switchReceiveEncoding()`：flush 旧 RX 链路并切换 Text decoder/Hex formatter
 - `writeTextLines()` / `writeHexLines()`：分别写主终端、同模式过滤 tab 和显示日志
 - `validateSendContent()` / `formatValidation()`：渲染层实时校验和本地化状态

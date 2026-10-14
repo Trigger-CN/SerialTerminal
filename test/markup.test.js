@@ -237,7 +237,7 @@ test('serial output is batched per animation frame before terminal rendering', (
   assert.match(renderer, /SERIAL_OUTPUT_FRAME_MS - \(performance\.now\(\) - lastSerialOutputFlushAt\)/);
   assert.match(renderer, /setTimeout\(\(\) => \{[\s\S]*requestAnimationFrame\(flushSerialOutputQueue\)/);
   assert.match(renderer, /const bytes = Buffer\.concat\(queued\)/);
-  assert.match(renderer, /queueSerialOutput\(Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)\)/);
+  assert.match(renderer, /const buffer = Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)[\s\S]*queueSerialOutput\(buffer\)/);
   assert.match(main, /function queueSerialOutput\(data, sessionId\)/);
   assert.match(main, /setImmediate\(flushSerialOutputQueue\)/);
   assert.match(main, /Buffer\.concat\(queued\.map\(entry => entry\.data\), byteCount\)/);
@@ -1101,4 +1101,34 @@ test('automatic update checks every two hours and reminds every eight hours', ()
   assert.match(main, /lastUpdatePromptVersion: ''/);
   assert.match(main, /lastUpdatePromptAt: 0/);
   assert.match(main, /if \(updateCheckTimer\) clearInterval\(updateCheckTimer\)/);
+});
+
+test('log hot path reuses buffers, batch timestamps, and compiled regexes', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+
+  // A：同一段字节只包装一次 Buffer 并复用给终端队列
+  assert.match(renderer, /const buffer = Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)[\s\S]*?queueSerialOutput\(buffer\)/);
+
+  // B：每个刷新批次只计算一次时间戳，逐行复用
+  assert.match(renderer, /function formatTimestamp\(now = new Date\(\)\)/);
+  assert.match(renderer, /currentBatchTimestamp = formatTimestamp\(\);/);
+  assert.match(renderer, /currentBatchTimestamp = null;/);
+  assert.match(renderer, /currentBatchTimestamp \|\| formatTimestamp\(\)/);
+
+  // C：高亮规则与带 g 的过滤正则预编译并缓存
+  assert.match(renderer, /function compileHighlightRules\(rules\)/);
+  assert.match(renderer, /compiledHighlightRules = compileHighlightRules\(highlightRules\)/);
+  assert.match(renderer, /const globalFilterRegexCache = new WeakMap\(\)/);
+  assert.match(renderer, /let re = globalFilterRegexCache\.get\(filterRegex\);/);
+  assert.doesNotMatch(renderer, /const re = new RegExp\(pattern, flags\);/);
+  assert.doesNotMatch(renderer, /new RegExp\(filterRegex\.source, flags\)/);
+
+  // D：解析器不再每个 flush 重新 split 整个缓冲
+  assert.doesNotMatch(renderer, /incomingBuffer\.split\(/);
+  assert.match(renderer, /const LINE_DELIMITER_RE = \//);
+  assert.match(renderer, /LINE_DELIMITER_RE\.lastIndex = scanFrom;/);
+
+  // E：stripAnsi 对无 ESC 的输出直接短路
+  assert.match(main, /if \(!str\.includes\('\\x1b'\)\) return str;/);
 });

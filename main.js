@@ -1007,6 +1007,7 @@ function stripAnsi(str) {
   if (currentConfig.stripAnsiInLog === false) return str;
   // Only strip SGR sequences (color/style codes ending with 'm'),
   // avoiding false positives on raw binary data that contains other CSI sequences.
+  if (!str.includes('\x1b')) return str;
   return str.replace(/\x1b\[[0-9;]*m/g, '');
 }
 

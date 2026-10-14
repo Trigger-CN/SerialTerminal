@@ -295,13 +295,20 @@ showLinenoCb.addEventListener('change', (e) => {
     }
 });
 
+// 当前刷新批次的时间戳字符串；非批次（如断连刷新）时为 null，即时生成。
+let currentBatchTimestamp = null;
+
+// 每批日志只计算一次时间戳字符串，逐行复用；未传入时按当前时间即时生成。
+function formatTimestamp(now = new Date()) {
+    return now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+}
+
 function getPrefix() {
     let s = '';
     const reset = '\x1b[0m';
     
     if (showTimestamp) {
-        const now = new Date();
-        const time = now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        const time = currentBatchTimestamp || formatTimestamp();
         const color = hexToAnsi(timestampColor);
         s += `${color}[${time}]${reset} `;
     }
@@ -317,9 +324,7 @@ function getPrefix() {
 function getLogPrefix() {
     let s = '';
     if (logIncludeTimestamp) {
-        const now = new Date();
-        const time = now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
-        s += `[${time}] `;
+        s += `[${currentBatchTimestamp || formatTimestamp()}] `;
     }
     if (logIncludeLineNumbers) {
         s += `[${String(logLineCounter).padStart(4, '0')}] `;
@@ -328,49 +333,58 @@ function getLogPrefix() {
     return s;
 }
 
+let compiledHighlightRules = [];
+// 过滤正则按对象缓存一份带 g 标志的副本，避免逐行逐标签重新编译；
+// 原始 filterRegex 保持无 g（供 test() 无状态使用）。
+const globalFilterRegexCache = new WeakMap();
+
+
+// 高亮规则只在配置变更时编译一次，避免逐行逐规则重复 new RegExp。
+function compileHighlightRules(rules) {
+    const compiled = [];
+    (rules || []).forEach(rule => {
+        if (!rule || !rule.enabled || !rule.regex) return;
+        try {
+            let pattern = rule.regex;
+            // Legacy support for (?i) prefix, overriding caseSensitive if present
+            let isCaseSensitive = rule.caseSensitive;
+            if (pattern.startsWith('(?i)')) {
+                pattern = pattern.substring(4);
+                isCaseSensitive = false;
+            }
+            // Handle useRegex flag (if useRegex is false, escape special characters)
+            if (rule.useRegex === false) {
+                pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+            compiled.push({ re: new RegExp(pattern, isCaseSensitive ? 'g' : 'gi'), color: rule.color });
+        } catch (e) {
+            // Ignore invalid regex
+        }
+    });
+    return compiled;
+}
+
 function collectGlobalHighlightMatches(text) {
     const matches = [];
-    if (highlightRules && highlightRules.length > 0) {
-        highlightRules.forEach(rule => {
-            if (!rule.enabled || !rule.regex) return;
-            try {
-                let pattern = rule.regex;
-                
-                // Determine flags
-                // Legacy support for (?i) prefix, overriding caseSensitive if present
-                let isCaseSensitive = rule.caseSensitive;
-                if (pattern.startsWith('(?i)')) {
-                    pattern = pattern.substring(4);
-                    isCaseSensitive = false;
-                }
-                
-                const flags = isCaseSensitive ? 'g' : 'gi';
-                
-                // Handle useRegex flag (if useRegex is false, escape special characters)
-                if (rule.useRegex === false) {
-                    pattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                }
-                
-                const re = new RegExp(pattern, flags);
-                let match;
-                while ((match = re.exec(text)) !== null) {
-                    // Prevent infinite loop for empty matches
-                    if (match[0].length === 0) {
-                        re.lastIndex++;
-                        continue;
-                    }
-                    matches.push({
-                        start: match.index,
-                        end: match.index + match[0].length,
-                        color: rule.color,
-                        isFilterMatch: false
-                    });
-                }
-            } catch (e) {
-                // Ignore invalid regex
+    if (!compiledHighlightRules.length) return matches;
+    compiledHighlightRules.forEach(({ re, color }) => {
+        // 复用带 g 标志的正则，需重置 lastIndex 开始本行匹配
+        re.lastIndex = 0;
+        let match;
+        while ((match = re.exec(text)) !== null) {
+            // Prevent infinite loop for empty matches
+            if (match[0].length === 0) {
+                re.lastIndex++;
+                continue;
             }
-        });
-    }
+            matches.push({
+                start: match.index,
+                end: match.index + match[0].length,
+                color,
+                isFilterMatch: false
+            });
+        }
+    });
     return matches;
 }
 
@@ -381,9 +395,13 @@ function applyHighlighting(text, filterRegex = null, globalMatches = null) {
     // Apply filter regex highlight
     if (filterRegex) {
         try {
-            // Ensure regex has 'g' flag for multiple matches in a line
-            const flags = filterRegex.flags.includes('g') ? filterRegex.flags : filterRegex.flags + 'g';
-            const re = new RegExp(filterRegex.source, flags);
+            // 优先复用缓存的带 g 副本；若原始正则已带 g 则直接使用（调用前已重置 lastIndex）。
+            let re = globalFilterRegexCache.get(filterRegex);
+            if (!re) {
+                re = filterRegex.global ? filterRegex : new RegExp(filterRegex.source, filterRegex.flags + 'g');
+                globalFilterRegexCache.set(filterRegex, re);
+            }
+            re.lastIndex = 0;
             let match;
             while ((match = re.exec(text)) !== null) {
                 // Prevent infinite loop for empty matches
@@ -455,6 +473,9 @@ function applyHighlighting(text, filterRegex = null, globalMatches = null) {
     return result;
 }
 
+// 行分隔符正则复用同一实例；parse 会按上次扫描位置设置 lastIndex。
+const LINE_DELIMITER_RE = /(\r\n|\r|\n)/g;
+
 class SerialDataParser {
     constructor() {
         this.incomingBuffer = '';
@@ -463,35 +484,40 @@ class SerialDataParser {
 
     parse(data) {
         if (!data) return [];
-        
+
+        // incomingBuffer 中已保留的尾部不含任何分隔符，因此只需从新增数据的起点继续扫描，
+        // 避免每次 flush 都重新 split 整个增长中的缓冲。
+        const scanFrom = this.incomingBuffer.length;
         this.incomingBuffer += data;
-        const parts = this.incomingBuffer.split(/(\r\n|\r|\n)/);
-        
-        if (parts.length === 1) {
-            if (this.incomingBuffer.length > 10000) {
-                const lineContent = this.incomingBuffer;
+        const buffer = this.incomingBuffer;
+
+        const lines = [];
+        let cursor = 0;
+        LINE_DELIMITER_RE.lastIndex = scanFrom;
+        let match;
+        while ((match = LINE_DELIMITER_RE.exec(buffer)) !== null) {
+            lines.push({
+                text: buffer.slice(cursor, match.index),
+                delimiter: match[0],
+                prefix: this.isNewLine ? getPrefix() : ''
+            });
+            this.isNewLine = true; // After delimiter, next line is new
+            cursor = match.index + match[0].length;
+        }
+
+        if (!lines.length) {
+            if (buffer.length > 10000) {
+                const lineContent = buffer;
                 this.incomingBuffer = '';
-                
+
                 const prefix = this.isNewLine ? getPrefix() : '';
                 this.isNewLine = false; // Next chunk is continuation
                 return [{ text: lineContent, delimiter: '', prefix }];
             }
             return [];
         }
-        
-        const incompleteLine = parts.pop();
-        this.incomingBuffer = incompleteLine;
-        
-        const lines = [];
-        for (let i = 0; i < parts.length; i += 2) {
-            const prefix = this.isNewLine ? getPrefix() : '';
-            lines.push({
-                text: parts[i],
-                delimiter: parts[i + 1],
-                prefix
-            });
-            this.isNewLine = true; // After delimiter, next line is new
-        }
+
+        this.incomingBuffer = buffer.slice(cursor);
         return lines;
     }
 
@@ -601,13 +627,18 @@ function flushSerialOutputQueue() {
     serialOutputQueue = [];
     serialOutputQueuedBytes = 0;
     const bytes = Buffer.concat(queued);
-    processQuickSendAutoTriggers(bytes);
-    if (receiveDisplayMode === 'hex') {
-        hexFormatter.push(bytes);
-    } else {
-        if (!textDecoder) createTextDecoder();
-        const text = textDecoder.write(bytes);
-        if (text) writeTextLines(dataParser.parse(text));
+    currentBatchTimestamp = formatTimestamp();
+    try {
+        processQuickSendAutoTriggers(bytes);
+        if (receiveDisplayMode === 'hex') {
+            hexFormatter.push(bytes);
+        } else {
+            if (!textDecoder) createTextDecoder();
+            const text = textDecoder.write(bytes);
+            if (text) writeTextLines(dataParser.parse(text));
+        }
+    } finally {
+        currentBatchTimestamp = null;
     }
     if (serialOutputQueue.length && !serialOutputFlushScheduled) {
         scheduleSerialOutputFlush();
@@ -4085,6 +4116,7 @@ function applyConfig(config) {
     let sendEncodingChanged = false;
     currentLanguage = getLanguage(config.language);
     highlightRules = config.highlightRules || [];
+    compiledHighlightRules = compileHighlightRules(highlightRules);
     highlightColors = config.highlightColors;
     const normalizedWorkspaceLayout = normalizeWorkspaceLayout(config.workspaceLayout);
     const normalizedWorkspaceLayoutKey = JSON.stringify(normalizedWorkspaceLayout);
@@ -4430,7 +4462,8 @@ ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const receivedAt = Number.isFinite(payload.receivedAt) ? payload.receivedAt : Date.now();
     chartTabs.forEach(tab => tab.stream?.write(buffer, receivedAt));
-    queueSerialOutput(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    // 复用同一个 Buffer 视图，避免为同一段字节重复包装。
+    queueSerialOutput(buffer);
 });
 ipcRenderer.on('serial-error', (event, err) => {
     const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
