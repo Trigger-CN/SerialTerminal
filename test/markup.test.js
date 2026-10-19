@@ -266,11 +266,18 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   assert.match(renderer, /const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 \* 1024/);
   assert.match(renderer, /serialOutputQueuedBytes >= SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES[\s\S]*flushPendingSerialOutput\(\)/);
   assert.match(preferencesHtml, /id="scrollbackLimit" min="1000" max="100000"/);
-  assert.match(renderer, /const TERMINAL_PENDING_OUTPUT_LIMIT = 2 \* 1024 \* 1024/);
+  // 终端待写入缓冲以回滚行数为主上限，字节硬上限仅作为内存兑底。
+  assert.match(renderer, /const TERMINAL_PENDING_OUTPUT_HARD_LIMIT = 32 \* 1024 \* 1024/);
+  assert.match(renderer, /function getTerminalPendingLineLimit\(\) \{[\s\S]*?scrollbackLimit[\s\S]*?\? limit : 20000/);
   assert.match(renderer, /function writeTerminalOutput\(term, output\)/);
   assert.match(renderer, /term\.write\(output, \(\) => \{/);
-  assert.match(renderer, /while \(state\.pendingLength > TERMINAL_PENDING_OUTPUT_LIMIT/);
-  assert.match(renderer, /output\.slice\(-TERMINAL_PENDING_OUTPUT_LIMIT\)/);
+  assert.match(renderer, /const dropped = appendPendingOutput\(state, output, \{[\s\S]*?maxLines: getTerminalPendingLineLimit\(\),[\s\S]*?maxBytes: TERMINAL_PENDING_OUTPUT_HARD_LIMIT/);
+  assert.match(renderer, /if \(dropped > 0\) state\.skipped = true;/);
+  // 单次写入按字节预算分批，并在 write 回调里让出一轮事件循环，避免恢复时巨型解析冻结界面。
+  assert.match(renderer, /const TERMINAL_WRITE_BATCH_BYTES = 512 \* 1024/);
+  assert.match(renderer, /const chunk = takePendingChunk\(state, TERMINAL_WRITE_BATCH_BYTES\)/);
+  assert.match(renderer, /if \(state\.pending\.length\) scheduleTerminalDrain\(term, state\)/);
+  assert.match(renderer, /function scheduleTerminalDrain\(term, state\) \{[\s\S]*?setTimeout\(\s*\(\) => \{[\s\S]*?drainTerminalOutput\(term, state\)/);
   assert.match(renderer, /Display output skipped to limit memory usage/);
   assert.match(renderer, /state\.resetAfterWrite = state\.writing/);
   assert.match(renderer, /if \(state\.resetAfterWrite\) \{[\s\S]*term\.reset\(\)/);

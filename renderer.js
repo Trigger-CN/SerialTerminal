@@ -30,6 +30,7 @@ const { getHorizontalInsertionIndex } = require('./tab-reorder');
 const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 const { serializeTerminalBuffer } = require('./terminal-buffer-text');
+const { appendPendingOutput, takePendingChunk } = require('./terminal-output-buffer');
 const { translateConptyMouseMode } = require('./shell-mouse-compat');
 const uPlot = require('uplot');
 const { SerialTextStream } = require('./serial-text-stream');
@@ -543,7 +544,15 @@ let lastSerialOutputFlushAt = 0;
 const SERIAL_OUTPUT_MAX_FPS = 30;
 const SERIAL_OUTPUT_FRAME_MS = 1000 / SERIAL_OUTPUT_MAX_FPS;
 const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 * 1024;
-const TERMINAL_PENDING_OUTPUT_LIMIT = 2 * 1024 * 1024;
+// 终端待写入缓冲：以回滚行数为主上限，字节硬上限仅作为内存兜底，避免极端长行撑爆内存。
+const TERMINAL_PENDING_OUTPUT_HARD_LIMIT = 32 * 1024 * 1024;
+// 单次交给 xterm 解析的字节预算：窗口恢复时按此分批写入，避免一次巨型解析阻塞主线程。
+const TERMINAL_WRITE_BATCH_BYTES = 512 * 1024;
+
+function getTerminalPendingLineLimit() {
+    const limit = Number(currentConfig?.scrollbackLimit);
+    return Number.isFinite(limit) && limit > 0 ? limit : 20000;
+}
 const terminalWriteStates = new WeakMap();
 
 function scrollMainTerminalToBottom() {
@@ -553,13 +562,12 @@ function scrollMainTerminalToBottom() {
 
 function drainTerminalOutput(term, state) {
     if (state.writing || !state.pending.length) return;
-    const chunks = state.pending;
-    state.pending = [];
-    state.pendingLength = 0;
     const skipped = state.skipped;
     state.skipped = false;
+    const chunk = takePendingChunk(state, TERMINAL_WRITE_BATCH_BYTES);
+    if (!chunk) return;
     state.writing = true;
-    const output = `${skipped ? '\r\n[Display output skipped to limit memory usage]\r\n' : ''}${chunks.join('')}`;
+    const output = `${skipped ? '\r\n[Display output skipped to limit memory usage]\r\n' : ''}${chunk}`;
     try {
         term.write(output, () => {
             state.writing = false;
@@ -568,32 +576,39 @@ function drainTerminalOutput(term, state) {
                 invalidateTerminalSearch(term, 'reset', { clearAnchor: true });
                 term.reset();
             }
-            drainTerminalOutput(term, state);
+            if (state.pending.length) scheduleTerminalDrain(term, state);
         });
     } catch (error) {
         state.writing = false;
         state.pending = [];
         state.pendingLength = 0;
+        state.pendingLines = 0;
     }
+}
+
+// 让出一轮事件循环后再写入下一批，保证恢复可见时界面仍能逐帧渲染而不冻结。
+function scheduleTerminalDrain(term, state) {
+    if (state.drainScheduled) return;
+    state.drainScheduled = true;
+    setTimeout(() => {
+        state.drainScheduled = false;
+        drainTerminalOutput(term, state);
+    }, 0);
 }
 
 function writeTerminalOutput(term, output) {
     if (!term || !output) return;
     let state = terminalWriteStates.get(term);
     if (!state) {
-        state = { writing: false, pending: [], pendingLength: 0, skipped: false, resetAfterWrite: false };
+        state = { writing: false, pending: [], pendingLength: 0, pendingLines: 0, skipped: false, resetAfterWrite: false, drainScheduled: false };
         terminalWriteStates.set(term, state);
     }
-    const displayOutput = output.length > TERMINAL_PENDING_OUTPUT_LIMIT
-        ? output.slice(-TERMINAL_PENDING_OUTPUT_LIMIT)
-        : output;
-    if (displayOutput.length !== output.length) state.skipped = true;
-    state.pending.push(displayOutput);
-    state.pendingLength += displayOutput.length;
-    while (state.pendingLength > TERMINAL_PENDING_OUTPUT_LIMIT && state.pending.length > 1) {
-        state.pendingLength -= state.pending.shift().length;
-        state.skipped = true;
-    }
+    // 未达到回滚行数前完整排队，超过后才从最旧处按行丢弃；字节硬上限仅作为内存兜底。
+    const dropped = appendPendingOutput(state, output, {
+        maxLines: getTerminalPendingLineLimit(),
+        maxBytes: TERMINAL_PENDING_OUTPUT_HARD_LIMIT
+    });
+    if (dropped > 0) state.skipped = true;
     drainTerminalOutput(term, state);
 }
 
@@ -602,6 +617,7 @@ function clearTerminalOutput(term) {
     if (state) {
         state.pending = [];
         state.pendingLength = 0;
+        state.pendingLines = 0;
         state.skipped = false;
         state.resetAfterWrite = state.writing;
     }

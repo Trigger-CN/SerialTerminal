@@ -602,6 +602,17 @@ npm run dist:linux
 - 已移除 Marker / Decoration 的整行高亮尝试，避免在不同 xterm 运行环境下表现不一致
 - 当前高亮目标是行号文本本身，而不是整行背景
 
+### 9.7 终端显示写入缓冲上限
+- `writeTerminalOutput()` 对每个终端维护待写入缓冲（`terminalWriteStates`），xterm 一次只允许一次 `write` 在途，期间新输出先排队。
+- 上限以**回滚行数**（`scrollbackLimit`，默认 20000）为主：未达到该行数前完整排队，超过后才从最旧一端**整行**丢弃，因此长时间高吞吐下不会再因固定字节阈值提前丢内容。
+- `TERMINAL_PENDING_OUTPUT_HARD_LIMIT`（32 MB）仅作为极端长行的内存兜底，且至少保留最后一行。
+- 丢弃策略位于纯逻辑模块 `terminal-output-buffer.js`（`appendPendingOutput` / `dropOldestLines`），有独立单测 `test/terminal-output-buffer.test.js`。
+- 只要有丢弃，下一次实际写入时会在该位置插入一次 `[Display output skipped to limit memory usage]`；日志文件路径不受影响。
+- 只要有丢弃，下一次实际写入时会在该位置插入一次 `[Display output skipped to limit memory usage]`；日志文件路径不受影响。
+- 写入侧按字节预算分批：`drainTerminalOutput()` 每次仅取 `TERMINAL_WRITE_BATCH_BYTES`（512 KB）内容调一次 `term.write`，剩余部分由 `scheduleTerminalDrain()` 在 `setTimeout(0)` 里继续。xterm 的 WriteBuffer 时间分片只在多个 write 块之间生效，单块解析是同步的，因此必须在这里限流，否则窗口恢复时一次巨型解析会冻结界面。
+- 取批函数 `takePendingChunk()` 与丢弃策略同在 `terminal-output-buffer.js`，取批时尽量在行边界处切开。
+- 历史实现曾使用固定 2 MB 字节上限，在同一窗口最小化/被遮挡导致刷新暂停的情况下会一次性丢掉约 2 MB 显示内容（曾表现为“丢失 15 分钟日志”），现已按行数上限解决。
+
 ---
 
 ## 10. 已实现的用户需求（重要）
