@@ -140,24 +140,22 @@
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
 
-## P3 - 多串口支持（设计已定，尚未实施）
+## P3 - 多串口支持（P1 已完成，P2–P5 待办）
 
-完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做；实施先只做 P1。
+完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做。
 
-- [ ] **P1：主进程多实例化（当前唯一开放的实施项）**
-  - 位置：`main.js` 的 `currentSerialPort` 及配套单例（`serialSessionId`/`serialSendEncoding`/`serialNewlineMode`/`serialConnectInProgress`/`rawBinary*`/`tabLogBuffers`/`throughputState`）。
-  - 将单例下沉为 `Map<groupId, session>`；串口 IPC 通道增加 `groupId`；`connect-serial` 不再关闭其他分组端口；新增 `disconnect-serial(groupId)`。
-  - **日志目录按端口号建子文件夹**：层级固定为 `<logPath>/[日期]/<端口号>/`，日期目录必须在外层（`log-cleanup.js:35` 只递归匹配 `^\d{4}-\d{2}-\d{2}$` 的目录，反过来会导致过期日志永远清不掉）。目录名用 `path.basename(portPath)` 去尾部 `.`/空格，端口缺失时退回 `groupId`，Shell 固定用 `_shell`。改造点：`ensureLogDirectory`/`ensureMainLogFilePath`/`ensureRawBinaryLogPath`/`ensureTabLogFile`。
-  - **必须一并修复**：`mainLogFilePath` 在 `connect-serial` 里从未重置（只重置了 `rawBinaryLogPath`），当前换端口后通用日志会继续写旧文件；多端口后会变成「日志写进错误端口的文件夹」。
-  - `flushSerialOutputQueue()`（`main.js:2807`）必须改为按 `sessionId` 分桶：现在只用 `queued[0].sessionId` 当整批标识，多端口下会贴错会话而串流。
-  - **不改线程模型**：串口读已由 binding 自带 OS 线程（Windows `ReadThread` + `ReadFileEx`/`SleepEx`，Linux/macOS 走 libuv 线程池），不要为了「多线程」把端口搬进 `worker_threads`（native 句柄不可跨线程转移）。
-  - 重点风险：`cleanupSerialConnection()` 现在用 `currentSerialPort` 判断迟到事件，多端口下会把真实数据当幽灵事件丢弃，必需改为按 `sessionId` 判定。
-  - **首个门禁**：双端口真机并发打开。未验证 Node `serialport` 在本项目环境下能稳定同时持有两个端口；不通过则整个方案需重新评估。
-  - 验收：`npm test` 全绿；单端口行为完全回归；两组同时收发逐字节校验不串流；关闭其中一组不影响另一组；采集双端口高吞吐下的主线程响应基线。
-  - 明确不做：任何 UI 改动、双层标签栏、分屏改造、设置侧栏跟随、日志写入去同步化（后者归 P1.5）。
+- [x] **P1：主进程多实例化**（已完成并验证）
+  - 结果：`currentSerialPort` 及 `serialSendEncoding`/`serialNewlineMode`/`serialCleanupComplete`/`serialConnectInProgress`/全局 `throughputState`/全局 `serialOutputQueue` 全部删除，改为 `serialSessions = new Map()`（默认分组 `DEFAULT_SERIAL_GROUP_ID = 'default'`）。
+  - `connect-serial` 接受 `options.groupId`且**不再关闭其他分组端口**；`disconnect-serial` 接受 `{ groupId }`；三个串口事件均携带 `groupId`。
+  - `cleanupSerialConnection(message, port, groupId)` 改为按本会话端口判定，不再丢弃他组真实数据。
+  - `flushSerialOutputQueue()` 改为按**会话 + sessionId 双维度分桶**，消除了原 `queued[0].sessionId` 整批标注导致的串流。
+  - 日志目录层级：`<logPath>/[日期]/<端口号>/`（日期在外层，与 `log-cleanup.js:35` 的日期正则兼容），端口名用 `path.basename()` 并去尾部 `.`/空格，Shell 用 `_shell`。`connect-serial` 现在会重置 `mainLogFilePath`/`activeMainLogGroupId`/各 tab entry 的 `filePath`。
+  - 门禁结果：双端口真机（COM6 + COM1）同时打开、各自可写、关闭一个另一个不受影响。
+  - 验证：`npm test` 252/252；沙箱行为验证 19 项全通过；双端口端到端 9 项全通过；`git diff --check` 干净。
+  - 仍不做：任何 UI 改动、双层标签栏、分屏改造、设置侧栏跟随、日志写入去同步化。
 
 - [ ] **P1.5：日志落盘去同步化（多线程的真实收益点）**
-  - 位置：`main.js:772` `appendToTabLogSync`、`main.js:844` raw 二进制刷盘、`main.js:958` `saveLog`——三者均为 `fs.appendFileSync`，阻塞主进程 JS 线程。
+  - 位置：`appendToTabLogSync`、raw 二进制刷盘、`saveLog`——三者均为 `fs.appendFileSync`，阻塞主进程 JS 线程。
   - 方案：引入日志写入 Worker，沿用 `chart-parser-worker-client.js` 已成熟的队列/超时/重启范式；队列按 `groupId` 分桶避免串写；溢出提示沿用现有 `shouldAcceptMoreCachedLog` 语义。
   - 动因：端口数增加时写盘频率线性上升，一个高吞吐端口会拖慢所有端口。
   - 不做：配置写盘（`fs.writeFileSync`）保持同步，触发频率低、收益不抵风险。

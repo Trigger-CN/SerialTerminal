@@ -700,9 +700,20 @@ const shellSessions = new Map();
 displaySettings.showTimestamp = currentConfig.showTimestamp;
 displaySettings.showLineNumbers = currentConfig.showLineNumbers;
 
+// 多串口日志归属：每个分组的日志写到以端口号命名的子文件夹。
+// 日志层级固定为 <logPath>/[日期]/<端口号>/，日期目录必须在外层：
+// log-cleanup.js 只递归匹配 ^\d{4}-\d{2}-\d{2}$ 的目录，
+// 若把端口目录放外层，过期日志永远不会被清理。
+const SERIAL_LOG_FOLDER_SHELL = '_shell';
+// 串口分组默认 id。日志层在模块顶层就会引用它，因此必须先于所有使用者声明（const 有 TDZ）。
+const DEFAULT_SERIAL_GROUP_ID = 'default';
+
 let logBuffer = [];
 let logBufferByteCount = 0;
 let mainLogFilePath = '';
+// 当前通用/raw 日志归属的分组；换端口时重置，避免继续写进上一个端口的目录。
+let activeMainLogGroupId = DEFAULT_SERIAL_GROUP_ID;
+let activeRawLogGroupId = DEFAULT_SERIAL_GROUP_ID;
 let tabLogBuffers = new Map();
 let textLogFlushError = null;
 let tabLogFlushError = null;
@@ -722,6 +733,21 @@ let logCleanupPending = false;
 const logErrorNoticeKeys = new Set();
 const LOG_AUTO_FLUSH_INTERVAL_MS = 5000;
 const LOG_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function buildPortLogFolderName(portPath, groupId) {
+  // 必须取 basename：Linux 的 /dev/ttyUSB0 直接当目录名会产生非法字符。
+  const base = path.basename(String(portPath || '').trim());
+  const safe = sanitizeFileNamePart(base).replace(/[. ]+$/g, '');
+  // 端口名缺失时退回 groupId，避免多个分组撞进同一个目录。
+  return safe || normalizeSerialGroupId(groupId);
+}
+
+function resolveLogFolderName(groupId) {
+  const id = normalizeSerialGroupId(groupId);
+  if (id === SERIAL_LOG_FOLDER_SHELL) return SERIAL_LOG_FOLDER_SHELL;
+  const session = getSerialSession(id);
+  return buildPortLogFolderName(session?.portPath, id);
+}
 
 function getAutoFlushThreshold() {
   const mb = Number(currentConfig.rawBufferAutoFlushMB);
@@ -757,8 +783,9 @@ function ensureTabLogFile(tabId) {
   const entry = tabLogBuffers.get(tabId);
   if (!entry) return '';
   rotateLogFilesForCurrentDate();
+  // 换端口/重连后 entry 的 filePath 已被清空，会重新落到当前分组的端口目录。
   if (entry.filePath) return entry.filePath;
-  const logDirectory = ensureLogDirectory();
+  const logDirectory = ensureLogDirectory(entry.groupId);
   entry.filePath = path.join(logDirectory, buildLogFileName({ tabTitle: entry.title || tabId }));
   tabLogBuffers.set(tabId, entry);
   return entry.filePath;
@@ -807,7 +834,7 @@ function buildRawLogFileName() {
 function ensureMainLogFilePath() {
   rotateLogFilesForCurrentDate();
   if (mainLogFilePath) return mainLogFilePath;
-  const logDirectory = ensureLogDirectory();
+  const logDirectory = ensureLogDirectory(activeMainLogGroupId);
   const fileName = buildLogFileName({});
   const extension = path.extname(fileName);
   const baseName = path.basename(fileName, extension);
@@ -823,7 +850,7 @@ function ensureMainLogFilePath() {
 function ensureRawBinaryLogPath() {
   rotateLogFilesForCurrentDate();
   if (rawBinaryLogPath) return rawBinaryLogPath;
-  const logDirectory = ensureLogDirectory();
+  const logDirectory = ensureLogDirectory(activeRawLogGroupId);
   const fileName = buildRawLogFileName();
   const extension = path.extname(fileName);
   const baseName = path.basename(fileName, extension);
@@ -855,9 +882,10 @@ function flushRawBinaryLogSync() {
   }
 }
 
-function bufferRawSerialBytes(data) {
+function bufferRawSerialBytes(data, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (!currentConfig.saveRawSerialToFile || !Buffer.isBuffer(data) || data.length === 0) return;
   rotateLogFilesForCurrentDate();
+  activeRawLogGroupId = normalizeSerialGroupId(groupId);
   ensureRawBinaryLogPath();
   if (!shouldAcceptMoreCachedLog('raw', rawBinaryByteCount, rawBinaryFlushError, rawBinaryLogOverflowNotified)) {
     rawBinaryLogOverflowNotified = true;
@@ -933,9 +961,11 @@ function rotateLogFilesForCurrentDate() {
   activeLogDate = today;
 }
 
-function ensureLogDirectory() {
+function ensureLogDirectory(groupId = DEFAULT_SERIAL_GROUP_ID) {
   rotateLogFilesForCurrentDate();
-  const logDirectory = getLogDirectory(currentConfig.logPath, currentConfig.logCreateDateFolder);
+  // 日期目录在外层，端口目录在内层：log-cleanup 只递归匹配日期格式的目录名。
+  const baseDirectory = getLogDirectory(currentConfig.logPath, currentConfig.logCreateDateFolder);
+  const logDirectory = path.join(baseDirectory, resolveLogFolderName(groupId));
   if (!fs.existsSync(logDirectory)) {
     fs.mkdirSync(logDirectory, { recursive: true });
   }
@@ -1037,9 +1067,15 @@ function stripAnsi(str) {
   return str.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
-function writeLog(data) {
+function writeLog(data, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (!currentConfig.logEnabled || !data || currentConfig.saveAllTabsLogToFiles) return;
   rotateLogFilesForCurrentDate();
+  // 日志跟随触发它的分组：首次写入时按该分组解析端口目录，随后同组内复用同一文件。
+  const resolvedGroupId = normalizeSerialGroupId(groupId);
+  if (resolvedGroupId !== activeMainLogGroupId) {
+    activeMainLogGroupId = resolvedGroupId;
+    mainLogFilePath = '';
+  }
   ensureMainLogFilePath();
   if (!shouldAcceptMoreCachedLog('text', logBufferByteCount, textLogFlushError, textLogOverflowNotified)) {
     textLogOverflowNotified = true;
@@ -1052,17 +1088,22 @@ function writeLog(data) {
   }
 }
 
-function writeTabLog(tabId, title, data) {
+function writeTabLog(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (!tabId || typeof data !== 'string' || !data) return;
   // 自动日志总开关关闭后必须整体停止写盘，否则分标签页分支会继续追加到旧文件。
   if (!currentConfig.logEnabled) return;
   if (tabId.startsWith('tab-shell-') && !currentConfig.saveShellTabsLogToFiles) return;
   const clean = stripAnsi(data);
   if (tabId === 'tab-main') {
-    writeLog(clean);
+    writeLog(clean, groupId);
   }
   if (!currentConfig.saveAllTabsLogToFiles) return;
-  const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [], filePath: '', byteCount: 0 };
+  // 每个标签页的日志归属它所在的分组，Shell 固定 _shell。
+  const logGroupId = tabId.startsWith('tab-shell-')
+    ? SERIAL_LOG_FOLDER_SHELL
+    : normalizeSerialGroupId(groupId);
+  const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [], filePath: '', byteCount: 0, groupId: logGroupId };
+  existing.groupId = logGroupId;
   tabLogBuffers.set(tabId, existing);
   rotateLogFilesForCurrentDate();
   ensureTabLogFile(tabId);
@@ -2725,47 +2766,83 @@ ipcMain.on('close-shell-tab-session', (event, payload = {}) => {
 });
 
 // Serial Port Setup
-let currentSerialPort = null;
-let serialSendEncoding = 'utf8';
-let serialNewlineMode = 'crlf';
-let serialCleanupComplete = true;
+// 多串口：每一条串口连接是一个独立会话，按 groupId 隔离。
+// 单串口模式（renderer 不传 groupId）统一使用 DEFAULT_SERIAL_GROUP_ID（已在文件前部声明）。
+const serialSessions = new Map();
 let serialSessionId = 0;
-let serialConnectInProgress = false;
 const THROUGHPUT_SAMPLE_MS = 1000;
 const THROUGHPUT_HISTORY_LENGTH = 30;
 let throughputTimer = null;
-let serialOutputQueue = [];
-let serialOutputFlushScheduled = false;
-let throughputState = {
-  connected: false,
-  rxCurrentBytes: 0,
-  txCurrentBytes: 0,
-  rxHistory: Array(THROUGHPUT_HISTORY_LENGTH).fill(0),
-  txHistory: Array(THROUGHPUT_HISTORY_LENGTH).fill(0)
-};
+
+function normalizeSerialGroupId(value) {
+  const id = typeof value === 'string' ? value.trim() : '';
+  return id || DEFAULT_SERIAL_GROUP_ID;
+}
+
+function createSerialSession(groupId, portPath) {
+  return {
+    groupId,
+    portPath: typeof portPath === 'string' ? portPath : '',
+    port: null,
+    sessionId: 0,
+    sendEncoding: 'utf8',
+    newlineMode: 'crlf',
+    cleanupComplete: true,
+    connectInProgress: false,
+    // 输出队列按 sessionId 分桶：不同会话的字节永远不会合进同一条 IPC 消息。
+    outputBuckets: new Map(),
+    outputFlushScheduled: false,
+    throughput: {
+      connected: false,
+      rxCurrentBytes: 0,
+      txCurrentBytes: 0,
+      rxHistory: createEmptyThroughputHistory(),
+      txHistory: createEmptyThroughputHistory()
+    }
+  };
+}
+
+function getSerialSession(groupId) {
+  return serialSessions.get(normalizeSerialGroupId(groupId)) || null;
+}
+
+function getOrCreateSerialSession(groupId, portPath) {
+  const id = normalizeSerialGroupId(groupId);
+  let session = serialSessions.get(id);
+  if (!session) {
+    session = createSerialSession(id, portPath);
+    serialSessions.set(id, session);
+  } else if (typeof portPath === 'string' && portPath) {
+    session.portPath = portPath;
+  }
+  return session;
+}
+
 
 function createEmptyThroughputHistory() {
   return Array(THROUGHPUT_HISTORY_LENGTH).fill(0);
 }
 
-function sendThroughputUpdate() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('serial-throughput-update', {
-      connected: throughputState.connected,
-      rxHistory: [...throughputState.rxHistory],
-      txHistory: [...throughputState.txHistory],
-      rxBytesPerSecond: throughputState.rxCurrentBytes,
-      txBytesPerSecond: throughputState.txCurrentBytes
-    });
-  }
+function sendThroughputUpdate(session = null) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!session) return;
+  mainWindow.webContents.send('serial-throughput-update', {
+    groupId: session.groupId,
+    connected: session.throughput.connected,
+    rxHistory: [...session.throughput.rxHistory],
+    txHistory: [...session.throughput.txHistory],
+    rxBytesPerSecond: session.throughput.rxCurrentBytes,
+    txBytesPerSecond: session.throughput.txCurrentBytes
+  });
 }
 
-function resetThroughputState(connected = false) {
-  throughputState.connected = connected;
-  throughputState.rxCurrentBytes = 0;
-  throughputState.txCurrentBytes = 0;
-  throughputState.rxHistory = createEmptyThroughputHistory();
-  throughputState.txHistory = createEmptyThroughputHistory();
+function resetThroughputState(session, connected = false) {
+  if (!session) return;
+  session.throughput.connected = connected;
+  session.throughput.rxCurrentBytes = 0;
+  session.throughput.txCurrentBytes = 0;
+  session.throughput.rxHistory = createEmptyThroughputHistory();
+  session.throughput.txHistory = createEmptyThroughputHistory();
 }
 
 function stopThroughputSampling() {
@@ -2778,94 +2855,112 @@ function stopThroughputSampling() {
 function startThroughputSampling() {
   stopThroughputSampling();
   throughputTimer = setInterval(() => {
-    throughputState.rxHistory.push(throughputState.rxCurrentBytes);
-    throughputState.txHistory.push(throughputState.txCurrentBytes);
-    if (throughputState.rxHistory.length > THROUGHPUT_HISTORY_LENGTH) {
-      throughputState.rxHistory.shift();
+    for (const session of serialSessions.values()) {
+      session.throughput.rxHistory.push(session.throughput.rxCurrentBytes);
+      session.throughput.txHistory.push(session.throughput.txCurrentBytes);
+      if (session.throughput.rxHistory.length > THROUGHPUT_HISTORY_LENGTH) {
+        session.throughput.rxHistory.shift();
+      }
+      if (session.throughput.txHistory.length > THROUGHPUT_HISTORY_LENGTH) {
+        session.throughput.txHistory.shift();
+      }
+      sendThroughputUpdate(session);
+      session.throughput.rxCurrentBytes = 0;
+      session.throughput.txCurrentBytes = 0;
     }
-    if (throughputState.txHistory.length > THROUGHPUT_HISTORY_LENGTH) {
-      throughputState.txHistory.shift();
-    }
-    sendThroughputUpdate();
-    throughputState.rxCurrentBytes = 0;
-    throughputState.txCurrentBytes = 0;
   }, THROUGHPUT_SAMPLE_MS);
 }
 
-function initializeThroughputState() {
-  resetThroughputState(true);
-  sendThroughputUpdate();
+function initializeThroughputState(session) {
+  resetThroughputState(session, true);
+  sendThroughputUpdate(session);
   startThroughputSampling();
 }
 
-function notifySerialDisconnected(message = null) {
+function notifySerialDisconnected(message = null, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('serial-disconnected', message);
+    mainWindow.webContents.send('serial-disconnected', message, { groupId });
   }
 }
 
+// 每个会话、每个 sessionId 一个桶。不同串口的字节永远不会进入同一条 IPC 消息，
+// 从根上消除“整批贴上 queued[0].sessionId”导致的串流。
 function flushSerialOutputQueue() {
-  serialOutputFlushScheduled = false;
-  if (!serialOutputQueue.length || !mainWindow || mainWindow.isDestroyed()) {
-    serialOutputQueue = [];
-    return;
+  for (const session of serialSessions.values()) {
+    session.outputFlushScheduled = false;
+    const buckets = session.outputBuckets;
+    if (!buckets.size) continue;
+    session.outputBuckets = new Map();
+    if (!mainWindow || mainWindow.isDestroyed()) continue;
+    for (const [bucketSessionId, entries] of buckets.entries()) {
+      if (!entries.length) continue;
+      const receivedAt = entries[0].receivedAt;
+      const byteCount = entries.reduce((total, entry) => total + entry.data.length, 0);
+      const bytes = Buffer.concat(entries.map(entry => entry.data), byteCount);
+      mainWindow.webContents.send('serial-output-bytes', {
+        bytes: new Uint8Array(bytes),
+        sessionId: bucketSessionId,
+        groupId: session.groupId,
+        receivedAt
+      });
+    }
   }
-  const queued = serialOutputQueue;
-  serialOutputQueue = [];
-  const sessionId = queued[0].sessionId;
-  const receivedAt = queued[0].receivedAt;
-  const byteCount = queued.reduce((total, entry) => total + entry.data.length, 0);
-  const bytes = Buffer.concat(queued.map(entry => entry.data), byteCount);
-  mainWindow.webContents.send('serial-output-bytes', {
-    bytes: new Uint8Array(bytes),
-    sessionId,
-    receivedAt
-  });
 }
 
-function queueSerialOutput(data, sessionId) {
-  if (serialOutputQueue.length && serialOutputQueue[0].sessionId !== sessionId) {
-    flushSerialOutputQueue();
+function queueSerialOutput(session, data, sessionId) {
+  if (!session) return;
+  let entries = session.outputBuckets.get(sessionId);
+  if (!entries) {
+    entries = [];
+    session.outputBuckets.set(sessionId, entries);
   }
-  serialOutputQueue.push({ data: Buffer.from(data), sessionId, receivedAt: Date.now() });
-  if (!serialOutputFlushScheduled) {
-    serialOutputFlushScheduled = true;
+  entries.push({ data: Buffer.from(data), receivedAt: Date.now() });
+  if (!session.outputFlushScheduled) {
+    session.outputFlushScheduled = true;
     setImmediate(flushSerialOutputQueue);
   }
 }
 
-function cleanupSerialConnection(message = null, port = currentSerialPort) {
-  if (port && currentSerialPort && port !== currentSerialPort) return;
-  if (serialCleanupComplete) return;
-  serialCleanupComplete = true;
-  serialSessionId++;
-  stopThroughputSampling();
-  resetThroughputState(false);
-  sendThroughputUpdate();
-  flushRawBinaryLogSync();
-  const disconnectMsg = message || 'Serial port disconnected';
-  currentSerialPort = null;
-  if (!currentConfig.saveAllTabsLogToFiles) {
-    saveLog();
+function cleanupSerialConnection(message = null, port = null, groupId = DEFAULT_SERIAL_GROUP_ID) {
+  const session = getSerialSession(groupId);
+  if (!session) {
+    // 没有该分组的会话时，保持旧行为：仍通知一次断开，避免 UI 卡在已连接状态。
+    notifySerialDisconnected(message || 'Serial port disconnected', groupId);
+    return;
   }
-  notifySerialDisconnected(disconnectMsg);
+  // 只丢弃不属于本分组、或不属于当前连接的事件；其他分组的事件不得被误判为幽灵事件。
+  if (port && session.port && port !== session.port) return;
+  if (session.cleanupComplete) return;
+  session.cleanupComplete = true;
+  session.sessionId++;
+  resetThroughputState(session, false);
+  sendThroughputUpdate(session);
+  flushRawBinaryLogSync(session.groupId);
+  const disconnectMsg = message || 'Serial port disconnected';
+  session.port = null;
+  if (!currentConfig.saveAllTabsLogToFiles) {
+    saveLog({ groupId: session.groupId });
+  }
+  notifySerialDisconnected(disconnectMsg, session.groupId);
 }
 
 function writeSerialPayload(request) {
-  if (!currentSerialPort || !currentSerialPort.isOpen) {
+  const groupId = normalizeSerialGroupId(request?.groupId);
+  const session = getSerialSession(groupId);
+  if (!session || !session.port || !session.port.isOpen) {
     return Promise.resolve({ ok: false, code: 'SERIAL_NOT_OPEN', message: 'Serial port is not open' });
   }
-  if (request?.sessionId !== undefined && request.sessionId !== serialSessionId) {
+  if (request?.sessionId !== undefined && request.sessionId !== session.sessionId) {
     return Promise.resolve({ ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' });
   }
 
   const built = buildSerialWriteBuffer(request, {
-    defaultEncoding: serialSendEncoding,
-    defaultNewlineMode: serialNewlineMode
+    defaultEncoding: session.sendEncoding,
+    defaultNewlineMode: session.newlineMode
   });
   if (!built.ok) return Promise.resolve(built);
 
-  const port = currentSerialPort;
+  const port = session.port;
   return new Promise(resolve => {
     try {
       port.write(built.bytes, error => {
@@ -2873,8 +2968,8 @@ function writeSerialPayload(request) {
           resolve({ ok: false, code: 'SERIAL_WRITE_FAILED', message: error.message });
           return;
         }
-        throughputState.txCurrentBytes += built.bytes.length;
-        resolve({ ok: true, bytesWritten: built.bytes.length });
+        session.throughput.txCurrentBytes += built.bytes.length;
+        resolve({ ok: true, bytesWritten: built.bytes.length, sessionId: session.sessionId });
       });
     } catch (error) {
       resolve({ ok: false, code: 'SERIAL_WRITE_FAILED', message: error.message });
@@ -2887,31 +2982,40 @@ ipcMain.handle('list-ports', async () => {
 });
 
 ipcMain.handle('connect-serial', async (event, options = {}) => {
-  if (serialConnectInProgress) {
+  const { path, baudRate, dataBits, stopBits, parity, encoding, sendEncoding, newlineMode } = options;
+  const groupId = normalizeSerialGroupId(options.groupId);
+  const session = getOrCreateSerialSession(groupId, path);
+  if (session.connectInProgress) {
     throw new Error('A serial connection attempt is already in progress');
   }
-  serialConnectInProgress = true;
-  const { path, baudRate, dataBits, stopBits, parity, encoding, sendEncoding, newlineMode } = options;
+  session.connectInProgress = true;
   try {
-    if (currentSerialPort && currentSerialPort.isOpen) {
-      await new Promise(resolve => currentSerialPort.close(resolve));
-      cleanupSerialConnection();
-    } else if (currentSerialPort && !serialCleanupComplete) {
+    // 只影响本分组：其他分组已打开的端口不会被关闭。
+    if (session.port && session.port.isOpen) {
+      await new Promise(resolve => session.port.close(resolve));
+      cleanupSerialConnection(null, null, groupId);
+    } else if (session.port && !session.cleanupComplete) {
       throw new Error('A serial port is still opening');
     }
-    if (rawBinaryBuffers.length > 0 && !flushRawBinaryLogSync()) {
+    if (rawBinaryBuffers.length > 0 && !flushRawBinaryLogSync(groupId)) {
       throw new Error(`Failed to flush pending raw serial log: ${rawBinaryFlushError?.message || 'unknown error'}`);
     }
 
-    serialSendEncoding = oneOf(sendEncoding || encoding, SERIAL_ENCODINGS, 'utf8');
-    serialNewlineMode = newlineMode || 'crlf';
-    serialCleanupComplete = false;
-    serialSessionId++;
-    const connectionSessionId = serialSessionId;
+    session.sendEncoding = oneOf(sendEncoding || encoding, SERIAL_ENCODINGS, 'utf8');
+    session.newlineMode = newlineMode || 'crlf';
+    session.cleanupComplete = false;
+    session.sessionId++;
+    const connectionSessionId = session.sessionId;
+    session.outputBuckets = new Map();
     rawBinaryBuffers = [];
     rawBinaryByteCount = 0;
     rawBinaryLogPath = '';
     rawBinaryFlushError = null;
+    // 换端口/重连必须重建日志归属，否则日志会继续写进上一次端口的目录。
+    mainLogFilePath = '';
+    textLogFlushError = null;
+    textLogOverflowNotified = false;
+    tabLogBuffers.forEach(entry => { entry.filePath = ''; });
 
     return await new Promise((resolve, reject) => {
     const port = new SerialPort({
@@ -2922,57 +3026,61 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
         parity: parity || 'none',
         autoOpen: false
     });
-    currentSerialPort = port;
+    session.port = port;
+    session.portPath = path || session.portPath;
 
     port.open((err) => {
         if (err) {
-            cleanupSerialConnection(null, port);
+            cleanupSerialConnection(null, port, groupId);
             reject(err.message);
             return;
         }
-        writeLog(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`);
+        writeLog(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`, groupId);
         if (currentConfig.logEnabled && currentConfig.saveAllTabsLogToFiles) {
           const title = 'Main_Terminal';
-          tabLogBuffers.set('tab-main', { title, buffer: [], byteCount: 0, filePath: '' });
+          tabLogBuffers.set('tab-main', { title, buffer: [], byteCount: 0, filePath: '', groupId });
         }
-        initializeThroughputState();
-        resolve({ ok: true, sessionId: connectionSessionId });
+        initializeThroughputState(session);
+        resolve({ ok: true, sessionId: connectionSessionId, groupId });
     });
 
         port.on('data', (data) => {
-      if (currentSerialPort !== port || serialCleanupComplete) return;
-      throughputState.rxCurrentBytes += data.length;
-      bufferRawSerialBytes(data);
-          queueSerialOutput(data, connectionSessionId);
+      if (session.port !== port || session.cleanupComplete) return;
+      session.throughput.rxCurrentBytes += data.length;
+      bufferRawSerialBytes(data, groupId);
+          queueSerialOutput(session, data, connectionSessionId);
     });
 
     port.on('error', (err) => {
-      if (currentSerialPort !== port || serialCleanupComplete) return;
+      if (session.port !== port || session.cleanupComplete) return;
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('serial-error', err.message);
+        mainWindow.webContents.send('serial-error', err.message, { groupId });
       }
-      writeLog(`\n[SERIAL ERROR] ${err.message}\n`);
+      writeLog(`\n[SERIAL ERROR] ${err.message}\n`, groupId);
     });
 
     port.on('close', () => {
-      if (currentSerialPort !== port || serialCleanupComplete) return;
-      writeLog('\r\n[SERIAL DISCONNECTED]\r\n');
-      cleanupSerialConnection('Serial port disconnected', port);
+      if (session.port !== port || session.cleanupComplete) return;
+      writeLog('\r\n[SERIAL DISCONNECTED]\r\n', groupId);
+      cleanupSerialConnection('Serial port disconnected', port, groupId);
     });
     });
   } finally {
-    serialConnectInProgress = false;
+    session.connectInProgress = false;
   }
 });
 
 ipcMain.handle('serial-write', (event, request) => writeSerialPayload(request));
 
-ipcMain.on('disconnect-serial', () => {
-  serialSessionId++;
-  if (currentSerialPort && currentSerialPort.isOpen) {
-    currentSerialPort.close();
+ipcMain.on('disconnect-serial', (event, payload = {}) => {
+  const groupId = normalizeSerialGroupId(payload?.groupId);
+  const session = getSerialSession(groupId);
+  if (!session) return;
+  session.sessionId++;
+  if (session.port && session.port.isOpen) {
+    session.port.close();
   } else {
-    cleanupSerialConnection();
+    cleanupSerialConnection(null, null, groupId);
   }
 });
 

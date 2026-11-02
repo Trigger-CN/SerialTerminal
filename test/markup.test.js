@@ -342,10 +342,10 @@ test('serial output is batched per animation frame before terminal rendering', (
   assert.match(renderer, /setTimeout\(\(\) => \{[\s\S]*requestAnimationFrame\(flushSerialOutputQueue\)/);
   assert.match(renderer, /const bytes = Buffer\.concat\(queued\)/);
   assert.match(renderer, /const buffer = Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)[\s\S]*queueSerialOutput\(buffer\)/);
-  assert.match(main, /function queueSerialOutput\(data, sessionId\)/);
+  assert.match(main, /function queueSerialOutput\(session, data, sessionId\)/);
   assert.match(main, /setImmediate\(flushSerialOutputQueue\)/);
-  assert.match(main, /Buffer\.concat\(queued\.map\(entry => entry\.data\), byteCount\)/);
-  assert.match(main, /queueSerialOutput\(data, connectionSessionId\)/);
+  assert.match(main, /Buffer\.concat\(entries\.map\(entry => entry\.data\), byteCount\)/);
+  assert.match(main, /queueSerialOutput\(session, data, connectionSessionId\)/);
   assert.match(renderer, /function flushPendingSerialOutput\(\)/);
   assert.match(renderer, /flushPendingSerialOutput\(\);\s*if \(normalized !== receiveDisplayMode\)/);
   assert.match(renderer, /const highlighted = applyHighlighting\(text, tab\.filterRegex, globalMatches\);[\s\S]*terminal:[\s\S]*log:/);

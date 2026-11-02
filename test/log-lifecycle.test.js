@@ -11,7 +11,7 @@ test('closing a serial session rotates the main text log path', () => {
   assert.match(main, /function ensureMainLogFilePath\(\)[\s\S]*?while \(fs\.existsSync\(mainLogFilePath\)\)[\s\S]*?`\$\{baseName\}_\$\{suffix\}\$\{extension\}`/);
   assert.match(main, /function closeMainLogSession\(\{ notify = true \} = \{\}\) \{[\s\S]*?saveLog\(\{ notify \}\);[\s\S]*?if \(logBuffer\.length === 0\) \{[\s\S]*?mainLogFilePath = '';[\s\S]*?\}/);
   assert.match(main, /ipcMain\.on\('flush-tab-logs'[\s\S]*?if \(currentConfig\.saveAllTabsLogToFiles\)[\s\S]*?else \{\s*closeMainLogSession\(\);/);
-  assert.match(main, /function cleanupSerialConnection[\s\S]*?if \(!currentConfig\.saveAllTabsLogToFiles\) \{[\s\S]*?saveLog\(\);/);
+  assert.match(main, /function cleanupSerialConnection[\s\S]*?if \(!currentConfig\.saveAllTabsLogToFiles\) \{[\s\S]*?saveLog\(/);
   assert.doesNotMatch(main, /port\.on\('close',[\s\S]*?writeLog\('\\\r\\n\[SERIAL DISCONNECTED\]\\r\\n'\);\s*saveLog\(\);/);
 });
 
@@ -20,7 +20,7 @@ test('enabling per-tab logs closes the previous main log session', () => {
 });
 
 test('Shell tab logging is opt-in and flushes buffered Shell sessions when disabled', () => {
-  assert.match(main, /function writeTabLog\(tabId, title, data\) \{[\s\S]*?tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles/);
+  assert.match(main, /function writeTabLog\(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID\) \{[\s\S]*?tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles/);
   assert.match(main, /function closeShellTabLogSessions\([\s\S]*?tabId\.startsWith\('tab-shell-'\)[\s\S]*?flushTabLogEntrySync\(tabId, entry\)[\s\S]*?tabLogBuffers\.delete\(tabId\)/);
   assert.match(main, /currentConfig\.saveShellTabsLogToFiles && !normalized\.saveShellTabsLogToFiles\) \{\s*closeShellTabLogSessions\(\);/);
 });
@@ -30,9 +30,9 @@ test('date folders apply to main, tab, and raw logs and rotate at midnight', () 
   assert.match(main, /logCreateDateFolder: false/);
   assert.match(main, /normalized\.logCreateDateFolder = normalizeBoolean\(source\.logCreateDateFolder, false\)/);
   assert.match(main, /function rotateLogFilesForCurrentDate\(\)[\s\S]*?flushRawBinaryLogSync\(\)[\s\S]*?saveAllTabLogs\(\{ notify: false, closeEntries: false \}\)[\s\S]*?saveLog\(\{ notify: false \}\)[\s\S]*?mainLogFilePath = '';[\s\S]*?rawBinaryLogPath = '';[\s\S]*?entry\.filePath = ''/);
-  assert.match(main, /function writeLog\(data\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureMainLogFilePath\(\)/);
-  assert.match(main, /function writeTabLog\(tabId, title, data\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureTabLogFile\(tabId\)/);
-  assert.match(main, /function bufferRawSerialBytes\(data\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureRawBinaryLogPath\(\)/);
+  assert.match(main, /function writeLog\(data, groupId = DEFAULT_SERIAL_GROUP_ID\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureMainLogFilePath\(\)/);
+  assert.match(main, /function writeTabLog\(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureTabLogFile\(tabId\)/);
+  assert.match(main, /function bufferRawSerialBytes\(data, groupId = DEFAULT_SERIAL_GROUP_ID\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureRawBinaryLogPath\(\)/);
   assert.match(main, /function ensureTabLogFile\(tabId\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, buildLogFileName/);
   assert.match(main, /function ensureMainLogFilePath\(\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, fileName\)/);
   assert.match(main, /function ensureRawBinaryLogPath\(\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, fileName\)/);
@@ -77,7 +77,7 @@ test('resetting preferences preserves the telemetry installation identity', () =
 
 test('disabling automatic logging stops every file write path, including per-tab logs', () => {
   // writeTabLog 必须在分流前统一检查总开关，否则分标签页分支会绕过它继续 append。
-  assert.match(main, /function writeTabLog\(tabId, title, data\) \{[\s\S]*?if \(!currentConfig\.logEnabled\) return;[\s\S]*?if \(tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles\)/);
+  assert.match(main, /function writeTabLog\(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID\) \{[\s\S]*?if \(!currentConfig\.logEnabled\) return;[\s\S]*?if \(tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles\)/);
   // 分标签页刷盘与单标签页刷盘同样要受总开关约束。
   assert.match(main, /function saveAllTabLogs\([\s\S]*?if \(!currentConfig\.logEnabled \|\| !currentConfig\.saveAllTabsLogToFiles \|\| tabLogBuffers\.size === 0\) return;/);
   assert.match(main, /ipcMain\.on\('flush-tab-log'[\s\S]*?if \(!currentConfig\.logEnabled \|\| !currentConfig\.saveAllTabsLogToFiles \|\| !payload\.tabId\) \{ return; \}/);

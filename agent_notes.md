@@ -6,7 +6,7 @@
 
 - 当前配置 schema：v14；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口支持**尚未实现**，当前仍是单串口单例（`currentSerialPort`、单 `serialTerm`/`dataParser`、单 `workspaceLayout`）。设计与分阶段方案见 `MULTI_SERIAL_DESIGN.md`；已定快捷指令全局共享、分屏两级同时做、实施先只做 P1。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录），但**UI 仍是单串口形态**，P2–P5（渲染层分组上下文、双层标签栏、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -976,19 +976,29 @@ npm run dist:linux
    - Shell IPC/输入链路与串口模式完全独立，Hex 改动不得复用到 Shell tab
    - Raw 写盘失败会保留待写 Buffer 并记录 `rawBinaryFlushError`/electron-log；在待写数据成功刷盘前拒绝开始新连接，避免重连覆盖缓冲。当前仍没有独立的用户可见恢复界面
 
-## 13A. 多串口支持（设计基线，尚未实现）
+## 13A. 多串口支持（P1 已实现，P2–P5 未开始）
 
 - 完整设计文档：[`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)，包含数据模型、主进程多实例、IPC 分流、双层标签栏、设置跟随、两级分屏、配置迁移、分阶段落地与风险清单。
-- 现状：主进程与渲染层均为单串口单例（`currentSerialPort`、单 `serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`、单 `workspaceLayout`），`connect-serial` 先 close 再 open，多端口并存结构性不可达；`serial-output-bytes` 已带 `sessionId` 但 `flushSerialOutputQueue()` 未按它分流。
-- 已定决策（实施时不得自行更改）：快捷指令与自动发送总开关**全局共享**；分屏首版**分组级 + 组内级同时做**；实施**先只做 P1**（主进程 `Map<groupId, session>` 化 + IPC 带 `groupId` + 日志按组隔离），P2–P5 待 P1 通过后再定。
-- 未验证项：同一进程内并发打开多个串口端口的稳定性。这是 P1 的首个门禁，不通过则整个方案需重新评估。
-- 硬约束：`tab-main` 需从全局常量改为组内隐式标签 `${groupId}:tab-main`；`serialLineCounter`/`logLineCounter` 需按组独立。
-- 日志目录（已定）：每个串口在日志目录下拥有一个**以端口号命名的子文件夹**，层级固定为 `<logPath>/[日期]/<端口号>/`。**日期目录必须在外层**：`log-cleanup.js` 的 `cleanEntries()` 只递归匹配 `^\d{4}-\d{2}-\d{2}$` 的目录（第 35 行），若写成 `<logPath>/COM3/2026-04-01/`，外层 `COM3` 不匹配日期格式会被 `continue` 跳过，过期日志永远不会被清理。目录名用 `path.basename(portPath)` 并去尾部 `.`/空格，端口缺失时退回 `groupId`；Shell 固定用 `_shell`。
-- 已实测（本机 Windows 10 + Node 20）：`mkdir('COM3')` / `mkdir('COM11')` / `mkdir('com9')` 作为**目录名**均正常创建并可追加写入。注意 `CreateFile("COM3")` 才会触发设备命名空间重定向，目录名不受影响。
-- 必须一并修复：`mainLogFilePath` 在 `connect-serial` 里没有被重置（`main.js:2889-2966` 只重置了 `rawBinaryLogPath`），当前表现为换端口后通用日志继续写旧文件；多端口后会变成「日志写进错误端口的文件夹」，属数据归属错误。
+- **当前进度：P1（主进程多实例化）已完成并通过验证；P2–P5 未开始，UI 仍为单串口形态。**
+- P1 已落地的事实（以 `main.js` 为准）：
+  - `serialSessions = new Map()` + `DEFAULT_SERIAL_GROUP_ID = 'default'`；会话对象持有 `groupId/portPath/port/sessionId/sendEncoding/newlineMode/cleanupComplete/connectInProgress/outputBuckets/outputFlushScheduled/throughput`。`normalizeSerialGroupId()` / `createSerialSession()` / `getSerialSession()` / `getOrCreateSerialSession()` 为入口。
+  - 旧的 `currentSerialPort` / `serialSendEncoding` / `serialNewlineMode` / `serialCleanupComplete` / `serialConnectInProgress` / 全局 `throughputState` / 全局 `serialOutputQueue` 已**全部删除**，不得再引入。
+  - `connect-serial` 接受 `options.groupId`，**只关闭本分组已有端口，不再关闭其他分组**；`connectInProgress` 为会话级；连接成功时重置 `mainLogFilePath`、`activeMainLogGroupId` 与各 tab entry 的 `filePath`。
+  - `disconnect-serial` 接受 `{ groupId }` 只断指定分组；`serial-error` / `serial-disconnected` / `serial-throughput-update` 均携带 `groupId`。
+  - `cleanupSerialConnection(message, port, groupId)` 的判据是「本会话的 port 是否等于传入 port」，不再是全局单例比较，因此不会丢弃其他分组的真实数据。
+  - `flushSerialOutputQueue()` 按**会话 + sessionId 双维度分桶**发送，`serial-output-bytes` 携带 `sessionId` 与 `groupId`；已消除原来用 `queued[0].sessionId` 标注整批的串流缺陷。
+  - 日志层：`ensureLogDirectory(groupId)` / `writeLog(data, groupId)` / `writeTabLog(tabId, title, data, groupId)` / `bufferRawSerialBytes(data, groupId)`；`buildPortLogFolderName()` 与 `resolveLogFolderName()` 负责端口目录名。
+  - 渲染层：新增 `DEFAULT_SERIAL_GROUP_ID = 'default'`，并在 connect/disconnect/serial-write 三处回传 groupId；**UI 未变**，单串口行为与改造前一致。
+- 已定决策（实施时不得自行更改）：快捷指令与自动发送总开关**全局共享**；分屏首版**分组级 + 组内级同时做**。
+- 日志目录（已实现）：层级固定为 `<logPath>/[日期]/<端口号>/`。**日期目录必须在外层**：`log-cleanup.js` 的 `cleanEntries()` 只递归匹配 `^\d{4}-\d{2}-\d{2}$` 的目录（第 35 行），若写成 `<logPath>/COM3/2026-04-01/`，外层 `COM3` 不匹配日期格式会被 `continue` 跳过，过期日志永远不会被清理。目录名用 `path.basename(portPath)` 并去尾部 `.`/空格，端口缺失时退回 `groupId`；Shell 固定用 `_shell`。
 - 并发模型（核实结论，详见设计文档 5A）：**串口读已经是线程化的**。`@serialport/bindings-cpp` 在 Windows 上为每个端口 `CreateThread` 出 `ReadThread`，内部 `ReadFileEx` + `SleepEx(INFINITE, TRUE)` 阻塞等待，数据到达后 `uv_async_send` 回 JS 线程（`src/serialport_win.cpp`）；Linux/macOS 走 libuv 线程池（`dist/unix-read.js`）。因此**不要为了「多线程」把串口搬进 `worker_threads`**：native 句柄不可跨线程转移，只能让 worker 自己打开，反而使主进程失去端口控制权。
-- 多线程的真实价值在**写盘**：`fs.appendFileSync`（`main.js:772`/`844`/`958`）运行在主线程，端口数增多后一个高吞吐端口会拖慢所有端口，因此列为 P1.5（日志落盘去同步化），复用 `chart-parser-worker-client.js` 的队列/超时/重启范式。
-- 已确认缺陷：`flushSerialOutputQueue()`（`main.js:2807`）合并队列时只取 `queued[0].sessionId` 作为整批标识，多端口下会把整批贴错 session，导致**串流**。P1 必须改为按 sessionId 分桶。
+- 多线程的真实价值在**写盘**：`fs.appendFileSync`（`main.js` 的 appendToTabLogSync / flushRawBinaryLogSync / saveLog）运行在主线程，端口数增多后一个高吞吐端口会拖慢所有端口，因此列为 P1.5（日志落盘去同步化），复用 `chart-parser-worker-client.js` 的队列/超时/重启范式。
+- P1 验证记录：双端口真机并发（COM6 + COM1）同时打开、独立写入、关闭一个另一个不受影响；完整测试套件 255/255；沙箱行为验证 19 项、双端口端到端 9 项均通过；模块体加载门禁 3/3 通过。
+- **启动崩溃教训（已修复，必须遵守）**：`main.js` 曾在模块顶层写 `let activeMainLogGroupId = DEFAULT_SERIAL_GROUP_ID;`，而 `const DEFAULT_SERIAL_GROUP_ID = 'default';` 声明在其后约 2000 行。`const`/`let` 具有暂时性死区（TDZ），模块加载执行到该行时抛出 `ReferenceError: Cannot access 'DEFAULT_SERIAL_GROUP_ID' before initialization`，主进程加载失败、窗口根本无法创建。修复方式：把常量前置到 `SERIAL_LOG_FOLDER_SHELL` 之后、所有顶层使用者之前，并删除后部重复声明。
+  - **为什么原有校验没拦住**：`node --check` 只做语法解析、**从不执行代码**，看不见 TDZ；原单元测试是对源码做正则断言，同样不执行模块体。二者在应用已完全无法启动时仍然全绿。
+  - **硬性规则**：任何改动 `main.js` 顶层结构的变更（新增/移动顶层 `const`/`let`、新增顶层立即求值的初始化表达式），**必须真的执行一次模块体**来验证，不能只靠 `node --check` 与正则断言。
+  - **门禁**：`test/main-module-load.test.js` 用 `vm.runInThisContext` 执行完整 `main.js` 模块体（只 stub `electron` / `electron-log` / `serialport` / `@serialport/*`，相对 require 用 `Module.createRequire(mainPath)` 解析），并含一个**反向对照**用例：构造 usage-before-declaration 片段并断言确实抛出 `ReferenceError`，防止门禁退化成恒真。
+  - **进程清理提醒**：`Start-Process electron.cmd` 拿到的是 `cmd.exe` 包装进程，结束它**不会**连带结束 `electron.exe` 子进程树。验证完应用后必须用 `Get-Process electron | Where-Object { $_.Path -eq '<repo>\node_modules\electron\dist\electron.exe' }` 精确核对并清理，不要凭 PID 数量或「应该无关」的推断放过残留窗口。
 
 ---
 

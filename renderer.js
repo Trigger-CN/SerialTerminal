@@ -3382,6 +3382,7 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
     try {
         const requestSessionId = serialSessionId;
         const writeRequest = {
+            groupId: DEFAULT_SERIAL_GROUP_ID,
             mode: profileRequest.mode, content: profileRequest.content,
             encoding: profileRequest.encoding, appendCrLf: profileRequest.appendCrLf,
             source: request.source || 'renderer', terminalEnter: request.terminalEnter === true,
@@ -4718,7 +4719,7 @@ function disconnectSerial() {
         tab.stream?.reset();
     });
     updateSerialConnectionState(false);
-    ipcRenderer.send('disconnect-serial');
+    ipcRenderer.send('disconnect-serial', { groupId: DEFAULT_SERIAL_GROUP_ID });
 }
 
 function waitForSerialDisconnected() {
@@ -4888,6 +4889,10 @@ const refreshBtn = document.getElementById('refresh-btn');
 
 let isConnected = false;
 
+// 多串口 P1：渲染层暂仍只操作一个串口分组。P2 引入真正的分组上下文后，
+// 这里会改为当前激活分组的 id；主进程已按 groupId 隔离，未传时回退到该默认值。
+const DEFAULT_SERIAL_GROUP_ID = 'default';
+
 ensureThroughputSvg(throughputRxChart, 'rx');
 ensureThroughputSvg(throughputTxChart, 'tx');
 updateThroughputPanel({
@@ -5000,6 +5005,7 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
     if (reconnecting) setActionStatus(`正在应用新的波特率 ${baudRate}...`);
     try {
         const connectResult = await ipcRenderer.invoke('connect-serial', {
+            groupId: DEFAULT_SERIAL_GROUP_ID,
             path,
             baudRate,
             dataBits,
