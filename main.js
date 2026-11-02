@@ -972,7 +972,7 @@ function closeMainLogSession({ notify = true } = {}) {
 }
 
 function saveAllTabLogs({ notify = true, closeEntries = true } = {}) {
-  if (!currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return;
+  if (!currentConfig.logEnabled || !currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return;
   const savedPaths = [];
   const completedTabIds = [];
   for (const [tabId, entry] of tabLogBuffers.entries()) {
@@ -1002,6 +1002,21 @@ function closeShellTabLogSessions({ notify = true } = {}) {
   }
 }
 
+// 关闭自动日志时把已缓冲内容落盘并清空所有日志会话，避免重新开启后接写到旧文件。
+function closeLogSessionsForDisabled() {
+  flushRawBinaryLogSync();
+  if (currentConfig.saveAllTabsLogToFiles) {
+    saveAllTabLogs({ notify: false });
+    tabLogBuffers.clear();
+  } else {
+    saveLog({ notify: false });
+  }
+  logBuffer = [];
+  logBufferByteCount = 0;
+  mainLogFilePath = '';
+  rawBinaryLogPath = '';
+}
+
 function stripAnsi(str) {
   if (typeof str !== 'string' || !str) return str || '';
   if (currentConfig.stripAnsiInLog === false) return str;
@@ -1028,9 +1043,11 @@ function writeLog(data) {
 
 function writeTabLog(tabId, title, data) {
   if (!tabId || typeof data !== 'string' || !data) return;
+  // 自动日志总开关关闭后必须整体停止写盘，否则分标签页分支会继续追加到旧文件。
+  if (!currentConfig.logEnabled) return;
   if (tabId.startsWith('tab-shell-') && !currentConfig.saveShellTabsLogToFiles) return;
   const clean = stripAnsi(data);
-  if (tabId === 'tab-main' && currentConfig.logEnabled) {
+  if (tabId === 'tab-main') {
     writeLog(clean);
   }
   if (!currentConfig.saveAllTabsLogToFiles) return;
@@ -1052,6 +1069,8 @@ function writeTabLog(tabId, title, data) {
 }
 
 function flushPendingLogs({ notify = false } = {}) {
+  // 自动日志关闭后不再进行任何周期性刷盘，避免空缓冲也去创建文件。
+  if (!currentConfig.logEnabled) return;
   flushRawBinaryLogSync();
   if (currentConfig.saveAllTabsLogToFiles) {
     saveAllTabLogs({ notify, closeEntries: false });
@@ -1162,6 +1181,10 @@ function saveConfig(config) {
     saveAllTabLogs();
   } else if (!currentConfig.saveAllTabsLogToFiles && normalized.saveAllTabsLogToFiles) {
     closeMainLogSession();
+  }
+  if (currentConfig.logEnabled && !normalized.logEnabled) {
+    // 关闭自动日志总开关：先把已缓冲内容落盘并清空会话，避免切换后仍向旧文件追加。
+    closeLogSessionsForDisabled();
   }
   currentConfig = normalized;
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
@@ -2168,7 +2191,7 @@ ipcMain.on('flush-tab-logs', () => {
 });
 
 ipcMain.on('flush-tab-log', (event, payload = {}) => {
-  if (!currentConfig.saveAllTabsLogToFiles || !payload.tabId) { return; }
+  if (!currentConfig.logEnabled || !currentConfig.saveAllTabsLogToFiles || !payload.tabId) { return; }
   const entry = tabLogBuffers.get(payload.tabId);
   if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) { return; }
   if (flushTabLogEntrySync(payload.tabId, entry)) {
@@ -2897,7 +2920,7 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
             return;
         }
         writeLog(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`);
-        if (currentConfig.saveAllTabsLogToFiles) {
+        if (currentConfig.logEnabled && currentConfig.saveAllTabsLogToFiles) {
           const title = 'Main_Terminal';
           tabLogBuffers.set('tab-main', { title, buffer: [], byteCount: 0, filePath: '' });
         }

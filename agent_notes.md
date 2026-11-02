@@ -529,7 +529,9 @@ npm run dist:linux
 - `rawBinaryBuffers` 保存 RX-only Buffer，并用 `rawBinaryByteCount` 按真实字节数计数；达到阈值后由 `flushRawBinaryLogSync()` 追加到 `.bin`
 - 各显示日志缓冲达到 `getAutoFlushThreshold()` 后同步追加落盘；5 秒定时器还会静默刷盘所有待处理日志，降低异常退出的丢失窗口
 - `ensureMainLogFilePath()`、`ensureTabLogFile()` 和 `ensureRawBinaryLogPath()` 按日志会话延迟创建并缓存路径，后续持续追加，避免产生碎片文件
-- `connect-serial` 在启用全部 tab 日志时预注册 `tab-main` 条目；实际文件路径仍在首次写入时创建
+- `connect-serial` 仅在 `logEnabled` 与 `saveAllTabsLogToFiles` 同时开启时才预注册 `tab-main` 条目；实际文件路径仍在首次写入时创建
+- **`logEnabled` 是全部写盘路径的总开关**：`writeTabLog()` 在分流前统一校验它，`saveAllTabLogs()`、`flushPendingLogs()` 与 `flush-tab-log` 也各自校验，因此关闭后不会再有追加写入（包括分标签页与 Shell 日志）
+- 关闭 `logEnabled` 时由 `closeLogSessionsForDisabled()` 把已缓冲内容一次性落盘、清空所有缓冲并重置文件路径，避免重新开启时接写到旧文件
 
 #### 日志标题命名
 - 日志标题使用固定英文名，不受界面语言切换影响：
@@ -814,11 +816,12 @@ npm run dist:linux
 - `ensureMainLogFilePath()` / `ensureTabLogFile(tabId)` / `ensureRawBinaryLogPath()`：为三类日志延迟创建并缓存路径
 - `flushTabLogEntrySync()` / `saveAllTabLogs()`：追加刷盘并管理各 tab 日志条目
 - `writeLog(data)` / `saveLog()`：维护未启用全部 tab 日志时的通用主日志缓冲
-- `writeTabLog(tabId, title, data)`：接收 renderer 的显示日志，统一处理 ANSI，并分流到通用主日志或 `tabLogBuffers`；Shell 需额外通过 `saveShellTabsLogToFiles` 开关
+- `writeTabLog(tabId, title, data)`：接收 renderer 的显示日志，先校验 `logEnabled` 总开关，再统一处理 ANSI 并分流到通用主日志或 `tabLogBuffers`；Shell 需额外通过 `saveShellTabsLogToFiles` 开关
 - `closeShellTabLogSessions()`：关闭 Shell 自动日志时刷盘并移除已有 Shell 日志条目
-- `flushPendingLogs()` / `startLogAutoFlushTimer()`：每 5 秒静默刷盘显示日志与 RX Raw 日志
+- `closeLogSessionsForDisabled()`：关闭 `logEnabled` 时刷盘、清空所有日志缓冲并重置文件路径
+- `flushPendingLogs()` / `startLogAutoFlushTimer()`：每 5 秒静默刷盘显示日志与 RX Raw 日志；`logEnabled` 关闭时直接返回
 - `cleanupSerialConnection()`：清理串口状态并刷盘 RX Raw；显示日志由 renderer 的断开事件处理继续触发 flush
-- `ipcMain.handle('connect-serial')`：串口连接入口；启用全部 tab 日志时预注册 `tab-main`
+- `ipcMain.handle('connect-serial')`：串口连接入口；仅 `logEnabled` 与全部 tab 日志同时开启时预注册 `tab-main`
 - `ipcMain.handle('serial-write')`：唯一串口发送入口
 - `ipcMain.on('save-config')`：渲染层配置保存
 - `ipcMain.handle('connect-serial')`：串口连接入口，预注册 `tab-main` 条目

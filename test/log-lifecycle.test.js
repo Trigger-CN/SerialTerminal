@@ -74,3 +74,20 @@ test('resetting preferences preserves the telemetry installation identity', () =
   assert.match(main, /ipcMain\.on\('reset-config'[\s\S]*telemetryState = \{[\s\S]*telemetryInstallationId[\s\S]*telemetryLastReportedVersion/);
   assert.match(main, /currentConfig = loadConfig\(\);\s*currentConfig = normalizeConfig\(\{ \.\.\.currentConfig, \.\.\.telemetryState \}, currentConfig\)/);
 });
+
+test('disabling automatic logging stops every file write path, including per-tab logs', () => {
+  // writeTabLog 必须在分流前统一检查总开关，否则分标签页分支会绕过它继续 append。
+  assert.match(main, /function writeTabLog\(tabId, title, data\) \{[\s\S]*?if \(!currentConfig\.logEnabled\) return;[\s\S]*?if \(tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles\)/);
+  // 分标签页刷盘与单标签页刷盘同样要受总开关约束。
+  assert.match(main, /function saveAllTabLogs\([\s\S]*?if \(!currentConfig\.logEnabled \|\| !currentConfig\.saveAllTabsLogToFiles \|\| tabLogBuffers\.size === 0\) return;/);
+  assert.match(main, /ipcMain\.on\('flush-tab-log'[\s\S]*?if \(!currentConfig\.logEnabled \|\| !currentConfig\.saveAllTabsLogToFiles \|\| !payload\.tabId\) \{ return; \}/);
+  // 周期性刷盘在关闭后必须直接返回，不能创建空文件。
+  assert.match(main, /function flushPendingLogs\(\{ notify = false \} = \{\}\) \{[\s\S]*?if \(!currentConfig\.logEnabled\) return;[\s\S]*?flushRawBinaryLogSync\(\);/);
+  // 串口重连不能无条件重建主日志条目。
+  assert.match(main, /if \(currentConfig\.logEnabled && currentConfig\.saveAllTabsLogToFiles\) \{\s*const title = 'Main_Terminal';/);
+});
+
+test('turning automatic logging off flushes and closes log sessions', () => {
+  assert.match(main, /function closeLogSessionsForDisabled\(\) \{[\s\S]*?flushRawBinaryLogSync\(\)[\s\S]*?saveAllTabLogs\(\{ notify: false \}\)[\s\S]*?tabLogBuffers\.clear\(\)[\s\S]*?mainLogFilePath = '';[\s\S]*?rawBinaryLogPath = '';/);
+  assert.match(main, /if \(currentConfig\.logEnabled && !normalized\.logEnabled\) \{[\s\S]*?closeLogSessionsForDisabled\(\);/);
+});
