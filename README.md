@@ -299,6 +299,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 ├─ agent_notes.md             项目接手与维护说明
 ├─ HEX_FEATURE_TODO.md         Hex 功能实施状态、测试矩阵与未完成项
 ├─ CHART_TAB_IMPLEMENTATION_PLAN.md  图表设计基线、实施状态与验收标准
+├─ MULTI_SERIAL_DESIGN.md     多串口支持设计基线与分阶段实施方案
 ├─ package.json               依赖、脚本与打包配置
 └─ README.md                  项目说明
 ```
@@ -310,6 +311,7 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 - `ToDo.md`：全仓库仍需执行的工程待办与验证基线。
 - `HEX_FEATURE_TODO.md`：Hex 功能的历史实施记录和剩余实机测试矩阵。
 - `CHART_TAB_IMPLEMENTATION_PLAN.md`：图表页设计基线、当前落地映射和剩余性能/交互验证。
+- `MULTI_SERIAL_DESIGN.md`：多串口支持的设计基线，含数据模型、主进程多实例、双层标签栏、两级分屏与分阶段验收（尚未实现）。
 - `telemetry-server/README.md`：遥测与动态更新服务的独立部署、数据和运维说明。
 
 ## 技术栈

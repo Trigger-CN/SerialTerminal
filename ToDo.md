@@ -5,8 +5,8 @@
 ## 当前状态
 
 - 已完成项保留为审查和实施记录；未勾选项才是当前工程待办。
-- 专项硬件、跨平台和长时间验证分别记录在 `HEX_FEATURE_TODO.md` 与 `CHART_TAB_IMPLEMENTATION_PLAN.md`，本文件只保留全局门禁。
-- 当前配置 schema 为 v11；开发与 CI 使用 Node.js >=22.12.0；`npm test` 同时运行根项目和 `telemetry-server` 测试。
+- 专项硬件、跨平台和长时间验证分别记录在 `HEX_FEATURE_TODO.md` 与 `CHART_TAB_IMPLEMENTATION_PLAN.md`，多串口设计基线记录在 `MULTI_SERIAL_DESIGN.md`，本文件只保留全局门禁。
+- 当前配置 schema 为 v14（以 `main.js` 的 `CONFIG_VERSION` 为准）；开发与 CI 使用 Node.js >=22.12.0；`npm test` 同时运行根项目和 `telemetry-server` 测试。
 
 
 ## P0 - 优先修复
@@ -140,6 +140,36 @@
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
 
+## P3 - 多串口支持（设计已定，尚未实施）
+
+完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做；实施先只做 P1。
+
+- [ ] **P1：主进程多实例化（当前唯一开放的实施项）**
+  - 位置：`main.js` 的 `currentSerialPort` 及配套单例（`serialSessionId`/`serialSendEncoding`/`serialNewlineMode`/`serialConnectInProgress`/`rawBinary*`/`tabLogBuffers`/`throughputState`）。
+  - 将单例下沉为 `Map<groupId, session>`；串口 IPC 通道增加 `groupId`；`connect-serial` 不再关闭其他分组端口；新增 `disconnect-serial(groupId)`。
+  - **日志目录按端口号建子文件夹**：层级固定为 `<logPath>/[日期]/<端口号>/`，日期目录必须在外层（`log-cleanup.js:35` 只递归匹配 `^\d{4}-\d{2}-\d{2}$` 的目录，反过来会导致过期日志永远清不掉）。目录名用 `path.basename(portPath)` 去尾部 `.`/空格，端口缺失时退回 `groupId`，Shell 固定用 `_shell`。改造点：`ensureLogDirectory`/`ensureMainLogFilePath`/`ensureRawBinaryLogPath`/`ensureTabLogFile`。
+  - **必须一并修复**：`mainLogFilePath` 在 `connect-serial` 里从未重置（只重置了 `rawBinaryLogPath`），当前换端口后通用日志会继续写旧文件；多端口后会变成「日志写进错误端口的文件夹」。
+  - `flushSerialOutputQueue()`（`main.js:2807`）必须改为按 `sessionId` 分桶：现在只用 `queued[0].sessionId` 当整批标识，多端口下会贴错会话而串流。
+  - **不改线程模型**：串口读已由 binding 自带 OS 线程（Windows `ReadThread` + `ReadFileEx`/`SleepEx`，Linux/macOS 走 libuv 线程池），不要为了「多线程」把端口搬进 `worker_threads`（native 句柄不可跨线程转移）。
+  - 重点风险：`cleanupSerialConnection()` 现在用 `currentSerialPort` 判断迟到事件，多端口下会把真实数据当幽灵事件丢弃，必需改为按 `sessionId` 判定。
+  - **首个门禁**：双端口真机并发打开。未验证 Node `serialport` 在本项目环境下能稳定同时持有两个端口；不通过则整个方案需重新评估。
+  - 验收：`npm test` 全绿；单端口行为完全回归；两组同时收发逐字节校验不串流；关闭其中一组不影响另一组；采集双端口高吞吐下的主线程响应基线。
+  - 明确不做：任何 UI 改动、双层标签栏、分屏改造、设置侧栏跟随、日志写入去同步化（后者归 P1.5）。
+
+- [ ] **P1.5：日志落盘去同步化（多线程的真实收益点）**
+  - 位置：`main.js:772` `appendToTabLogSync`、`main.js:844` raw 二进制刷盘、`main.js:958` `saveLog`——三者均为 `fs.appendFileSync`，阻塞主进程 JS 线程。
+  - 方案：引入日志写入 Worker，沿用 `chart-parser-worker-client.js` 已成熟的队列/超时/重启范式；队列按 `groupId` 分桶避免串写；溢出提示沿用现有 `shouldAcceptMoreCachedLog` 语义。
+  - 动因：端口数增加时写盘频率线性上升，一个高吞吐端口会拖慢所有端口。
+  - 不做：配置写盘（`fs.writeFileSync`）保持同步，触发频率低、收益不抵风险。
+
+- [ ] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
+- [ ] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时塌回一层）
+- [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）
+- [ ] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）
+
+P2–P5 待 P1 验证通过后再逐个开工，不得提前并行。
+
+## 验证基线
 ## 验证基线
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
