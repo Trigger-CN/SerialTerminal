@@ -80,6 +80,9 @@ const elements = {
   saveShellTabsLogToFiles: document.getElementById('saveShellTabsLogToFiles'),
   stripAnsiInLog: document.getElementById('stripAnsiInLog'),
   logSettings: document.getElementById('log-settings'),
+  echoSentData: document.getElementById('echoSentData'),
+  echoSentDataBothFormats: document.getElementById('echoSentDataBothFormats'),
+  echoSentDataInFilterTabs: document.getElementById('echoSentDataInFilterTabs'),
   logPath: document.getElementById('logPath'),
   logCreateDateFolder: document.getElementById('logCreateDateFolder'),
   logRetentionDays: document.getElementById('logRetentionDays'),
@@ -507,6 +510,9 @@ async function init() {
 
   elements.clearAllLogsIncludesShell.checked = config.clearAllLogsIncludesShell === true;
   elements.logEnabled.checked = config.logEnabled;
+  elements.echoSentData.checked = config.echoSentData !== false;
+  elements.echoSentDataBothFormats.checked = config.echoSentDataBothFormats === true;
+  elements.echoSentDataInFilterTabs.checked = config.echoSentDataInFilterTabs !== false;
   elements.saveAllTabsLogToFiles.checked = config.saveAllTabsLogToFiles === true;
   elements.saveShellTabsLogToFiles.checked = config.saveShellTabsLogToFiles === true;
   elements.saveShellTabsLogToFiles.disabled = !elements.saveAllTabsLogToFiles.checked;
@@ -852,6 +858,9 @@ elements.saveBtn.onclick = async () => {
     scrollToBottomOnSend: elements.scrollToBottomOnSend.checked,
     clearAllLogsIncludesShell: elements.clearAllLogsIncludesShell.checked,
     logEnabled: elements.logEnabled.checked,
+    echoSentData: elements.echoSentData.checked,
+    echoSentDataBothFormats: elements.echoSentDataBothFormats.checked,
+    echoSentDataInFilterTabs: elements.echoSentDataInFilterTabs.checked,
     saveAllTabsLogToFiles: elements.saveAllTabsLogToFiles.checked,
     saveShellTabsLogToFiles: elements.saveShellTabsLogToFiles.checked,
     stripAnsiInLog: elements.stripAnsiInLog.checked,

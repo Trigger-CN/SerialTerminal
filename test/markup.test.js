@@ -189,6 +189,110 @@ test('preferences persist the optional Shell clear and automatic log scopes', ()
   assert.match(preferences, /clearAllLogsIncludesShell: elements\.clearAllLogsIncludesShell\.checked/);
   assert.match(preferences, /saveShellTabsLogToFiles: elements\.saveShellTabsLogToFiles\.checked/);
 });
+test('sent data echo is configurable and available from both settings surfaces', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const prefsHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
+
+  assert.match(main, /echoSentData: true,/);
+  assert.match(main, /echoSentDataBothFormats: false,/);
+  assert.match(main, /echoSentDataInFilterTabs: true,/);
+  assert.match(main, /echoSentDataHighlightColor: '#1e3a5f'/);
+  assert.match(main, /normalized\.echoSentData = normalizeBoolean\(source\.echoSentData, true\)/);
+  assert.match(main, /normalized\.echoSentDataHighlightColor = HEX_COLOR_PATTERN\.test/);
+
+  // 左侧设置 tab 的三个开关。
+  assert.match(html, /id="echo-sent-data"[\s\S]*?data-i18n="main\.echoSentData"/);
+  assert.match(html, /id="echo-sent-data-both"[\s\S]*?data-i18n="main\.echoSentDataBoth"/);
+  assert.match(html, /id="echo-sent-data-filter"[\s\S]*?data-i18n="main\.echoSentDataFilter"/);
+
+  // 偏好设置窗口的三个开关，与左侧栏共享同一组配置键。
+  assert.match(prefsHtml, /id="echoSentData"[\s\S]*?data-i18n="prefs\.echoSentData"/);
+  assert.match(prefsHtml, /id="echoSentDataBothFormats"[\s\S]*?data-i18n="prefs\.echoSentDataBothFormats"/);
+  assert.match(prefsHtml, /id="echoSentDataInFilterTabs"[\s\S]*?data-i18n="prefs\.echoSentDataInFilterTabs"/);
+  assert.match(preferences, /echoSentData: elements\.echoSentData\.checked/);
+  assert.match(preferences, /echoSentDataBothFormats: elements\.echoSentDataBothFormats\.checked/);
+  assert.match(preferences, /echoSentDataInFilterTabs: elements\.echoSentDataInFilterTabs\.checked/);
+
+  // 左侧栏开关变化时立即生效并持久化。
+  assert.match(renderer, /echoSentDataCb\?\.addEventListener\('change'[\s\S]*?ipcRenderer\.send\('update-display-settings', \{ echoSentData \}\)/);
+  assert.match(renderer, /echoSentDataBothCb\?\.addEventListener\('change'[\s\S]*?\{ echoSentDataBothFormats \}/);
+  assert.match(renderer, /echoSentDataFilterCb\?\.addEventListener\('change'[\s\S]*?\{ echoSentDataInFilterTabs \}/);
+});
+
+test('sidebar settings group receive and send items under labelled sections', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+  // 两个带标题的分组。
+  assert.match(html, /<section class="settings-section" aria-labelledby="settings-receive-title">/);
+  assert.match(html, /id="settings-receive-title" class="settings-section-title" data-i18n="main\.receiveSettings"/);
+  assert.match(html, /<section class="settings-section" aria-labelledby="settings-send-title">/);
+  assert.match(html, /id="settings-send-title" class="settings-section-title" data-i18n="main\.sendSettings"/);
+
+  // 接收组内：接收模式/编码 + 显示时间、行号；不得混入发送项。
+  const receiveSection = html.match(/aria-labelledby="settings-receive-title"[\s\S]*?<\/section>/)[0];
+  assert.match(receiveSection, /id="receive-mode-select"/);
+  assert.match(receiveSection, /id="receive-encoding-select"/);
+  assert.match(receiveSection, /id="show-timestamp"/);
+  assert.match(receiveSection, /id="show-lineno"/);
+  assert.doesNotMatch(receiveSection, /id="send-encoding-select"/);
+  assert.doesNotMatch(receiveSection, /id="echo-sent-data"/);
+
+  // 发送组内：发送编码 + 发送回显三开关；不得混入接收项。
+  const sendSection = html.match(/aria-labelledby="settings-send-title"[\s\S]*?<\/section>/)[0];
+  assert.match(sendSection, /id="send-encoding-select"/);
+  assert.match(sendSection, /id="echo-sent-data"/);
+  assert.match(sendSection, /id="echo-sent-data-both"/);
+  assert.match(sendSection, /id="echo-sent-data-filter"/);
+  assert.doesNotMatch(sendSection, /id="receive-mode-select"/);
+  assert.doesNotMatch(sendSection, /id="show-timestamp"/);
+
+  // 分组容器保留原有样式类，保证主题与间距不依赖新选择器。
+  assert.match(css, /\.settings-section-title \{[\s\S]*?text-transform: uppercase;/);
+  assert.match(receiveSection, /class="settings-group"/);
+  assert.match(sendSection, /class="settings-group"/);
+});
+
+test('sent records render as a single highlighted line and never touch the RX parser', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+
+  // 整行背景：写前缀色 → 内容 → SGR 复位 → 整行换行。
+  assert.match(renderer, /function renderSentRecord\(record\) \{[\s\S]*?hexToAnsiBackground\(echoSentDataHighlightColor\)/);
+  assert.match(renderer, /writeTerminalOutput\(serialTerm, `\$\{bg\}\$\{body\}\\x1b\[0m\\r\\n`\)/);
+  assert.match(renderer, /writeMainTabLog\(`\$\{body\}\\r\\n`\)/);
+
+  // 回显不得进入接收解析器，也不得占用接收行号计数器；只检查函数体自身，避免跨函数误判。
+  const sentBody = renderer.match(/function renderSentRecord\(record\) \{[\s\S]*?\n\}/)[0];
+  assert.doesNotMatch(sentBody, /dataParser\.parse/);
+  assert.doesNotMatch(sentBody, /serialLineCounter/);
+  assert.doesNotMatch(sentBody, /processQuickSendAutoTriggers/);
+
+  // 仅在实际写入成功后回显。
+  assert.match(renderer, /if \(result\.ok\) \{\s*renderSentRecord\(\{/);
+
+  // 开启“追加 CRLF”时，回显文本必须包含那 2 字节，与 header 中的字节数自洽。
+  assert.match(renderer, /text: profileRequest\.mode === 'text'\s*\? `\$\{profileRequest\.content\}\$\{profileRequest\.appendCrLf \? '\\r\\n' : ''\}`/);
+});
+
+test('filter tabs can show sent data only and persist the choice', () => {
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+
+  assert.match(renderer, /class="filter-toggle-btn filter-sent-only-btn"[\s\S]*?main\.showSentOnly/);
+  assert.match(renderer, /function applySentOnlyMode\(enabled\) \{[\s\S]*?tabState\.showSentOnly = enabled;/);
+  assert.match(renderer, /sentOnlyBtn\.onclick = \(e\) => \{[\s\S]*?applySentOnlyMode\(!tabState\.showSentOnly\)/);
+
+  // 开启后接收路径必须跳过该标签页，否则发送历史会被接收内容冲淡。
+  assert.match(renderer, /if \(tab\.showSentOnly === true \|\| tab\.dataMode !== 'text'\) return;/);
+  assert.match(renderer, /if \(tab\.showSentOnly === true \|\| tab\.dataMode !== 'hex'\) return;/);
+
+  assert.match(renderer, /showSentOnly: tab\.showSentOnly === true,/);
+  assert.match(main, /showSentOnly: normalizeBoolean\(tab\.showSentOnly, false\)/);
+});
+
 
 test('custom baud rates are normalized, persisted, and restored as reusable options', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');

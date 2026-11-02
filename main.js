@@ -474,7 +474,8 @@ function normalizeConfig(config, defaults) {
   normalized.filterTabs = Array.isArray(source.filterTabs)
     ? source.filterTabs.filter(tab => tab && typeof tab === 'object').map(tab => ({
         ...tab,
-        dataMode: oneOf(tab.dataMode, SERIAL_MODES, migratedMode)
+        dataMode: oneOf(tab.dataMode, SERIAL_MODES, migratedMode),
+        showSentOnly: normalizeBoolean(tab.showSentOnly, false)
       }))
     : [];
   normalized.chartTabs = Array.isArray(source.chartTabs)
@@ -503,6 +504,12 @@ function normalizeConfig(config, defaults) {
     : [];
   normalized.clearAllLogsIncludesShell = normalizeBoolean(source.clearAllLogsIncludesShell, false);
   normalized.scrollToBottomOnSend = normalizeBoolean(source.scrollToBottomOnSend, true);
+  normalized.echoSentData = normalizeBoolean(source.echoSentData, true);
+  normalized.echoSentDataBothFormats = normalizeBoolean(source.echoSentDataBothFormats, false);
+  normalized.echoSentDataInFilterTabs = normalizeBoolean(source.echoSentDataInFilterTabs, true);
+  normalized.echoSentDataHighlightColor = HEX_COLOR_PATTERN.test(source.echoSentDataHighlightColor || '')
+    ? source.echoSentDataHighlightColor
+    : defaults.echoSentDataHighlightColor;
   normalized.saveShellTabsLogToFiles = normalizeBoolean(source.saveShellTabsLogToFiles, false);
   normalized.saveRawSerialToFile = normalizeBoolean(source.saveRawSerialToFile, false);
   normalized.manualExportDirectory = typeof source.manualExportDirectory === 'string' && source.manualExportDirectory.trim()
@@ -548,6 +555,10 @@ function loadConfig() {
     logEnabled: false,
     saveAllTabsLogToFiles: false,
     scrollToBottomOnSend: true,
+    echoSentData: true,
+    echoSentDataBothFormats: false,
+    echoSentDataInFilterTabs: true,
+    echoSentDataHighlightColor: '#1e3a5f',
     clearAllLogsIncludesShell: false,
     saveShellTabsLogToFiles: false,
     logIncludeTimestamp: false,

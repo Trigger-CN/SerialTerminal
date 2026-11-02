@@ -125,38 +125,56 @@
                     <option value="space">Parity: Space</option>
                 </select>
 
-                <div class="serial-mode-grid" aria-label="Serial receive settings" data-i18n-aria-label="main.serialDataModes">
-                    <span class="serial-mode-label" data-i18n="main.receiveShort" data-i18n-fallback="RX">RX</span>
-                    <select id="receive-mode-select" title="Receive display mode" data-i18n-title="main.receiveDisplayMode">
-                        <option value="text" data-i18n="main.textMode" data-i18n-fallback="Text">Text</option>
-                        <option value="hex" data-i18n="main.hexMode" data-i18n-fallback="Hex">Hex</option>
-                    </select>
-                    <select id="receive-encoding-select" title="Receive encoding" data-i18n-title="main.receiveEncoding">
-                        <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
-                    </select>
-                </div>
-
                 <select id="newline-mode-select" title="Newline Mode (Receive/Send)" data-i18n-title="main.newlineCrlf">
                     <option value="crlf" selected>NL: CRLF / CRLF</option>
                     <option value="lf">NL: LF / LF</option>
                     <option value="cr">NL: CR / CR</option>
                 </select>
 
-                <div class="serial-mode-grid serial-send-encoding">
-                    <label class="serial-mode-label" for="send-encoding-select" data-i18n="main.sendShort" data-i18n-fallback="TX">TX</label>
-                    <select id="send-encoding-select" title="Send encoding" data-i18n-title="main.sendEncoding">
-                        <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
-                    </select>
-                </div>
+                <section class="settings-section" aria-labelledby="settings-receive-title">
+                    <h3 id="settings-receive-title" class="settings-section-title" data-i18n="main.receiveSettings">Receive</h3>
+                    <div class="serial-mode-grid" aria-label="Serial receive settings" data-i18n-aria-label="main.serialDataModes">
+                        <span class="serial-mode-label" data-i18n="main.receiveShort" data-i18n-fallback="RX">RX</span>
+                        <select id="receive-mode-select" title="Receive display mode" data-i18n-title="main.receiveDisplayMode">
+                            <option value="text" data-i18n="main.textMode" data-i18n-fallback="Text">Text</option>
+                            <option value="hex" data-i18n="main.hexMode" data-i18n-fallback="Hex">Hex</option>
+                        </select>
+                        <select id="receive-encoding-select" title="Receive encoding" data-i18n-title="main.receiveEncoding">
+                            <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
+                        </select>
+                    </div>
 
-                <div id="display-controls" class="settings-group">
-                    <label>
-                        <input type="checkbox" id="show-timestamp"> <span class="material-icon-placeholder" data-material-icon="schedule"></span><span data-i18n="main.showTime">Show Time</span>
-                    </label>
-                    <label>
-                        <input type="checkbox" id="show-lineno"> <span class="material-icon-placeholder" data-material-icon="format_list_numbered"></span><span data-i18n="main.showLineNo">Show Line #</span>
-                    </label>
-                </div>
+                    <div id="display-controls" class="settings-group">
+                        <label>
+                            <input type="checkbox" id="show-timestamp"> <span class="material-icon-placeholder" data-material-icon="schedule"></span><span data-i18n="main.showTime">Show Time</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="show-lineno"> <span class="material-icon-placeholder" data-material-icon="format_list_numbered"></span><span data-i18n="main.showLineNo">Show Line #</span>
+                        </label>
+                    </div>
+                </section>
+
+                <section class="settings-section" aria-labelledby="settings-send-title">
+                    <h3 id="settings-send-title" class="settings-section-title" data-i18n="main.sendSettings">Send</h3>
+                    <div class="serial-mode-grid serial-send-encoding">
+                        <label class="serial-mode-label" for="send-encoding-select" data-i18n="main.sendShort" data-i18n-fallback="TX">TX</label>
+                        <select id="send-encoding-select" title="Send encoding" data-i18n-title="main.sendEncoding">
+                            <option value="utf8">UTF-8</option><option value="ascii">ASCII</option><option value="gbk">GBK</option>
+                        </select>
+                    </div>
+
+                    <div id="sent-echo-controls" class="settings-group">
+                        <label>
+                            <input type="checkbox" id="echo-sent-data"> <span class="material-icon-placeholder" data-material-icon="send"></span><span data-i18n="main.echoSentData">Show Sent Data</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="echo-sent-data-both"> <span class="material-icon-placeholder" data-material-icon="translate"></span><span data-i18n="main.echoSentDataBoth">Text + HEX</span>
+                        </label>
+                        <label>
+                            <input type="checkbox" id="echo-sent-data-filter"> <span class="material-icon-placeholder" data-material-icon="filter_alt"></span><span data-i18n="main.echoSentDataFilter">In Filter Tabs</span>
+                        </label>
+                    </div>
+                </section>
             </div>
 
             <!-- Search Tab -->

@@ -31,6 +31,7 @@ const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
 const { HexStreamFormatter } = require('./hex-formatter');
 const { serializeTerminalBuffer } = require('./terminal-buffer-text');
 const { appendPendingOutput, takePendingChunk } = require('./terminal-output-buffer');
+const { formatSentRecord } = require('./sent-record');
 const { translateConptyMouseMode } = require('./shell-mouse-compat');
 const uPlot = require('uplot');
 const { SerialTextStream } = require('./serial-text-stream');
@@ -110,6 +111,11 @@ let highlightColors = {
 };
 let mouseWheelScrollLines = 3;
 let scrollToBottomOnSend = true;
+// 发送回显配置：总开关、文本+HEX 双表示、过滤标签页展示与整行背景色。
+let echoSentData = true;
+let echoSentDataBothFormats = false;
+let echoSentDataInFilterTabs = true;
+let echoSentDataHighlightColor = '#1e3a5f';
 
 const DEFAULT_WORKSPACE_LAYOUT = {
     splitEnabled: false,
@@ -207,6 +213,9 @@ function applyTerminalWallpaper(config) {
 
 const showTimestampCb = document.getElementById('show-timestamp');
 const showLinenoCb = document.getElementById('show-lineno');
+const echoSentDataCb = document.getElementById('echo-sent-data');
+const echoSentDataBothCb = document.getElementById('echo-sent-data-both');
+const echoSentDataFilterCb = document.getElementById('echo-sent-data-filter');
 const mainSendInput = document.getElementById('main-send-input');
 const mainInputHistoryBtn = document.getElementById('main-input-history-btn');
 const mainInputHistoryMenu = document.getElementById('main-input-history-menu');
@@ -296,7 +305,22 @@ showLinenoCb.addEventListener('change', (e) => {
     }
 });
 
-// 当前刷新批次的时间戳字符串；非批次（如断连刷新）时为 null，即时生成。
+// 发送回显开关：与显示时间/行号同级，属于显示层偏好，切换后立即生效并持久化。
+echoSentDataCb?.addEventListener('change', (e) => {
+    echoSentData = e.target.checked;
+    ipcRenderer.send('update-display-settings', { echoSentData });
+});
+
+echoSentDataBothCb?.addEventListener('change', (e) => {
+    echoSentDataBothFormats = e.target.checked;
+    ipcRenderer.send('update-display-settings', { echoSentDataBothFormats });
+});
+
+echoSentDataFilterCb?.addEventListener('change', (e) => {
+    echoSentDataInFilterTabs = e.target.checked;
+    ipcRenderer.send('update-display-settings', { echoSentDataInFilterTabs });
+});
+
 let currentBatchTimestamp = null;
 
 // 每批日志只计算一次时间戳字符串，逐行复用；未传入时按当前时间即时生成。
@@ -697,7 +721,7 @@ function writeTextLines(lines) {
         writeMainTabLog(formattedLines.map(line => `${line.logPrefix}${line.highlighted}${line.delimiter}`).join(''));
     }
     filterTabs.forEach(tab => {
-        if (tab.dataMode !== 'text') return;
+        if (tab.showSentOnly === true || tab.dataMode !== 'text') return;
         const formatted = formattedLines.map(({ text, delimiter, prefix, logPrefix, globalMatches }) => {
             if (tab.filterRegex && !tab.filterRegex.test(text)) return null;
             const highlighted = applyHighlighting(text, tab.filterRegex, globalMatches);
@@ -731,7 +755,7 @@ function writeHexLines(lines) {
     writeTerminalOutput(serialTerm, mainOutput);
     writeMainTabLog(formattedLines.map(({ text, logPrefix }) => `${logPrefix}${text}\r\n`).join(''));
     filterTabs.forEach(tab => {
-        if (tab.dataMode !== 'hex') return;
+        if (tab.showSentOnly === true || tab.dataMode !== 'hex') return;
         const matched = formattedLines.map(({ text, prefix, logPrefix, globalMatches }) => {
             if (tab.filterRegex && !tab.filterRegex.test(text)) return null;
             const highlighted = applyHighlighting(text, tab.filterRegex, globalMatches);
@@ -749,6 +773,30 @@ function writeHexLines(lines) {
 }
 
 const hexFormatter = new HexStreamFormatter({}, writeHexLines);
+
+// 发送回显使用独立的背景色整行标记，不经过 SerialDataParser，也不占用接收行号。
+function renderSentRecord(record) {
+    if (!echoSentData) return;
+    const formatted = formatSentRecord(record, {
+        label: trFallback('main.txLabel', 'TX'),
+        both: echoSentDataBothFormats
+    });
+    const bg = hexToAnsiBackground(echoSentDataHighlightColor);
+    const body = formatted.line;
+    writeTerminalOutput(serialTerm, `${bg}${body}\x1b[0m\r\n`);
+    writeMainTabLog(`${body}\r\n`);
+    if (!echoSentDataInFilterTabs) return;
+    filterTabs.forEach(tab => {
+        if (tab.showSentOnly === true) {
+            writeTerminalOutput(tab.term, `${bg}${body}\x1b[0m\r\n`);
+            writeFilterTabLog(tab, `${body}\r\n`);
+            return;
+        }
+        if (tab.filterRegex && !tab.filterRegex.test(body)) return;
+        writeTerminalOutput(tab.term, `${bg}${body}\x1b[0m\r\n`);
+        writeFilterTabLog(tab, `${body}\r\n`);
+    });
+}
 
 function createTextDecoder() {
     textDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8');
@@ -2194,6 +2242,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
             <button type="button" class="filter-toggle-btn filter-case-btn" title="${tr('main.matchCase')}"><span class="material-icon-placeholder" data-material-icon="match_case"></span></button>
             <button type="button" class="filter-toggle-btn filter-word-btn" title="${tr('main.wholeWord')}"><span class="material-icon-placeholder" data-material-icon="match_word"></span></button>
             <button type="button" class="filter-toggle-btn filter-regex-btn" title="${tr('main.useRegex')}"><span class="material-icon-placeholder" data-material-icon="regular_expression"></span></button>
+            <button type="button" class="filter-toggle-btn filter-sent-only-btn" title="${trFallback('main.showSentOnly', 'Only show sent data')}"><span class="material-icon-placeholder" data-material-icon="send"></span></button>
         </div>
         <span class="filter-mode-status" role="status"></span>
     `;
@@ -2246,6 +2295,8 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         filterText: '',
         dataMode: initialState.dataMode === 'hex' ? 'hex' : (initialState.dataMode === 'text' ? 'text' : receiveDisplayMode),
         contextLine: null,
+        contextLine: null,
+        showSentOnly: initialState.showSentOnly === true,
         element: tabPane,
         btn: tabBtn
     };
@@ -2255,6 +2306,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     const caseBtn = filterHeader.querySelector('.filter-case-btn');
     const wordBtn = filterHeader.querySelector('.filter-word-btn');
     const regexBtn = filterHeader.querySelector('.filter-regex-btn');
+    const sentOnlyBtn = filterHeader.querySelector('.filter-sent-only-btn');
     const dropdownMenu = filterHeader.querySelector('.filter-history-dropdown');
     const modeStatus = filterHeader.querySelector('.filter-mode-status');
     tabState.modeStatus = modeStatus;
@@ -2348,6 +2400,26 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         updateRegex();
     };
 
+    // “仅显示发送内容”：开启后本标签页只接收发送回显，不再接收串口数据，
+    // 便于把它当成发送历史面板使用；同时暂停接收模式徽标的提示。
+    function applySentOnlyMode(enabled) {
+        tabState.showSentOnly = enabled;
+        sentOnlyBtn.classList.toggle('active', enabled);
+        tabPane.classList.toggle('sent-only', enabled);
+        if (tabState.modeStatus) tabState.modeStatus.textContent = enabled
+            ? trFallback('main.sentOnly', 'SENT')
+            : tabState.dataMode.toUpperCase();
+    }
+
+    sentOnlyBtn.onclick = (e) => {
+        e.stopPropagation();
+        applySentOnlyMode(!tabState.showSentOnly);
+        persistFilterTabs();
+    };
+
+    tabState.sentOnlyBtn = sentOnlyBtn;
+    tabState.applySentOnlyMode = applySentOnlyMode;
+
     function updateRegex() {
         tabState.filterText = input.value;
         if (!input.value) {
@@ -2436,6 +2508,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         regexBtn.classList.add('active');
     }
     updateRegex();
+    applySentOnlyMode(tabState.showSentOnly);
     
     filterTabs.push(tabState);
     updateTabTitles();
@@ -2498,6 +2571,8 @@ function persistFilterTabs({ debounce = false } = {}) {
             wholeWord: tab.wholeWord,
             useRegex: tab.useRegex,
             dataMode: tab.dataMode,
+            dataMode: tab.dataMode,
+            showSentOnly: tab.showSentOnly === true,
             paneId: tab.paneId || getTabPaneId(tab.id)
         }));
         if (currentConfig) currentConfig.filterTabs = savedTabs;
@@ -3321,6 +3396,19 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
         serialWriteChain = pendingWrite.catch(() => undefined);
         const result = await pendingWrite;
         if (result.ok && profileRequest.mode === 'text' && scrollToBottomOnSend) scrollMainTerminalToBottom();
+        if (result.ok) {
+            renderSentRecord({
+                timestamp: formatTimestamp(),
+                mode: profileRequest.mode,
+                bytes: validation.bytes
+                    ? Buffer.concat([validation.bytes, profileRequest.appendCrLf ? Buffer.from([0x0d, 0x0a]) : Buffer.alloc(0)])
+                    : Buffer.alloc(result.bytesWritten || 0),
+                // appendCrLf 真正写入的是 CRLF，回显文本必须包含它，否则字节数与可见内容不自洽。
+                text: profileRequest.mode === 'text'
+                    ? `${profileRequest.content}${profileRequest.appendCrLf ? '\r\n' : ''}`
+                    : undefined
+            });
+        }
         if (!silent) setActionStatus(result.ok
             ? trFallback('main.bytesSent', 'Sent {count} bytes', { count: result.bytesWritten })
             : trFallback('main.serialWriteFailed', 'Write failed: {error}', { error: result.message || result.code }));
@@ -4142,6 +4230,13 @@ function applyConfig(config) {
     lineNoColor = config.lineNoColor || '#67986f';
     mouseWheelScrollLines = config.mouseWheelScrollLines || 3;
     scrollToBottomOnSend = config.scrollToBottomOnSend !== false;
+    echoSentData = config.echoSentData !== false;
+    echoSentDataBothFormats = config.echoSentDataBothFormats === true;
+    echoSentDataInFilterTabs = config.echoSentDataInFilterTabs !== false;
+    echoSentDataHighlightColor = config.echoSentDataHighlightColor || '#1e3a5f';
+    if (echoSentDataCb) echoSentDataCb.checked = echoSentData;
+    if (echoSentDataBothCb) echoSentDataBothCb.checked = echoSentDataBothFormats;
+    if (echoSentDataFilterCb) echoSentDataFilterCb.checked = echoSentDataInFilterTabs;
     
     // Update Checkboxes
     showTimestamp = config.showTimestamp || false;

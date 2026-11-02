@@ -1722,6 +1722,24 @@ html.custom-titlebar .window-titlebar {
     gap: 8px;
 }
 
+/* 设置分组：接收/发送各自成块，用标题与细分隔线区分。 */
+.settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.settings-section-title {
+    margin: 0 0 2px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
 .serial-mode-grid {
     display: grid;
     grid-template-columns: 24px minmax(58px, 0.8fr) minmax(76px, 1fr);
@@ -2705,6 +2723,15 @@ html.custom-titlebar .window-titlebar {
     color: var(--accent-color);
     background: rgba(0, 122, 204, 0.2);
     border-color: var(--accent-color);
+}
+
+/* 仅显示发送内容时，过滤输入框与相关开关不再生效，用降低不透明度提示。 */
+.main-tab-pane.sent-only .filter-input-wrapper,
+.main-tab-pane.sent-only .filter-case-btn,
+.main-tab-pane.sent-only .filter-word-btn,
+.main-tab-pane.sent-only .filter-regex-btn {
+    opacity: 0.45;
+    pointer-events: none;
 }
 
 @keyframes fadeIn {

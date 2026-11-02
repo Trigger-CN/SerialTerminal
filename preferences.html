@@ -520,6 +520,20 @@
                 </div>
 
                 <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="echoSentData"> <span data-i18n="prefs.echoSentData">Show sent data in the Log terminal</span>
+                    </label>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.echoSentDataHelp">Displays each sent payload with its timestamp, byte count and a highlighted background line.</small>
+                    <label style="display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="echoSentDataBothFormats"> <span data-i18n="prefs.echoSentDataBothFormats">Show both text and HEX for sent data</span>
+                    </label>
+                    <small style="color: var(--text-secondary); display: block; margin-top: 5px;" data-i18n="prefs.echoSentDataBothFormatsHelp">When off, each entry uses the mode it was sent in.</small>
+                    <label style="display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; font-weight: normal; cursor: pointer;">
+                        <input type="checkbox" id="echoSentDataInFilterTabs"> <span data-i18n="prefs.echoSentDataInFilterTabs">Also show sent data in filter tabs</span>
+                    </label>
+                </div>
+
+                <div class="form-group">
                     <label><span class="material-icon-placeholder" data-material-icon="folder_open"></span><span data-i18n="prefs.logSavePath">Log Save Path</span></label>
                     <div style="display: flex; gap: 8px;">
                         <input type="text" id="logPath" readonly style="flex: 1;">

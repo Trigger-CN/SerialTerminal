@@ -522,7 +522,30 @@ npm run dist:linux
 - **Shell tab 日志**：renderer 仍将 shell 输出通过 `writeShellTabLog()` → `write-tab-log` 发送到主进程；仅 `saveAllTabsLogToFiles` 与 `saveShellTabsLogToFiles` 同时开启时才进入独立缓冲
 - **通用主日志**：未启用 `saveAllTabsLogToFiles` 时，`main.js::writeTabLog()` 将 `tab-main` 内容转交 `writeLog()`；启用后，主终端与过滤 tab 进入独立条目，Shell 是否进入由独立开关决定
 - **RX Raw 日志**：仅 `port.on('data')` 的原始 Buffer 进入 `bufferRawSerialBytes()`，与上述显示日志完全独立
+- **发送回显**：`sendSerialRequest()` 成功后由 `renderSentRecord()` 生成一条 TX 记录，同时写入主终端与主终端日志；不经过 `SerialDataParser`、不占用接收行号计数器、不触发快捷指令自动触发
 
+#### 发送回显（Show Sent Data）
+- 开关：`echoSentData`（总开关，默认开）、`echoSentDataBothFormats`（文本 + HEX 双表示，默认关）、`echoSentDataInFilterTabs`（过滤标签页也显示，默认开）、`echoSentDataHighlightColor`（整行背景色，默认 `#1e3a5f`）
+- 行格式：`[HH:mm:ss.SSS] [TX 12B] 内容`；发送行总是带自己的时间戳，不受 `showTimestamp` / `logIncludeTimestamp` 控制
+- 转义：`\r` `\n` `\t` 与其它不可打印字符统一转成可见字面量（如 `\x1b`），避免控制字符被 xterm 当作转义序列执行
+- 追加换行：开启 `appendCrLf`（输入框与快捷发送各自的追加换行开关）时，回显文本必须在内容末尾拼上 `\r\n`，否则 header 中的字节数会比可见字符多 2 字节，用户会误以为换行没发出去
+- 截断：文本预览最多 512 字符、HEX 预览最多 256 字节，超出后缀 `…`；完整内容仍照常发送到串口
+- 整行背景：`hexToAnsiBackground(...)` → 内容 → `\x1b[0m` → 整行 `\r\n`；依赖 xterm `_eraseAttrData()` 用当前背景填充新行，因此不需要 `\x1b[K`，也不会污染下一行
+- 仅在实际写入成功后回显；失败时只在状态栏报错
+- 格式化逻辑位于纯模块 `sent-record.js`（`formatSentRecord` / `formatSentBody` / `escapeControlChars`），单测在 `test/sent-record.test.js`
+
+#### 过滤标签页“仅显示发送内容”
+- 过滤标签页头部新增 `filter-sent-only-btn`，切换 `tab.showSentOnly`；开启后该标签页不再接收串口数据，只显示发送回显，可直接当作发送历史面板
+- 开启时 `writeTextLines()` / `writeHexLines()` 在分发阶段跳过该 tab，模式徽标显示 `SENT`，过滤输入框与大小写/整词/正则按钮变半透明且不可交互
+- `showSentOnly` 随 `filterTabs` 持久化，并在 `main.js::normalizeConfig()` 中做布尔归一化
+- `showSentOnly` 随 `filterTabs` 持久化，并在 `main.js::normalizeConfig()` 中做布尔归一化
+
+#### 左侧设置 tab 的分组结构
+- 设置页按方向分为两个 `<section class="settings-section">`，各自带 `<h3 class="settings-section-title">` 标题：`main.receiveSettings`（接收）与 `main.sendSettings`（发送）
+- 接收组：接收显示模式与接收编码、显示时间、显示行号
+- 发送组：发送编码、发送回显三个开关
+- 数据位/停止位/校验位/换行模式跨收发两侧，保持在分组之外单独成行，避免同一配置同时属于两个分组
+- 分组样式使用 `.settings-section` / `.settings-section-title`，主题颜色与间距沿用 CSS 变量；原有的 `.settings-group` 保持作为组内细分隔，不新建重复样式
 #### 缓冲与落盘机制
 - 显示日志经主进程 `writeTabLog()` 统一按 `stripAnsiInLog` 配置处理 SGR 序列，再写入 `logBuffer` 或 `tabLogBuffers`；字节数使用 `Buffer.byteLength()` 统计
 - `tabLogBuffers` 的每个条目包含 `{ title, buffer[], filePath, byteCount }`；`logBuffer` 保存未启用全部 tab 日志时的主终端显示日志
@@ -845,7 +868,9 @@ npm run dist:linux
 - `switchReceiveMode()` / `switchReceiveEncoding()`：flush 旧 RX 链路并切换 Text decoder/Hex formatter
 - `writeTextLines()` / `writeHexLines()`：分别写主终端、同模式过滤 tab 和显示日志
 - `validateSendContent()` / `formatValidation()`：渲染层实时校验和本地化状态
-- `sendSerialRequest()`：所有现代发送入口的串行 IPC 包装
+- `sendSerialRequest()`：所有现代发送入口的串行 IPC 包装；写入成功后调用 `renderSentRecord()` 回显
+- `renderSentRecord(record)`：生成发送回显行并写入主终端、主终端日志与（可选）过滤标签页
+- `applySentOnlyMode(enabled)`：切换过滤标签页的“仅显示发送内容”状态与徽标
 - `formatLineForTerminal()`
 - `writeTabLog()` / `writeMainTabLog()` / `writeFilterTabLog()` / `writeShellTabLog()`
 - `getMainTabTitle()` / `getFilterTabLogTitle()` / `getShellTabLogTitle()`：生成固定英文日志标题

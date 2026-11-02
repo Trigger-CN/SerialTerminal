@@ -66,8 +66,16 @@ const translations = {
       newlineCrlf: 'NL: CRLF / CRLF',
       newlineLf: 'NL: LF / LF',
       newlineCr: 'NL: CR / CR',
+      receiveSettings: 'Receive',
+      sendSettings: 'Send',
       showTime: 'Show Time',
       showLineNo: 'Show Line #',
+      echoSentData: 'Show Sent Data',
+      echoSentDataBoth: 'Text + HEX',
+      echoSentDataFilter: 'In Filter Tabs',
+      showSentOnly: 'Only show sent data',
+      sentOnly: 'SENT',
+      txLabel: 'TX',
       searchPlaceholder: 'Search...',
       searchResultEmpty: 'Enter text to search',
       searchResultZero: 'No results',
@@ -418,6 +426,19 @@ const logScopePreferenceTranslations = {
   de: { clearAllLogsIncludesShell: 'Shell-Tabs beim Leeren aller Log-Tabs einbeziehen', clearAllLogsIncludesShellHelp: 'Wenn deaktiviert, werden nur das serielle Hauptterminal und Filterterminals geleert.', saveAllTabsLogToFiles: 'Serielle Log-Tabs in getrennten Dateien speichern', saveShellTabsLogToFiles: 'Shell-Tab-Protokolle automatisch speichern', saveShellTabsLogToFilesHelp: 'Erfordert getrennte Dateien für serielle Log-Tabs. Wenn deaktiviert, wird die Shell-Ausgabe nicht automatisch gespeichert.' }
 };
 
+const sentEchoPrefsTranslations = {
+  en: { echoSentData: 'Show sent data in the Log terminal', echoSentDataHelp: 'Displays each sent payload with its timestamp, byte count and a highlighted background line.', echoSentDataBothFormats: 'Show both text and HEX for sent data', echoSentDataBothFormatsHelp: 'When off, each entry uses the mode it was sent in.', echoSentDataInFilterTabs: 'Also show sent data in filter tabs' },
+  'zh-CN': { echoSentData: '在 Log 终端显示发送内容', echoSentDataHelp: '每条发送记录显示时间戳、字节数，并用整行背景色标记。', echoSentDataBothFormats: '同时显示发送内容的文本和 HEX', echoSentDataBothFormatsHelp: '关闭时按发送时的模式显示。', echoSentDataInFilterTabs: '过滤标签页也显示发送内容' },
+  'zh-TW': { echoSentData: '在 Log 終端顯示傳送內容', echoSentDataHelp: '每筆傳送記錄顯示時間戳、位元組數，並以整行背景色標記。', echoSentDataBothFormats: '同時顯示傳送內容的文字與 HEX', echoSentDataBothFormatsHelp: '關閉時依傳送時的模式顯示。', echoSentDataInFilterTabs: '過濾分頁也顯示傳送內容' },
+  fr: { echoSentData: 'Afficher les données envoyées dans le terminal Log', echoSentDataHelp: 'Chaque envoi affiche son horodatage, son nombre d’octets et une ligne surlignée.', echoSentDataBothFormats: 'Afficher le texte et le HEX des envois', echoSentDataBothFormatsHelp: 'Si désactivé, chaque entrée utilise le mode d’envoi.', echoSentDataInFilterTabs: 'Afficher aussi les envois dans les onglets de filtre' },
+  ru: { echoSentData: 'Показывать отправленные данные в терминале Log', echoSentDataHelp: 'Каждая отправка отображается с отметкой времени, числом байт и подсветкой строки.', echoSentDataBothFormats: 'Показывать текст и HEX для отправленных данных', echoSentDataBothFormatsHelp: 'Если выключено, используется режим отправки.', echoSentDataInFilterTabs: 'Показывать отправленные данные и во вкладках фильтра' },
+  de: { echoSentData: 'Gesendete Daten im Log-Terminal anzeigen', echoSentDataHelp: 'Jede Sendung zeigt Zeitstempel, Byteanzahl und eine hervorgehobene Zeile.', echoSentDataBothFormats: 'Text und HEX für gesendete Daten anzeigen', echoSentDataBothFormatsHelp: 'Wenn deaktiviert, wird der Sendemodus verwendet.', echoSentDataInFilterTabs: 'Gesendete Daten auch in Filter-Tabs anzeigen' }
+};
+
+for (const [language, values] of Object.entries(sentEchoPrefsTranslations)) {
+  translations[language].prefs = { ...translations[language].prefs, ...values };
+}
+
 const shellQuickCommandTranslations = {
   en: { shellQuickCommands: 'Shell Quick Commands', noShellQuickCommands: 'No Shell quick commands', addShellQuickCommand: 'Add Shell Quick Command', editShellQuickCommand: 'Edit Shell Quick Command', deleteShellQuickCommand: 'Delete Shell Quick Command', shellCommand: 'Command', shellQuickCommandAppendEnter: 'Execute immediately (append Enter)', shellCommandRequired: 'Enter a Shell command', shellQuickCommandNeedsShell: 'Activate a Shell tab first', shellQuickCommandNotReady: 'The active Shell is not ready', shellQuickCommandSent: 'Sent Shell command: {label}' },
   'zh-CN': { shellQuickCommands: 'Shell 快捷指令', noShellQuickCommands: '暂无 Shell 快捷指令', addShellQuickCommand: '添加 Shell 快捷指令', editShellQuickCommand: '编辑 Shell 快捷指令', deleteShellQuickCommand: '删除 Shell 快捷指令', shellCommand: '命令', shellQuickCommandAppendEnter: '立即执行（追加 Enter）', shellCommandRequired: '请输入 Shell 命令', shellQuickCommandNeedsShell: '请先激活一个 Shell 标签页', shellQuickCommandNotReady: '当前 Shell 尚未就绪', shellQuickCommandSent: '已发送 Shell 指令：{label}' },
@@ -704,6 +725,31 @@ const addToListTranslations = {
 
 for (const [language, value] of Object.entries(addToListTranslations)) {
   translations[language].main.addToList = value;
+}
+
+const settingsSectionTranslations = {
+  'zh-CN': { receiveSettings: '接收', sendSettings: '发送' },
+  'zh-TW': { receiveSettings: '接收', sendSettings: '傳送' },
+  fr: { receiveSettings: 'Réception', sendSettings: 'Envoi' },
+  ru: { receiveSettings: 'Приём', sendSettings: 'Отправка' },
+  de: { receiveSettings: 'Empfang', sendSettings: 'Senden' }
+};
+
+for (const [language, values] of Object.entries(settingsSectionTranslations)) {
+  Object.assign(translations[language].main, values);
+}
+
+// 发送回显与“仅显示发送内容”的本地化文案（英文缺省值已在主表中）。
+const sentEchoTranslations = {
+  'zh-CN': { echoSentData: '显示发送内容', echoSentDataBoth: '同时显示文本和 HEX', echoSentDataFilter: '过滤标签页也显示', showSentOnly: '仅显示发送的内容', sentOnly: '发送', txLabel: '发送' },
+  'zh-TW': { echoSentData: '顯示傳送內容', echoSentDataBoth: '同時顯示文字與 HEX', echoSentDataFilter: '過濾分頁也顯示', showSentOnly: '僅顯示傳送的內容', sentOnly: '傳送', txLabel: '傳送' },
+  fr: { echoSentData: 'Afficher les données envoyées', echoSentDataBoth: 'Texte + HEX', echoSentDataFilter: 'Dans les onglets de filtre', showSentOnly: 'Afficher uniquement les envois', sentOnly: 'ENVOI', txLabel: 'TX' },
+  ru: { echoSentData: 'Показывать отправленные данные', echoSentDataBoth: 'Текст + HEX', echoSentDataFilter: 'В вкладках фильтра', showSentOnly: 'Только отправленные данные', sentOnly: 'ОТПР', txLabel: 'TX' },
+  de: { echoSentData: 'Gesendete Daten anzeigen', echoSentDataBoth: 'Text + HEX', echoSentDataFilter: 'Auch in Filter-Tabs', showSentOnly: 'Nur gesendete Daten zeigen', sentOnly: 'GESENDET', txLabel: 'TX' }
+};
+
+for (const [language, values] of Object.entries(sentEchoTranslations)) {
+  Object.assign(translations[language].main, values);
 }
 
 function getLanguage(configLanguage) {
