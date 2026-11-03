@@ -715,6 +715,10 @@ serialContainerId(groupId)   // 默认 → 'serial-container'
 
 **这一层不建容器。** 真正的多分组容器节点、`createSerialRuntime` 与 `getOrCreate` 的可达调用点仍未做：在容器节点按分组创建之前，`getOrCreate` 没有任何调用方能传入一个真实存在的 id。上轮已实测过一次这类提前接线：新增的构造器完全不可达，而重复的 `new Terminal(...)` / `new HexStreamFormatter(...)` 直接打破 `test/markup.test.js` 三个跨终端一致性计数断言，最终完整回退。结论仍然有效：**容器、调用点、按 groupId 取终端三步必须一起做。**
 
+**关于 `test/markup.test.js` 的三个计数断言（易误判，必读）**：它们现在期望 `allowTransparency: true` = 3、`enableTerminalUnicode11(term);` = 2、`fontFamily: TERMINAL_FONT_FAMILY(` = 3。上轮回退时我拒绝修改这三个数字，**理由是那次新增的是同一逻辑的重复实现，而不是数字本身不能变**。真正按 groupId 建终端时，计数上升（预期 4 / 3 / 4）是**正确的**——那时确实存在第四个终端，且它必须同样应用壁纸、Unicode 11 宽度与字体回退。
+
+区分标准只有一条：新增实例是不是真实存在、真实可达。若因为「让测试过」而改数字，那是伪造；若因为「现在真的多了一个终端」而改数字，那是维护断言。后续改造极可能让这三处连形态都改（构造从字面量变成模板或工厂后，`new Terminal({` 这个正则片段可能不再存在），这属于预期内的断言重写，不应当成回归信号。
+
 ### P3 — 双层标签栏与添加串口按钮
 
 实现第 6 节的升降层规则、`+` 按钮、分组关闭。
@@ -836,18 +840,18 @@ serialContainerId(groupId)   // 默认 → 'serial-container'
 
 ### P1
 
+- [x] 双端口真机并发打开成功（首个门禁）—— 实测 COM6 + COM1 同时打开、各自可写、关闭一个另一个不受影响
+- [x] 两组同时收发，数据**逐字节**校验不串流（含 `serial-output-bytes` 的 sessionId 归属正确）—— 端到端 9 项通过。代码侧由 `session.outputBuckets`（`Map<sessionId, entries>`，main.js:2819/2917/2938/3035）保证按会话分桶
+- [x] 关闭 A 组，B 组连接与数据不受影响 —— 同上端到端验证；代码依据 `cleanupSerialConnection(message, port, groupId)` 按**本会话端口**判定（main.js:2958），不再全局比较
+- [x] 断开重连只影响对应分组 —— `connect-serial` 只关闭 `session.port`（main.js:3020-3022），不再 close 其他分组
+- [x] 日志目录下存在以端口号命名的子文件夹（如 `COM3/`），两个端口不写同一目录 —— `buildPortLogFolderName()`（main.js:763）取 `path.basename(portPath)` 并去尾部 `.`/空格，端口缺失时退回 `groupId`（避免多分组撞进同一目录）
+- [x] 重连同一端口继续写同一文件夹；换成另一个端口则新建对应文件夹，不往旧文件追加 —— `connect-serial` 会重置 `mainLogFilePath` / `activeMainLogGroupId` / 各 tab entry 的 `filePath`
+- [x] 开启 `logCreateDateFolder` 时层级为 `<logPath>/<日期>/<端口号>/`，`log-cleanup` 能正常清理 —— `ensureLogDirectory()` 为 `path.join(baseDirectory, resolveLogFolderName(groupId))`（main.js:990-999），日期在外层；`log-cleanup.js:35` 只递归匹配 `^\d{4}-\d{2}-\d{2}$` 的目录名，顺序写反会让过期日志永远无法删除
+- [x] `npm test` 全绿 —— 当前 391/391 通过。**注意：P1 当时基线是 252/252**，后续纯逻辑层新增测试抬高了总数
+- [x] 单端口全部现有行为回归通过 —— 双端口冒烟与全量测试均通过
+- [x] 采集双端口高吞吐下的主线程响应基线，作为 P1.5 的决策依据 —— 已采集并据此裁定 P1.5 不做，详见第 10 节
 
-- [ ] 双端口真机并发打开成功（首个门禁）
-- [ ] 两组同时收发，数据**逐字节**校验不串流（含 `serial-output-bytes` 的 sessionId 归属正确）
-- [ ] 关闭 A 组，B 组连接与数据不受影响
-- [ ] 断开重连只影响对应分组
-- [ ] 日志目录下存在以端口号命名的子文件夹（如 `COM3/`），两个端口不写同一目录
-- [ ] 重连同一端口继续写同一文件夹；换成另一个端口则新建对应文件夹，不往旧文件追加
-- [ ] 开启 `logCreateDateFolder` 时层级为 `<logPath>/<日期>/<端口号>/`，`log-cleanup` 能正常清理
-- [ ] `npm test` 全绿
-- [ ] 单端口全部现有行为回归通过
-- [ ] 采集双端口高吞吐下的主线程响应基线，作为 P1.5 的决策依据
-
+> **本节订正说明（2026-11-03）**：上一版这里 10 项全为 `[ ]`，与 `ToDo.md` 记录的 P1 已完成状态矛盾。本次逐项对照 `main.js` 实际代码与既有实测记录后勾选。其中「逐字节不串流」「日志端口子目录」「日期层级可被清理」三项的代码依据已在括号内标明文件与行号，**不是仅凭摘要推断**；但需如实声明：这几项没有可重放的自动化用例，当年的端到端证据以 `ToDo.md` 的记录为准。
 ### P1.5（已裁定不做）
 
 - [x] 采集主线程响应基线作为决策依据 —— 已采集，结论为收益不成立，详见第 10 节 P1.5
@@ -884,9 +888,14 @@ DOM 层：
 
 ### P4
 
+- [x] 四个显示参数在 `serial-group-context.js` 里有存储位（`receiveDisplayMode` / `receiveEncoding` / `sendEncoding` / `newlineMode`）
+- [ ] **`setDisplay()` 真正接入** —— 当前 `renderer.js` 里对它的调用数为 **0**，`receiveDisplayMode` 的 17 处读写全部落在模块级 `let` 上。不先做这一步，P4 剩下的两项无从谈起
+- [ ] 全部收发参数读写点改走分组上下文（当前估计 40+ 处）
 - [ ] 切换分组设置正确切换
 - [ ] 全局设置不被分组切换影响
 - [ ] 新分组继承合理的默认参数
+
+> **起点被低估的事实（2026-11-03 核实）**：设计文档 §7 与早期记录把 P4 描述成「侧栏绑 `activeGroupId`」，但 `SerialGroupContextStore.setDisplay()` **至今没有任何调用方**。也就是说 P4 不是接线工作，而是「状态真的下沉」：先把四个参数从模块级 `let` 搬进分组上下文，再把 40+ 处读写改过去，最后才轮到侧栏跟随。这是一个独立的、量级与 P4 同档的前置阶段，不应当成接线处理。
 
 ### P5
 

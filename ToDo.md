@@ -168,7 +168,7 @@
   - 新增 `serial-group-tabs.js`：`buildTabBarModel()` 输出两层内容；`normalizeGroups` / `resolveActiveGroupId` / `resolveGroupAfterAdd` / `resolveGroupAfterClose` / `didLayerCountChange`。配套 `test/serial-group-tabs.test.js` 17 项全通过。
   - 三条硬规则：Shell 永不归属分组；分组数 ≥2 双层、=1 塌回一层；切换分组只换下层集合不销毁 DOM。
   - 已固定的非显然行为：`activeGroupId` 不存在退回第一个分组（否则下层整层空且无法恢复）；`activeTabId` 失效退回该组第一个标签；重复分组 id 去重；空标题给 `Serial N`；关闭当前分组优先选**右邻**；关闭非当前分组保持原选择；单分组时串口标签排在 Shell 之前。
-  - **未接入 renderer**：DOM 层依赖「一组一个 Terminal 容器」（= P2 剩余），而 `serialTerm` 在模块加载时即 `open(#serial-container)`，全文 40 处引用，必须先解容器契约。
+  - **未接入 renderer**：DOM 层依赖「一组一个 Terminal 容器」（= P2 剩余），而 `serialTerm` 在模块加载时即 `open(#serial-container)`，实测全文 **33 处**引用，必须先解容器契约。
 
 - [x] **P3：分组增删改数据层**（可独立验证）
   - 新增 `serial-groups-model.js`：`nextGroupId` / `addSerialGroup` / `removeSerialGroup` / `renameSerialGroup` / `findSerialGroup`。配套 `test/serial-groups-model.test.js` 17 项全通过。

@@ -1022,6 +1022,10 @@ npm run dist:linux
   - groupId 会拼进 HTML id，因此 `[^A-Za-z0-9_-]` 一律替换为 `_`：配置是用户可编辑的文本，含空格或冒号的 id 直接进 `querySelector` 会抛 `SyntaxError` 而不是找不到元素。空 id 回落到默认分组（否则得到永远不存在的 `serial-container-`）。
   - `pane-layout-dom.js` 不再保存 `'tab-main'` / `'serial-container'` 字面量，改为委托本模块；`renderer.js` 的三处容器查找（open、context menu、wheel）改为 `serialContainerId(REGISTRY_DEFAULT_GROUP_ID)`，并合并为一次 `serialContainerEl` 解析。**单分组行为零变化。**
   - 本层只负责「id 怎么算」，**不负责建容器**。真正的多分组容器节点、`createSerialRuntime` 与 `getOrCreate` 的可达调用点仍未做；在容器节点按分组创建之前写那些代码就是不可达死代码。
+- 后续改造前必须知道的两件事（2026-11-03 核实）：
+  - **`test/markup.test.js` 的三个计数断言应当上调。** 当前 `allowTransparency: true`=3、`enableTerminalUnicode11(term);`=2、`fontFamily: TERMINAL_FONT_FAMILY(`=3。真正按 groupId 建终端时，预期改为 4/3/4。上轮回退时我拒绝改这三个数字，是因为**那次新增的是同一逻辑的重复实现且不可达**，不是因为数字神圣。区分标准：新增实例是否真实存在且可达。后续构造可能从字面量变成模板/工厂，正则片段本身也可能不存在，届时重写断言是预期行为。
+  - **P4 的起点比声称的更靠后。** `SerialGroupContextStore.setDisplay()` **至今零调用**，`renderer.js` 里 `receiveDisplayMode` 的 17 处读写、`receiveEncoding`/`sendEncoding`/`newlineMode` 全部仍在模块级 `let` 上。P4 不是「侧栏读 activeGroupId」的接线，而是「状态真的下沉 + 40+ 处读写点改造」，应作为独立前置阶段。
+  - **P1 验收清单已订正。** `MULTI_SERIAL_DESIGN.md` §12 曾把 10 项全列为 `[ ]`，与 `ToDo.md` 记录的 P1 已完成矛盾。现已逐项对照 `main.js` 实际代码（`buildPortLogFolderName` @763、`ensureLogDirectory` @990、`cleanupSerialConnection` 按本会话端口判定 @2958、`session.outputBuckets` @2819/2917/2938）勾选并注明依据；但「逐字节不串流」与「日志端口子目录」当年只有端到端摘要级记录，**没有可重放的自动化用例**，这一点已在文档中声明。
 - 配置迁移 v14 → v15（已实现，代码在 `serial-groups-config.js`，14 项单测）：
   - `CONFIG_VERSION` 不再硬编码，`main.js` 改为 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;`。
   - 默认分组 id **固定为 `'default'`**，不能随机：随机 id 会让每次 `normalizeConfig()` 产生新 id，幂等性直接失效，日志目录归属也会跟着漂移。
