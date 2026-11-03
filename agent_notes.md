@@ -6,7 +6,7 @@
 
 - 当前配置 schema：**v15**。版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 以 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。v14 → v15 迁移已落地并实测，详见 13A 节与 `MULTI_SERIAL_DESIGN.md` 第 9 节。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 剩余、P3、P4 与 P5 的分组级/组内级分屏（双层标签栏、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**；**P3 的标签归属纯逻辑层已完成**（`serial-group-tabs.js`，17 项单测）；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 剩余、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏（双层标签栏接线、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -998,10 +998,14 @@ npm run dist:linux
    - Shell IPC/输入链路与串口模式完全独立，Hex 改动不得复用到 Shell tab
    - Raw 写盘失败会保留待写 Buffer 并记录 `rawBinaryFlushError`/electron-log；在待写数据成功刷盘前拒绝开始新连接，避免重连覆盖缓冲。当前仍没有独立的用户可见恢复界面
 
-## 13A. 多串口支持（P1 已实现，P2 完成三步，P5 纯数据层与 DOM 层已落地）
+## 13A. 多串口支持（P1 已实现；配置迁移已完成；P2 完成三步；P3 纯逻辑层已实现；P5 纯数据层与 DOM 层已落地）
 
 - 完整设计文档：[`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)，包含数据模型、主进程多实例、IPC 分流、双层标签栏、设置跟随、两级分屏、配置迁移、分阶段落地与风险清单。
-- **当前进度：P1（主进程多实例化）已完成并通过验证；配置 v14 → v15 迁移已完成并实测；P2 已完成分组注册表、分组上下文、行解析器三步；P5 的纯数据层与 DOM 层均已完成；P3、P4 与 P5 的分组级/组内级分屏尚未开始，UI 仍为单串口形态。**
+- **当前进度：P1（主进程多实例化）已完成并通过验证；配置 v14 → v15 迁移已完成并实测；P2 已完成分组注册表、分组上下文、行解析器三步；P3 的标签归属纯逻辑层已完成；P5 的纯数据层与 DOM 层均已完成；P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始，UI 仍为单串口形态。**
+- P3 标签归属纯逻辑层（`serial-group-tabs.js`，17 项单测）：
+  - `buildTabBarModel()` 输出两层内容；三条硬规则：Shell 永不归属分组、group 数 ≥2 双层 / =1 塌回一层、切换分组只换下层集合。抽成纯函数的原因是归属判定错了在浏览器里只能靠肉眼发现。
+  - 已固定的非显然行为：`activeGroupId` 不存在退回第一个分组（否则下层整层空掉且无法恢复）；`activeTabId` 失效退回该组第一个标签；重复分组 id 去重（两个相同标签都指向同一 id，点击像没反应）；空标题给 `Serial N`；关闭当前分组优先选**右邻**（总退回第一个会让焦点反复跳回最左）；关闭非当前分组保持当前选择；单分组时 `groupLayer` 只含 Shell且串口标签排在 Shell 之前。
+  - **未接入 renderer**：DOM 接线依赖「一组一个 Terminal 容器」，与 P2 剩余同属一件事，均卡在 `serialTerm` 模块加载即 `open(#serial-container)`。
 - 配置迁移 v14 → v15（已实现，代码在 `serial-groups-config.js`，14 项单测）：
   - `CONFIG_VERSION` 不再硬编码，`main.js` 改为 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;`。
   - 默认分组 id **固定为 `'default'`**，不能随机：随机 id 会让每次 `normalizeConfig()` 产生新 id，幂等性直接失效，日志目录归属也会跟着漂移。

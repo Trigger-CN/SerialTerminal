@@ -140,7 +140,7 @@
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
 
-## P3 - 多串口支持（P1 已完成；配置 v14 → v15 迁移已完成；P2 完成三步；P5 纯数据层与 DOM 层已落地）
+## P3 - 多串口支持（P1 已完成；配置 v14 → v15 迁移已完成；P2 完成三步；P3 纯逻辑层已实现；P5 纯数据层与 DOM 层已落地）
 
 完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做。
 
@@ -164,6 +164,12 @@
   - 实测（真实 v14 配置 + 独立 `--user-data-dir`，连启两次）：config.json 21667→23284 字节、version=15、groups=1、g0=`default/COM6/921600`，旧字段保留；第二次仍 15/1 组，备份 mtime 未变（未被覆盖）。
   - **踩过的坑**：开发版与已安装版共用 `%APPDATA%\serialterminal`，旧版已安装程序会用旧 `saveConfig` 把 v15 覆盖回 v14，表现为「迁移没生效」。验证前必须查 `resources/app.asar` 是否含 `serialGroups`，或全程用独立 `--user-data-dir`。
 
+- [x] **P3：标签归属纯逻辑层**（可独立验证，不碰 DOM）
+  - 新增 `serial-group-tabs.js`：`buildTabBarModel()` 输出两层内容；`normalizeGroups` / `resolveActiveGroupId` / `resolveGroupAfterAdd` / `resolveGroupAfterClose` / `didLayerCountChange`。配套 `test/serial-group-tabs.test.js` 17 项全通过。
+  - 三条硬规则：Shell 永不归属分组；分组数 ≥2 双层、=1 塌回一层；切换分组只换下层集合不销毁 DOM。
+  - 已固定的非显然行为：`activeGroupId` 不存在退回第一个分组（否则下层整层空且无法恢复）；`activeTabId` 失效退回该组第一个标签；重复分组 id 去重；空标题给 `Serial N`；关闭当前分组优先选**右邻**；关闭非当前分组保持原选择；单分组时串口标签排在 Shell 之前。
+  - **未接入 renderer**：DOM 层依赖「一组一个 Terminal 容器」（= P2 剩余），而 `serialTerm` 在模块加载时即 `open(#serial-container)`，必须先解容器契约。
+
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
   - [x] 第一步：新增 `serial-group-registry.js` 分组注册表，`accepts()` 作为「这条字节该不该进本分组终端」的唯一判定入口（带 `reason` 区分丢错与本该丢）；`renderer.js` 的 `serial-output-bytes` 归属性判定、`beginSession`/`invalidateSession` 已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
   - [x] 第二步：新增 `serial-group-context.js` 分组上下文（`SerialGroupContextStore`），提供 `serialLineCounter`/`logLineCounter`/`serialNewLine` 与四个收发显示参数；**其中只有三个计数器真正生效**（`getPrefix()`、`getLogPrefix()`、`clearTerminalByTabId`、连接成功重置均改走它），`receiveDisplayMode`/`receiveEncoding`/`sendEncoding`/`newlineMode` 仍由 `renderer.js` 自己的模块级 `let` 持有，`setDisplay()` 尚未被调用。配套 `test/serial-group-context.test.js` 8 项全通过。
@@ -185,7 +191,7 @@ P2 剩余部分必须先解 P3 的动态 pane 创建（P5 的布局层前置已�
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **330/330 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项与 `test/serial-groups-config.test.js` 14 项）。
+- [x] `npm test` 当前 **347/347 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项与 `test/serial-group-tabs.test.js` 17 项）。
 - [x] 配置迁移磁盘验证：独立 `--user-data-dir` 连启两次，`config.json` 均为 v15 + 1 组，旧字段保留，`config.v14.backup.json` 保持 21667 字节的 v14 原件且第二次启动未覆盖。
 - [x] 实机启动：主窗口正常出现，`main.log` 与渲染进程 stderr 均无 JS 错误，electron 进程清理后 `remaining: 0`。
 - [ ] **多串口行为的人工 GUI 验证**：连接、收发、日志写入从未在真实窗口中手工跑过；现有结论均来自单测与源码断言。
