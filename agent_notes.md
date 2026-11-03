@@ -4,9 +4,9 @@
 
 ## 0. 当前状态快照（维护入口）
 
-- 当前配置 schema：v14；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
+- 当前配置 schema：**v15**。版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 以 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。v14 → v15 迁移已落地并实测，详见 13A 节与 `MULTI_SERIAL_DESIGN.md` 第 9 节。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**P2 已完成分组注册表、分组上下文、行解析器三步**；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 剩余、P3、P4 与 P5 的分组级/组内级分屏（双层标签栏、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 剩余、P3、P4 与 P5 的分组级/组内级分屏（双层标签栏、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -297,7 +297,29 @@ npm run dist:linux
 
 ```json
 {
-  "configVersion": 14,
+  "configVersion": 15,
+  "serialGroups": [
+    {
+      "id": "default",
+      "title": "COM6",
+      "portPath": "COM6",
+      "status": "disconnected",
+      "sessionId": null,
+      "serialOptions": {
+        "baudRate": "921600",
+        "dataBits": "8",
+        "stopBits": "1",
+        "parity": "none",
+        "receiveDisplayMode": "text",
+        "receiveEncoding": "utf8",
+        "sendEncoding": "utf8",
+        "newlineMode": "crlf"
+      },
+      "filterTabs": [],
+      "chartTabs": [],
+      "workspaceLayout": null
+    }
+  ],
   "customBaudRates": ["250000"],
   "clearAllLogsIncludesShell": false,
   "saveAllTabsLogToFiles": false,
@@ -979,7 +1001,16 @@ npm run dist:linux
 ## 13A. 多串口支持（P1 已实现，P2 完成三步，P5 纯数据层与 DOM 层已落地）
 
 - 完整设计文档：[`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)，包含数据模型、主进程多实例、IPC 分流、双层标签栏、设置跟随、两级分屏、配置迁移、分阶段落地与风险清单。
-- **当前进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器三步；P5 的纯数据层与 DOM 层均已完成；P3、P4 与 P5 的分组级/组内级分屏尚未开始，UI 仍为单串口形态。**
+- **当前进度：P1（主进程多实例化）已完成并通过验证；配置 v14 → v15 迁移已完成并实测；P2 已完成分组注册表、分组上下文、行解析器三步；P5 的纯数据层与 DOM 层均已完成；P3、P4 与 P5 的分组级/组内级分屏尚未开始，UI 仍为单串口形态。**
+- 配置迁移 v14 → v15（已实现，代码在 `serial-groups-config.js`，14 项单测）：
+  - `CONFIG_VERSION` 不再硬编码，`main.js` 改为 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;`。
+  - 默认分组 id **固定为 `'default'`**，不能随机：随机 id 会让每次 `normalizeConfig()` 产生新 id，幂等性直接失效，日志目录归属也会跟着漂移。
+  - 迁移判据是 `Object.prototype.hasOwnProperty.call(source, 'serialGroups')`，**不是** `Array.isArray(...) && length`。空数组 `serialGroups: []` 是合法状态（用户把分组全关了只剩 Shell），绝不能被当成「没迁移过」重新造出一个幽灵分组。
+  - 旧字段 `lastSerialOptions` / `filterTabs` / `chartTabs` / `workspaceLayout` 全部保留，支持降级回 v14；`sessionId` 归一化时一律重置为 `null`（运行时标识，`id` 才是稳定键）。
+  - 备份 `config.v14.backup.json` **只写一次**：仅当「尚未迁移过」且「备份不存在」时生成；已迁移过的配置再备份会把真正的 v14 原件覆盖成 v15。备份失败只记 `log.error`，不得阻断启动。
+  - 迁移调用位置是 `normalizeConfig()` 的最后一条语句 `return migrateSerialGroupsConfig(normalized);`，这样 `loadConfig` / `saveConfig` / `persistTelemetryState` 三条写盘路径都经过同一处。
+  - **验证陷阱**：开发版与已安装版共用同一个 `%APPDATA%\serialterminal`。若机上还跑着旧版已安装程序，它会用旧 `saveConfig` 把刚迁移好的 v15 覆盖回 v14 结构，表现为「迁移没生效」。判定方法：查 `resources/app.asar` 里是否存在 `serialGroups`。实机验证迁移必须用独立 `--user-data-dir`，或确认没有旧版进程在跑。
+  - 隔离实测（连启两次）：第一次 21667→23284 字节、version=15、groups=1、g0=`default/COM6/921600`，旧字段保留；第二次仍为 15/1 组，备份 mtime 未变。幂等与一次性备份均实测通过。
 - P1 已落地的事实（以 `main.js` 为准）：
   - `serialSessions = new Map()` + `DEFAULT_SERIAL_GROUP_ID = 'default'`；会话对象持有 `groupId/portPath/port/sessionId/sendEncoding/newlineMode/cleanupComplete/connectInProgress/outputBuckets/outputFlushScheduled/throughput`。`normalizeSerialGroupId()` / `createSerialSession()` / `getSerialSession()` / `getOrCreateSerialSession()` 为入口。
   - 旧的 `currentSerialPort` / `serialSendEncoding` / `serialNewlineMode` / `serialCleanupComplete` / `serialConnectInProgress` / 全局 `throughputState` / 全局 `serialOutputQueue` 已**全部删除**，不得再引入。
@@ -992,7 +1023,7 @@ npm run dist:linux
 - 已定决策（实施时不得自行更改）：快捷指令与自动发送总开关**全局共享**；分屏首版**分组级 + 组内级同时做**。
 - 日志目录（已实现）：层级固定为 `<logPath>/[日期]/<端口号>/`。**日期目录必须在外层**：`log-cleanup.js` 的 `cleanEntries()` 只递归匹配 `^\d{4}-\d{2}-\d{2}$` 的目录（第 35 行），若写成 `<logPath>/COM3/2026-04-01/`，外层 `COM3` 不匹配日期格式会被 `continue` 跳过，过期日志永远不会被清理。目录名用 `path.basename(portPath)` 并去尾部 `.`/空格，端口缺失时退回 `groupId`；Shell 固定用 `_shell`。
 - 并发模型（核实结论，详见设计文档 5A）：**串口读已经是线程化的**。`@serialport/bindings-cpp` 在 Windows 上为每个端口 `CreateThread` 出 `ReadThread`，内部 `ReadFileEx` + `SleepEx(INFINITE, TRUE)` 阻塞等待，数据到达后 `uv_async_send` 回 JS 线程（`src/serialport_win.cpp`）；Linux/macOS 走 libuv 线程池（`dist/unix-read.js`）。因此**不要为了「多线程」把串口搬进 `worker_threads`**：native 句柄不可跨线程转移，只能让 worker 自己打开，反而使主进程失去端口控制权。
-- 多线程的真实价值在**写盘**：`fs.appendFileSync`（`main.js` 的 appendToTabLogSync / flushRawBinaryLogSync / saveLog）运行在主线程，端口数增多后一个高吞吐端口会拖慢所有端口，因此列为 P1.5（日志落盘去同步化），复用 `chart-parser-worker-client.js` 的队列/超时/重启范式。
+- 多线程在**写盘**上曾经列过名单（P1.5），但**已实测裁定不做**：`fs.appendFileSync` 在真实数据量下（56 KB / 450 KB / 1 MB）分别只需 0.39 / 0.69 / 0.93 ms，比 Windows 15.6 ms 的定时器分辨率还快，Worker 化买不到可感知收益；只有 10 MB 级批次才有 12.7 ms 阻塞，而那时真正的瓶颈已是终端渲染。结论：保留同步写盘，不引入日志 Worker。完整数据见 `MULTI_SERIAL_DESIGN.md` 第 10 节 P1.5。
 - P1 验证记录：双端口真机并发（COM6 + COM1）同时打开、独立写入、关闭一个另一个不受影响；完整测试套件 255/255；沙箱行为验证 19 项、双端口端到端 9 项均通过；模块体加载门禁 3/3 通过。
 - **启动崩溃教训（已修复，必须遵守）**：`main.js` 曾在模块顶层写 `let activeMainLogGroupId = DEFAULT_SERIAL_GROUP_ID;`，而 `const DEFAULT_SERIAL_GROUP_ID = 'default';` 声明在其后约 2000 行。`const`/`let` 具有暂时性死区（TDZ），模块加载执行到该行时抛出 `ReferenceError: Cannot access 'DEFAULT_SERIAL_GROUP_ID' before initialization`，主进程加载失败、窗口根本无法创建。修复方式：把常量前置到 `SERIAL_LOG_FOLDER_SHELL` 之后、所有顶层使用者之前，并删除后部重复声明。
   - **为什么原有校验没拦住**：`node --check` 只做语法解析、**从不执行代码**，看不见 TDZ；原单元测试是对源码做正则断言，同样不执行模块体。二者在应用已完全无法启动时仍然全绿。

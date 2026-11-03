@@ -4,7 +4,7 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）；P5 纯数据层与 DOM 层已完成；P3、P4 与 P5 的分组级/组内级分屏尚未开始。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）；配置 v14 → v15 迁移已完成并实测；P5 纯数据层与 DOM 层已完成；P3、P4 与 P5 的分组级/组内级分屏尚未开始。**
 > 当前主进程已按 `groupId` 完全隔离，但 UI 仍为单串口形态（`renderer.js` 固定使用 `DEFAULT_SERIAL_GROUP_ID`）。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -88,7 +88,7 @@ let tabLogBuffers / throughputState
 
 ### 2.5 配置 schema
 
-`main.js:138` 当前为 `const CONFIG_VERSION = 14;`。多串口引入后必须升到 15，并做无损迁移（见第 9 节）。
+`CONFIG_VERSION` 现为 **15**，由 [`serial-groups-config.js`](serial-groups-config.js) 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 只做 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。多串口引入的 `serialGroups` 字段与无损迁移规则见第 9 节。
 
 ---
 
@@ -496,7 +496,41 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 - 迁移前备份 `config.json` 为 `config.v14.backup.json`
 - 首次以 v15 启动后，若用户回退到旧版本，旧版本读到的仍是完整 v14 字段（因为保留未删）
-- 迁移只读不写直到首次保存，避免启动即改写配置
+- 备份**只写一次**：仅当「配置尚未迁移过」且「备份文件尚不存在」时生成。已迁移过的配置再备份会把真正的 v14 原件覆盖成 v15，用户回退时就无据可依
+- 备份失败不得阻断启动：一次磁盘问题不能让用户打不开程序，只记 `log.error` 继续
+
+> **订正**：本节曾写「迁移只读不写直到首次保存」。实测与实现均不成立——`loadConfig()` 在归一化后发现内容变化会立即写回 `config.json`。这是必要的：若不写回，`saveConfig()` 后续以 `currentConfig` 为默认值反复归一化，磁盘上的 v14 形态会与内存态长期分叉。
+
+### 9.4 落地记录（v14 → v15）
+
+实现在 [`serial-groups-config.js`](serial-groups-config.js)，纯逻辑、不碰文件系统与 Electron，可直接在 Node 断言。
+
+**两个必须保留的设计决定：**
+
+1. **默认分组 id 固定为 `'default'`，不能随机。** 随机 id 会让每次 `normalizeConfig()` 产生新 id，幂等性直接失效，日志目录归属也会跟着漂移。
+2. **迁移判据是 `Object.prototype.hasOwnProperty.call(source, 'serialGroups')`，不是 `Array.isArray(...) && length`。** 空数组 `serialGroups: []` 是**合法状态**（用户把分组全关了、只剩 Shell），绝不能被当成「没迁移过」而重新造出一个幽灵分组。
+
+其余已实现细节：
+
+- `CONFIG_VERSION` 不再硬编码在 `main.js`，改为 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;`
+- `normalizeConfig()` 末尾 `return migrateSerialGroupsConfig(normalized);`——迁移放在归一化最后一步，保证任何写盘路径（`loadConfig` / `saveConfig` / `persistTelemetryState`）都经过同一处
+- 旧字段 `lastSerialOptions` / `filterTabs` / `chartTabs` / `workspaceLayout` 全部保留，支持降级回 v14
+- `sessionId` 在归一化时一律重置为 `null`：它是运行时标识，重启后必须失效；`id` 才是稳定键
+- 缺 id 的分组补位序 id（`g-00000001`），重复 id 派生确定性后缀（`g-1`、`g-1-2`），两者都稳定，不破坏幂等
+- `buildMigratedDefaultGroup` 在端口为空时给 `'Serial 1'` 占位标题，避免分组标签变成一块无法识别的空白
+
+**隔离实测（真实 v14 配置，`--user-data-dir` 指向独立目录，连启两次）：**
+
+| 观察项 | 第一次启动 | 第二次启动 |
+|---|---|---|
+| `config.json` 大小 | 21667 → 23284 字节 | 23284 字节不变 |
+| `configVersion` | 15 | 15 |
+| `serialGroups.length` | 1 | 1（未重复生成） |
+| 分组内容 | `default` / `COM6` / `COM6` / `921600` | 同上 |
+| 旧字段 | `lastSerialOptions.path=COM6`、`filterTabs` 保留 | 保留 |
+| 备份 | 21667 字节，`configVersion=14` | mtime 未变，未被覆盖 |
+
+> **验证陷阱（已踩过，务必记住）**：开发版与已安装版共用同一个 `%APPDATA%\serialterminal`。若机器上还跑着**旧版本**的已安装程序，它会用自己的 `saveConfig` 把刚迁移好的 v15 配置覆盖回 v14 结构，表现为「迁移没生效」。判定方法：比对 `resources/app.asar` 里是否存在 `serialGroups`；若不存在，就是旧代码在覆盖。实机验证迁移必须用独立 `--user-data-dir`，或在确认没有旧版进程运行时进行。
 
 ---
 
@@ -697,7 +731,19 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 ## 12. 验收清单
 
+### 配置迁移（v14 → v15）
+
+- [x] `CONFIG_VERSION` 升到 15，由 `serial-groups-config.js` 统一提供
+- [x] 无 `serialGroups` 的旧配置迁入一个默认分组（id 固定为 `default`）
+- [x] 旧字段 `lastSerialOptions` / `filterTabs` / `chartTabs` / `workspaceLayout` 保留不删，可降级回 v14
+- [x] 归一化幂等：重复执行不造出第二个分组、不改 id
+- [x] 空数组 `serialGroups: []` 不被当成「未迁移」重新播种
+- [x] 迁移前写入 `config.v14.backup.json`，且只写一次、不覆盖原件
+- [x] 备份失败不阻断启动
+- [x] 真机磁盘验证：连启两次均为 v15 / 1 组，备份保持 v14 且 mtime 未变（用独立 `--user-data-dir` 隔离）
+
 ### P1
+
 
 - [ ] 双端口真机并发打开成功（首个门禁）
 - [ ] 两组同时收发，数据**逐字节**校验不串流（含 `serial-output-bytes` 的 sessionId 归属正确）

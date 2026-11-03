@@ -15,6 +15,11 @@ const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
 const { normalizeBaudRate, normalizeCustomBaudRates, isStandardBaudRate } = require('./baud-rates');
 const { normalizeSearchHistory } = require('./search-history');
+const {
+  SERIAL_GROUPS_CONFIG_VERSION,
+  migrateSerialGroupsConfig,
+  needsSerialGroupsMigration
+} = require('./serial-groups-config');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const { formatLocalDate, getLogDirectory } = require('./log-directory');
 const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
@@ -135,7 +140,10 @@ let updatePromptState = {
   promptPromise: null
 };
 const configPath = path.join(app.getPath('userData'), 'config.json');
-const CONFIG_VERSION = 14;
+// v14 → v15 迁移前写入的备份。只在配置尚未迁移过时生成一次，
+// 后续启动不覆盖，保证用户回退旧版本时还能拿回原件。
+const configBackupPath = path.join(app.getPath('userData'), 'config.v14.backup.json');
+const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -523,7 +531,13 @@ function normalizeConfig(config, defaults) {
     ? source.rawLogFileNameFormat
     : 'raw_%Y-%m-%d_%H-%M-%S.bin';
   normalized.logRetentionDays = oneOf(Number(source.logRetentionDays), LOG_RETENTION_DAYS, 0);
-  return normalized;
+  // 配置 v14 → v15：把旧的全字段搬进 serialGroups[0]。
+  //
+  // 放在 normalizeConfig 的最后一步而不是 loadConfig 里，是因为归一化可能被反复调用，
+  // 而迁移本身必须是幂等的：migrateSerialGroupsConfig 用「有没有 serialGroups 键」
+  // 判断是否已迁移，所以重复执行只会重算一次归一化，不会造出第二个分组。
+  // 旧字段一律保留，用户回退到 v14 时仍能读到完整配置。
+  return migrateSerialGroupsConfig(normalized);
 }
 
 // Runtime Display Settings (Initialized from config later)
@@ -679,6 +693,18 @@ function loadConfig() {
   if (fs.existsSync(configPath)) {
     try {
       const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      // 迁移前先备份 v14 原件。
+      //
+      // 只在「尚未迁移过」时备份：已经迁移过的配置再备份，会把真正的 v14 原件覆盖成 v15，
+      // 用户回退时就无据可依。备份失败不能阻断启动，否则一次磁盘问题就让用户打不开程序。
+      if (needsSerialGroupsMigration(saved) && !fs.existsSync(configBackupPath)) {
+        try {
+          fs.writeFileSync(configBackupPath, JSON.stringify(saved, null, 2));
+          log.info(`Config backup written before v15 migration: ${configBackupPath}`);
+        } catch (backupError) {
+          log.error('Failed to write config backup before migration:', backupError);
+        }
+      }
       const normalized = normalizeConfig(saved, defaults);
       if (JSON.stringify(saved) !== JSON.stringify(normalized)) {
         fs.writeFileSync(configPath, JSON.stringify(normalized, null, 2));

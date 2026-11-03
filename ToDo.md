@@ -6,7 +6,7 @@
 
 - 已完成项保留为审查和实施记录；未勾选项才是当前工程待办。
 - 专项硬件、跨平台和长时间验证分别记录在 `HEX_FEATURE_TODO.md` 与 `CHART_TAB_IMPLEMENTATION_PLAN.md`，多串口设计基线记录在 `MULTI_SERIAL_DESIGN.md`，本文件只保留全局门禁。
-- 当前配置 schema 为 v14（以 `main.js` 的 `CONFIG_VERSION` 为准）；开发与 CI 使用 Node.js >=22.12.0；`npm test` 同时运行根项目和 `telemetry-server` 测试。
+- 当前配置 schema 为 **v15**（版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 只做引用）；开发与 CI 使用 Node.js >=22.12.0；`npm test` 同时运行根项目和 `telemetry-server` 测试。
 
 
 ## P0 - 优先修复
@@ -140,7 +140,7 @@
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
 
-## P3 - 多串口支持（P1 已完成，P2 完成三步，P5 纯数据层与 DOM 层已落地）
+## P3 - 多串口支持（P1 已完成；配置 v14 → v15 迁移已完成；P2 完成三步；P5 纯数据层与 DOM 层已落地）
 
 完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做。
 
@@ -155,6 +155,14 @@
   - 仍不做：任何 UI 改动、双层标签栏、分屏改造、设置侧栏跟随、日志写入去同步化。
 
 - [~] ~~P1.5：日志落盘去同步化~~ **已实测裁定不做**。实测：56 KB（115200 bps × 5 秒刷盘）单次 `appendFileSync` 仅 0.39 ms、450 KB 为 0.69 ms、1 MB 为 0.93 ms，而 Windows 定时器分辨率本身就是 15.6 ms；只有 10 MB 阈值批次才 12.72 ms。真实数据量下同步写盘比系统定时器还快，Worker 化买不到可感知收益，而那种量级下真正的瓶颈是终端渲染。保留 `fs.appendFileSync`；若将来真出现高吞吐卡顿，先查 `terminal-output-buffer` 与分批写入。
+
+- [x] **配置迁移 v14 → v15：引入 `serialGroups`**（P3 的数据前置，已完成并实测）
+  - 新增 `serial-groups-config.js`（纯逻辑，不碰 fs/Electron）：`SERIAL_GROUPS_CONFIG_VERSION` / `migrateSerialGroupsConfig` / `needsSerialGroupsMigration` / `normalizeSerialGroups` / `normalizeGroupSerialOptions` / `buildMigratedDefaultGroup` / `normalizeSerialGroup`。配套 `test/serial-groups-config.test.js` 14 项全通过。
+  - `main.js`：`const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;`；`normalizeConfig()` 末尾 `return migrateSerialGroupsConfig(normalized);`；新增 `configBackupPath`，`loadConfig` 在归一化前备份（仅在未迁移且备份不存在时）。
+  - **两个不可改的设计决定**：默认分组 id 固定为 `'default'`（随机会破坏幂等、日志目录归属会漂移）；迁移判据用 `hasOwnProperty('serialGroups')` 而非数组长度（`serialGroups: []` 是合法状态，用户可关光分组只留 Shell，绝不能被当成未迁移重新播种）。
+  - 其余保证：旧字段全保留可降级回 v14；`sessionId` 归一化为 `null`；缺 id 补位序 id、重复 id 派生确定性后缀；端口为空时标题给 `Serial 1` 而不是空串。
+  - 实测（真实 v14 配置 + 独立 `--user-data-dir`，连启两次）：config.json 21667→23284 字节、version=15、groups=1、g0=`default/COM6/921600`，旧字段保留；第二次仍 15/1 组，备份 mtime 未变（未被覆盖）。
+  - **踩过的坑**：开发版与已安装版共用 `%APPDATA%\serialterminal`，旧版已安装程序会用旧 `saveConfig` 把 v15 覆盖回 v14，表现为「迁移没生效」。验证前必须查 `resources/app.asar` 是否含 `serialGroups`，或全程用独立 `--user-data-dir`。
 
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
   - [x] 第一步：新增 `serial-group-registry.js` 分组注册表，`accepts()` 作为「这条字节该不该进本分组终端」的唯一判定入口（带 `reason` 区分丢错与本该丢）；`renderer.js` 的 `serial-output-bytes` 归属性判定、`beginSession`/`invalidateSession` 已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
@@ -177,7 +185,8 @@ P2 剩余部分必须先解 P3 的动态 pane 创建（P5 的布局层前置已�
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **316/316 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项与 `test/pane-layout-dom.test.js` 9 项）。
+- [x] `npm test` 当前 **330/330 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项与 `test/serial-groups-config.test.js` 14 项）。
+- [x] 配置迁移磁盘验证：独立 `--user-data-dir` 连启两次，`config.json` 均为 v15 + 1 组，旧字段保留，`config.v14.backup.json` 保持 21667 字节的 v14 原件且第二次启动未覆盖。
 - [x] 实机启动：主窗口正常出现，`main.log` 与渲染进程 stderr 均无 JS 错误，electron 进程清理后 `remaining: 0`。
 - [ ] **多串口行为的人工 GUI 验证**：连接、收发、日志写入从未在真实窗口中手工跑过；现有结论均来自单测与源码断言。
 - [ ] Windows 和 Linux 打包通过（Windows NSIS 已有成功记录，Linux 仍待验证；不再生成 portable 版本）。
