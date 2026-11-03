@@ -42,11 +42,16 @@ function createWorkspaceManager(options = {}) {
         getPaneDom,
         getPaneTabsList,
         getPaneTabsContent,
-        onLayoutApplied,
-        onTabActivated,
         onTabMoved,
         ensurePaneElement,
-        fitWorkspace
+        fitWorkspace,
+        // 可选：让调用方接管「某个标签的按钮应挂在哪个容器里」。返回 null 表示按默认规则
+        // （留在所属 pane 的 tabsList）。Shell 标签在多分组时会搬到分组栏，而它仍属于
+        // pane-1 的 tabIds，因此布局层仍要能找到它的按钮并给它上激活态。
+        resolveTabButtonHost,
+        // 可选：按 data-target 查找标签按钮。默认只在 pane 内找，但被搬到外层的按钮
+        // 不在那个 pane 里，必须允许调用方提供更宽的查找。
+        findTabButton
     } = options;
 
     function getLayoutState() {
@@ -164,7 +169,12 @@ function createWorkspaceManager(options = {}) {
         if (!tabId) return false;
         const paneEl = getPaneDom(paneId);
         if (!paneEl) return false;
-        const tabButton = paneEl.querySelector(`.main-tab[data-target="${tabId}"]`);
+        // 面板一定在这个 pane 里；按钮则可能被调用方搬到外层容器（多分组时的 Shell 标签）。
+        // 若仍用 paneEl.querySelector 找按钮，被搬走的标签会被判为不可渲染，随后被
+        // prunePaneTabIds() 从布局里删掉，表现为「切到多分组后 Shell 标签彻底消失」。
+        const tabButton = findTabButton
+            ? findTabButton(tabId, paneId)
+            : paneEl.querySelector(`.main-tab[data-target="${tabId}"]`);
         const tabPane = paneEl.querySelector(`.main-tab-pane#${tabId}`);
         return Boolean(tabButton && tabPane);
     }
@@ -293,8 +303,12 @@ function createWorkspaceManager(options = {}) {
                 const tabButton = document.querySelector(`.main-tab[data-target="${tabId}"]`);
                 const tabPane = document.getElementById(tabId);
                 const previousPaneId = tabButton?.dataset?.paneId || tabPane?.dataset?.paneId || null;
-                if (tabButton && tabsList) {
-                    tabsList.appendChild(tabButton);
+                // 按钮目标容器可由调用方接管（Shell 标签被搬到分组栏时就是这种情况）。
+                // 未接管时仍然是所属 pane 的 tabsList，单分组行为零变化。
+                const buttonHost = resolveTabButtonHost ? resolveTabButtonHost(tabId, pane.id) : null;
+                const effectiveTabsList = buttonHost || tabsList;
+                if (tabButton && effectiveTabsList) {
+                    effectiveTabsList.appendChild(tabButton);
                     tabButton.dataset.paneId = pane.id;
                 }
                 if (tabPane && tabsContent) {
@@ -310,13 +324,16 @@ function createWorkspaceManager(options = {}) {
             const paneEl = getPaneDom(pane.id);
             if (!paneEl) return;
             if (pane.activeTabId) {
-                const tabButton = paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
+                const findButton = id => (findTabButton
+                    ? findTabButton(id, pane.id)
+                    : paneEl.querySelector(`.main-tab[data-target="${id}"]`));
+                const tabButton = findButton(pane.activeTabId);
                 const tabPane = paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`);
                 if (!tabButton || !tabPane) {
                     pane.activeTabId = findFirstRenderableTabId(pane.id) || null;
                 }
                 if (pane.activeTabId) {
-                    const activeTab = paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
+                    const activeTab = findButton(pane.activeTabId);
                     activeTab?.classList.add('active');
                     activeTab?.setAttribute?.('aria-selected', 'true');
                     paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`)?.classList.add('active');
@@ -336,16 +353,22 @@ function createWorkspaceManager(options = {}) {
         const pane = getPaneById(paneId);
         const paneEl = getPaneDom(paneId);
         if (!paneEl) return;
-        paneEl.querySelector('.main-tab.active')?.classList.remove('active');
-        paneEl.querySelector('.main-tab-pane.active')?.classList.remove('active');
-        paneEl.querySelectorAll('.main-tab[aria-selected="true"]').forEach(tab => {
-            tab.setAttribute('aria-selected', 'false');
+        // 激活类必须先按全文档清一遍：被搬到外层容器的按钮（多分组时的 Shell）不在 paneEl 里，
+        // 只清 paneEl 会把它上一个激活态留在分组栏上，表现为「两个标签同时亮着」。
+        document.querySelectorAll('.main-tab.active').forEach(tab => {
+            if (tab.dataset?.paneId === paneId) tab.classList.remove('active');
         });
+        document.querySelectorAll('.main-tab[aria-selected="true"]').forEach(tab => {
+            if (tab.dataset?.paneId === paneId) tab.setAttribute('aria-selected', 'false');
+        });
+        paneEl.querySelector('.main-tab-pane.active')?.classList.remove('active');
         if (!pane.activeTabId) return;
-        const activeTab = paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
+        const activeTab = findTabButton
+            ? findTabButton(pane.activeTabId, paneId)
+            : paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
         const activePane = paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`);
         activeTab?.classList.add('active');
-        activeTab?.setAttribute('aria-selected', 'true');
+        activeTab?.setAttribute?.('aria-selected', 'true');
         activePane?.classList.add('active');
     }
 

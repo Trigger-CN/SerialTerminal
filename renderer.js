@@ -1753,7 +1753,17 @@ workspaceManager = createWorkspaceManager({
         }
     },
     ensurePaneElement: createPaneElement,
-    fitWorkspace: fitWorkspaceTerminals
+    fitWorkspace: fitWorkspaceTerminals,
+    // 多分组时 Shell 的按钮挂在分组层，但它的面板与 tabIds 归属仍是 pane-1。
+    // 这两个钩子让布局层既能找到外层的按钮，也不会把它当成「不可渲染」而清掉。
+    findTabButton: findWorkspaceTabButton,
+    resolveTabButtonHost: resolveWorkspaceTabButtonHost,
+    // 布局重排会把被接管的按钮按 resolveTabButtonHost 重新挂载，但它也可能在
+    // 某些路径上（如 reconcileEmptyPanes 把 pane 合并）把按钮探到别处。
+    // 每次布局落地后再对一次，保证分组数与实际位置始终一致。
+    onLayoutApplied: () => {
+        syncShellTabLayer();
+    }
 });
 
 let workspaceFitFrame = null;
@@ -2271,6 +2281,10 @@ function renderSerialGroupTabBar() {
     barEl.hidden = model.hidden;
     listEl.replaceChildren();
 
+    // 注意：分组标签只渲染分组，**Shell 标签不由这里创建**。Shell 是既有节点，
+    // 升降层靠搬移（见 syncShellTabLayer）而不是重建——重建会丢 xterm 实例与监听。
+    // 但 replaceChildren() 会把之前搬上来的 Shell 节点一并移除，所以搬移必须在本函数之后做。
+    //
     // model.tabs 的每一项已经是 describeGroupTab() 的完整结果，绝不能再喂回它：
     // describeGroupTab 用 source.id 取 groupId，而这里只有 groupId，会全部回落 'default'。
     model.tabs.forEach(tab => {
@@ -2312,7 +2326,67 @@ function renderSerialGroupTabBar() {
 
         listEl.appendChild(button);
     });
+
+    // 分组标签重建完后才能搬 Shell：replaceChildren() 已经把上一轮搬上来的节点摘掉了。
+    syncShellTabLayer();
 }
+
+// Shell 标签应该挂在哪一层：多分组时在分组层，单分组时回到 pane 标签行。
+//
+// 只移动节点，不重建。Shell 的点击/关闭/双击监听绑在节点自身，终端在 tabPane 里，
+// 两者都不会因 appendChild 而失效；反过来若在这里重建，每次切分组都会多出一个
+// 旧的 xterm 实例与一堆悬空监听。
+function syncShellTabLayer() {
+    const listEl = document.getElementById('serial-group-tab-list');
+    const paneList = getPaneTabsList('pane-1');
+    if (!listEl || !paneList) return;
+    const isMultiGroup = serialGroups.length > 1;
+    if (!isMultiGroup) {
+        // 单分组：Shell 回到 pane 标签行，且必须按布局里 tabIds 的相对顺序落位。
+        // 直接 appendChild 会把它推到末尾，而用户可能把 Shell 拖到主标签前面过；
+        // 那样一来「回到单层」就会静默改掉用户的标签顺序。
+        const pane = getPaneById('pane-1');
+        const order = Array.isArray(pane?.tabIds) ? pane.tabIds : [];
+        shellTabs.forEach(tabState => {
+            const button = tabState?.btn;
+            if (!button || button.parentElement === paneList) return;
+            const nextTabId = order
+                .slice(order.indexOf(tabState.id) + 1)
+                .find(id => paneList.querySelector(`.main-tab[data-target="${id}"]`));
+            const anchor = nextTabId ? paneList.querySelector(`.main-tab[data-target="${nextTabId}"]`) : null;
+            paneList.insertBefore(button, anchor);
+        });
+        return;
+    }
+    shellTabs.forEach(tabState => {
+        const button = tabState?.btn;
+        if (!button) return;
+        // 多分组：Shell 与分组标签同级，且排在分组标签之后。
+        if (button.parentElement !== listEl) listEl.appendChild(button);
+    });
+}
+
+// 供 workspace-manager 判断「这个标签的按钮还在不在」。Shell 被搬到分组层后，
+// 按钮不在 pane 内，但它的面板仍在 pane 里，因此仍算可渲染。
+function findWorkspaceTabButton(tabId, paneId) {
+    if (!tabId) return null;
+    const byTarget = `.main-tab[data-target="${tabId}"]`;
+    return document.querySelector(byTarget)
+        || getPaneDom(paneId)?.querySelector(byTarget)
+        || null;
+}
+
+// 告诉布局层：多分组时 Shell 的按钮应挂到分组层。返回 null 表示按默认规则留在 pane 里。
+function resolveWorkspaceTabButtonHost(tabId, paneId) {
+    if (serialGroups.length <= 1) return null;
+    if (!isShellTabId(tabId)) return null;
+    return document.getElementById('serial-group-tab-list');
+}
+
+function isShellTabId(tabId) {
+    return typeof tabId === 'string' && /^tab-shell-\d+$/.test(tabId);
+}
+
 
 function activateSerialGroup(groupId) {
     const id = resolveSerialGroupId(groupId);
