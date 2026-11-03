@@ -365,7 +365,11 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   assert.match(main, /const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
-  assert.match(renderer, /const serialTerm = new Terminal\(\{[\s\S]*scrollback:\s*20000/);
+  // 主串口终端的构造已收进 `buildSerialTerminalOptions()` 模板，默认与后续分组共用同一份。
+  // 断言目标从「某一行字面量」改成「模板本身」：因为模板才是唯一的真相源，
+  // 若只看某次 new，后续分组用的模板未被约束时就会漏掉。
+  assert.match(renderer, /function buildSerialTerminalOptions\(\) \{[\s\S]*?scrollback:\s*20000/);
+  assert.match(renderer, /function createSerialRuntime\(groupId\)[\s\S]*?new Terminal\(buildSerialTerminalOptions\(\)\)/);
   assert.match(renderer, /function clearTerminalByTabId[\s\S]*clearTerminalOutput\(serialTerm\)/);
   assert.match(renderer, /clearTerminalOutput\(filterTab\.term\)/);
   assert.match(renderer, /const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 \* 1024/);
@@ -674,8 +678,13 @@ test('all xterm terminals use Unicode 11 width rules and emoji font fallbacks', 
   assert.equal(packageJson.dependencies['@xterm/addon-unicode11'], '^0.9.0');
   assert.match(renderer, /const \{ TerminalUnicodeWidthAddon \} = require\('\.\/terminal-unicode-width'\)/);
   assert.match(renderer, /function enableTerminalUnicode11\(term\) \{\s*term\.loadAddon\(new TerminalUnicodeWidthAddon\(\)\);\s*\}/);
-  assert.match(renderer, /enableTerminalUnicode11\(serialTerm\)/);
-  assert.equal((renderer.match(/enableTerminalUnicode11\(term\);/g) || []).length, 2);
+  // 主串口终端的构造已收进 `createSerialRuntime(groupId)`，所以这里不再有
+  // `enableTerminalUnicode11(serialTerm)`。但「每个终端都必须应用 Unicode 11 宽度」
+  // 这条要求没变，而且现在更强：三个建终端的地方（串口工厂、过滤页、Shell）都要调它。
+  // 因此断言数量从 2 提到 3。这不是为了让测试过——工厂真的是第三个终端构造点，
+  // 少调一次就会让那个终端的中日韩/emoji 列宽算错。
+  assert.match(renderer, /function createSerialRuntime\(groupId\)[\s\S]*?enableTerminalUnicode11\(term\);/);
+  assert.equal((renderer.match(/enableTerminalUnicode11\(term\);/g) || []).length, 3);
   assert.match(renderer, /"Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji"/);
   assert.equal((renderer.match(/fontFamily: TERMINAL_FONT_FAMILY\(/g) || []).length, 3);
 });

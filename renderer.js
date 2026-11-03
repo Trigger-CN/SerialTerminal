@@ -41,6 +41,7 @@ const { SerialGroupRegistry, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID 
 const { SerialGroupContextStore } = require('./serial-group-context');
 const { SerialDataParser } = require('./serial-data-parser');
 const { serialContainerId } = require('./serial-group-dom');
+const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -511,8 +512,13 @@ function applyHighlighting(text, filterRegex = null, globalMatches = null) {
 }
 
 // 行解析器已抽到 serial-data-parser.js（无 DOM 依赖，可单测）。
-// 这里注入绑定到默认分组的 prefixProvider，行号仍记在分组上下文里。
-const dataParser = new SerialDataParser({ prefixProvider: () => getPrefix(REGISTRY_DEFAULT_GROUP_ID) });
+//
+// 默认分组的解析器由 `createSerialRuntime()` 在建终端时一并创建，并作为终端运行时
+// 的一部分返回。这里不单独 new 一个：同一分组若存在两个解析器，只有其中一个会被写入
+// 数据，行号会看起来「不涨」，属于最难定位的一类状态分裂。
+//
+// 声明成 `let` 是因为模块顶部先执行到这里、终端运行时要到下方才构造。赋值后不再变化。
+let dataParser = null;
 let serialOutputQueue = [];
 let serialOutputQueuedBytes = 0;
 let serialOutputFlushScheduled = false;
@@ -1339,20 +1345,79 @@ term.loadAddon(fitAddon);
 term.open(document.getElementById('terminal-container'));
 */
 
-const serialTerm = new Terminal({ 
-    cursorBlink: true,
-    allowProposedApi: true,
-    allowTransparency: true,
-    scrollback: 20000
+// 主串口终端的构造模板。
+//
+// 为什么做成模板而不是直接 new 一个：多分组需要「一个分组一个终端」，若每个分组
+// 各写一段构造代码，壁纸、Unicode 11 宽度、字体回退这些跨终端一致性就会逐份漂移。
+// 只保留一份模板，`createSerialRuntime(groupId)` 对任意分组都走它。
+function buildSerialTerminalOptions() {
+    return {
+        cursorBlink: true,
+        allowProposedApi: true,
+        allowTransparency: true,
+        scrollback: 20000
+    };
+}
+
+// 按 groupId 建一个完整的串口终端运行时（终端 + fit + search + 解析器）。
+//
+// 容器 id 由 serial-group-dom.js 统一计算，默认分组仍是 'serial-container'。
+// 若容器不存在就不再建——xterm 的 open() 拿到 null 会直接抛，而且报到的是 xterm 内部，
+// 很难看出真正原因在哪里。返回 null 让调用方自己决定怎么报错更清楚。
+function createSerialRuntime(groupId) {
+    const containerId = serialContainerId(groupId);
+    const container = document.getElementById(containerId);
+    if (!container) return null;
+
+    const term = new Terminal(buildSerialTerminalOptions());
+    const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
+    enableTerminalUnicode11(term);
+    term.open(container);
+
+    // 每个分组自己的行解析器，行号只能记进它自己的分组上下文。
+    const dataParser = new SerialDataParser({ prefixProvider: () => getPrefix(groupId) });
+
+    return {
+        groupId,
+        term,
+        fitAddon,
+        searchAddon,
+        dataParser,
+        container,
+        dispose() {
+            try {
+                term.dispose();
+            } catch (error) {
+                console.error(`Failed to dispose terminal for group ${groupId}:`, error);
+            }
+        }
+    };
+}
+
+// 分组终端运行时注册表：负责「谁持有、什么时候建、什么时候释放」。
+// 构造函数不建任何实例——xterm 需要真实 DOM，而这里执行时标签尚未渲染完。
+const serialRuntimes = new SerialTerminalRuntimeRegistry({
+    defaultGroupId: REGISTRY_DEFAULT_GROUP_ID,
+    createRuntime: createSerialRuntime
 });
-const serialFitAddon = new FitAddon();
-const serialSearchAddon = new SearchAddon();
-serialTerm.loadAddon(serialFitAddon);
-serialTerm.loadAddon(serialSearchAddon);
-enableTerminalUnicode11(serialTerm);
-// 容器 id 由 serial-group-dom.js 统一计算。默认分组算出来仍是 'serial-container'，
-// 与改造前逐字一致；这一步只是把「字面量」换成「契约」，单分组行为零变化。
-serialTerm.open(document.getElementById(serialContainerId(REGISTRY_DEFAULT_GROUP_ID)));
+
+// 默认分组的终端在模块加载期就要建好：主终端是应用启动后就存在的东西，
+// 而且后面的 32 处 serialTerm 引用全部依赖它已存在。
+const defaultSerialRuntime = serialRuntimes.getOrCreate(REGISTRY_DEFAULT_GROUP_ID);
+if (!defaultSerialRuntime) {
+    throw new Error(`Missing serial container for group ${REGISTRY_DEFAULT_GROUP_ID}`);
+}
+serialRuntimes.assertDefaultAttached();
+const serialTerm = defaultSerialRuntime.term;
+const serialFitAddon = defaultSerialRuntime.fitAddon;
+const serialSearchAddon = defaultSerialRuntime.searchAddon;
+// 默认分组的行解析器直接用运行时里那一个，绝不另建。
+dataParser = defaultSerialRuntime.dataParser;
+// serialTerm.open() 已在 createSerialRuntime() 里做过。这里不能再调一次：
+// xterm 重复 open 同一容器会重建 DOM 并丢掉已写入内容，且不报错。
 const mainTabButton = document.querySelector('.main-tab[data-target="tab-main"]');
 if (mainTabButton) {
     mainTabButton.addEventListener('click', () => {

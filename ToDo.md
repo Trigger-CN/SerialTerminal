@@ -184,7 +184,11 @@
   - [x] 注册表的三条硬约束：**惰性创建**（xterm 的 `open()` 需要真实 DOM，标签未渲染不能构造）；**默认分组不可释放**（释放后无路径恢复，用户看到空白终端）；**释放前必须 dispose**（只删引用会让 canvas/textarea 与滚动缓冲挂在 DOM 上，长用越来越卡）。
   - [x] `attach()` 用于改造初期：默认分组的终端已在模块加载期建好并 open，再让注册表构造会得到**两个绑在同一容器的 xterm 实例**（互相抢输入、画面覆盖），比不接入更糟；对已登记分组返回 `false` 而不覆盖。
   - [x] 第五步：新增 `serial-group-dom.js` 分组 DOM 标识契约（`groupDomSuffix`/`mainTabId`/`mainTabButtonId`/`serialContainerId`）。把 `tab-main` 与 `serial-container` 从两处独立字面量变成可计算的 id。**默认分组无后缀**（算出仍是 `tab-main` / `serial-container`，与改造前逐字一致），非默认分组为 `serial-container-g-1`；后缀在尾部以保留前缀便于批量查找；`[^A-Za-z0-9_-]` 净化（脏 id 进 `querySelector` 会抛 `SyntaxError`），空 id 回落默认分组。`pane-layout-dom.js` 的两处字面量改为委托本模块；`renderer.js` 三处容器查找（open / context menu / wheel）改为 `serialContainerId(REGISTRY_DEFAULT_GROUP_ID)` 并合并为一次解析。配套 `test/serial-group-dom.test.js` 8 项全通过（其中一项直接读 `index.html` 校验三个 id 真实存在）。
-  - [ ] **阻塞项**：`serialTerm`/`filterTabs`/`chartTabs`/`workspaceLayout` 每个分组一份无法单独完成——`#serial-container` 是全页唯一串口终端容器。注册表与 id 契约已就绪，但真正切到“按 groupId 取终端”需先有每分组容器节点（归 P3 的动态 pane），且**容器、调用点、按 groupId 取终端三步必须一起做**。
+  - [x] 第六步：**终端构造改为工厂 + 注册表托管**。新增 `buildSerialTerminalOptions()`（唯一构造模板）与 `createSerialRuntime(groupId)`（返回 `{ groupId, term, fitAddon, searchAddon, dataParser, container, dispose }`）；`serialRuntimes = new SerialTerminalRuntimeRegistry(...)`；默认分组经 `serialRuntimes.getOrCreate()` 构造，`serialTerm`/`serialFitAddon`/`serialSearchAddon` 从运行时取出。**工厂因此不再是死代码。** 两条必须保留的细节：`dataParser` 由运行时持有（同一分组两个解析器时只有一个被写入，行号会「不涨」）；**不得在工厂外再调 `serialTerm.open()`**（xterm 重复 open 会重建 DOM 并静默丢掉已写内容）。
+  - [x] 第七步：新增 `serial-group-workspace.js` 分组工作区形状（15 项）：`describeGroupWorkspace` / `describeGroupWorkspaceEntry` / `findMissingGroupContainers` / `attributeSelector`。算出每组应有的容器 id 与属性选择器（`[id="serial-container-g-1"]`，避免 `#1a` 这类合法 id 在 `querySelector` 里报语法错）。仍是纯数据，不建节点。
+  - [x] **新增 renderer 模块加载门禁**：`scripts/check-renderer-module-load.js` + `test/renderer-module-load.test.js`（4 项，含 TDZ 反向对照与「serialTerm 必须取自运行时」断言）。工厂在模块顶层被立即调用，顺序写错会启动即白屏，而 `node --check` 与源码正则都看不见。门禁在**独立子进程**里只对同步顶层求值负责：renderer 顶层会排入依赖真实布局的异步回调，同进程执行会让这些拒绝把整个文件判红。
+  - [x] markup 计数断言已按预期改写：`enableTerminalUnicode11(term);` 由 2 → **3**（串口工厂/过滤/Shell）；另有一条改为断言 `buildSerialTerminalOptions()` 模板与工厂调用（模板才是唯一真相源）。
+  - [ ] **阻塞项**：`serialTerm` 的剩余引用仍绑默认分组，且 `#serial-container` 是全页唯一串口终端容器。注册表、id 契约与工厂均已就绪，但**建每分组容器节点这一步仍未做**；在那之前切「按 activeGroupId 取终端」只会得到伪多实例（换个名字，终端依旧是那一个）。
 - [ ] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时塌回一层）
 - [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）
 - [~] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）；**也是 P2 剩余部分的前置条件**
@@ -201,7 +205,8 @@ P2 剩余部分必须先解 P3 的动态 pane 创建（P5 的布局层前置已�
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **391/391 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项与 `test/serial-group-dom.test.js` 8 项）。
+- [x] `npm test` 当前 **410/410 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项与 `test/renderer-module-load.test.js` 4 项）。
+- [x] **renderer 模块加载门禁**：`node scripts/check-renderer-module-load.js` 退出码 0；反向对照（故意 TDZ）确实非零退出。
 - [x] 配置迁移磁盘验证：独立 `--user-data-dir` 连启两次，`config.json` 均为 v15 + 1 组，旧字段保留，`config.v14.backup.json` 保持 21667 字节的 v14 原件且第二次启动未覆盖。
 - [x] 实机启动：主窗口正常出现，`main.log` 与渲染进程 stderr 均无 JS 错误，electron 进程清理后 `remaining: 0`。
 - [ ] **多串口行为的人工 GUI 验证**：连接、收发、日志写入从未在真实窗口中手工跑过；现有结论均来自单测与源码断言。

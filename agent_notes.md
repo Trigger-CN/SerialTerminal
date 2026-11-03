@@ -6,7 +6,7 @@
 
 - 当前配置 schema：**v15**。版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 以 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。v14 → v15 迁移已落地并实测，详见 13A 节与 `MULTI_SERIAL_DESIGN.md` 第 9 节。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**，并已具备**分组终端运行时注册表**（`serial-group-runtime.js`，19 项单测）与**分组 DOM 标识契约**（`serial-group-dom.js`，8 项单测，把 `tab-main` / `serial-container` 从字面量变成可计算的 id）；**P3 的标签归属与分组增删改纯逻辑层已完成**（`serial-group-tabs.js` 17 项 + `serial-groups-model.js` 17 项）；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 的渲染层接线（按 groupId 建终端与容器）、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏（双层标签栏接线、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**，并已具备**分组终端运行时注册表**（19 项单测）、**分组 DOM 标识契约**（8 项）与**终端工厂/注册表托管**（`createSerialRuntime(groupId)` + `serialRuntimes.getOrCreate()`，默认分组即经由它构造）；**P3 的标签归属与分组增删改纯逻辑层已完成**（17 + 17 项）；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**：`serialTerm` 的剩余引用仍绑默认分组，多分组容器节点未建；P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -1021,9 +1021,18 @@ npm run dist:linux
   - 后缀放**尾部**而非中部（`serial-container-g-1` 而不是 `serial-g-1-container`），这样非默认容器仍以同一前缀开头，按 `[id^="serial-container"]` 批量查找才能生效。
   - groupId 会拼进 HTML id，因此 `[^A-Za-z0-9_-]` 一律替换为 `_`：配置是用户可编辑的文本，含空格或冒号的 id 直接进 `querySelector` 会抛 `SyntaxError` 而不是找不到元素。空 id 回落到默认分组（否则得到永远不存在的 `serial-container-`）。
   - `pane-layout-dom.js` 不再保存 `'tab-main'` / `'serial-container'` 字面量，改为委托本模块；`renderer.js` 的三处容器查找（open、context menu、wheel）改为 `serialContainerId(REGISTRY_DEFAULT_GROUP_ID)`，并合并为一次 `serialContainerEl` 解析。**单分组行为零变化。**
-  - 本层只负责「id 怎么算」，**不负责建容器**。真正的多分组容器节点、`createSerialRuntime` 与 `getOrCreate` 的可达调用点仍未做；在容器节点按分组创建之前写那些代码就是不可达死代码。
+  - 本层只负责「id 怎么算」，**不负责建容器**。多分组容器节点仍未做。
+- 终端构造改为工厂 + 注册表托管（`renderer.js` + `serial-group-runtime.js`，2026-11-03）：
+  - `buildSerialTerminalOptions()` 是唯一构造模板；`createSerialRuntime(groupId)` 返回 `{ groupId, term, fitAddon, searchAddon, dataParser, container, dispose }`；`serialRuntimes` 为 `SerialTerminalRuntimeRegistry` 实例。
+  - **默认分组经 `serialRuntimes.getOrCreate()` 构造**，`serialTerm` / `serialFitAddon` / `serialSearchAddon` 从运行时取出。工厂因此不再是死代码——这是上一轮回退的直接修复。
+  - **`dataParser` 由运行时持有**，模块级只做引用（`let` + 赋值）。同一分组若有两个解析器，只有一个会被写入，行号会看起来「不涨」。
+  - **不得在工厂外再调 `serialTerm.open()`**：xterm 重复 open 同一容器会重建 DOM 并丢掉已写内容，**且不报错**。
+  - `serial-group-workspace.js`（15 项）提供每组应有的容器 id / 选择器与 `findMissingGroupContainers`；仍是纯数据，不建节点。
+  - **新增加载门禁**：`scripts/check-renderer-module-load.js`（独立子进程执行完整模块体，只对同步顶层求值负责，完成后 `process.exit()`）+ `test/renderer-module-load.test.js`（4 项，含 TDZ 反向对照与「serialTerm 必须取自运行时」断言）。
+    - 为什么不写成同进程 node:test：renderer 顶层会排入异步回调（首帧 fit、图表），依赖真实布局，stub 永远补不完；在测试进程内执行会让这些拒绝把整个文件判红。
+    - **连踩六轮 stub 的教训**：遇到「stub 永远补不完」，首先怀疑验证范围选错（应当只验证同步求值），而不是继续补 stub。
+  - **markup 计数断言已按预期改写**：`enableTerminalUnicode11(term);` 由 2 → **3**（串口工厂 / 过滤 / Shell 三处）；`allowTransparency: true` 与 `fontFamily: TERMINAL_FONT_FAMILY(` 仍为 3（串口那处进了模板）。另有一条从「`const serialTerm = new Terminal({...scrollback: 20000`」改为断言模板与工厂调用。
 - 后续改造前必须知道的两件事（2026-11-03 核实）：
-  - **`test/markup.test.js` 的三个计数断言应当上调。** 当前 `allowTransparency: true`=3、`enableTerminalUnicode11(term);`=2、`fontFamily: TERMINAL_FONT_FAMILY(`=3。真正按 groupId 建终端时，预期改为 4/3/4。上轮回退时我拒绝改这三个数字，是因为**那次新增的是同一逻辑的重复实现且不可达**，不是因为数字神圣。区分标准：新增实例是否真实存在且可达。后续构造可能从字面量变成模板/工厂，正则片段本身也可能不存在，届时重写断言是预期行为。
   - **P4 的起点比声称的更靠后。** `SerialGroupContextStore.setDisplay()` **至今零调用**，`renderer.js` 里 `receiveDisplayMode` 的 17 处读写、`receiveEncoding`/`sendEncoding`/`newlineMode` 全部仍在模块级 `let` 上。P4 不是「侧栏读 activeGroupId」的接线，而是「状态真的下沉 + 40+ 处读写点改造」，应作为独立前置阶段。
   - **P1 验收清单已订正。** `MULTI_SERIAL_DESIGN.md` §12 曾把 10 项全列为 `[ ]`，与 `ToDo.md` 记录的 P1 已完成矛盾。现已逐项对照 `main.js` 实际代码（`buildPortLogFolderName` @763、`ensureLogDirectory` @990、`cleanupSerialConnection` 按本会话端口判定 @2958、`session.outputBuckets` @2819/2917/2938）勾选并注明依据；但「逐字节不串流」与「日志端口子目录」当年只有端到端摘要级记录，**没有可重放的自动化用例**，这一点已在文档中声明。
 - 配置迁移 v14 → v15（已实现，代码在 `serial-groups-config.js`，14 项单测）：

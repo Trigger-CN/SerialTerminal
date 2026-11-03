@@ -4,7 +4,7 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器），并已具备分组终端运行时注册表与分组 DOM 标识契约；配置 v14 → v15 迁移已完成并实测；P3 的标签归属与分组增删改纯逻辑层已完成；P5 纯数据层与 DOM 层已完成；P2 的渲染层接线（按 groupId 建终端与容器）、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器），并已具备分组终端运行时注册表与分组 DOM 标识契约；**终端构造已改为 `createSerialRuntime(groupId)` 工厂并交由运行时注册表管理，默认分组经 `getOrCreate` 构造（单分组行为不变）**；配置 v14 → v15 迁移已完成并实测；P3 的标签归属与分组增删改纯逻辑层已完成；P5 纯数据层与 DOM 层已完成；P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始。**
 > 当前主进程已按 `groupId` 完全隔离，但 UI 仍为单串口形态（`renderer.js` 固定使用 `DEFAULT_SERIAL_GROUP_ID`）。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -713,11 +713,44 @@ serialContainerId(groupId)   // 默认 → 'serial-container'
 
 落地范围：`pane-layout-dom.js` 不再保存 `'tab-main'` / `'serial-container'` 字面量，改为委托本模块；`renderer.js` 的三处容器查找（open、context menu、wheel）改为 `serialContainerId(REGISTRY_DEFAULT_GROUP_ID)`，并合并为一次 `serialContainerEl` 解析。**单分组行为零变化**——默认分组算出的三个 id 与改造前逐字一致，`test/serial-group-dom.test.js` 里有一条用例直接读 `index.html` 断言这三个 id 真实存在于静态标记中，防止契约与页面漂移。
 
-**这一层不建容器。** 真正的多分组容器节点、`createSerialRuntime` 与 `getOrCreate` 的可达调用点仍未做：在容器节点按分组创建之前，`getOrCreate` 没有任何调用方能传入一个真实存在的 id。上轮已实测过一次这类提前接线：新增的构造器完全不可达，而重复的 `new Terminal(...)` / `new HexStreamFormatter(...)` 直接打破 `test/markup.test.js` 三个跨终端一致性计数断言，最终完整回退。结论仍然有效：**容器、调用点、按 groupId 取终端三步必须一起做。**
+**这一层不建容器。** 真正的多分组容器节点仍未做：在容器节点按分组创建之前，`getOrCreate` 没有任何调用方能传入一个真实存在的 id。上轮已实测过一次这类提前接线：新增的构造器完全不可达，而重复的 `new Terminal(...)` / `new HexStreamFormatter(...)` 直接打破 `test/markup.test.js` 三个跨终端一致性计数断言，最终完整回退。结论仍然有效：**容器、调用点、按 groupId 取终端三步必须一起做。**
 
-**关于 `test/markup.test.js` 的三个计数断言（易误判，必读）**：它们现在期望 `allowTransparency: true` = 3、`enableTerminalUnicode11(term);` = 2、`fontFamily: TERMINAL_FONT_FAMILY(` = 3。上轮回退时我拒绝修改这三个数字，**理由是那次新增的是同一逻辑的重复实现，而不是数字本身不能变**。真正按 groupId 建终端时，计数上升（预期 4 / 3 / 4）是**正确的**——那时确实存在第四个终端，且它必须同样应用壁纸、Unicode 11 宽度与字体回退。
+### P2 新增：终端构造改为工厂 + 注册表托管（已落地）
 
-区分标准只有一条：新增实例是不是真实存在、真实可达。若因为「让测试过」而改数字，那是伪造；若因为「现在真的多了一个终端」而改数字，那是维护断言。后续改造极可能让这三处连形态都改（构造从字面量变成模板或工厂后，`new Terminal({` 这个正则片段可能不再存在），这属于预期内的断言重写，不应当成回归信号。
+上面说的「`createSerialRuntime` 不可达」已被解决：现在默认分组就是经由 `serialRuntimes.getOrCreate()` 构造的，工厂有真实调用方。
+
+```text
+buildSerialTerminalOptions()        // 构造模板，唯一一份
+createSerialRuntime(groupId)        // 返回 { groupId, term, fitAddon, searchAddon, dataParser, container, dispose }
+serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
+  └─ getOrCreate(default) → defaultSerialRuntime
+       └─ serialTerm / serialFitAddon / serialSearchAddon 从中取出
+```
+
+三条必须保留的决定：
+
+| 决定 | 理由 |
+| --- | --- |
+| 构造参数只留一份模板 | 壁纸、Unicode 11 宽度、字体回退这些跨终端一致性要求，若每个分组各写一段构造代码就会逐份漂移 |
+| `dataParser` 由运行时持有，模块级只做引用 | 同一分组若存在两个解析器，只有其中一个会被写入数据，行号会看起来「不涨」，属于最难定位的状态分裂 |
+| 不在工厂外再调 `serialTerm.open()` | xterm 重复 `open` 同一容器会重建 DOM 并丢掉已写内容，**且不报错** |
+
+**新增的加载门禁（重要）**：`scripts/check-renderer-module-load.js` + `test/renderer-module-load.test.js`。
+改造后模块顶层会**立即执行** `createSerialRuntime()`，而它内部又调 `enableTerminalUnicode11()` / `getPrefix()` / `document.getElementById()`。只要其中任意一个的声明被移到构造点下方，应用就会启动即白屏，而所有源码文本断言仍然全绿——这正是 `node --check` 与正则断言共同的盲区。
+门禁在**独立子进程**里执行完整模块体并只对**同步顶层求值**负责，随后 `process.exit()`；它带一个反向对照（故意写错顺序必须失败）。
+为什么不写成同进程的 node:test 用例：renderer 顶层会排入异步回调（首帧 fit、图表初始化），它们依赖真实布局，stub 永远补不完；在测试进程内执行会让这些拒绝把整个文件判红，而那种红是测试夹具的缺陷。**本次在这个陷阱上连踩了六轮，教训是：遇到「stub 永远补不完」应首先怀疑验证范围选错，而不是继续补 stub。**
+
+**关于 `test/markup.test.js` 的三个计数断言（已按预期改写，必读）**：
+
+| 断言 | 旧 | 新 | 原因 |
+| --- | --- | --- | --- |
+| `allowTransparency: true` | 3 | 3（不变） | 串口那处从字面量变成了模板内容 |
+| `enableTerminalUnicode11(term);` | 2 | **3** | 工厂真的是第三个终端构造点（串口 / 过滤 / Shell），少调一次会让那个终端的中日韩与 emoji 列宽算错 |
+| `fontFamily: TERMINAL_FONT_FAMILY(` | 3 | 3（不变） | 同上，串口那处进入模板 |
+
+另有一条断言从「`const serialTerm = new Terminal({...scrollback: 20000`」改为「`buildSerialTerminalOptions()` 模板 + 工厂内 `new Terminal(buildSerialTerminalOptions())`」：模板才是唯一真相源，只断言某一次 `new` 会漏掉后续分组。
+
+区分标准只有一条：**新增实例是不是真实存在、真实可达**。若因为「让测试过」而改数字，那是伪造；若因为「现在真的多了一个终端」而改数字，那是维护断言。
 
 ### P3 — 双层标签栏与添加串口按钮
 
@@ -864,8 +897,11 @@ serialContainerId(groupId)   // 默认 → 'serial-container'
 - [ ] 快捷指令自动发送只向触发来源组发送
 - [x] 分组终端生命周期管理 —— `serial-group-runtime.js`（惰性创建、已有实例可 attach、默认分组不可释放、释放前 dispose），19 项单测
 - [x] 分组 DOM 标识契约 —— `serial-group-dom.js`（`serialContainerId` / `mainTabId` / `mainTabButtonId` / `groupDomSuffix`），8 项单测；默认分组算出的三个 id 与改造前逐字一致，并由一条用例直接读 `index.html` 校验真实存在
-- [ ] `serialTerm` 改为按 groupId 从运行时注册表取用 —— 需先完成 P3 的动态容器
-- [ ] **阻塞项**：`#serial-container` 是全局唯一串口终端容器，需先支持每分组独立容器。P5 的布局层已不再假设两个 pane，但 `index.html` 的动态 pane 创建归 P3（pane 数量由分组数驱动）
+- [x] 终端构造改为工厂 + 注册表托管 —— `buildSerialTerminalOptions()` / `createSerialRuntime(groupId)` / `serialRuntimes`；默认分组经 `getOrCreate` 构造，单分组行为与改造前一致；4 项加载门禁
+- [x] 分组工作区形状纯数据层 —— `serial-group-workspace.js`（`describeGroupWorkspace` / `describeGroupWorkspaceEntry` / `findMissingGroupContainers` / `attributeSelector`），15 项单测
+- [x] **新增 renderer 模块加载门禁** —— `scripts/check-renderer-module-load.js` + `test/renderer-module-load.test.js`（4 项，含 TDZ 反向对照）。这是本次改造最关键的一条护栏：工厂在模块顶层被立即调用，一旦顺序写错会启动即白屏，而 `node --check` 与源码正则都看不见
+- [ ] `serialTerm` 的剩余引用改为按 `activeGroupId` 动态取用 —— 目前仍绑定默认分组；需等到多分组容器真实可建后再动，否则切换分组只是换个名字，终端依旧是那一个
+- [ ] **阻塞项**：`#serial-container` 是全局唯一串口终端容器。`serial-group-workspace.js` 已能算出每组应有的容器 id 与选择器，但**建节点的那一步仍未做**
 
 ### P3
 
