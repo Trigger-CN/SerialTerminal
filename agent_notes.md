@@ -6,7 +6,7 @@
 
 - 当前配置 schema：**v15**。版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 以 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。v14 → v15 迁移已落地并实测，详见 13A 节与 `MULTI_SERIAL_DESIGN.md` 第 9 节。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**，并已具备**分组终端运行时注册表**（`serial-group-runtime.js`，19 项单测）；**P3 的标签归属与分组增删改纯逻辑层已完成**（`serial-group-tabs.js` 17 项 + `serial-groups-model.js` 17 项）；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 的渲染层接线、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏（双层标签栏接线、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**，并已具备**分组终端运行时注册表**（`serial-group-runtime.js`，19 项单测）与**分组 DOM 标识契约**（`serial-group-dom.js`，8 项单测，把 `tab-main` / `serial-container` 从字面量变成可计算的 id）；**P3 的标签归属与分组增删改纯逻辑层已完成**（`serial-group-tabs.js` 17 项 + `serial-groups-model.js` 17 项）；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 的渲染层接线（按 groupId 建终端与容器）、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏（双层标签栏接线、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -1015,6 +1015,13 @@ npm run dist:linux
   - **三条硬约束**：① 惰性创建——xterm 的 `open()` 需要真实 DOM，标签未渲染就构造会失败；② 默认分组不可释放——释放后无路径可恢复，用户会看到空白终端区；③ 释放前必须 `dispose()`——只删引用会让 canvas/textarea 与滚动缓冲挂在 DOM 上，长用越来越卡。
   - `attach(groupId, runtime)` 是为改造初期准备的：默认分组的终端在 `renderer.js` 加载时就已建好并 open，再让注册表构造会得到**两个绑在同一容器的 xterm 实例**（互相抢输入、画面覆盖），比不接入更糟。`attach` 对已登记分组返回 `false` 而不覆盖，因为静默替换会让旧引用持有者继续操作被遗弃的实例。
   - `assertDefaultAttached()` 是启动自检：默认分组未登记意味着主终端不在注册表里，后续按 groupId 取终端全拿 null；宁可在启动时明确报错。
+- 分组 DOM 标识契约（`serial-group-dom.js`，8 项单测）：
+  - 提供 `groupDomSuffix` / `mainTabId` / `mainTabButtonId` / `serialContainerId`，把 `tab-main` 与 `serial-container` 从「散文式字面量」变成可计算的事实。
+  - **默认分组不携带后缀**：算出来仍是 `tab-main` / `tab-main-button` / `serial-container`，与改造前逐字一致；只有非默认分组才拼 `-<groupId>`，如 `serial-container-g-1`。给默认分组加后缀会让 `index.html` 的静态标记、`pane-layout-dom.js` 的描述与依赖 `#serial-container` 的既有断言同时失效，而失败方式是「终端区一片空白」而不是报错。
+  - 后缀放**尾部**而非中部（`serial-container-g-1` 而不是 `serial-g-1-container`），这样非默认容器仍以同一前缀开头，按 `[id^="serial-container"]` 批量查找才能生效。
+  - groupId 会拼进 HTML id，因此 `[^A-Za-z0-9_-]` 一律替换为 `_`：配置是用户可编辑的文本，含空格或冒号的 id 直接进 `querySelector` 会抛 `SyntaxError` 而不是找不到元素。空 id 回落到默认分组（否则得到永远不存在的 `serial-container-`）。
+  - `pane-layout-dom.js` 不再保存 `'tab-main'` / `'serial-container'` 字面量，改为委托本模块；`renderer.js` 的三处容器查找（open、context menu、wheel）改为 `serialContainerId(REGISTRY_DEFAULT_GROUP_ID)`，并合并为一次 `serialContainerEl` 解析。**单分组行为零变化。**
+  - 本层只负责「id 怎么算」，**不负责建容器**。真正的多分组容器节点、`createSerialRuntime` 与 `getOrCreate` 的可达调用点仍未做；在容器节点按分组创建之前写那些代码就是不可达死代码。
 - 配置迁移 v14 → v15（已实现，代码在 `serial-groups-config.js`，14 项单测）：
   - `CONFIG_VERSION` 不再硬编码，`main.js` 改为 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;`。
   - 默认分组 id **固定为 `'default'`**，不能随机：随机 id 会让每次 `normalizeConfig()` 产生新 id，幂等性直接失效，日志目录归属也会跟着漂移。

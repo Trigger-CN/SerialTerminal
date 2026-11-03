@@ -40,6 +40,7 @@ const { ChartDataModel } = require('./chart-data-model');
 const { SerialGroupRegistry, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
 const { SerialGroupContextStore } = require('./serial-group-context');
 const { SerialDataParser } = require('./serial-data-parser');
+const { serialContainerId } = require('./serial-group-dom');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -1349,7 +1350,9 @@ const serialSearchAddon = new SearchAddon();
 serialTerm.loadAddon(serialFitAddon);
 serialTerm.loadAddon(serialSearchAddon);
 enableTerminalUnicode11(serialTerm);
-serialTerm.open(document.getElementById('serial-container'));
+// 容器 id 由 serial-group-dom.js 统一计算。默认分组算出来仍是 'serial-container'，
+// 与改造前逐字一致；这一步只是把「字面量」换成「契约」，单分组行为零变化。
+serialTerm.open(document.getElementById(serialContainerId(REGISTRY_DEFAULT_GROUP_ID)));
 const mainTabButton = document.querySelector('.main-tab[data-target="tab-main"]');
 if (mainTabButton) {
     mainTabButton.addEventListener('click', () => {
@@ -1415,12 +1418,15 @@ function buildWelcomeGuideOutput(version) {
     const clearHint = `\x1b[1;38;2;251;191;36m${tr('main.welcomeClearHint')}${reset}`;
     return `${bannerOutput}\r\n\r\n${guideLines}\r\n\r\n${clearHint}\r\n\r\n`;
 }
+// 默认分组的终端容器。只解析一次：context menu、wheel、以及后续的 fit 都必须指向同一节点，
+// 各自重新 getElementById 会让「容器换了一个」这类错误分散到三处、无法统一修正。
+const serialContainerEl = document.getElementById(serialContainerId(REGISTRY_DEFAULT_GROUP_ID));
 bindTerminalContextMenu({
     terminalType: 'main',
     term: serialTerm,
-    element: document.getElementById('serial-container')
+    element: serialContainerEl
 });
-bindTerminalWheel(serialTerm, document.getElementById('serial-container'));
+bindTerminalWheel(serialTerm, serialContainerEl);
 
 // Filter Tabs Management
 let filterTabs = [];

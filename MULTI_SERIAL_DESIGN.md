@@ -4,7 +4,7 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）并已具备分组终端运行时注册表；配置 v14 → v15 迁移已完成并实测；P3 的标签归属与分组增删改纯逻辑层已完成；P5 纯数据层与 DOM 层已完成；P2 的渲染层接线、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器），并已具备分组终端运行时注册表与分组 DOM 标识契约；配置 v14 → v15 迁移已完成并实测；P3 的标签归属与分组增删改纯逻辑层已完成；P5 纯数据层与 DOM 层已完成；P2 的渲染层接线（按 groupId 建终端与容器）、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始。**
 > 当前主进程已按 `groupId` 完全隔离，但 UI 仍为单串口形态（`renderer.js` 固定使用 `DEFAULT_SERIAL_GROUP_ID`）。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -689,6 +689,32 @@ SerialTerminalRuntimeRegistry
 
 其它已固定的行为：`get()` 不隐式创建（调用方在渲染前取终端拿到 `null` 即可立即报错，比悄悄建一个未 `open` 的终端好定位）；`createRuntime` 返回非法值时不缓存半成品；`dispose` 抛错时仍从 Map 移除（留着只会让后续每次访问都拿到损坏对象），错误走 `console.error` 不外抛，避免中断调用方的关闭分组流程。
 
+### P2 新增：分组 DOM 标识契约（已落地）
+
+实现在 [`serial-group-dom.js`](serial-group-dom.js)，`test/serial-group-dom.test.js` 8 项覆盖。它只回答一个问题：**给定 groupId，终端容器叫什么 id**。
+
+```text
+groupDomSuffix(groupId)      // 默认分组 → ''，其它 → '-<sanitized>'
+mainTabId(groupId)           // 默认 → 'tab-main'
+mainTabButtonId(groupId)     // 默认 → 'tab-main-button'
+serialContainerId(groupId)   // 默认 → 'serial-container'
+```
+
+**为什么需要它。** 多串口卡住的不是「终端能不能建」，而是「终端该建在哪个容器里」。改造前 `renderer.js` 直接写 `document.getElementById('serial-container')`，`pane-layout-dom.js` 里又写了一份 `terminalContainerId: 'serial-container'`；两处字面量可以独立漂移，而漂移后的失败方式是**终端区一片空白且没有任何报错**。把 id 变成可计算的函数之后，「一个分组一个容器」才成为可断言的事实。
+
+四条已固定的非显然规则：
+
+| 规则 | 内容 | 理由 |
+| --- | --- | --- |
+| 默认分组无后缀 | `serial-container` 而非 `serial-container-default` | 加后缀会同时打断 `index.html` 的静态标记、`pane-layout-dom.js` 的描述与依赖 `#serial-container` 的既有断言，且失败静默 |
+| 后缀在尾部 | `serial-container-g-1` 而非 `serial-g-1-container` | 保持同前缀，`[id^="serial-container"]` 这类批量查找（统一 fit 全部终端）才可能生效 |
+| id 必须净化 | `[^A-Za-z0-9_-]` 一律替换为 `_` | 配置是用户可编辑文本；含空格或冒号的 id 直接进 `querySelector` 会抛 `SyntaxError`，而不是找不到元素 |
+| 空 id 回落默认 | 空串/空白/null → 默认分组 | 否则得到永远不存在的 `serial-container-`，终端挂在一个不存在节点上 |
+
+落地范围：`pane-layout-dom.js` 不再保存 `'tab-main'` / `'serial-container'` 字面量，改为委托本模块；`renderer.js` 的三处容器查找（open、context menu、wheel）改为 `serialContainerId(REGISTRY_DEFAULT_GROUP_ID)`，并合并为一次 `serialContainerEl` 解析。**单分组行为零变化**——默认分组算出的三个 id 与改造前逐字一致，`test/serial-group-dom.test.js` 里有一条用例直接读 `index.html` 断言这三个 id 真实存在于静态标记中，防止契约与页面漂移。
+
+**这一层不建容器。** 真正的多分组容器节点、`createSerialRuntime` 与 `getOrCreate` 的可达调用点仍未做：在容器节点按分组创建之前，`getOrCreate` 没有任何调用方能传入一个真实存在的 id。上轮已实测过一次这类提前接线：新增的构造器完全不可达，而重复的 `new Terminal(...)` / `new HexStreamFormatter(...)` 直接打破 `test/markup.test.js` 三个跨终端一致性计数断言，最终完整回退。结论仍然有效：**容器、调用点、按 groupId 取终端三步必须一起做。**
+
 ### P3 — 双层标签栏与添加串口按钮
 
 实现第 6 节的升降层规则、`+` 按钮、分组关闭。
@@ -833,6 +859,7 @@ SerialTerminalRuntimeRegistry
 - [~] 行号、过滤器、图表数据各自独立 —— **行号已独立**（`serial-group-context.js` + `serial-data-parser.js`，共 18 项单测）；过滤器与图表数据仍是全局单例，且受阻于单容器的 DOM 契约
 - [ ] 快捷指令自动发送只向触发来源组发送
 - [x] 分组终端生命周期管理 —— `serial-group-runtime.js`（惰性创建、已有实例可 attach、默认分组不可释放、释放前 dispose），19 项单测
+- [x] 分组 DOM 标识契约 —— `serial-group-dom.js`（`serialContainerId` / `mainTabId` / `mainTabButtonId` / `groupDomSuffix`），8 项单测；默认分组算出的三个 id 与改造前逐字一致，并由一条用例直接读 `index.html` 校验真实存在
 - [ ] `serialTerm` 改为按 groupId 从运行时注册表取用 —— 需先完成 P3 的动态容器
 - [ ] **阻塞项**：`#serial-container` 是全局唯一串口终端容器，需先支持每分组独立容器。P5 的布局层已不再假设两个 pane，但 `index.html` 的动态 pane 创建归 P3（pane 数量由分组数驱动）
 

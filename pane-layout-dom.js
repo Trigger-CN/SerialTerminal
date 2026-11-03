@@ -10,13 +10,19 @@
 // （相同的 id 命名规则、相同的类名、相同的按钮顺序），否则依赖
 // `#pane-1-tabs-list` / `#pane-1-new-chart-tab-btn` 之类选择器的既有代码会全部失效。
 
+// 分组的 DOM 标识（tab-main / serial-container）由 serial-group-dom.js 统一生成。
+// 这里不再重复字面量：两处各写一份 'serial-container' 正是「一个分组一个容器」
+// 迟迟无法成立的原因——两份定义可以独立漂移，而漂移后的失败方式是终端区空白。
+const { mainTabId, serialContainerId } = require('./serial-group-dom');
+
 const PANE_TAB_BUTTONS = Object.freeze([
   { kind: 'shell', icon: 'terminal', titleKey: 'main.newShellTab' },
   { kind: 'filter', icon: 'filter_alt', titleKey: 'main.newFilterTab' },
   { kind: 'chart', icon: 'show_chart', titleKey: 'main.newChartTab' }
 ]);
 
-const MAIN_TAB_ID = 'tab-main';
+// 默认分组的主标签 id；其它分组由 serial-group-dom.js 派生出带后缀的 id。
+const MAIN_TAB_ID = mainTabId();
 
 function paneTabsListId(paneId) {
   return `${paneId}-tabs-list`;
@@ -54,7 +60,7 @@ function describePane(paneId, { hostsMainTab = false, hidden = false } = {}) {
         buttonId: `${MAIN_TAB_ID}-button`,
         buttonLabelKey: 'main.mainTerminal',
         buttonLabelFallback: 'Main Terminal',
-        terminalContainerId: 'serial-container',
+        terminalContainerId: serialContainerId(),
         isMain: true
       }]
       : []
