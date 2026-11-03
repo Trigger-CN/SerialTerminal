@@ -1,72 +1,19 @@
-const DEFAULT_WORKSPACE_LAYOUT = {
-    splitEnabled: false,
-    orientation: 'horizontal',
-    activePaneId: 'pane-1',
-    paneSizes: { 'pane-1': 0.5, 'pane-2': 0.5 },
-    panes: [
-        { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main'] },
-        { id: 'pane-2', activeTabId: null, tabIds: [] }
-    ]
-};
+const {
+    createDefaultLayout: createShapeDefaultLayout,
+    normalizeLayoutShape,
+    reconcileEmptyPanes
+} = require('./workspace-layout-shape');
 
+const DEFAULT_WORKSPACE_LAYOUT = createShapeDefaultLayout();
+
+// 布局规整已抽到 workspace-layout-shape.js：那里按任意 pane 列表工作，
+// 两 pane 时的输出与改造前逐字段一致（由 test/workspace-layout-shape.test.js 的等价性用例背书）。
 function normalizeWorkspaceLayoutShape(layout) {
-    const normalized = JSON.parse(JSON.stringify(DEFAULT_WORKSPACE_LAYOUT));
-    const source = layout && typeof layout === 'object' ? layout : {};
-    normalized.splitEnabled = source.splitEnabled === true;
-    normalized.orientation = source.orientation === 'vertical' ? 'vertical' : 'horizontal';
-    normalized.activePaneId = source.activePaneId === 'pane-2' ? 'pane-2' : 'pane-1';
-    const sourceSizes = source.paneSizes && typeof source.paneSizes === 'object' ? source.paneSizes : {};
-    const pane1Size = Number(sourceSizes['pane-1']);
-    const pane2Size = Number(sourceSizes['pane-2']);
-    if (Number.isFinite(pane1Size) && pane1Size > 0 && pane1Size < 1) normalized.paneSizes['pane-1'] = pane1Size;
-    if (Number.isFinite(pane2Size) && pane2Size > 0 && pane2Size < 1) normalized.paneSizes['pane-2'] = pane2Size;
-    const totalSize = normalized.paneSizes['pane-1'] + normalized.paneSizes['pane-2'];
-    normalized.paneSizes['pane-1'] /= totalSize;
-    normalized.paneSizes['pane-2'] /= totalSize;
-
-    const sourcePanes = Array.isArray(source.panes) ? source.panes : [];
-    const usedTabIds = new Set();
-    normalized.panes.forEach(target => {
-        const pane = sourcePanes.find(item => item?.id === target.id);
-        const sourceTabIds = Array.isArray(pane?.tabIds) ? pane.tabIds : target.tabIds;
-        target.tabIds = sourceTabIds.filter(tabId => {
-            if (typeof tabId !== 'string' || !tabId || usedTabIds.has(tabId)) return false;
-            usedTabIds.add(tabId);
-            return true;
-        });
-        const activeTabId = typeof pane?.activeTabId === 'string' ? pane.activeTabId : target.activeTabId;
-        target.activeTabId = target.tabIds.includes(activeTabId) ? activeTabId : (target.tabIds[0] || null);
-    });
-    if (!usedTabIds.has('tab-main')) {
-        normalized.panes[0].tabIds.unshift('tab-main');
-        normalized.panes[0].activeTabId ||= 'tab-main';
-    }
-    if (!normalized.panes.find(pane => pane.id === normalized.activePaneId)?.tabIds.length) {
-        normalized.activePaneId = normalized.panes.find(pane => pane.tabIds.length)?.id || 'pane-1';
-    }
-    reconcileEmptyPaneLayout(normalized);
-    return normalized;
+    return normalizeLayoutShape(layout, { defaultLayout: DEFAULT_WORKSPACE_LAYOUT });
 }
 
 function reconcileEmptyPaneLayout(layout) {
-    const pane1 = layout.panes.find(pane => pane.id === 'pane-1');
-    const pane2 = layout.panes.find(pane => pane.id === 'pane-2');
-    if (!pane1 || !pane2 || (pane1.tabIds.length && pane2.tabIds.length)) {
-        return { collapsed: false, movedTabIds: [] };
-    }
-
-    const movedTabIds = pane1.tabIds.length === 0 ? [...pane2.tabIds] : [];
-    if (movedTabIds.length) {
-        pane1.tabIds = movedTabIds;
-        pane1.activeTabId = pane2.activeTabId && movedTabIds.includes(pane2.activeTabId)
-            ? pane2.activeTabId
-            : movedTabIds[0];
-        pane2.tabIds = [];
-    }
-    pane2.activeTabId = null;
-    layout.splitEnabled = false;
-    layout.activePaneId = 'pane-1';
-    return { collapsed: true, movedTabIds };
+    return reconcileEmptyPanes(layout);
 }
 
 function moveWorkspaceTab(layout, tabId, targetPaneId, insertionIndex = null) {

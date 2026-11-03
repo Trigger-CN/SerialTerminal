@@ -140,7 +140,7 @@
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
 
-## P3 - 多串口支持（P1 已完成，P2–P5 待办）
+## P3 - 多串口支持（P1 已完成，P2 完成三步，P5 纯数据层已落地）
 
 完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做。
 
@@ -157,12 +157,17 @@
 - [~] ~~P1.5：日志落盘去同步化~~ **已实测裁定不做**。实测：56 KB（115200 bps × 5 秒刷盘）单次 `appendFileSync` 仅 0.39 ms、450 KB 为 0.69 ms、1 MB 为 0.93 ms，而 Windows 定时器分辨率本身就是 15.6 ms；只有 10 MB 阈值批次才 12.72 ms。真实数据量下同步写盘比系统定时器还快，Worker 化买不到可感知收益，而那种量级下真正的瓶颈是终端渲染。保留 `fs.appendFileSync`；若将来真出现高吞吐卡顿，先查 `terminal-output-buffer` 与分批写入。
 
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
+  - [x] 第一步：新增 `serial-group-registry.js` 分组注册表，`accepts()` 作为「这条字节该不该进本分组终端」的唯一判定入口（带 `reason` 区分丢错与本该丢）；`renderer.js` 的 `serial-output-bytes` 归属性判定、`beginSession`/`invalidateSession` 已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
   - [x] 第二步：新增 `serial-group-context.js` 分组上下文（`SerialGroupContextStore`），接管 `serialLineCounter`/`logLineCounter`/`serialNewLine` 与收发显示参数；`getPrefix()`、`getLogPrefix()`、`clearTerminalByTabId`、连接成功重置均改走它。配套 `test/serial-group-context.test.js` 8 项全通过。
   - [x] 第三步：抽处 `serial-data-parser.js`，并修复其内部直接调全局 `getPrefix()` 导致多实例行号串用的缺陷（改为注入 `prefixProvider`）。配套 `test/serial-data-parser.test.js` 10 项全通过；`test/markup.test.js` 的相应断言改指向新文件。
   - [ ] **阻塞项**：`serialTerm`/`filterTabs`/`chartTabs`/`workspaceLayout` 每个分组一份无法单独完成——`#serial-container` 是全页唯一串口终端容器，必须先有「一组一个容器」的 DOM 契约（与 P5 合并）。
 - [ ] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时塌回一层）
 - [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）
-- [ ] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）；**也是 P2 剩余部分的前置条件**
+- [~] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）；**也是 P2 剩余部分的前置条件**
+  - [x] 纯数据层：新增 `workspace-layout-shape.js`（`normalizePaneSizes` / `reconcileEmptyPanes` / `normalizeLayoutShape` / `createDefaultLayout`），`workspace-manager.js` 的同名函数改为委托调用。**硬约束：pane 数为 2 时输出必须与改造前逐字段一致**，由测试内嵌的 `legacyNormalize()` 用 10 组用例做 `assert.deepEqual` 对比。配套 `test/workspace-layout-shape.test.js` 16 项全通过。
+  - [x] 过程中修掉四处真实问题：缺项补位不能有 `1/n` 回退（否则把已占满的 pane 缩小）；只在「全空」或「只剩一个非空」时收敛（否则拆散合法三 pane 布局）；宿主 pane 选择按 pane 数分叉（两 pane 选 `pane-1` 保证等价，N>2 选有内容的）；收敛时必须保留被搬 pane 的 `activeTabId`。
+  - [x] 另一个隐蔽判定错误：`moveWorkspaceTab` 搬空某 pane 后会残留陈旧 `activeTabId`，合并时若用合并**后**的列表判定会让它错误通过；现改为用合并前记录的 `primaryTabIdsBefore` 判定。
+  - [ ] DOM 层（未开始）：`workspace-manager.js` 的 `getOtherPaneId` / `resolvePaneId` / `updatePaneVisibility` / `applyPaneSizes` 三处两 pane 硬编码，`index.html` 的静态 `pane-1`/`pane-2` 改为可动态创建。
 
 P2 剩余部分必须先解 P5 的动态容器，否则做出来是伪多实例。其它阶段逐个开工，不得并行。
 
@@ -170,6 +175,9 @@ P2 剩余部分必须先解 P5 的动态容器，否则做出来是伪多实例�
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
+- [x] `npm test` 当前 **299/299 通过、0 失败**（含新增的 `test/workspace-layout-shape.test.js` 16 项）。
+- [x] 实机启动：主窗口正常出现，`main.log` 无致命错误，electron 进程清理后 `remaining: 0`。
+- [ ] **多串口行为的人工 GUI 验证**：连接、收发、日志写入从未在真实窗口中手工跑过；现有结论均来自单测与源码断言。
 - [ ] Windows 和 Linux 打包通过（Windows NSIS 已有成功记录，Linux 仍待验证；不再生成 portable 版本）。
 - [ ] 真实或虚拟串口覆盖 Text/Hex、UTF-8/ASCII/GBK、自动发送、快捷发送、Raw 日志和重连。
 - [ ] 主终端、过滤标签、图表标签、Shell 标签、分屏、壁纸、搜索历史和侧边栏收起/展开进行人工交互回归。

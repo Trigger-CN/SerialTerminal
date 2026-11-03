@@ -4,7 +4,7 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2–P5 尚未开始。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）；P5 纯数据层已完成；P3、P4 与 P5 的 DOM 层尚未开始。**
 > 当前主进程已按 `groupId` 完全隔离，但 UI 仍为单串口形态（`renderer.js` 固定使用 `DEFAULT_SERIAL_GROUP_ID`）。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -16,7 +16,7 @@
 | 分屏首版范围 | **分组级 + 组内级一起做**，不缩减为仅分组级 |
 | 实施顺序 | **P1 已完成；P1.5–P5 待定**。（P1 含双端口真机冒烟，已验证通过） |
 | Shell 标签归属 | **不归属任何分组**，始终位于分组层 |
-| 并发与线程 | **端口留在主进程**，不改串口读的线程模型（binding 已自带读线程）；多线程用于 P1.5 的日志落盘去同步化 |
+| 并发与线程 | **端口留在主进程**，不改串口读的线程模型（binding 已自带读线程）；日志落盘实测后维持同步写，不做 Worker（见第 10 节 P1.5） |
 
 已处理（P1 已实测）：同一进程并发打开多个串口端口在本机（Windows 10 + serialport 13.0.0）成立：COM6 与 COM1 可同时打开、各自可写、关闭其中一个不影响另一个。
 
@@ -607,6 +607,23 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 验收：分组级左右/上下分屏；组内级左右/上下分屏；两级同时存在时 fit 正确；关闭分组后布局收敛。
 
+**进度：纯数据层已完成（`workspace-layout-shape.js`），DOM 层未开始。**
+
+原 `workspace-manager.js` 把「恰好两个 pane」写死在规整与收敛逻辑里：`DEFAULT_WORKSPACE_LAYOUT` 固定 `paneSizes = {'pane-1': 0.5, 'pane-2': 0.5}` 与两元素 `panes`，`normalizeWorkspaceLayoutShape()` 的 `activePaneId` 白名单只有 `pane-1` / `pane-2`，`reconcileEmptyPaneLayout()` 也只理解这两个。现把其中的**纯数据规整**抽成 [`workspace-layout-shape.js`](workspace-layout-shape.js)，按任意 pane 列表工作，`workspace-manager.js` 的两个同名函数改为委托调用。
+
+该模块不碰 DOM，只处理布局对象，因此可以直接在 Node 里断言。**关键约束：pane 数量为 2 时输出必须与改造前逐字段一致**——`test/workspace-layout-shape.test.js` 内嵌一份旧实现的 `legacyNormalize()`，用 10 组用例与 `normalizeLayoutShape()` 做 `assert.deepEqual` 比对，使这条约束成为可执行证据而不是口头声明。
+
+四条不显眼但必须保留的规则：
+
+1. **`normalizePaneSizes` 的缺项补位必须用 `share = remainder / missing.length`，不能有 `1 / n` 回退。** 已有尺寸已经占满时 `remainder` 为 0，缺失的 pane 就该是 0；否则会把已占满的 pane 生生缩小（曾实测得到 `{pane-1: 0.6, pane-2: 0.2, pane-3: 0.2}`，正确结果是 `1 / 0 / 0`）。
+2. **`reconcileEmptyPanes` 只在「全空」或「只剩一个非空」时收敛。** 写成「任一 pane 为空就收敛」会拆散一个仍然有两个非空 pane 的合法三 pane 布局。
+3. **宿主 pane 的选择按 pane 数量分叉。** 恰两 pane 时必须选 `pane-1`（这是旧实现的行为，逐字段一致所需）；多于两 pane 时选有内容的那个，否则活跃 pane 会落在一个空 pane 上。
+4. **被搬 pane 的 `activeTabId` 必须跟着带过来**，直接取 `tabIds[0]` 会静默改变收敛后的活跃标签页。
+
+另外还修掉一处更隐蔽的判定错误：`moveWorkspaceTab` 把某个 pane 的最后一个 tab 搬走后，该 pane 会残留一个指向已离开 tab 的陈旧 `activeTabId`。合并逻辑若拿合并**后**的 tab 列表去判定宿主活跃 tab 是否仍有效，刚被搬进来的同名 tab 会让这个陈旧值错误地通过检查，导致收敛后排错活跃标签页。现在在合并前记录 `primaryTabIdsBefore`，用合并前的列表判定。
+
+**尚未处理**：`workspace-manager.js` 内仍有三处硬编码两个 pane——`getOtherPaneId` / `resolvePaneId` 的白名单、`updatePaneVisibility`（只切 `pane-2`）、`applyPaneSizes`（只设 `--pane-1-size` / `--pane-2-size`）；`index.html` 也仍是静态 `pane-1` + 空内容 `pane-2`。这些属于 DOM 层，是 P2 剩余部分的前置条件。
+
 ---
 
 ## 11. 风险与未验证项
@@ -685,6 +702,17 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 ### P5
 
+纯数据层：
+
+- [x] 布局规整按任意 pane 列表工作 —— `workspace-layout-shape.js`，16 项单测（含 10 组与旧实现逐字段对比）
+- [x] 两 pane 时输出与改造前逐字段一致 —— 由内嵌 `legacyNormalize()` 对比用例兼容性保障
+- [x] `normalizePaneSizes` / `reconcileEmptyPanes` 在 N>2 下行为正确
+- [x] 收敛后保留被搬 pane 的活跃标签页（含陈旧 `activeTabId` 场景）
+
+DOM 层（未开始）：
+
+- [ ] `workspace-manager.js` 去掉 `getOtherPaneId` / `resolvePaneId` / `updatePaneVisibility` / `applyPaneSizes` 的三处两 pane 硬编码
+- [ ] `index.html` 静态 `pane-1` / `pane-2` 改为可动态创建
 - [ ] 分组级左右/上下分屏
 - [ ] 组内级左右/上下分屏
 - [ ] 两级共存时 fit 正确
