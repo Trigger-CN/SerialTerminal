@@ -4,7 +4,7 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）；P5 纯数据层已完成；P3、P4 与 P5 的 DOM 层尚未开始。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）；P5 纯数据层与 DOM 层已完成；P3、P4 与 P5 的分组级/组内级分屏尚未开始。**
 > 当前主进程已按 `groupId` 完全隔离，但 UI 仍为单串口形态（`renderer.js` 固定使用 `DEFAULT_SERIAL_GROUP_ID`）。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -607,7 +607,9 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 验收：分组级左右/上下分屏；组内级左右/上下分屏；两级同时存在时 fit 正确；关闭分组后布局收敛。
 
-**进度：纯数据层已完成（`workspace-layout-shape.js`），DOM 层未开始。**
+**进度：纯数据层与 DOM 层均已完成；`index.html` 的 pane 节点仍为静态两项（动态创建归 P3）。**
+
+### 纯数据层：`workspace-layout-shape.js`
 
 原 `workspace-manager.js` 把「恰好两个 pane」写死在规整与收敛逻辑里：`DEFAULT_WORKSPACE_LAYOUT` 固定 `paneSizes = {'pane-1': 0.5, 'pane-2': 0.5}` 与两元素 `panes`，`normalizeWorkspaceLayoutShape()` 的 `activePaneId` 白名单只有 `pane-1` / `pane-2`，`reconcileEmptyPaneLayout()` 也只理解这两个。现把其中的**纯数据规整**抽成 [`workspace-layout-shape.js`](workspace-layout-shape.js)，按任意 pane 列表工作，`workspace-manager.js` 的两个同名函数改为委托调用。
 
@@ -622,7 +624,27 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 另外还修掉一处更隐蔽的判定错误：`moveWorkspaceTab` 把某个 pane 的最后一个 tab 搬走后，该 pane 会残留一个指向已离开 tab 的陈旧 `activeTabId`。合并逻辑若拿合并**后**的 tab 列表去判定宿主活跃 tab 是否仍有效，刚被搬进来的同名 tab 会让这个陈旧值错误地通过检查，导致收敛后排错活跃标签页。现在在合并前记录 `primaryTabIdsBefore`，用合并前的列表判定。
 
-**尚未处理**：`workspace-manager.js` 内仍有三处硬编码两个 pane——`getOtherPaneId` / `resolvePaneId` 的白名单、`updatePaneVisibility`（只切 `pane-2`）、`applyPaneSizes`（只设 `--pane-1-size` / `--pane-2-size`）；`index.html` 也仍是静态 `pane-1` + 空内容 `pane-2`。这些属于 DOM 层，是 P2 剩余部分的前置条件。
+**DOM 层已完成：`workspace-manager.js` 不再假设两个 pane。**
+
+原实现有 12 处 `pane-1` / `pane-2` 字面量，现全部改为由布局驱动：
+
+| 位置 | 原行为 | 现行为 |
+| --- | --- | --- |
+| `resolvePaneId` | 白名单只认 `pane-1` / `pane-2` | 只要求「存在于当前布局」 |
+| `getOtherPaneId` | 固定互换两值 | 按 pane 列表循环取下一个 |
+| `reconcileEmptyPanes` | DOM 搬移写死 `pane-1` | 宿主取 `layout.activePaneId`；源 pane 从调用前快照反查 |
+| `setActivePane` | 三元强制两值 | 不存在时退回首个 pane |
+| `updatePaneVisibility` | 只切 `pane-2` | 所有 index &gt; 0 的 pane 统一跟随 `splitEnabled` |
+| `applyPaneSizes` | 只设两个 CSS 变量 | 写各 pane 的内联 `flexBasis` |
+| `moveTabToPane` / `addTabToPane` | 目标为 `pane-2` 就开分屏 | 目标不是首个 pane 就开分屏 |
+| `removeTab` / `collapseSplit` | 收敛后写死 `pane-1` | 用 `layout.activePaneId`；`collapseSplit` 合入除首个 pane 外的全部 pane |
+| `setPaneSizes` | 只写两个键 | &gt;2 pane 时其余 pane 按现有比例分剩余空间 |
+
+配套改动：`style.css` 删掉 `#pane-1` / `#pane-2` 的 `flex-basis` 规则（改用 `.workspace-pane` 统一过渡，`.workspace-root.resizing .workspace-pane` 统一禁用过渡）；`renderer.js` 的 `transitionend` 过滤由列举两个 id 改为 `classList.contains('workspace-pane')`。
+
+**仍保留为静态**：`index.html` 的 `pane-1` / `pane-2` 两个 pane 节点。布局层已经可以承载任意 pane id（`getPaneDom` / `getPaneTabsList` / `getPaneTabsContent` 都是按 `${paneId}` 拼 ID 查 document），但“根据布局动态创建 pane 节点”属于 P3 的双层标签栏工作，不在这里提前做。
+
+验证：`test/workspace-pane-n.test.js` 6 项（三 pane 的内联尺寸、可见性、任意 pane id、循环取下一个、三 pane 收敛、拖拽分尺寸）；`npm test` **305/305 通过、0 失败**。
 
 ---
 
@@ -709,11 +731,13 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 - [x] `normalizePaneSizes` / `reconcileEmptyPanes` 在 N>2 下行为正确
 - [x] 收敛后保留被搬 pane 的活跃标签页（含陈旧 `activeTabId` 场景）
 
-DOM 层（未开始）：
+DOM 层：
 
-- [ ] `workspace-manager.js` 去掉 `getOtherPaneId` / `resolvePaneId` / `updatePaneVisibility` / `applyPaneSizes` 的三处两 pane 硬编码
-- [ ] `index.html` 静态 `pane-1` / `pane-2` 改为可动态创建
-- [ ] 分组级左右/上下分屏
+- [x] `workspace-manager.js` 去掉全部两 pane 硬编码（12 处）—— 由 6 项 `test/workspace-pane-n.test.js` 覆盖
+- [x] `style.css` 不再用 `#pane-1` / `#pane-2` 选择器设 `flex-basis`，改用 `.workspace-pane` 统一过渡
+- [x] `renderer.js` 的 `transitionend` 过滤按 `.workspace-pane` 类名判断
+- [ ] `index.html` 静态 `pane-1` / `pane-2` 改为可动态创建（归 P3，与双层标签栏一并做）
+- [ ] 分组级左右/上下分屏（需先有分组概念，归 P3 之后）
 - [ ] 组内级左右/上下分屏
 - [ ] 两级共存时 fit 正确
 - [ ] 关闭分组后布局正确收敛

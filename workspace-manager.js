@@ -1,6 +1,7 @@
 const {
     createDefaultLayout: createShapeDefaultLayout,
     normalizeLayoutShape,
+    normalizePaneSizes,
     reconcileEmptyPanes
 } = require('./workspace-layout-shape');
 
@@ -77,10 +78,28 @@ function createWorkspaceManager(options = {}) {
     function getPaneById(paneId) {
         return getLayoutState().panes.find(pane => pane.id === paneId) || getLayoutState().panes[0];
     }
+    // pane 数量由布局驱动，不再假设只有 pane-1 / pane-2。
+    function getPaneIds() {
+        return getLayoutState().panes.map(pane => pane.id);
+    }
+
+    function getPrimaryPaneId() {
+        return getLayoutState().panes[0]?.id || 'pane-1';
+    }
+
+    // 首个 pane 之外还有内容，才需要显示分屏。
+    function hasPopulatedSplitPane() {
+        return getLayoutState().panes.slice(1).some(pane => pane.tabIds.length > 0);
+    }
+
+    function ensurePaneSizesCoverLayout() {
+        const layout = getLayoutState();
+        layout.paneSizes = normalizePaneSizes(layout.paneSizes, getPaneIds());
+    }
 
     function getPaneIdForTabId(tabId) {
         const pane = getLayoutState().panes.find(item => item.tabIds.includes(tabId));
-        return pane ? pane.id : 'pane-1';
+        return pane ? pane.id : getPrimaryPaneId();
     }
 
     function getActivePane() {
@@ -94,13 +113,14 @@ function createWorkspaceManager(options = {}) {
     function getActiveTabInfo(fallbackTabId = 'tab-main') {
         const pane = getActivePane();
         return {
-            paneId: pane?.id || 'pane-1',
+            paneId: pane?.id || getPrimaryPaneId(),
             tabId: pane?.activeTabId || fallbackTabId
         };
     }
 
     function resolvePaneId(paneId, tabId, fallbackTabId = 'tab-main') {
-        if (paneId === 'pane-1' || paneId === 'pane-2') {
+        // 白名单改为「必须存在于当前布局」，否则多 pane 时新 pane 会被当成 pane-1。
+        if (paneId && getLayoutState().panes.some(pane => pane.id === paneId)) {
             return paneId;
         }
         if (tabId) {
@@ -109,8 +129,12 @@ function createWorkspaceManager(options = {}) {
         return getActiveTabInfo(fallbackTabId).paneId;
     }
 
+    // 两 pane 时就是「另一个 pane」；多 pane 时按布局顺序取下一个（循环）。
     function getOtherPaneId(paneId) {
-        return resolvePaneId(paneId) === 'pane-2' ? 'pane-1' : 'pane-2';
+        const paneIds = getPaneIds();
+        if (!paneIds.length) return 'pane-1';
+        const index = paneIds.indexOf(resolvePaneId(paneId));
+        return paneIds[(index + 1) % paneIds.length] || paneIds[0];
     }
 
     function getTabPaneId(tabId, fallbackPaneId = 'pane-1') {
@@ -155,24 +179,32 @@ function createWorkspaceManager(options = {}) {
 
     function reconcileEmptyPanes() {
         const layout = getLayoutState();
+        // 规整逻辑会把被搬 pane 的 tabIds 清空，因此源 pane 必须在调用前记下来。
+        const tabsBefore = new Map(layout.panes.map(pane => [pane.id, [...pane.tabIds]]));
         const result = reconcileEmptyPaneLayout(layout);
         if (!result.collapsed || result.movedTabIds.length === 0) return result;
 
+        // 宿主 pane 由规整逻辑决定（两 pane 时是 pane-1，多 pane 时是有内容的那个），
+        // 它会写进 layout.activePaneId，这里必须跟着走，不能再写死 'pane-1'。
+        const hostPaneId = layout.activePaneId || getPrimaryPaneId();
         result.movedTabIds.forEach(tabId => {
+            const sourcePaneId = [...tabsBefore.entries()]
+                .find(([paneId, tabIds]) => paneId !== hostPaneId && tabIds.includes(tabId))?.[0] || hostPaneId;
             const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
             const tabPane = document.getElementById(tabId);
-            getPaneTabsList('pane-1')?.appendChild(tabBtn);
-            getPaneTabsContent('pane-1')?.appendChild(tabPane);
-            if (tabBtn) tabBtn.dataset.paneId = 'pane-1';
-            if (tabPane) tabPane.dataset.paneId = 'pane-1';
-            onTabMoved?.({ tabId, sourcePaneId: 'pane-2', targetPaneId: 'pane-1' });
+            getPaneTabsList(hostPaneId)?.appendChild(tabBtn);
+            getPaneTabsContent(hostPaneId)?.appendChild(tabPane);
+            if (tabBtn) tabBtn.dataset.paneId = hostPaneId;
+            if (tabPane) tabPane.dataset.paneId = hostPaneId;
+            onTabMoved?.({ tabId, sourcePaneId, targetPaneId: hostPaneId });
         });
         return result;
     }
 
     function setActivePane(paneId, { persist = true } = {}) {
         const layout = getLayoutState();
-        layout.activePaneId = paneId === 'pane-2' ? 'pane-2' : 'pane-1';
+        const paneIds = getPaneIds();
+        layout.activePaneId = paneIds.includes(paneId) ? paneId : (paneIds[0] || 'pane-1');
         document.querySelectorAll('.workspace-pane').forEach(paneEl => {
             paneEl.classList.toggle('active', paneEl.dataset.paneId === layout.activePaneId);
         });
@@ -194,28 +226,39 @@ function createWorkspaceManager(options = {}) {
 
     function updatePaneVisibility() {
         const root = document.getElementById('workspace-root');
-        const pane2 = getPaneDom('pane-2');
         const splitter = document.getElementById('workspace-splitter');
+        if (!root) return;
         root.classList.toggle('split-vertical', getOrientation() === 'vertical');
         root.classList.toggle('split-horizontal', getOrientation() !== 'vertical');
-        if (pane2) pane2.hidden = !isSplitEnabled();
+        // 除首个 pane 外，其余 pane 只在分屏开启时可见；pane 数量不再假设为 2。
+        getPaneIds().forEach((paneId, index) => {
+            const paneEl = getPaneDom(paneId);
+            if (!paneEl) return;
+            paneEl.hidden = index === 0 ? false : !isSplitEnabled();
+        });
         if (splitter) splitter.hidden = !isSplitEnabled();
     }
 
     function applyPaneSizes() {
         const root = document.getElementById('workspace-root');
         if (!root) return;
+        // 旧实现用两个 CSS 变量（--pane-1-size / --pane-2-size）表达尺寸，pane 一多就无法表达。
+        // 改为把尺寸直接写到每个 pane 的 flex-basis 上，任意 pane 数都成立。
+        root.style.removeProperty('--pane-1-size');
+        root.style.removeProperty('--pane-2-size');
         const layout = getLayoutState();
-        if (!isSplitEnabled()) {
-            root.style.removeProperty('--pane-1-size');
-            root.style.removeProperty('--pane-2-size');
-            return;
-        }
-        const paneSizes = layout.paneSizes || {};
-        const pane1 = Number(paneSizes['pane-1']) || 0.5;
-        const pane2 = Number(paneSizes['pane-2']) || (1 - pane1);
-        root.style.setProperty('--pane-1-size', `${pane1 * 100}%`);
-        root.style.setProperty('--pane-2-size', `${pane2 * 100}%`);
+        const paneIds = getPaneIds();
+        const sizes = isSplitEnabled() ? normalizePaneSizes(layout.paneSizes, paneIds) : null;
+        paneIds.forEach(paneId => {
+            const paneEl = getPaneDom(paneId);
+            if (!paneEl?.style) return;
+            // 未分屏时不固定 flex-basis，交给 CSS 的 flex: 1 1 0 撑满。
+            if (!sizes) {
+                paneEl.style.removeProperty('flex-basis');
+                return;
+            }
+            paneEl.style.flexBasis = `${(sizes[paneId] || 0) * 100}%`;
+        });
     }
 
     function applyLayoutToDom() {
@@ -327,7 +370,7 @@ function createWorkspaceManager(options = {}) {
         const layout = getLayoutState();
         layout.splitEnabled = true;
         layout.orientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
-        layout.paneSizes = layout.paneSizes || { 'pane-1': 0.5, 'pane-2': 0.5 };
+        layout.paneSizes = normalizePaneSizes(layout.paneSizes, getPaneIds());
         applyLayoutToDom();
         persistLayout();
         fitWorkspace?.();
@@ -342,7 +385,8 @@ function createWorkspaceManager(options = {}) {
         const tabPane = document.getElementById(tabId);
         if (!tabBtn || !tabPane) return;
 
-        if (targetPaneId === 'pane-2') {
+        // 目标 pane 不是首个 pane 就一定需要分屏；多 pane 时不能只比 'pane-2'。
+        if (targetPaneId !== getPrimaryPaneId()) {
             layout.splitEnabled = true;
         }
 
@@ -357,14 +401,14 @@ function createWorkspaceManager(options = {}) {
 
         const reconciliation = reconcileEmptyPanes();
         if (!reconciliation.collapsed && !preserveSplit) {
-            layout.splitEnabled = targetPaneId === 'pane-2' || layout.panes[1].tabIds.length > 0;
+            layout.splitEnabled = targetPaneId !== getPrimaryPaneId() || hasPopulatedSplitPane();
         }
 
         if (typeof onTabMoved === 'function' && !reconciliation.movedTabIds.includes(tabId)) {
             onTabMoved({ tabId, sourcePaneId, targetPaneId });
         }
 
-        const finalPaneId = reconciliation.movedTabIds.includes(tabId) ? 'pane-1' : targetPaneId;
+        const finalPaneId = reconciliation.movedTabIds.includes(tabId) ? layout.activePaneId : targetPaneId;
         applyLayoutToDom();
         switchPaneTab(finalPaneId, tabId, { persist: false });
         persistLayout();
@@ -373,9 +417,9 @@ function createWorkspaceManager(options = {}) {
 
     function addTabToPane(tabId, paneId, { activate = true, allowSplit = true, persist = true } = {}) {
         const layout = getLayoutState();
-        const resolvedPaneId = paneId || layout.activePaneId || 'pane-1';
+        const resolvedPaneId = paneId || layout.activePaneId || getPrimaryPaneId();
         ensurePaneTabMembership(resolvedPaneId, tabId);
-        if (resolvedPaneId === 'pane-2' && allowSplit) {
+        if (resolvedPaneId !== getPrimaryPaneId() && allowSplit) {
             layout.splitEnabled = true;
         }
         if (activate) {
@@ -397,8 +441,9 @@ function createWorkspaceManager(options = {}) {
         ensurePaneActiveTab(paneId);
         const reconciliation = reconcileEmptyPanes();
         applyLayoutToDom();
+        // 收敛后宿主 pane 由规整逻辑决定（写入 layout.activePaneId），不能再写死 'pane-1'。
         let nextActiveTabId = reconciliation.collapsed
-            ? getPaneById('pane-1').activeTabId
+            ? getPaneById(getLayoutState().activePaneId).activeTabId
             : pane.activeTabId;
         nextActiveTabId ||= null;
         if (!nextActiveTabId && fallbackTabId) {
@@ -413,28 +458,43 @@ function createWorkspaceManager(options = {}) {
         };
     }
 
+    // 把除首个 pane 之外的所有 pane 合入首个 pane，然后关闭分屏。
+    // 旧实现只处理 pane-1/pane-2，pane 一多就会漏掉内容。
     function collapseSplit() {
         const layout = getLayoutState();
-        const pane1 = getPaneById('pane-1');
-        const pane2 = getPaneById('pane-2');
-        const movedTabIds = [...pane2.tabIds];
+        const hostPane = getPaneById(getPrimaryPaneId());
+        const hostPaneId = hostPane.id;
+        let carriedActiveTabId = null;
+        const movedTabIds = [];
+
+        layout.panes.forEach(pane => {
+            if (pane.id === hostPaneId) return;
+            if (pane.activeTabId && pane.tabIds.includes(pane.activeTabId) && !carriedActiveTabId) {
+                carriedActiveTabId = pane.activeTabId;
+            }
+            movedTabIds.push(...pane.tabIds);
+            pane.tabIds = [];
+            pane.activeTabId = null;
+        });
+
         movedTabIds.forEach(tabId => {
             const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
             const tabPane = document.getElementById(tabId);
-            getPaneTabsList('pane-1')?.appendChild(tabBtn);
-            getPaneTabsContent('pane-1')?.appendChild(tabPane);
-            if (tabBtn) tabBtn.dataset.paneId = 'pane-1';
-            if (tabPane) tabPane.dataset.paneId = 'pane-1';
-            onTabMoved?.({ tabId, sourcePaneId: 'pane-2', targetPaneId: 'pane-1' });
+            getPaneTabsList(hostPaneId)?.appendChild(tabBtn);
+            getPaneTabsContent(hostPaneId)?.appendChild(tabPane);
+            if (tabBtn) tabBtn.dataset.paneId = hostPaneId;
+            if (tabPane) tabPane.dataset.paneId = hostPaneId;
+            onTabMoved?.({ tabId, sourcePaneId: layout.activePaneId, targetPaneId: hostPaneId });
         });
-        pane1.tabIds = [...pane1.tabIds, ...movedTabIds];
-        if (layout.activePaneId === 'pane-2' && pane2.activeTabId) pane1.activeTabId = pane2.activeTabId;
-        pane2.tabIds = [];
-        pane2.activeTabId = null;
-        pane1.activeTabId = pane1.activeTabId || pane1.tabIds[0] || null;
+
+        hostPane.tabIds = [...hostPane.tabIds, ...movedTabIds];
+        if (!hostPane.tabIds.includes(hostPane.activeTabId) && carriedActiveTabId) {
+            hostPane.activeTabId = carriedActiveTabId;
+        }
+        hostPane.activeTabId = hostPane.activeTabId || hostPane.tabIds[0] || null;
         layout.splitEnabled = false;
-        layout.activePaneId = 'pane-1';
-        ensurePaneActiveTab('pane-1');
+        layout.activePaneId = hostPaneId;
+        ensurePaneActiveTab(hostPaneId);
         applyLayoutToDom();
         persistLayout();
         fitWorkspace?.();
@@ -465,13 +525,27 @@ function createWorkspaceManager(options = {}) {
         }
     }
 
+    // 拖动分界条只调「首个 pane」占比，其余 pane 按现有比例分配剩余空间。
     function setPaneSizes(pane1Ratio, { persist = true } = {}) {
         const layout = getLayoutState();
+        const paneIds = getPaneIds();
         const clampedPane1Ratio = Math.min(0.85, Math.max(0.15, Number(pane1Ratio) || 0.5));
-        layout.paneSizes = {
-            'pane-1': clampedPane1Ratio,
-            'pane-2': 1 - clampedPane1Ratio
-        };
+        if (paneIds.length <= 2) {
+            layout.paneSizes = {
+                [paneIds[0]]: clampedPane1Ratio,
+                [paneIds[1] || 'pane-2']: 1 - clampedPane1Ratio
+            };
+        } else {
+            const others = paneIds.slice(1);
+            const remaining = 1 - clampedPane1Ratio;
+            const othersTotal = others.reduce((sum, id) => sum + (Number(layout.paneSizes?.[id]) || 0), 0) || others.length;
+            const nextSizes = { [paneIds[0]]: clampedPane1Ratio };
+            others.forEach(id => {
+                const current = Number(layout.paneSizes?.[id]) || 0;
+                nextSizes[id] = current > 0 ? remaining * (current / othersTotal) : remaining / others.length;
+            });
+            layout.paneSizes = nextSizes;
+        }
         applyPaneSizes();
         if (persist) {
             persistLayout();

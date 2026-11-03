@@ -140,7 +140,7 @@
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
 
-## P3 - 多串口支持（P1 已完成，P2 完成三步，P5 纯数据层已落地）
+## P3 - 多串口支持（P1 已完成，P2 完成三步，P5 纯数据层与 DOM 层已落地）
 
 完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做。
 
@@ -167,7 +167,8 @@
   - [x] 纯数据层：新增 `workspace-layout-shape.js`（`normalizePaneSizes` / `reconcileEmptyPanes` / `normalizeLayoutShape` / `createDefaultLayout`），`workspace-manager.js` 的同名函数改为委托调用。**硬约束：pane 数为 2 时输出必须与改造前逐字段一致**，由测试内嵌的 `legacyNormalize()` 用 10 组用例做 `assert.deepEqual` 对比。配套 `test/workspace-layout-shape.test.js` 16 项全通过。
   - [x] 过程中修掉四处真实问题：缺项补位不能有 `1/n` 回退（否则把已占满的 pane 缩小）；只在「全空」或「只剩一个非空」时收敛（否则拆散合法三 pane 布局）；宿主 pane 选择按 pane 数分叉（两 pane 选 `pane-1` 保证等价，N>2 选有内容的）；收敛时必须保留被搬 pane 的 `activeTabId`。
   - [x] 另一个隐蔽判定错误：`moveWorkspaceTab` 搬空某 pane 后会残留陈旧 `activeTabId`，合并时若用合并**后**的列表判定会让它错误通过；现改为用合并前记录的 `primaryTabIdsBefore` 判定。
-  - [ ] DOM 层（未开始）：`workspace-manager.js` 的 `getOtherPaneId` / `resolvePaneId` / `updatePaneVisibility` / `applyPaneSizes` 三处两 pane 硬编码，`index.html` 的静态 `pane-1`/`pane-2` 改为可动态创建。
+  - [x] DOM 层：`workspace-manager.js` 的 12 处 `pane-1`/`pane-2` 字面量全部改为由布局驱动——`resolvePaneId` 只要求「存在于当前布局」、`getOtherPaneId` 按列表循环、`reconcileEmptyPanes` 宿主取 `layout.activePaneId`、`updatePaneVisibility` 对 index>0 的 pane 统一跟随分屏、`applyPaneSizes` 改为写各 pane 内联 `flexBasis`（不再用两个 CSS 变量）、`collapseSplit` 合入除首个 pane 外的全部 pane、`setPaneSizes` 支持 >2 pane。配套改 `style.css`（删除 `#pane-1`/`#pane-2` 选择器）与 `renderer.js`（`transitionend` 按类名判断）。配套 `test/workspace-pane-n.test.js` 6 项全通过。
+  - [ ] 剩余：`index.html` 的静态 `pane-1`/`pane-2` 节点改为可动态创建——归 P3（pane 数量由分组数量驱动）。
 
 P2 剩余部分必须先解 P5 的动态容器，否则做出来是伪多实例。其它阶段逐个开工，不得并行。
 
@@ -175,8 +176,8 @@ P2 剩余部分必须先解 P5 的动态容器，否则做出来是伪多实例�
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **299/299 通过、0 失败**（含新增的 `test/workspace-layout-shape.test.js` 16 项）。
-- [x] 实机启动：主窗口正常出现，`main.log` 无致命错误，electron 进程清理后 `remaining: 0`。
+- [x] `npm test` 当前 **305/305 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项与 `test/workspace-pane-n.test.js` 6 项）。
+- [x] 实机启动：主窗口正常出现，`main.log` 与渲染进程 stderr 均无 JS 错误，electron 进程清理后 `remaining: 0`。
 - [ ] **多串口行为的人工 GUI 验证**：连接、收发、日志写入从未在真实窗口中手工跑过；现有结论均来自单测与源码断言。
 - [ ] Windows 和 Linux 打包通过（Windows NSIS 已有成功记录，Linux 仍待验证；不再生成 portable 版本）。
 - [ ] 真实或虚拟串口覆盖 Text/Hex、UTF-8/ASCII/GBK、自动发送、快捷发送、Raw 日志和重连。

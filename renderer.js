@@ -1784,7 +1784,8 @@ function bindWorkspacePaneTransitionFit() {
 
     workspaceRootEl.addEventListener('transitionend', (event) => {
         if (event.propertyName !== 'flex-basis' || isDraggingWorkspaceSplitter) return;
-        if (event.target?.id !== 'pane-1' && event.target?.id !== 'pane-2') return;
+        // pane 数可变，按类名判断而不是列举 pane-1 / pane-2。
+        if (!event.target?.classList?.contains('workspace-pane')) return;
         fitWorkspaceTerminals();
     });
 

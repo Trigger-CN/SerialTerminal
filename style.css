@@ -1886,19 +1886,13 @@ html.custom-titlebar .window-titlebar {
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-#pane-1 {
-    flex-basis: var(--pane-1-size, auto);
+/* pane 尺寸不再用两个固定 CSS 变量表达：pane 数可变后由 workspace-manager 写到各 pane 的
+   内联 flex-basis 上。这里只保留过渡，拖动时统一禁用。 */
+.workspace-pane {
     transition: flex-basis 0.2s ease;
 }
 
-#pane-2 {
-    flex-basis: var(--pane-2-size, auto);
-    transition: flex-basis 0.2s ease;
-}
-
-/* 拖动 splitter 时禁用 flex-basis 过渡，避免跟随光标延迟（见 agent_notes 第 13 节） */
-.workspace-root.resizing #pane-1,
-.workspace-root.resizing #pane-2 {
+.workspace-root.resizing .workspace-pane {
     transition: none;
 }
 

@@ -6,7 +6,7 @@
 
 - 当前配置 schema：v14；任何迁移判断必须读取 `main.js`，不要复用本文历史示例中的旧版本号。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**P2 已完成分组注册表、分组上下文、行解析器三步**；**P5 纯数据层（`workspace-layout-shape.js`）已完成**。但 **UI 仍是单串口形态**，P2 剩余、P3、P4 与 P5 的 DOM 层（双层标签栏、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**P2 已完成分组注册表、分组上下文、行解析器三步**；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**，P2 剩余、P3、P4 与 P5 的分组级/组内级分屏（双层标签栏、设置跟随、两级分屏）未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -976,10 +976,10 @@ npm run dist:linux
    - Shell IPC/输入链路与串口模式完全独立，Hex 改动不得复用到 Shell tab
    - Raw 写盘失败会保留待写 Buffer 并记录 `rawBinaryFlushError`/electron-log；在待写数据成功刷盘前拒绝开始新连接，避免重连覆盖缓冲。当前仍没有独立的用户可见恢复界面
 
-## 13A. 多串口支持（P1 已实现，P2 完成三步，P5 纯数据层已落地）
+## 13A. 多串口支持（P1 已实现，P2 完成三步，P5 纯数据层与 DOM 层已落地）
 
 - 完整设计文档：[`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)，包含数据模型、主进程多实例、IPC 分流、双层标签栏、设置跟随、两级分屏、配置迁移、分阶段落地与风险清单。
-- **当前进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器三步；P5 纯数据层（`workspace-layout-shape.js`）已完成；P3、P4 与 P5 的 DOM 层尚未开始，UI 仍为单串口形态。**
+- **当前进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器三步；P5 的纯数据层与 DOM 层均已完成；P3、P4 与 P5 的分组级/组内级分屏尚未开始，UI 仍为单串口形态。**
 - P1 已落地的事实（以 `main.js` 为准）：
   - `serialSessions = new Map()` + `DEFAULT_SERIAL_GROUP_ID = 'default'`；会话对象持有 `groupId/portPath/port/sessionId/sendEncoding/newlineMode/cleanupComplete/connectInProgress/outputBuckets/outputFlushScheduled/throughput`。`normalizeSerialGroupId()` / `createSerialSession()` / `getSerialSession()` / `getOrCreateSerialSession()` 为入口。
   - 旧的 `currentSerialPort` / `serialSendEncoding` / `serialNewlineMode` / `serialCleanupComplete` / `serialConnectInProgress` / 全局 `throughputState` / 全局 `serialOutputQueue` 已**全部删除**，不得再引入。
@@ -1007,7 +1007,7 @@ npm run dist:linux
   - **关键设计约束**：注册表状态必须与裸的 `serialSessionId` **同步**更新，否则注册表会认为旧会话仍有效而把正常数据全丢掉。以后新增任何递增/重置 `serialSessionId` 的地方，必须同时调用 `beginSession()` 或 `invalidateSession()`。
   - **硬阻塞（必须知道，否则会白做）**：`serialTerm` 在模块加载时就 `new Terminal(...)` 并 `.open(document.getElementById('serial-container'))`，而 `index.html` 里 `#serial-container` 是全页**唯一**的串口终端容器。所以 `serialTerm` / `filterTabs` / `chartTabs` / `workspaceLayout` 的「每分组一份」无法单独完成——必须先有「一组一个 Terminal 容器」的 DOM 契约。没有这一步就下沉，只会得到只能挂一个 Terminal 的上下文对象，即**伪多实例**。
   - **后续次序**：先把 `workspace-manager.js` 扩展为可动态创建 pane 与容器（P5），再让 `serialTerm` 等对象按 `groupId` 实例化并挂到各自容器上。在这之前继续改写渲染层只会产出无法验证的代码。
-- **P5 进度（纯数据层已完成，DOM 层未开始）**：
+- **P5 进度（纯数据层与 DOM 层均已完成；`index.html` 的 pane 节点仍为静态两项）**：
   - 新增 [`workspace-layout-shape.js`](workspace-layout-shape.js)：把 `workspace-manager.js` 里的 pane 规整逻辑抽成不碰 DOM 的纯数据模块，按任意 pane 列表工作。`normalizePaneSizes` / `reconcileEmptyPanes` / `normalizeLayoutShape` / `createDefaultLayout` 为导出；`workspace-manager.js` 的同名函数改为委托调用。
   - **硬性约束：pane 数为 2 时输出必须与改造前逐字段一致。** 因此 `test/workspace-layout-shape.test.js` 内嵌一份旧实现的 `legacyNormalize()`，用 10 组用例（undefined / 空对象 / 默认布局 / 分裂两满 / pane-2 空 / pane-1 空 / 非法尺寸 / 未知 activePaneId / 跨 pane 重复 tabId / 缺 tab-main）与 `normalizeLayoutShape()` 做 `assert.deepEqual`。这是「N=2 字节等价」的唯一证据来源，不能删。
   - 四条不显眼但必须保留的规则：
@@ -1016,7 +1016,10 @@ npm run dist:linux
     3. 宿主 pane 选择按 pane 数量分叉：恰两 pane 时必须选 `pane-1`（旧实现行为，逐字段一致所需）；多于两 pane 时选有内容的那个，否则活跃 pane 会落到空 pane 上。
     4. 被搬 pane 的 `activeTabId` 必须跟着带过来，直接取 `tabIds[0]` 会静默改变收敛后的活跃标签页。
   - 另一个更隐蔽的判定错误：`moveWorkspaceTab` 把某个 pane 的最后一个 tab 搬走后，该 pane 会残留一个指向已离开 tab 的**陈旧** `activeTabId`。若合并时拿合并**后**的 tab 列表去判定宿主活跃 tab 是否仍有效，刚被搬进来的同名 tab 会让这个陈旧值错误通过检查，导致收敛后排错活跃标签页。现改为在合并前记录 `primaryTabIdsBefore`，用合并前的列表判定。修改此处前请先看 `test/workspace-manager.test.js` 的 `moving the last primary-pane tab collapses the split without changing its target index`。
-  - **尚未处理**：`workspace-manager.js` 内仍有三处硬编码两个 pane——`getOtherPaneId` / `resolvePaneId` 的白名单、`updatePaneVisibility`（只切 `pane-2`）、`applyPaneSizes`（只设 `--pane-1-size` / `--pane-2-size`）；`index.html` 也仍是静态 `pane-1` + 空内容 `pane-2`。这些属于 DOM 层，是 P2 剩余部分的前置条件。
+  - **DOM 层：`workspace-manager.js` 不再假设两个 pane。** 原实现有 12 处 `pane-1` / `pane-2` 字面量，现全部由布局驱动：`resolvePaneId` 只要求「存在于当前布局」；`getOtherPaneId` 按 pane 列表循环；`reconcileEmptyPanes` 的宿主取 `layout.activePaneId`（不再写死 `pane-1`），源 pane 从调用前快照反查；`setActivePane` 不存在时退回首个 pane；`updatePaneVisibility` 让所有 index > 0 的 pane 统一跟随 `splitEnabled`；**`applyPaneSizes` 改为写各 pane 的内联 `flexBasis`**（旧的 `--pane-1-size` / `--pane-2-size` 两个 CSS 变量无法表达 N>2）；`moveTabToPane` / `addTabToPane` 用「目标不是首个 pane」判断开分屏；`removeTab` / `collapseSplit` 用 `layout.activePaneId`；`collapseSplit` 合入除首个 pane 外的全部 pane；`setPaneSizes` 在 >2 pane 时其余 pane 按现有比例分剩余空间。
+  - 配套：`style.css` 删除 `#pane-1` / `#pane-2` 的 `flex-basis` 规则，改由 `.workspace-pane` 统一过渡、`.workspace-root.resizing .workspace-pane` 统一禁用过渡；`renderer.js` 的 `transitionend` 过滤由列举两个 id 改为 `classList.contains('workspace-pane')`。
+  - **仍为静态**：`index.html` 的 `pane-1` / `pane-2` 两个 pane 节点。“根据布局动态创建 pane 节点”归 P3 双层标签栏一并做，因为 pane 数量由分组数量驱动。布局层已经能承载任意 pane id（`getPaneDom` / `getPaneTabsList` / `getPaneTabsContent` 都按 `${paneId}` 拼 ID 查 document），所以这一步不需要再改注入。
+  - 验证基线（当前）：`npm test` **305/305 通过、0 失败**（新增 `test/workspace-pane-n.test.js` 6 项）；实机启动主窗口正常、`main.log` 与渲染进程 stderr 均无 JS 错误、electron 进程清理后 `remaining: 0`。**尚无任何多串口行为的人工 GUI 验证**——所有结论都来自单测、源码断言与「应用能启动并存活」。
   - 验证基线（当前）：`npm test` **299/299 通过、0 失败**；实机启动主窗口正常、`main.log` 无致命错误。**尚无任何多串口行为的人工 GUI 验证**——所有结论都来自单测、源码断言与「应用能启动并存活」。
 
 ---
