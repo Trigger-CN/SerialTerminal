@@ -5,8 +5,8 @@
 ## 0. 当前状态快照（维护入口）
 
 - 当前配置 schema：**v15**。版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 以 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。v14 → v15 迁移已落地并实测，详见 13A 节与 `MULTI_SERIAL_DESIGN.md` 第 9 节。
-- 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；最多两个 pane，支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位，可作为 P3 的数据前置）；**P2 已完成分组注册表、分组上下文、行解析器三步**，并已具备**分组终端运行时注册表**（19 项单测）、**分组 DOM 标识契约**（8 项）与**终端工厂/注册表托管**（`createSerialRuntime(groupId)` + `serialRuntimes.getOrCreate()`，默认分组即经由它构造）；**P3 的标签归属与分组增删改纯逻辑层已完成**（17 + 17 项）；**P5 的纯数据层与 DOM 层均已完成**（布局与 `workspace-manager` 已能驱动任意 pane 数）。但 **UI 仍是单串口形态**：`serialTerm` 的剩余引用仍绑默认分组，多分组容器节点未建；P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏未开始。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
+- 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；pane 数不再固定为两个（`workspace-manager.js` 已 N pane 化，`pane-3` 及以后按需创建），支持左右/上下分屏、拖动排序和跨 pane 移动。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位）；**P2 已完成分组注册表、分组上下文、行解析器三步**，并已具备**分组终端运行时注册表**（19 项单测）、**分组 DOM 标识契约**（8 项）与**终端工厂/注册表托管**（`createSerialRuntime(groupId)` + `serialRuntimes.getOrCreate()`）；**P3 已完成标签归属（17）、分组增删改（17）、标签栏结构描述（15）、输出分桶（12）四个纯逻辑层**，并已把**渲染层数据面按 `groupId` 真正路由**（输出队列分桶、按分组取运行时/解码器/HEX 格式化器、日志路径带 groupId）；**分组标签栏与容器创建/关闭已接入 DOM 并经真实点击验证**（新增 `serial-container-<g>` / `tab-main-<g>` / `tab-main-<g>-button`，关闭后回落到单层）。**仍未完成**：Shell 标签与分组标签同级的两个层次投影（当前分组栏是独立一行）、`filterTabs` / `chartTabs` 按分组各一份（仍是全应用单例且只跟随激活分组）、P4 设置侧栏跟随、P5 分组级/组内级两级分屏。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -998,10 +998,10 @@ npm run dist:linux
    - Shell IPC/输入链路与串口模式完全独立，Hex 改动不得复用到 Shell tab
    - Raw 写盘失败会保留待写 Buffer 并记录 `rawBinaryFlushError`/electron-log；在待写数据成功刷盘前拒绝开始新连接，避免重连覆盖缓冲。当前仍没有独立的用户可见恢复界面
 
-## 13A. 多串口支持（P1 已实现；配置迁移已完成；P2 完成三步；P3 纯逻辑层已实现；P5 纯数据层与 DOM 层已落地）
+## 13A. 多串口支持（P1 已实现；配置迁移已完成；P2 已完成；P3 数据面与分组 DOM 已落地；P5 纯数据层与 DOM 层已落地）
 
 - 完整设计文档：[`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)，包含数据模型、主进程多实例、IPC 分流、双层标签栏、设置跟随、两级分屏、配置迁移、分阶段落地与风险清单。
-- **当前进度：P1（主进程多实例化）已完成并通过验证；配置 v14 → v15 迁移已完成并实测；P2 已完成分组注册表、分组上下文、行解析器三步；P3 的标签归属纯逻辑层已完成；P5 的纯数据层与 DOM 层均已完成；P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始，UI 仍为单串口形态。**
+- **当前进度：P1（主进程多实例化）已完成并通过验证；配置 v14 → v15 迁移已完成并实测；P2 已完成（注册表/上下文/行解析器/运行时注册表/DOM 标识契约/终端工厂托管）；P3 四个纯逻辑层已完成（标签归属 17、分组增删改 17、标签栏结构描述 15、输出分桶 12），且渲染层数据面已按 groupId 真正路由、分组标签栏与容器创建/关闭已接入 DOM 并经真实点击验证；P5 的纯数据层与 DOM 层均已完成。** 仍未完成：Shell 标签与分组标签同级的两个层次投影（当前分组栏独立一行）、`filterTabs`/`chartTabs` 按分组各一份、P4 设置侧栏跟随、P5 分组级/组内级两级分屏。
 - P3 标签归属纯逻辑层（`serial-group-tabs.js`，17 项单测）：
   - `buildTabBarModel()` 输出两层内容；三条硬规则：Shell 永不归属分组、group 数 ≥2 双层 / =1 塌回一层、切换分组只换下层集合。抽成纯函数的原因是归属判定错了在浏览器里只能靠肉眼发现。
   - 已固定的非显然行为：`activeGroupId` 不存在退回第一个分组（否则下层整层空掉且无法恢复）；`activeTabId` 失效退回该组第一个标签；重复分组 id 去重（两个相同标签都指向同一 id，点击像没反应）；空标题给 `Serial N`；关闭当前分组优先选**右邻**（总退回第一个会让焦点反复跳回最左）；关闭非当前分组保持当前选择；单分组时 `groupLayer` 只含 Shell且串口标签排在 Shell 之前。
@@ -1084,7 +1084,54 @@ npm run dist:linux
   - 配套：`style.css` 删除 `#pane-1` / `#pane-2` 的 `flex-basis` 规则，改由 `.workspace-pane` 统一过渡、`.workspace-root.resizing .workspace-pane` 统一禁用过渡；`renderer.js` 的 `transitionend` 过滤由列举两个 id 改为 `classList.contains('workspace-pane')`。
   - **pane 节点：前两个仍为静态，第 3 个起按需创建。** 新增 [`pane-layout-dom.js`](pane-layout-dom.js)（纯数据描述，不碰 DOM，因此可单测）与 `workspace-manager.js` 的 `ensurePaneElements()`、`renderer.js` 的 `createPaneElement(paneId)`。`ensurePaneElements()` 被放在 `applyLayoutToDom()` 的**第一行**：`appendChild(null)` 不报错也不警告，标签页会静默消失，得到一块空面板——必须先补节点再布局。
   - **为何不把 `pane-1` / `pane-2` 也改成动态**：`serialTerm` 在模块加载时就 `serialTerm.open(document.getElementById('serial-container'))`，而 `#serial-container` 在两个静态 pane 里。动这两个节点就得同时改 `serialTerm` 的挂载时机，那属于 P2 剩余部分。这一轮只补「多出来的 pane 能现建」，单串口与现有两 pane 分屏行为完全不变。
-  - 验证基线（当前）：`npm test` **316/316 通过、0 失败**（`test/workspace-pane-n.test.js` 8 项 + `test/pane-layout-dom.test.js` 9 项）；实机启动主窗口正常、`main.log` 与渲染进程 stderr 均无 JS 错误、electron 进程清理后 `remaining: 0`。**尚无任何多串口行为的人工 GUI 验证**——所有结论都来自单测、源码断言与「应用能启动并存活」。
+  - 验证基线（当时）：`npm test` **316/316 通过、0 失败**（`test/workspace-pane-n.test.js` 8 项 + `test/pane-layout-dom.test.js` 9 项）；实机启动主窗口正常、`main.log` 无 JS 错误、electron 进程清理后 `remaining: 0`。**多串口行为至今仍未做过真实双端口 GUI 验证**——所有隔离结论都来自单测、源码断言、CDP DOM 断言与「应用能启动并存活」。
+
+### P3 渲染层数据面按 groupId 路由（已落地）
+
+- 改造前渲染层只有**一个** `serialOutputQueue` 与**一个** `serialTerm`。先做标签栏会得到两类静默故障：未登记分组的字节被 `accepts()` 判为 `unknown-group` 后**直接丢弃**（终端空白、日志无记录、无报错），以及补上 `ensureGroup` 后两组字节被 `Buffer.concat` 拼进同一批、写进同一终端与同一日志文件。**因此顺序必须是「先数据面、后 UI」。**
+- `serial-output-buckets.js`（12 项单测）：`drain()` 的每一项**严格只含一个 groupId 的字节**；水位按分组独立判断（默认 1 MiB，与旧 `SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES` 同值）；`Uint8Array` 走自身 `byteOffset`/`byteLength` 构造视图（防止读到相邻内存）；缺失或非法 groupId 回落默认而不是丢弃。
+- 新增的按分组基础设施：`resolveSerialGroupId`（未登记回落默认，**绝不静默丢弃**）/ `isActiveSerialGroup` / `getGroupSessionId` / `serialGroupIo: Map<groupId, {textDecoder, hexFormatter}>` / `getSerialRuntime` / `getSerialTerm` / `resolveGroupIdForMainTab`。
+- **四条必须保留的关键判断**：
+  1. `serialSessionId` **只在 `groupId === REGISTRY_DEFAULT_GROUP_ID` 时同步**。否则 g-2 的一条入站消息会覆盖默认分组的会话号，让默认分组的写入被误判为 `STALE_SERIAL_SESSION` 而静默失败。
+  2. `serial-disconnected` **只在默认分组时**做 `updateSerialConnectionState(false)` / `stopAutoSendRuntime()` / 释放 `serialDisconnectWaiters` / `ipcRenderer.send('flush-tab-logs')`。关掉 g-2 不该让默认分组界面显示「已断开」。
+  3. `clearTerminalByTabId` 必须调 `serialOutputBuckets.clear(groupId)`——清屏后未上屏的旧数据不能紧接着又冒出来。
+  4. `getMainTabTitle(groupId)`：默认分组仍返回 `'Main_Terminal'`（零变化），其它分组取配置里的 title。
+- 全部改为接受 `groupId` 的写入路径：`writeTextLines` / `writeHexLines` / `renderSentRecord` / `flushTextReceive` / `resetTextReceive` / `createTextDecoder` / `writeMainTabLog` / `writeFilterTabLog` / `writeTabLog` / `connectSerialFromUi({ groupId })` / `sendSerialRequest` / `serial-output-bytes` / `serial-error` / `serial-disconnected` / `clearTerminalByTabId`。`main.js` 的 `ipcMain.on('write-tab-log')` 透传 `payload.groupId`。
+- **本层仍是单例的部分（不得当作已完成）**：`filterTabs` 与 `chartTabs` 全应用只有一份，只跟随激活分组。若不设 `isActiveSerialGroup(groupId)` 这道边界，g-2 的字节会同时写进 g-1 的过滤页与日志。
+
+### P3 分组标签栏的 DOM 结构描述层（已落地）
+
+- `serial-group-tab-bar.js`（15 项单测）——纯数据、不碰 DOM。导出 `GROUP_TAB_BAR_ID` / `GROUP_TAB_LIST_ID` / `ADD_GROUP_BUTTON_ID` / `groupTabId` / `groupTabButtonId` / `groupCloseButtonId` / `describeGroupTab` / `describeGroupTabBar` / `describeAddGroupButton` / `describeGroupVisibility`。
+- 五条非显然规则：① 分组标签与主终端标签 id 永不相交（`tab-group-<g>` vs `tab-main-<g>`）；② 默认分组也带 `-default` 后缀；③ 默认分组 `closable: false` 但**仍渲染关闭按钮**（按钮置灰，否则标签宽度跳变、点击位置漂移）；④ `groupId` 放 `dataset` 不放闭包（标签会重建，闭包会跟着丢）；⑤ 未知激活分组时全部隐藏而不猜。
+- `describeGroupTabBar` 的显示判据是 **`isMultiGroup === true` 且 `groups.length > 1`**，两者缺一不可；`canAdd` 恒为真（否则用户永远开启不了多分组）。`describeAddGroupButton` 在已达上限时**禁用而不是隐藏**（隐藏会让布局跳动）。
+- `describeGroupVisibility` 要求非激活分组**真正 `hidden`**：xterm 在 `display:none` 的容器里 `fit()` 会算出 0 尺寸，切回来时字符被压扁或右侧被裁掉。
+
+### P3 渲染层分组状态与生命周期（已落地）
+
+- 三个模块级状态：`serialGroups` / `activeGroupId` / `isApplyingSessionGroups`（防止 `applyConfig` → persist 的回环）。
+- `syncSerialGroupsFromConfig(config)` **必须对每个分组执行 `serialGroupRegistry.ensureGroup` 与 `serialGroupContext.ensureContext`**。缺这两步会让 `serial-output-bytes` 以 `unknown-group` 把这些分组的全部字节静默丢弃。
+- `ensureSerialGroupMainTabDom(groupId, title)` 建三样节点：主标签按钮（`mainTabButtonId`）、`.main-tab-pane`（`mainTabId`）、`.terminal-wrapper`（`serialContainerId`），然后 `addTabToPane(tabId, 'pane-1', { activate: false, persist: false })`。**不登记进布局的话 `switchPaneTab` 会因 `tabIds` 不含它而直接返回**。已存在则直接返回，保证反复调用无副作用。
+- `applyActiveSerialGroup({ fit })` 同时改三处：注册表 `setActiveGroup`、`.serial-group-tab` 的 `active` 类与 `aria-selected`、`switchPaneTab('pane-1', mainTabId(activeGroupId))`，最后 `fitWorkspaceTerminals()`。
+- `addSerialGroupFromUi()`：新分组 **status=disconnected**（用户明确决定，不自动连接），persist、建 DOM、切过去、`portSelect.focus()`。
+- `closeSerialGroup(groupId)` 的顺序不可乱：默认分组拒绝 → 已连接时 `window.confirm` → `disconnect-serial` → `serialRuntimes.release` → `serialGroupIo.delete` → `serialOutputBuckets.clear` → `serialGroupContext.removeContext` → `serialGroupRegistry.removeGroup` → 移除按钮/面板/容器 → `removeTabFromWorkspace` → `removeSerialGroup` → 按「优先右邻」切到相邻分组。**先 release 后 removeGroup**：反过来会让释放路径拿 `undefined` 而静默跳过 `dispose()`，canvas 与滚动缓冲挂在已移除的 DOM 上不释放。
+- `applyConfig` 末尾调用 `syncSerialGroupsFromConfig(config)`（受 `isApplyingSessionGroups` 守卫），位置在布局恢复**之后**，确保 pane 的 `tabs-list`/`tabs-content` 已在 DOM 里。
+
+### CDP 真实点击验证手段（本阶段新增，必读）
+
+仓库**没有** `ws` / `websocket` / `puppeteer` / `playwright`（实测 `require.resolve('ws')` → `ws-missing`）。为了不引入生产依赖，验证工具是手写的最小 CDP 客户端（`.me/tmp/` 下临时脚本，只依赖 Node 内置 `net` / `http` / `crypto`）：自实现 WebSocket 握手（`Sec-WebSocket-Key` + 校验 `HTTP/1.1 101`）与帧编解码（opcode `0x1`/`0x8`/`0x9`/`0xa`，长度分支 `<126`/`<65536`/127，客户端掩码），导出的 `send(method, params)` 把每帧 JSON 的 `id` 与 waiter 配对。
+
+用法：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用 `Runtime.evaluate`（`returnByValue` + `awaitPromise`）**真实点击按钮**并断言 DOM，逐项 PASS/FAIL。
+
+**为什么非得补这一层（最有力的证据）**：分组标签栏首版在 `node --check`、renderer 模块加载门禁与 437 项全量测试下**全部全绿**，却存在如下致命缺陷：
+
+```text
+实测：[{id:"tab-group-default-button", groupId:"default"},"Serial 1"],
+      [{id:"tab-group-default-button", groupId:"default"},"Serial 2"]   ← 两个分组拿到同一个 id
+```
+
+根因是「二次描述」：`describeGroupTabBar()` 返回的 `tabs` **已经是 `describeGroupTab()` 的完整结果**（没有 `id` 字段），渲染层又把它喂回 `describeGroupTab()`；后者用 `source.id` 取 groupId 而得到 `undefined`，**所有分组都回落 `'default'`**。后果：新分组不高亮、`tab-group-g-1-close` 不存在、**关闭分组整条流程点不到**。
+
+**教训（必须遵守）**：`scripts/check-renderer-module-load.js` 的 `document.getElementById` **每次都返回新的 stub 对象**，因此它无法表达「同一个 id 被生成了两次」「点按钮后页面真的多了一个容器」这类问题。它的职责边界只是「顶层同步求值不抛错」。**凡涉及真实 DOM 结构或交互的改动，必须补真实窗口 + CDP 驱动验证。**
 
 ---
 
