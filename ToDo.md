@@ -154,20 +154,17 @@
   - 验证：`npm test` 252/252；沙箱行为验证 19 项全通过；双端口端到端 9 项全通过；`git diff --check` 干净。
   - 仍不做：任何 UI 改动、双层标签栏、分屏改造、设置侧栏跟随、日志写入去同步化。
 
-- [ ] **P1.5：日志落盘去同步化（多线程的真实收益点）**
-  - 位置：`appendToTabLogSync`、raw 二进制刷盘、`saveLog`——三者均为 `fs.appendFileSync`，阻塞主进程 JS 线程。
-  - 方案：引入日志写入 Worker，沿用 `chart-parser-worker-client.js` 已成熟的队列/超时/重启范式；队列按 `groupId` 分桶避免串写；溢出提示沿用现有 `shouldAcceptMoreCachedLog` 语义。
-  - 动因：端口数增加时写盘频率线性上升，一个高吞吐端口会拖慢所有端口。
-  - 不做：配置写盘（`fs.writeFileSync`）保持同步，触发频率低、收益不抵风险。
+- [~] ~~P1.5：日志落盘去同步化~~ **已实测裁定不做**。实测：56 KB（115200 bps × 5 秒刷盘）单次 `appendFileSync` 仅 0.39 ms、450 KB 为 0.69 ms、1 MB 为 0.93 ms，而 Windows 定时器分辨率本身就是 15.6 ms；只有 10 MB 阈值批次才 12.72 ms。真实数据量下同步写盘比系统定时器还快，Worker 化买不到可感知收益，而那种量级下真正的瓶颈是终端渲染。保留 `fs.appendFileSync`；若将来真出现高吞吐卡顿，先查 `terminal-output-buffer` 与分批写入。
 
-- [ ] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
+- [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
+  - [x] 第一步：新增 `serial-group-registry.js` 分组注册表（纯逻辑、无 DOM 依赖），`accepts()` 作为字节归属的唯一判定入口，`reason` 区分 `ok`/`unknown-group`/`session-other-group`/`stale-session`；`renderer.js` 的 `serial-output-bytes`、`connectSerialFromUi`、`disconnectSerial`、`serial-disconnected` 四处已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
+  - [ ] 待继续：把 `serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 逐个下沉到分组上下文。
 - [ ] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时塌回一层）
 - [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）
 - [ ] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）
 
-P2–P5 待 P1 验证通过后再逐个开工，不得提前并行。
+P2–P5 逐个开工，不得并行。
 
-## 验证基线
 ## 验证基线
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。

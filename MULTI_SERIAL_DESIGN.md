@@ -539,33 +539,47 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 > P1 的第一件事应是**双端口真机冒烟**，先确认 Node `serialport` 在本项目环境下能稳定并发持有两个端口。若这一步不成立，整个方案需要重新评估，不应继续投入 P2。
 
-### P1.5 — 日志落盘去同步化（多线程的实际收益点）
+### P1.5 — 日志落盘去同步化（已实测裁定：不做）
 
-把「格式化 + 写盘」从主线程移出，端口仍留在主进程（方案 C，见 5A.3）。
+> **结论：本阶段经基线实测后判定收益不成立，不做。** 保留本节仅作为决策记录，避免后人重复论证。
 
-**范围**
+原本的假设是「`fs.appendFileSync` 在主线程会拖慢所有端口」。实测（本机 Windows 10 + Node 20，写临时文件后已清理）推翻了该假设：
 
-1. 新增日志写入 Worker（沿用 `chart-parser-worker-client.js` 的队列/超时/重启范式）
-2. `main.js:772` `appendToTabLogSync`、`main.js:844` raw 二进制、`main.js:958` `saveLog` 改为投递到队列
-3. 队列满时按当前已有的「溢出提示」机制上报，不静默丢失（与 `shouldAcceptMoreCachedLog` 语义一致）
-4. 分组隔离与 P1 一致：队列按 `groupId` 分桶，避免不同端口串写
+| 刷盘批次 | 单次 `appendFileSync` 耗时 |
+| --- | --- |
+| 56 KB（115200 bps × 5 秒刷盘间隔） | 0.39 ms |
+| 450 KB（921600 bps × 5 秒） | 0.69 ms |
+| 1 MB | 0.93 ms |
+| 10 MB（`rawBufferAutoFlushMB` 默认阈值批次） | 12.72 ms |
 
-**本轮不做**：配置写盘（`fs.writeFileSync`）同步化。触发频率低，收益远小于风险。
+事件循环抖动（每 300 ms 反复写一次，空闲基线为 17.51 ms，即 Windows 定时器 15.6 ms 分辨率）—— 56 KB 时 19.35 ms、450 KB 时 28.32 ms、10 MB 时 31.69 ms；而用 `fs.promises.appendFile`（libuv 线程池）对照时全部落在 16.5–17.3 ms，与空闲基线无异。
 
-**验收**
+**关键事实：真实数据量下同步写盘只有 0.39 ms，比操作系统的定时器分辨率还小。** 即使再优化到 0 ms，UI 也感知不到差异；只有 10 MB 级洪水批次才有 12.7 ms 的单次阻塞，而那种量级下真正的瓶颈是终端渲染而不是写盘。用 Worker 换来的收益买不回引入的异步时序复杂度（见下方“本轮不做”）。
 
-- 单端口高吞吐（≥ 115200）时主线程无长任务毛刺
-- 双端口同时高吞吐，一个端口卡顿不影响另一个的 UI 响应
-- 日志内容与同步版本逐字节一致
-- 写盘失败与队列溢出的用户可见提示与现状相同
+**因此：**
 
-**为何不选方案 B（端口进 Worker）**：native 串口句柄无法跨 `worker_threads` 转移，只能让 worker 自己打开；而端口枚举、错误弹窗、重连 UI 都在主进程，控制权被切开后更难维护。详见 5A.3。
+- 主线程同步写盘保持不变，`appendToTabLogSync` / `flushRawBinaryLogSync` / `saveLog` 继续使用 `fs.appendFileSync`
+- 不新增日志写入 Worker
+- 若未来出现真实的高吞吐卡顿现场（需有可复现的帧掉帧观测），应先查终端渲染路径（`terminal-output-buffer` / 分批写入）而不是先动写盘
+
+也一并说明为何不选方案 B：native 串口句柄无法跨 `worker_threads` 转移，只能让 worker 自己打开；而端口枚举、错误弹窗、重连 UI 都在主进程，控制权被切开后更难维护（详见 5A.3）。
 
 ### P2 — 渲染层分组上下文对象化
 
 把 `isConnected`、`serialTerm`、`dataParser`、`hexFormatter`、`textDecoder`、`filterTabs`、`chartTabs`、`workspaceLayout` 收进每个分组的上下文对象；`sessionToGroup` 映射建立；渲染层消费侧按组丢弃不匹配会话的字节。
 
 验收：分组切换不串流、不串行号；两组同时刷数据互不影响。
+
+**进度：已完成第一步（分组注册表与字节归属判定）；完整上下文对象化待继续。**
+
+已落地：
+
+- 新增 [`serial-group-registry.js`](serial-group-registry.js)：`SerialGroupRegistry` 持有 groupId → `{ sessionId, connected, portPath }` 与 `sessionToGroup` 映射，对外提供 `ensureGroup` / `beginSession` / `invalidateSession` / `groupIdForSession` / `accepts` / `isVisible` / `removeGroup`。它是纯逻辑模块，不依赖 DOM，因此可以脱离 Electron 直接单测。
+- `accepts()` 是「这条字节该不该进本分组的终端」的唯一判定入口，返回 `{ accepted, reason, groupId }`，其中 `reason` 区分 `ok` / `unknown-group` / `session-other-group` / `stale-session`，便于定位到底是丢错了还是本来就该丢。
+- `renderer.js` 已接入三处：`serial-output-bytes` 的归属判定改走 `accepts()`；`connectSerialFromUi` 用 `beginSession()` 登记主进程分配的会话号；`disconnectSerial` 与 `serial-disconnected` 用 `invalidateSession()` 同步失效，避免注册表状态落后于裸的 `serialSessionId`。
+- 兼容性：首版只注册 `default` 一个分组，单串口行为不变；不带 `sessionId` 的旧载荷退化为按 groupId 判定。
+
+待继续：`serialTerm` / `dataParser` / `hexFormatter` / `textDecoder` / `filterTabs` / `chartTabs` / `workspaceLayout` 仍是全局单例，真正多分组同时显示前必须逐个下沉到分组上下文。
 
 ### P3 — 双层标签栏与添加串口按钮
 
@@ -637,18 +651,15 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 - [ ] 单端口全部现有行为回归通过
 - [ ] 采集双端口高吞吐下的主线程响应基线，作为 P1.5 的决策依据
 
-### P1.5
+### P1.5（已裁定不做）
 
-- [ ] 日志写入改经 Worker 队列，主线程无 `appendFileSync` 长任务
-- [ ] 队列按 `groupId` 分桶，不同端口不串写
-- [ ] 日志内容与同步版本逐字节一致
-- [ ] 队列溢出与写盘失败的用户提示与现状一致
-- [ ] 双端口同时高吞吐时，一个端口卡顿不影响另一个的 UI 响应
+- [x] 采集主线程响应基线作为决策依据 —— 已采集，结论为收益不成立，详见第 10 节 P1.5
+- [~] 日志写入改经 Worker 队列 —— **不做**：真实数据量下同步写盘仅 0.39 ms，低于 Windows 定时器分辨率
 
 ### P2
 
-- [ ] `sessionId → groupId` 分流正确
-- [ ] 行号、过滤器、图表数据各自独立
+- [x] `sessionId → groupId` 分流正确 —— `serial-group-registry.js` 已实现并由 10 项单测覆盖
+- [ ] 行号、过滤器、图表数据各自独立（待上下文对象化）
 - [ ] 快捷指令自动发送只向触发来源组发送
 
 ### P3

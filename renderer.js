@@ -37,6 +37,7 @@ const uPlot = require('uplot');
 const { SerialTextStream } = require('./serial-text-stream');
 const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./chart-parser-ipc-client');
 const { ChartDataModel } = require('./chart-data-model');
+const { SerialGroupRegistry, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -85,6 +86,9 @@ let quickTriggerBuffer = '';
 let appliedHexSettingsKey = '';
 let serialWriteChain = Promise.resolve();
 let serialSessionId = 0;
+// P2：分组上下文。首版只注册 default 一个分组，但字节分发的判定已经走注册表，
+// 后续添加分组时不需要再改这条链路。
+const serialGroupRegistry = new SerialGroupRegistry({ defaultGroupId: REGISTRY_DEFAULT_GROUP_ID });
 let serialConnectInProgress = false;
 let serialReconnectInProgress = false;
 let serialDisconnectWaiters = [];
@@ -4565,10 +4569,18 @@ serialTerm.onData((data) => {
     });
 });
 ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
-    if (serialConnectInProgress && Number.isInteger(payload.sessionId) && payload.sessionId !== serialSessionId) {
+    // P2：入站字节的归属判定统一走分组注册表。旧写法只比一个裸的 serialSessionId，
+    // 没有分组概念，多串口下无法区分「这是哪个分组的字节」。
+    const groupId = payload.groupId || REGISTRY_DEFAULT_GROUP_ID;
+    if (Number.isInteger(payload.sessionId) && !serialGroupRegistry.groupIdForSession(payload.sessionId)) {
+        // 首次见到该会话号（连接刚成功，或旧主进程不带 groupId）：登记到默认分组。
+        serialSessionId = serialGroupRegistry.beginSession(groupId, payload.sessionId);
+    }
+    const verdict = serialGroupRegistry.accepts({ groupId, sessionId: payload.sessionId });
+    if (!verdict.accepted) return;
+    if (Number.isInteger(payload.sessionId) && payload.sessionId !== serialSessionId) {
         serialSessionId = payload.sessionId;
     }
-    if (payload.sessionId !== undefined && payload.sessionId !== serialSessionId) return;
     const bytes = payload.bytes instanceof Uint8Array ? payload.bytes : Uint8Array.from(payload.bytes || []);
     if (!bytes.length) return;
     const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -4710,7 +4722,8 @@ function updateSerialConnectionState(connected) {
 }
 
 function disconnectSerial() {
-    serialSessionId++;
+    // 递增会话号作废迟到的数据，同时让分组注册表同步失效（否则注册表仍认为旧会话有效）。
+    serialSessionId = serialGroupRegistry.invalidateSession(REGISTRY_DEFAULT_GROUP_ID);
     serialWriteChain = Promise.resolve();
     stopAutoSendRuntime();
     resetQuickTriggerReceive();
@@ -4729,7 +4742,7 @@ function waitForSerialDisconnected() {
 }
 
 ipcRenderer.on('serial-disconnected', (event, message) => {
-    serialSessionId++;
+    serialSessionId = serialGroupRegistry.invalidateSession(REGISTRY_DEFAULT_GROUP_ID);
     serialWriteChain = Promise.resolve();
     if (receiveDisplayMode === 'hex') hexFormatter.flush();
     else flushTextReceive();
@@ -5014,7 +5027,8 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
             sendEncoding,
             newlineMode
         });
-        serialSessionId = Number.isInteger(connectResult?.sessionId) ? connectResult.sessionId : serialSessionId + 1;
+        // 连接成功后把主进程分配的会话号登记进分组注册表，后续字节归属以它为准。
+        serialSessionId = serialGroupRegistry.beginSession(REGISTRY_DEFAULT_GROUP_ID, connectResult?.sessionId);
         chartTabs.forEach(clearChartDataSession);
 
         ipcRenderer.send('save-config', {
