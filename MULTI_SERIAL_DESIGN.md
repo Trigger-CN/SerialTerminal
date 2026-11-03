@@ -570,16 +570,17 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 验收：分组切换不串流、不串行号；两组同时刷数据互不影响。
 
-**进度：已完成第一步（分组注册表与字节归属判定）；完整上下文对象化待继续。**
+**进度：已完成前两步（分组注册表 + 分组上下文接管行号与显示参数）；持有 DOM 的对象尚未下沉。**
 
 已落地：
 
 - 新增 [`serial-group-registry.js`](serial-group-registry.js)：`SerialGroupRegistry` 持有 groupId → `{ sessionId, connected, portPath }` 与 `sessionToGroup` 映射，对外提供 `ensureGroup` / `beginSession` / `invalidateSession` / `groupIdForSession` / `accepts` / `isVisible` / `removeGroup`。它是纯逻辑模块，不依赖 DOM，因此可以脱离 Electron 直接单测。
 - `accepts()` 是「这条字节该不该进本分组的终端」的唯一判定入口，返回 `{ accepted, reason, groupId }`，其中 `reason` 区分 `ok` / `unknown-group` / `session-other-group` / `stale-session`，便于定位到底是丢错了还是本来就该丢。
-- `renderer.js` 已接入三处：`serial-output-bytes` 的归属判定改走 `accepts()`；`connectSerialFromUi` 用 `beginSession()` 登记主进程分配的会话号；`disconnectSerial` 与 `serial-disconnected` 用 `invalidateSession()` 同步失效，避免注册表状态落后于裸的 `serialSessionId`。
+- 新增 [`serial-group-context.js`](serial-group-context.js)：`SerialGroupContextStore` 接管**与 DOM 无关的可变状态**——`serialLineCounter` / `logLineCounter` / `serialNewLine` 与收发显示参数（`receiveDisplayMode` / `receiveEncoding` / `sendEncoding` / `newlineMode`）。提供 `resetLineCounters()` 与 `nextLineNumbers()`，后者可选择只推进屏幕行号或只推进日志行号，对应改造前两个独立计数器的语义。
+- `renderer.js` 已接入：`serial-output-bytes` 的归属判定走 `accepts()`；`connectSerialFromUi` 用 `beginSession()`；`disconnectSerial` 与 `serial-disconnected` 用 `invalidateSession()`；`getPrefix()` / `getLogPrefix()` 改从 `groupState(groupId)` 取行号；`clearTerminalByTabId` 与连接成功处改调 `resetLineCounters()`。
 - 兼容性：首版只注册 `default` 一个分组，单串口行为不变；不带 `sessionId` 的旧载荷退化为按 groupId 判定。
 
-待继续：`serialTerm` / `dataParser` / `hexFormatter` / `textDecoder` / `filterTabs` / `chartTabs` / `workspaceLayout` 仍是全局单例，真正多分组同时显示前必须逐个下沉到分组上下文。
+待继续：`serialTerm` / `dataParser` / `hexFormatter` / `textDecoder` / `filterTabs` / `chartTabs` / `workspaceLayout` 仍是全局单例。这些对象在构造时绑定 DOM 容器与回调，下沉时会让上下文模块失去可测试性，所以分两步走：先把纯状态抽完（已完成），再让持 DOM 的对象按同一个 groupId 申请自己的实例。
 
 ### P3 — 双层标签栏与添加串口按钮
 
@@ -659,7 +660,7 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 ### P2
 
 - [x] `sessionId → groupId` 分流正确 —— `serial-group-registry.js` 已实现并由 10 项单测覆盖
-- [ ] 行号、过滤器、图表数据各自独立（待上下文对象化）
+- [~] 行号、过滤器、图表数据各自独立 —— **行号已独立**（`serial-group-context.js` + 8 项单测）；过滤器与图表数据仍是全局单例
 - [ ] 快捷指令自动发送只向触发来源组发送
 
 ### P3

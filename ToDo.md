@@ -157,8 +157,8 @@
 - [~] ~~P1.5：日志落盘去同步化~~ **已实测裁定不做**。实测：56 KB（115200 bps × 5 秒刷盘）单次 `appendFileSync` 仅 0.39 ms、450 KB 为 0.69 ms、1 MB 为 0.93 ms，而 Windows 定时器分辨率本身就是 15.6 ms；只有 10 MB 阈值批次才 12.72 ms。真实数据量下同步写盘比系统定时器还快，Worker 化买不到可感知收益，而那种量级下真正的瓶颈是终端渲染。保留 `fs.appendFileSync`；若将来真出现高吞吐卡顿，先查 `terminal-output-buffer` 与分批写入。
 
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
-  - [x] 第一步：新增 `serial-group-registry.js` 分组注册表（纯逻辑、无 DOM 依赖），`accepts()` 作为字节归属的唯一判定入口，`reason` 区分 `ok`/`unknown-group`/`session-other-group`/`stale-session`；`renderer.js` 的 `serial-output-bytes`、`connectSerialFromUi`、`disconnectSerial`、`serial-disconnected` 四处已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
-  - [ ] 待继续：把 `serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 逐个下沉到分组上下文。
+  - [x] 第二步：新增 `serial-group-context.js` 分组上下文（`SerialGroupContextStore`），接管 `serialLineCounter`/`logLineCounter`/`serialNewLine` 与收发显示参数；`getPrefix()`、`getLogPrefix()`、`clearTerminalByTabId`、连接成功重置均改走它。配套 `test/serial-group-context.test.js` 8 项全通过。
+  - [ ] 待继续：把 `serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 逐个下沉到分组上下文（这些对象绑定 DOM，需先抽象实例工厂）。
 - [ ] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时塌回一层）
 - [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）
 - [ ] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）

@@ -38,6 +38,7 @@ const { SerialTextStream } = require('./serial-text-stream');
 const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./chart-parser-ipc-client');
 const { ChartDataModel } = require('./chart-data-model');
 const { SerialGroupRegistry, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
+const { SerialGroupContextStore } = require('./serial-group-context');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -97,11 +98,14 @@ let serialDisconnectWaiters = [];
 // Display Settings
 let showTimestamp = false;
 let showLineNumbers = false;
-let serialLineCounter = 1;
+// P2：行号计数器与收发显示参数已下沉到分组上下文（serial-group-context.js）。
+// 这里保留同名访问器，避免一次性改写全文调用点；真正的状态按 groupId 隔离。
+const serialGroupContext = new SerialGroupContextStore({ defaultGroupId: REGISTRY_DEFAULT_GROUP_ID });
+function groupState(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    return serialGroupContext.get(groupId);
+}
 let logIncludeTimestamp = false;
 let logIncludeLineNumbers = false;
-let logLineCounter = 1;
-let serialNewLine = true;
 let lastCharWasCR = false;
 
 // Color settings
@@ -332,9 +336,10 @@ function formatTimestamp(now = new Date()) {
     return now.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
 }
 
-function getPrefix() {
+function getPrefix(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     let s = '';
     const reset = '\x1b[0m';
+    const state = groupState(groupId);
     
     if (showTimestamp) {
         const time = currentBatchTimestamp || formatTimestamp();
@@ -342,22 +347,23 @@ function getPrefix() {
         s += `${color}[${time}]${reset} `;
     }
     if (showLineNumbers) {
-        const lineNo = String(serialLineCounter).padStart(4, '0');
+        const lineNo = String(state.serialLineCounter).padStart(4, '0');
         const color = hexToAnsi(lineNoColor);
         s += `${color}[${lineNo}]${reset} `;
-        serialLineCounter++;
+        state.serialLineCounter++;
     }
     return s;
 }
 
-function getLogPrefix() {
+function getLogPrefix(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     let s = '';
+    const state = groupState(groupId);
     if (logIncludeTimestamp) {
         s += `[${currentBatchTimestamp || formatTimestamp()}] `;
     }
     if (logIncludeLineNumbers) {
-        s += `[${String(logLineCounter).padStart(4, '0')}] `;
-        logLineCounter++;
+        s += `[${String(state.logLineCounter).padStart(4, '0')}] `;
+        state.logLineCounter++;
     }
     return s;
 }
@@ -1131,8 +1137,7 @@ function clearTerminalByTabId(tabId) {
         if (receiveDisplayMode === 'hex') hexFormatter.reset({ resetOffset: false });
         else resetTextReceive();
         clearTerminalOutput(serialTerm);
-        serialLineCounter = 1;
-        logLineCounter = 1;
+        serialGroupContext.resetLineCounters(REGISTRY_DEFAULT_GROUP_ID);
         return;
     }
     const filterTab = filterTabs.find(t => t.id === tabId);
@@ -5048,9 +5053,7 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
         updateSerialConnectionState(true);
         updateAutoSendState();
 
-        serialLineCounter = 1;
-        logLineCounter = 1;
-        serialNewLine = true;
+        serialGroupContext.resetLineCounters(REGISTRY_DEFAULT_GROUP_ID);
 
         serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
         setActionStatus(reconnecting ? `已重新连接串口 ${path} @ ${baudRate}` : `已连接串口 ${path} @ ${baudRate}`);
