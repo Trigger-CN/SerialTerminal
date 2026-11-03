@@ -168,7 +168,13 @@
   - 新增 `serial-group-tabs.js`：`buildTabBarModel()` 输出两层内容；`normalizeGroups` / `resolveActiveGroupId` / `resolveGroupAfterAdd` / `resolveGroupAfterClose` / `didLayerCountChange`。配套 `test/serial-group-tabs.test.js` 17 项全通过。
   - 三条硬规则：Shell 永不归属分组；分组数 ≥2 双层、=1 塌回一层；切换分组只换下层集合不销毁 DOM。
   - 已固定的非显然行为：`activeGroupId` 不存在退回第一个分组（否则下层整层空且无法恢复）；`activeTabId` 失效退回该组第一个标签；重复分组 id 去重；空标题给 `Serial N`；关闭当前分组优先选**右邻**；关闭非当前分组保持原选择；单分组时串口标签排在 Shell 之前。
-  - **未接入 renderer**：DOM 层依赖「一组一个 Terminal 容器」（= P2 剩余），而 `serialTerm` 在模块加载时即 `open(#serial-container)`，必须先解容器契约。
+  - **未接入 renderer**：DOM 层依赖「一组一个 Terminal 容器」（= P2 剩余），而 `serialTerm` 在模块加载时即 `open(#serial-container)`，全文 40 处引用，必须先解容器契约。
+
+- [x] **P3：分组增删改数据层**（可独立验证）
+  - 新增 `serial-groups-model.js`：`nextGroupId` / `addSerialGroup` / `removeSerialGroup` / `renameSerialGroup` / `findSerialGroup`。配套 `test/serial-groups-model.test.js` 17 项全通过。
+  - 新分组继承边界：**只继承 `serialOptions`**；`portPath` 必须清空（否则会去抢已占用的口）；`title` 给 `Serial N`；`filterTabs`/`chartTabs`/`workspaceLayout` 一律清空（属于具体端口的数据视图）。
+  - `nextGroupId` 取当前未被占用的最小 `g-<n>`：用「长度+1」会在删过中间分组后撞车（`[g-1,g-3]` → `g-3`）；不能用随机或时间戳（会破坏幂等与日志目录归属）。
+  - `removeSerialGroup` 对不存在的 id 不抛错（关闭按钮可能连点），并返回被删分组供断串口/销毁子标签。`renameSerialGroup` 空标题回落原标题，上限 60 字符。
 
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
   - [x] 第一步：新增 `serial-group-registry.js` 分组注册表，`accepts()` 作为「这条字节该不该进本分组终端」的唯一判定入口（带 `reason` 区分丢错与本该丢）；`renderer.js` 的 `serial-output-bytes` 归属性判定、`beginSession`/`invalidateSession` 已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
@@ -191,7 +197,7 @@ P2 剩余部分必须先解 P3 的动态 pane 创建（P5 的布局层前置已�
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **347/347 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项与 `test/serial-group-tabs.test.js` 17 项）。
+- [x] `npm test` 当前 **364/364 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项与 `test/serial-groups-model.test.js` 17 项）。
 - [x] 配置迁移磁盘验证：独立 `--user-data-dir` 连启两次，`config.json` 均为 v15 + 1 组，旧字段保留，`config.v14.backup.json` 保持 21667 字节的 v14 原件且第二次启动未覆盖。
 - [x] 实机启动：主窗口正常出现，`main.log` 与渲染进程 stderr 均无 JS 错误，electron 进程清理后 `remaining: 0`。
 - [ ] **多串口行为的人工 GUI 验证**：连接、收发、日志写入从未在真实窗口中手工跑过；现有结论均来自单测与源码断言。

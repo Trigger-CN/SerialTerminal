@@ -427,6 +427,27 @@ COM5 / COM7 的 data 回调同样在排队，三个端口的 UI 一起卡
 
 需确认的行为：分组处于 `connected` 状态时关闭需二次确认，避免误断正在通行的连接。
 
+### 6.4 分组增删改的数据层（已落地）
+
+实现在 [`serial-groups-model.js`](serial-groups-model.js)，同样是纯逻辑（不碰 fs / Electron / DOM），`test/serial-groups-model.test.js` 17 项覆盖。
+
+**新分组的继承边界（只继承串口参数，绝不继承数据）：**
+
+| 字段 | 新分组 | 理由 |
+| --- | --- | --- |
+| `serialOptions`（波特率/数据位/停止位/校验/收发编码/换行） | **继承**当前分组 | 再连一个同型号设备时不用重填 |
+| `portPath` | **清空** | 继承来的端口已被原分组占用，否则用户点连接会去抢一个正在用的口 |
+| `title` | 占位 `Serial N` | 继承来的标题会与新分组实际端口不符 |
+| `filterTabs` / `chartTabs` / `workspaceLayout` | **清空** | 这些属于具体端口的数据视图，搬给一个还没连接的端口只会误导 |
+| `status` / `sessionId` | `disconnected` / `null` | 新分组尚未连接 |
+
+**`nextGroupId` 的两个非显然约束：**
+
+1. 取**当前未被占用的最小 `g-<n>`**，不是「长度 + 1」。删掉中间分组后长度小于最大编号，用长度会直接撞车（实测 `[g-1, g-3]` 长度 2 → 若用长度+1 会得到 `g-3`）。
+2. **不能用时间戳或随机数**。这个 id 会写进配置文件并参与日志目录归属，带随机性的话同一份配置两次加载会得到不同 id，幂等性立刻失效——与迁移层固定 `'default'` 是同一个理由。
+
+**其它已固定的行为：** 删除不存在的 id 返回原列表而不抛错（标签栏关闭按钮可能被连点，抛错会变成未捕获异常）；删除会把被删分组对象一并返回，调用方需要用它去断串口、销毁子标签、关日志会话；重命名空标题回落到原标题（空标题标签是一块无法识别的空白）；标题上限 60 字符。
+
 ---
 
 ## 7. 设置侧栏跟随
@@ -795,6 +816,8 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 - [x] 标签归属判定抽成纯函数 —— `serial-group-tabs.js`，17 项单测覆盖两层构成、Shell 始终在分组层、切换分组只换下层、缺失 activeGroupId / activeTabId 的兜底、关闭分组选邻规则、空列表不崩
 - [x] 层数变化判定（1 ↔ 2+）—— `didLayerCountChange()`
+- [x] 分组增删改数据层 —— `serial-groups-model.js`（`nextGroupId` / `addSerialGroup` / `removeSerialGroup` / `renameSerialGroup` / `findSerialGroup`），17 项单测；新分组只继承串口参数，端口与数据视图均清空
+- [x] `nextGroupId` 取未被占用的最小 `g-<n>`，不用长度+1、不用随机或时间戳
 
 DOM 层：
 

@@ -1005,7 +1005,11 @@ npm run dist:linux
 - P3 标签归属纯逻辑层（`serial-group-tabs.js`，17 项单测）：
   - `buildTabBarModel()` 输出两层内容；三条硬规则：Shell 永不归属分组、group 数 ≥2 双层 / =1 塌回一层、切换分组只换下层集合。抽成纯函数的原因是归属判定错了在浏览器里只能靠肉眼发现。
   - 已固定的非显然行为：`activeGroupId` 不存在退回第一个分组（否则下层整层空掉且无法恢复）；`activeTabId` 失效退回该组第一个标签；重复分组 id 去重（两个相同标签都指向同一 id，点击像没反应）；空标题给 `Serial N`；关闭当前分组优先选**右邻**（总退回第一个会让焦点反复跳回最左）；关闭非当前分组保持当前选择；单分组时 `groupLayer` 只含 Shell且串口标签排在 Shell 之前。
-  - **未接入 renderer**：DOM 接线依赖「一组一个 Terminal 容器」，与 P2 剩余同属一件事，均卡在 `serialTerm` 模块加载即 `open(#serial-container)`。
+  - **未接入 renderer**：DOM 接线依赖「一组一个 Terminal 容器」，与 P2 剩余同属一件事，均卡在 `serialTerm` 模块加载即 `open(#serial-container)`（全文 40 处引用，直改风险过高）。
+- P3 分组增删改数据层（`serial-groups-model.js`，17 项单测）：
+  - `addSerialGroup` 的继承边界：**只继承 `serialOptions`**（同型号设备不用重填）；`portPath` 必须清空（继承来的端口已被原分组占用，否则用户点连接会去抢正在用的口）；`title` 给 `Serial N` 占位；`filterTabs` / `chartTabs` / `workspaceLayout` 一律清空（属于具体端口的数据视图）。
+  - `nextGroupId` 取**当前未被占用的最小 `g-<n>`**，不是「长度 + 1」：删掉中间分组后长度小于最大编号，用长度会撞车（`[g-1,g-3]` 长度 2 → 长度+1 得到已存在的 `g-3`）。也**不能用时间戳或随机数**：id 会写进配置并参与日志目录归属，随机化会让同一配置两次加载得到不同 id，幂等性失效（与迁移层固定 `'default'` 同一理由）。
+  - `removeSerialGroup` 对不存在的 id 返回原列表而不抛错（关闭按钮可能被连点，抛错会变成未捕获异常），并把被删分组对象一并返回供调用方断串口/销毁子标签/关日志会话。`renameSerialGroup` 空标题回落到原标题，上限 60 字符。
 - 配置迁移 v14 → v15（已实现，代码在 `serial-groups-config.js`，14 项单测）：
   - `CONFIG_VERSION` 不再硬编码，`main.js` 改为 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;`。
   - 默认分组 id **固定为 `'default'`**，不能随机：随机 id 会让每次 `normalizeConfig()` 产生新 id，幂等性直接失效，日志目录归属也会跟着漂移。
