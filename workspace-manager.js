@@ -45,12 +45,26 @@ function createWorkspaceManager(options = {}) {
         onLayoutApplied,
         onTabActivated,
         onTabMoved,
+        ensurePaneElement,
         fitWorkspace
     } = options;
 
     function getLayoutState() {
         return getLayout();
     }
+
+    // 布局可能包含 DOM 里还不存在的 pane（静态页只有两个，而布局层已支持 N 个）。
+    // 必须在任何 appendChild 之前把节点补齐，否则 appendChild(null) 会静默丢掉标签页。
+    function ensurePaneElements() {
+        if (typeof ensurePaneElement !== 'function') return [];
+        const created = [];
+        getLayoutState().panes.forEach(pane => {
+            if (getPaneDom(pane.id)) return;
+            if (ensurePaneElement(pane.id) !== false) created.push(pane.id);
+        });
+        return created;
+    }
+
 
     function getDefaultLayout() {
         return cloneLayout();
@@ -262,6 +276,8 @@ function createWorkspaceManager(options = {}) {
     }
 
     function applyLayoutToDom() {
+        // 先把布局里有、DOM 里没有的 pane 建出来，后续 appendChild 才不会拿到 null。
+        ensurePaneElements();
         const layout = getLayoutState();
         updatePaneVisibility();
         applyPaneSizes();
@@ -580,7 +596,8 @@ function createWorkspaceManager(options = {}) {
         collapseSplit,
         replaceLayout,
         restoreLayout,
-        setPaneSizes
+        setPaneSizes,
+        ensurePaneElements
     };
 }
 

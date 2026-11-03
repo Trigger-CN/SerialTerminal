@@ -164,3 +164,39 @@ test('dragging the splitter distributes the remainder across the extra panes', (
     assert.ok(Math.abs(sizes['pane-3'] - 0.25) < 1e-9);
     assert.ok(Math.abs(sizes['pane-1'] + sizes['pane-2'] + sizes['pane-3'] - 1) < 1e-9);
 });
+
+test('ensurePaneElements only asks for panes that have no DOM element yet', () => {
+    const { paneElements, manager } = createThreePaneFixture();
+    const requested = [];
+    const restore = installDocument(paneElements);
+    try {
+        const second = createWorkspaceManager({
+            getLayout: () => ({
+                splitEnabled: true,
+                activePaneId: 'pane-1',
+                paneSizes: { 'pane-1': 0.5, 'pane-2': 0.25, 'pane-3': 0.25 },
+                panes: [
+                    { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main'] },
+                    { id: 'pane-2', activeTabId: 'tab-a', tabIds: ['tab-a'] },
+                    { id: 'pane-3', activeTabId: 'tab-b', tabIds: ['tab-b'] }
+                ]
+            }),
+            setLayout() {},
+            cloneLayout: value => JSON.parse(JSON.stringify(value)),
+            persistLayout() {},
+            getPaneDom: paneId => (paneId === 'pane-3' ? null : paneElements[paneId]),
+            getPaneTabsList: () => ({ appendChild() {} }),
+            getPaneTabsContent: () => ({ appendChild() {} }),
+            ensurePaneElement: paneId => { requested.push(paneId); return {}; }
+        });
+        assert.deepEqual(second.ensurePaneElements(), ['pane-3']);
+    } finally {
+        restore();
+    }
+    assert.deepEqual(requested, ['pane-3']);
+});
+
+test('ensurePaneElements is a no-op when no creator is wired', () => {
+    const { manager } = createThreePaneFixture();
+    assert.deepEqual(manager.ensurePaneElements(), []);
+});

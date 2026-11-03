@@ -1445,6 +1445,70 @@ function getPaneTabsContent(paneId) {
     return document.getElementById(`${paneId}-tabs-content`);
 }
 
+// 按需创建第 3 个及以后的 pane 节点。
+//
+// index.html 里 pane-1 / pane-2 是静态写死的，行为与改造前完全一致；
+// 但布局层已经支持 N 个 pane（P5），多出来的 pane 必须能现建。
+// 不建的话，appendChild(null) 会静默把标签页丢掉——这是最难查的一类空面板缺陷。
+function createPaneElement(paneId) {
+    if (!paneId || getPaneDom(paneId)) return null;
+    const root = document.getElementById('workspace-root');
+    if (!root) return null;
+
+    const paneEl = document.createElement('div');
+    paneEl.className = 'workspace-pane';
+    paneEl.id = paneId;
+    paneEl.dataset.paneId = paneId;
+    paneEl.hidden = true;
+
+    const header = document.createElement('div');
+    header.className = 'main-tabs-header pane-tabs-header';
+    const tabsList = document.createElement('div');
+    tabsList.className = 'main-tabs-list pane-tabs-list';
+    tabsList.id = `${paneId}-tabs-list`;
+    tabsList.setAttribute('role', 'tablist');
+    const actions = document.createElement('div');
+    actions.className = 'pane-tab-actions';
+
+    const buttonSpecs = [
+        { kind: 'shell', icon: 'terminal', title: tr('main.newShellTab'), create: () => createShellTab({ profileId: getDefaultShellProfileId() }, paneId) },
+        { kind: 'filter', icon: 'filter_alt', title: tr('main.newFilterTab'), create: () => createFilterTab({}, paneId) },
+        { kind: 'chart', icon: 'show_chart', title: tr('main.newChartTab'), create: () => createChartTab({}, paneId) }
+    ];
+    buttonSpecs.forEach(spec => {
+        const button = document.createElement('button');
+        button.id = `${paneId}-new-${spec.kind}-tab-btn`;
+        button.className = 'secondary pane-new-tab-btn';
+        button.type = 'button';
+        button.title = spec.title;
+        button.appendChild(createMaterialIcon(spec.icon, 'material-icon'));
+        button.addEventListener('click', spec.create);
+        actions.appendChild(button);
+    });
+
+    header.appendChild(tabsList);
+    header.appendChild(actions);
+
+    const content = document.createElement('div');
+    content.className = 'main-tabs-content pane-tabs-content';
+    content.id = `${paneId}-tabs-content`;
+
+    paneEl.appendChild(header);
+    paneEl.appendChild(content);
+    paneEl.addEventListener('mousedown', () => setActivePane(paneId));
+
+    // 追加到最后一个已有 pane 之后，保证 splitter 仍然落在中间。
+    // 若直接 appendChild 到 root，新 pane 会跑到 splitter 后面。
+    const existingPanes = root.querySelectorAll('.workspace-pane');
+    const lastPane = existingPanes[existingPanes.length - 1];
+    if (lastPane && lastPane.parentNode === root) {
+        root.insertBefore(paneEl, lastPane.nextSibling);
+    } else {
+        root.appendChild(paneEl);
+    }
+    return paneEl;
+}
+
 function getShellTabState(tabId) {
     return shellTabs.find(tab => tab.id === tabId) || null;
 }
@@ -1492,6 +1556,7 @@ workspaceManager = createWorkspaceManager({
             persistChartTabs();
         }
     },
+    ensurePaneElement: createPaneElement,
     fitWorkspace: fitWorkspaceTerminals
 });
 

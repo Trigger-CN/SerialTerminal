@@ -642,9 +642,21 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 配套改动：`style.css` 删掉 `#pane-1` / `#pane-2` 的 `flex-basis` 规则（改用 `.workspace-pane` 统一过渡，`.workspace-root.resizing .workspace-pane` 统一禁用过渡）；`renderer.js` 的 `transitionend` 过滤由列举两个 id 改为 `classList.contains('workspace-pane')`。
 
-**仍保留为静态**：`index.html` 的 `pane-1` / `pane-2` 两个 pane 节点。布局层已经可以承载任意 pane id（`getPaneDom` / `getPaneTabsList` / `getPaneTabsContent` 都是按 `${paneId}` 拼 ID 查 document），但“根据布局动态创建 pane 节点”属于 P3 的双层标签栏工作，不在这里提前做。
+**pane 节点：前两个仍为静态，第 3 个起按需创建。**
 
-验证：`test/workspace-pane-n.test.js` 6 项（三 pane 的内联尺寸、可见性、任意 pane id、循环取下一个、三 pane 收敛、拖拽分尺寸）；`npm test` **305/305 通过、0 失败**。
+`index.html` 的 `pane-1` / `pane-2` 保留为静态标签，原因不是懒，而是 `serialTerm` 在模块加载时就 `serialTerm.open(document.getElementById('serial-container'))`——把这两个节点也改成动态创建，就必须同时改造 `serialTerm` 的挂载时机，而那属于 P2 剩余部分。这一轮只补上「多出来的 pane 能现建」的能力，单串口与现有两 pane 分屏的行为因此完全不变。
+
+两个新模块/函数：
+
+| 位置 | 职责 |
+| --- | --- |
+| [`pane-layout-dom.js`](pane-layout-dom.js) | 纯数据描述：`describePane` / `describeWorkspace` / `findMissingPaneIds`。不碰 DOM，因此可直接在 Node 里断言 pane 的 id 命名、三个按钮的顺序与主终端容器归属 |
+| `workspace-manager.js` 的 `ensurePaneElements()` | 在 `applyLayoutToDom()` 开头调用，先把布局里有、DOM 里没有的 pane 建出来，再 `appendChild` |
+| `renderer.js` 的 `createPaneElement(paneId)` | 按描述建节点（`pane-N-tabs-list` / `pane-N-tabs-content` / 三个新建按钮），插入到最后一个已有 pane 之后以保证 splitter 仍在中间 |
+
+**为什么必须先补节点再布局**：`appendChild(null)` 不报错也不警告，标签页会静默消失，得到一块空面板。这是最难查的一类缺陷，因此 `ensurePaneElements()` 被放在 `applyLayoutToDom()` 的第一行，而不是等出错再补救。
+
+验证：`test/workspace-pane-n.test.js` 8 项（三 pane 的内联尺寸、可见性、任意 pane id、循环取下一个、三 pane 收敛、拖拽分尺寸、`ensurePaneElements` 只请求缺失的 pane、无创建器时为空操作）；`test/pane-layout-dom.test.js` 9 项；`npm test` **316/316 通过、0 失败**。
 
 ---
 
@@ -736,7 +748,8 @@ DOM 层：
 - [x] `workspace-manager.js` 去掉全部两 pane 硬编码（12 处）—— 由 6 项 `test/workspace-pane-n.test.js` 覆盖
 - [x] `style.css` 不再用 `#pane-1` / `#pane-2` 选择器设 `flex-basis`，改用 `.workspace-pane` 统一过渡
 - [x] `renderer.js` 的 `transitionend` 过滤按 `.workspace-pane` 类名判断
-- [ ] `index.html` 静态 `pane-1` / `pane-2` 改为可动态创建（归 P3，与双层标签栏一并做）
+- [x] 第 3 个及以后的 pane 可按需创建 —— `pane-layout-dom.js` + `ensurePaneElements()` + `createPaneElement()`，由 9 项 + 2 项单测覆盖
+- [ ] `index.html` 的静态 `pane-1` / `pane-2` 也改为动态创建 —— **阻塞于** `serialTerm` 在模块加载时就 `open(#serial-container)`，需与 P2 剩余部分一并做
 - [ ] 分组级左右/上下分屏（需先有分组概念，归 P3 之后）
 - [ ] 组内级左右/上下分屏
 - [ ] 两级共存时 fit 正确
