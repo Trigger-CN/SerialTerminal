@@ -1236,9 +1236,12 @@ test('log hot path reuses buffers, batch timestamps, and compiled regexes', () =
   assert.doesNotMatch(renderer, /new RegExp\(filterRegex\.source, flags\)/);
 
   // D：解析器不再每个 flush 重新 split 整个缓冲
-  assert.doesNotMatch(renderer, /incomingBuffer\.split\(/);
-  assert.match(renderer, /const LINE_DELIMITER_RE = \//);
-  assert.match(renderer, /LINE_DELIMITER_RE\.lastIndex = scanFrom;/);
+  // 解析器已抽到 serial-data-parser.js（无 DOM 依赖，可单测），因此改查该文件。
+  const parserSource = fs.readFileSync(path.join(root, 'serial-data-parser.js'), 'utf8');
+  assert.doesNotMatch(parserSource, /incomingBuffer\.split\(/);
+  assert.match(parserSource, /const LINE_DELIMITER_RE = \//);
+  assert.match(parserSource, /LINE_DELIMITER_RE\.lastIndex = scanFrom;/);
+  assert.doesNotMatch(renderer, /class SerialDataParser/);
 
   // E：stripAnsi 对无 ESC 的输出直接短路
   assert.match(main, /if \(!str\.includes\('\\x1b'\)\) return str;/);

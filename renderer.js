@@ -39,6 +39,7 @@ const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./chart-p
 const { ChartDataModel } = require('./chart-data-model');
 const { SerialGroupRegistry, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
 const { SerialGroupContextStore } = require('./serial-group-context');
+const { SerialDataParser } = require('./serial-data-parser');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -508,68 +509,9 @@ function applyHighlighting(text, filterRegex = null, globalMatches = null) {
     return result;
 }
 
-// 行分隔符正则复用同一实例；parse 会按上次扫描位置设置 lastIndex。
-const LINE_DELIMITER_RE = /(\r\n|\r|\n)/g;
-
-class SerialDataParser {
-    constructor() {
-        this.incomingBuffer = '';
-        this.isNewLine = true;
-    }
-
-    parse(data) {
-        if (!data) return [];
-
-        // incomingBuffer 中已保留的尾部不含任何分隔符，因此只需从新增数据的起点继续扫描，
-        // 避免每次 flush 都重新 split 整个增长中的缓冲。
-        const scanFrom = this.incomingBuffer.length;
-        this.incomingBuffer += data;
-        const buffer = this.incomingBuffer;
-
-        const lines = [];
-        let cursor = 0;
-        LINE_DELIMITER_RE.lastIndex = scanFrom;
-        let match;
-        while ((match = LINE_DELIMITER_RE.exec(buffer)) !== null) {
-            lines.push({
-                text: buffer.slice(cursor, match.index),
-                delimiter: match[0],
-                prefix: this.isNewLine ? getPrefix() : ''
-            });
-            this.isNewLine = true; // After delimiter, next line is new
-            cursor = match.index + match[0].length;
-        }
-
-        if (!lines.length) {
-            if (buffer.length > 10000) {
-                const lineContent = buffer;
-                this.incomingBuffer = '';
-
-                const prefix = this.isNewLine ? getPrefix() : '';
-                this.isNewLine = false; // Next chunk is continuation
-                return [{ text: lineContent, delimiter: '', prefix }];
-            }
-            return [];
-        }
-
-        this.incomingBuffer = buffer.slice(cursor);
-        return lines;
-    }
-
-    flush() {
-        if (!this.incomingBuffer) return [];
-        const line = {
-            text: this.incomingBuffer,
-            delimiter: '',
-            prefix: this.isNewLine ? getPrefix() : ''
-        };
-        this.incomingBuffer = '';
-        this.isNewLine = false;
-        return [line];
-    }
-}
-
-const dataParser = new SerialDataParser();
+// 行解析器已抽到 serial-data-parser.js（无 DOM 依赖，可单测）。
+// 这里注入绑定到默认分组的 prefixProvider，行号仍记在分组上下文里。
+const dataParser = new SerialDataParser({ prefixProvider: () => getPrefix(REGISTRY_DEFAULT_GROUP_ID) });
 let serialOutputQueue = [];
 let serialOutputQueuedBytes = 0;
 let serialOutputFlushScheduled = false;

@@ -158,12 +158,13 @@
 
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
   - [x] 第二步：新增 `serial-group-context.js` 分组上下文（`SerialGroupContextStore`），接管 `serialLineCounter`/`logLineCounter`/`serialNewLine` 与收发显示参数；`getPrefix()`、`getLogPrefix()`、`clearTerminalByTabId`、连接成功重置均改走它。配套 `test/serial-group-context.test.js` 8 项全通过。
-  - [ ] 待继续：把 `serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 逐个下沉到分组上下文（这些对象绑定 DOM，需先抽象实例工厂）。
+  - [x] 第三步：抽处 `serial-data-parser.js`，并修复其内部直接调全局 `getPrefix()` 导致多实例行号串用的缺陷（改为注入 `prefixProvider`）。配套 `test/serial-data-parser.test.js` 10 项全通过；`test/markup.test.js` 的相应断言改指向新文件。
+  - [ ] **阻塞项**：`serialTerm`/`filterTabs`/`chartTabs`/`workspaceLayout` 每个分组一份无法单独完成——`#serial-container` 是全页唯一串口终端容器，必须先有「一组一个容器」的 DOM 契约（与 P5 合并）。
 - [ ] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时塌回一层）
 - [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）
-- [ ] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）
+- [ ] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）；**也是 P2 剩余部分的前置条件**
 
-P2–P5 逐个开工，不得并行。
+P2 剩余部分必须先解 P5 的动态容器，否则做出来是伪多实例。其它阶段逐个开工，不得并行。
 
 ## 验证基线
 

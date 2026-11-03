@@ -1003,8 +1003,10 @@ npm run dist:linux
 - **P2 进度（已完成前两步：分组注册表 + 分组上下文接管纯状态）**：
   - 第一步 `serial-group-registry.js`：**不依赖 DOM、可直接单测**的纯逻辑模块，持有 groupId → `{ sessionId, connected, portPath }` 与 `sessionToGroup` 映射。`accepts()` 是「这条字节该不该进本分组终端」的唯一判定入口，返回的 `reason`（`ok` / `unknown-group` / `session-other-group` / `stale-session`）能让丢包问题可定位。`renderer.js` 已接入：`serial-output-bytes` 走 `accepts()`、`connectSerialFromUi` 用 `beginSession()`、`disconnectSerial` 与 `serial-disconnected` 用 `invalidateSession()`。
   - 第二步 `serial-group-context.js`：`SerialGroupContextStore` 接管与 DOM 无关的可变状态——`serialLineCounter` / `logLineCounter` / `serialNewLine` 与收发显示参数（`receiveDisplayMode` / `receiveEncoding` / `sendEncoding` / `newlineMode`）。`getPrefix()` 与 `getLogPrefix()` 已改为从 `groupState(groupId)` 取行号；`clearTerminalByTabId` 与连接成功处改调 `resetLineCounters()`。**屏幕行号与日志行号必须是两个独立计数器**，`nextLineNumbers()` 允许只推进其中一个，这是改造前就有的语义，不得合并。
+  - 第三步 `serial-data-parser.js`：把行切分逻辑从 `renderer.js` 抽出，含跨 chunk 拼接与超长行（`MAX_UNTERMINATED_LINE`）保护。**这是一处真实缺陷修复**：原 `SerialDataParser` 在 `parse()` / `flush()` 内部直接调用全局 `getPrefix()`，一旦有多个分组各自的 parser 实例，所有实例会把行号记到同一个分组上，表现为两个端口行号互相跳号。现改为构造时注入 `prefixProvider`，每个实例绑定自己的分组。
   - **关键设计约束**：注册表状态必须与裸的 `serialSessionId` **同步**更新，否则注册表会认为旧会话仍有效而把正常数据全丢掉。以后新增任何递增/重置 `serialSessionId` 的地方，必须同时调用 `beginSession()` 或 `invalidateSession()`。
-  - **待继续**：`serialTerm` / `dataParser` / `hexFormatter` / `textDecoder` / `filterTabs` / `chartTabs` / `workspaceLayout` 仍是全局单例。这些对象在构造时就绑定 DOM 容器与回调，直接下沉会让上下文模块失去可测试性，因此按两步走：先把纯状态抽完（已完成），再让持 DOM 的对象按同一个 groupId 申请实例。
+  - **硬阻塞（必须知道，否则会白做）**：`serialTerm` 在模块加载时就 `new Terminal(...)` 并 `.open(document.getElementById('serial-container'))`，而 `index.html` 里 `#serial-container` 是全页**唯一**的串口终端容器。所以 `serialTerm` / `filterTabs` / `chartTabs` / `workspaceLayout` 的「每分组一份」无法单独完成——必须先有「一组一个 Terminal 容器」的 DOM 契约。没有这一步就下沉，只会得到只能挂一个 Terminal 的上下文对象，即**伪多实例**。
+  - **后续次序**：先把 `workspace-manager.js` 扩展为可动态创建 pane 与容器（P5），再让 `serialTerm` 等对象按 `groupId` 实例化并挂到各自容器上。在这之前继续改写渲染层只会产出无法验证的代码。
 
 ---
 
