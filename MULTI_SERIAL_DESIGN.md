@@ -4,7 +4,7 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）；配置 v14 → v15 迁移已完成并实测；P3 的标签归属纯逻辑层已完成；P5 纯数据层与 DOM 层已完成；P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成三步（分组注册表、分组上下文、行解析器）并已具备分组终端运行时注册表；配置 v14 → v15 迁移已完成并实测；P3 的标签归属与分组增删改纯逻辑层已完成；P5 纯数据层与 DOM 层已完成；P2 的渲染层接线、P3 的 DOM 层、P4 与 P5 的分组级/组内级分屏尚未开始。**
 > 当前主进程已按 `groupId` 完全隔离，但 UI 仍为单串口形态（`renderer.js` 固定使用 `DEFAULT_SERIAL_GROUP_ID`）。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -646,7 +646,7 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 验收：分组切换不串流、不串行号；两组同时刷数据互不影响。
 
-**进度：已完成三步（分组注册表、分组上下文、行解析器）；持有 DOM 的对象尚未下沉，且受阻于单容器契约。**
+**进度：已完成三步（分组注册表、分组上下文、行解析器），并已具备分组终端运行时注册表；持有 DOM 的对象尚未下沉，且受阻于单容器契约。**
 
 已落地：
 
@@ -664,6 +664,30 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 否则得到的只是一个只能挂一个 Terminal 的上下文对象，属于**伪多实例**：看起来分组隔离了，实际第二个分组无处可显示。
 
 因此 P2 的剩余部分必须与 P5 合并推进。**P5 的 DOM 层已完成**（`workspace-manager` 已能驱动任意 pane 数），但「一个分组一个 Terminal 容器」还需要 `index.html` 的动态 pane 创建，而 pane 数量由分组数量驱动，因此归 P3。在这之前下沉 `serialTerm` 只会产出无法验证的代码。
+
+### P2 新增：分组终端运行时注册表（已落地）
+
+实现在 [`serial-group-runtime.js`](serial-group-runtime.js)，`test/serial-group-runtime.test.js` 19 项覆盖。它管理的是「实例的生命周期」，而不是构造细节：
+
+```text
+SerialTerminalRuntimeRegistry
+  constructor({ defaultGroupId, createRuntime })   // 不建任何实例
+  has(groupId) / get(groupId)                       // 只读，不隐式创建
+  attach(groupId, runtime)                         // 登记已存在的实例
+  getOrCreate(groupId)                             // 惰性构造，失败不留半成品
+  release(groupId) / releaseAllExceptDefault()     // 释放前先 dispose
+  assertDefaultAttached()                          // 启动自检
+```
+
+三条硬约束（改前必读）：
+
+1. **必须惰性创建**。xterm 的 `open()` 需要真实 DOM 节点，分组标签还没渲染出来就构造会直接失败。所以构造函数里不允许预先创建任何实例。
+2. **默认分组不可释放**。它是应用启动就存在的分组，释放后没有任何路径能恢复，用户会看到一个空白终端区。
+3. **释放必须先调 `dispose()`**。只从 Map 删掉引用而不断开，xterm 持有的 canvas/textarea 与滚动缓冲会一直挂在 DOM 上；切换几十次分组后内存与事件监听都会累积，而这种泄漏在任务管理器里看不出来，只表现为「用久了越来越卡」。
+
+`attach()` 为什么必需：改造初期，默认分组的终端在 `renderer.js` 模块加载时就已经建好并 `open` 过了。此时再让注册表去构造一个，会得到**两个绑在同一容器的 xterm 实例**——互相抢输入、画面互相覆盖，比不接入更糟。所以必须先能把已有实例挂进去。`attach` 对已登记的分组返回 `false` 而不覆盖：静默替换会让先前持有旧引用的调用方继续操作一个已被遗弃的实例，这种错误极难发现。
+
+其它已固定的行为：`get()` 不隐式创建（调用方在渲染前取终端拿到 `null` 即可立即报错，比悄悄建一个未 `open` 的终端好定位）；`createRuntime` 返回非法值时不缓存半成品；`dispose` 抛错时仍从 Map 移除（留着只会让后续每次访问都拿到损坏对象），错误走 `console.error` 不外抛，避免中断调用方的关闭分组流程。
 
 ### P3 — 双层标签栏与添加串口按钮
 
@@ -808,6 +832,8 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 - [x] `sessionId → groupId` 分流正确 —— `serial-group-registry.js` 已实现并由 10 项单测覆盖
 - [~] 行号、过滤器、图表数据各自独立 —— **行号已独立**（`serial-group-context.js` + `serial-data-parser.js`，共 18 项单测）；过滤器与图表数据仍是全局单例，且受阻于单容器的 DOM 契约
 - [ ] 快捷指令自动发送只向触发来源组发送
+- [x] 分组终端生命周期管理 —— `serial-group-runtime.js`（惰性创建、已有实例可 attach、默认分组不可释放、释放前 dispose），19 项单测
+- [ ] `serialTerm` 改为按 groupId 从运行时注册表取用 —— 需先完成 P3 的动态容器
 - [ ] **阻塞项**：`#serial-container` 是全局唯一串口终端容器，需先支持每分组独立容器。P5 的布局层已不再假设两个 pane，但 `index.html` 的动态 pane 创建归 P3（pane 数量由分组数驱动）
 
 ### P3
