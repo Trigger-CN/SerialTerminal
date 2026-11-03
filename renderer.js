@@ -44,7 +44,7 @@ const { mainTabId, mainTabButtonId, serialContainerId } = require('./serial-grou
 const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { SerialOutputBuckets } = require('./serial-output-buckets');
 const { addSerialGroup, removeSerialGroup } = require('./serial-groups-model');
-const { describeGroupTabBar, describeGroupTab } = require('./serial-group-tab-bar');
+const { describeGroupTabBar } = require('./serial-group-tab-bar');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -2271,8 +2271,9 @@ function renderSerialGroupTabBar() {
     barEl.hidden = model.hidden;
     listEl.replaceChildren();
 
-    model.tabs.forEach(spec => {
-        const tab = describeGroupTab(spec, { isDefault: spec.groupId === REGISTRY_DEFAULT_GROUP_ID });
+    // model.tabs 的每一项已经是 describeGroupTab() 的完整结果，绝不能再喂回它：
+    // describeGroupTab 用 source.id 取 groupId，而这里只有 groupId，会全部回落 'default'。
+    model.tabs.forEach(tab => {
         const button = document.createElement('button');
         button.className = tab.className;
         button.type = 'button';
