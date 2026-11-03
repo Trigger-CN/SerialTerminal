@@ -2257,7 +2257,9 @@ ipcMain.handle('save-config-request', (event, config) => {
 });
 
 ipcMain.on('write-tab-log', (event, payload = {}) => {
-  writeTabLog(payload.tabId, payload.title, payload.data);
+  // groupId 决定日志落到哪个端口目录。渲染层必须逐条带上它，否则多分组下
+  // 所有主终端日志都会挤进默认分组的目录。
+  writeTabLog(payload.tabId, payload.title, payload.data, payload.groupId);
 });
 
 ipcMain.on('flush-tab-logs', () => {

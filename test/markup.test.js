@@ -261,12 +261,14 @@ test('sent records render as a single highlighted line and never touch the RX pa
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
 
   // 整行背景：写前缀色 → 内容 → SGR 复位 → 整行换行。
-  assert.match(renderer, /function renderSentRecord\(record\) \{[\s\S]*?hexToAnsiBackground\(echoSentDataHighlightColor\)/);
-  assert.match(renderer, /writeTerminalOutput\(serialTerm, `\$\{bg\}\$\{body\}\\x1b\[0m\\r\\n`\)/);
-  assert.match(renderer, /writeMainTabLog\(`\$\{body\}\\r\\n`\)/);
+  // 回显必须写进“该条发送所属分组”的终端与日志：改造后函数多了一个 groupId 参数，
+  // 终端从运行时注册表取，日志调用必须把同一个 groupId 传下去。
+  assert.match(renderer, /function renderSentRecord\(record, groupId = REGISTRY_DEFAULT_GROUP_ID\) \{[\s\S]*?hexToAnsiBackground\(echoSentDataHighlightColor\)/);
+  assert.match(renderer, /const runtime = serialRuntimes\.get\(id\);[\s\S]*?writeTerminalOutput\(runtime\.term, `\$\{bg\}\$\{body\}\\x1b\[0m\\r\\n`\)/);
+  assert.match(renderer, /writeMainTabLog\(`\$\{body\}\\r\\n`, id\)/);
 
   // 回显不得进入接收解析器，也不得占用接收行号计数器；只检查函数体自身，避免跨函数误判。
-  const sentBody = renderer.match(/function renderSentRecord\(record\) \{[\s\S]*?\n\}/)[0];
+  const sentBody = renderer.match(/function renderSentRecord\(record, groupId = REGISTRY_DEFAULT_GROUP_ID\) \{[\s\S]*?\n\}/)[0];
   assert.doesNotMatch(sentBody, /dataParser\.parse/);
   assert.doesNotMatch(sentBody, /serialLineCounter/);
   assert.doesNotMatch(sentBody, /processQuickSendAutoTriggers/);
@@ -337,18 +339,26 @@ test('sending text can auto-scroll the main terminal to the bottom', () => {
 test('serial output is batched per animation frame before terminal rendering', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-  assert.match(renderer, /function queueSerialOutput\(bytes\)/);
+  // 队列改为按 groupId 分桶后，函数签名多了一个带默认值的 groupId。
+  // 默认值必须保留：单分组行为要与改造前逐字节一致。
+  assert.match(renderer, /function queueSerialOutput\(bytes, groupId = REGISTRY_DEFAULT_GROUP_ID\)/);
   assert.match(renderer, /const SERIAL_OUTPUT_MAX_FPS = 30/);
   assert.match(renderer, /SERIAL_OUTPUT_FRAME_MS - \(performance\.now\(\) - lastSerialOutputFlushAt\)/);
   assert.match(renderer, /setTimeout\(\(\) => \{[\s\S]*requestAnimationFrame\(flushSerialOutputQueue\)/);
-  assert.match(renderer, /const bytes = Buffer\.concat\(queued\)/);
-  assert.match(renderer, /const buffer = Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)[\s\S]*queueSerialOutput\(buffer\)/);
+  // 分桶层自己负责每桶的 Buffer.concat；这里断言渲染层消费的是 drain() 的批次，
+  // 且**不再**把整个队列一次 concat —— 那样就把两个分组的字节拼成一批了。
+  assert.match(renderer, /for \(const batch of serialOutputBuckets\.drain\(\)\) \{\s*dispatchSerialBatch\(batch\.groupId, batch\.buffer\);/);
+  assert.doesNotMatch(renderer, /const bytes = Buffer\.concat\(queued\)/);
+  assert.match(renderer, /const buffer = Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)[\s\S]*?queueSerialOutput\(buffer, groupId\)/);
   assert.match(main, /function queueSerialOutput\(session, data, sessionId\)/);
   assert.match(main, /setImmediate\(flushSerialOutputQueue\)/);
   assert.match(main, /Buffer\.concat\(entries\.map\(entry => entry\.data\), byteCount\)/);
   assert.match(main, /queueSerialOutput\(session, data, connectionSessionId\)/);
   assert.match(renderer, /function flushPendingSerialOutput\(\)/);
   assert.match(renderer, /flushPendingSerialOutput\(\);\s*if \(normalized !== receiveDisplayMode\)/);
+  // 日志写入必须把 groupId 透传给主进程：否则所有分组的主终端日志都会落进默认端口目录。
+  assert.match(renderer, /ipcRenderer\.send\('write-tab-log', \{ tabId, title, data, groupId: resolveSerialGroupId\(groupId\) \}\)/);
+  assert.match(main, /writeTabLog\(payload\.tabId, payload\.title, payload\.data, payload\.groupId\)/);
   assert.match(renderer, /const highlighted = applyHighlighting\(text, tab\.filterRegex, globalMatches\);[\s\S]*terminal:[\s\S]*log:/);
   assert.match(renderer, /function collectGlobalHighlightMatches\(text\)/);
   assert.match(renderer, /applyHighlighting\(text, tab\.filterRegex, globalMatches\)/);
@@ -370,10 +380,13 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   // 若只看某次 new，后续分组用的模板未被约束时就会漏掉。
   assert.match(renderer, /function buildSerialTerminalOptions\(\) \{[\s\S]*?scrollback:\s*20000/);
   assert.match(renderer, /function createSerialRuntime\(groupId\)[\s\S]*?new Terminal\(buildSerialTerminalOptions\(\)\)/);
-  assert.match(renderer, /function clearTerminalByTabId[\s\S]*clearTerminalOutput\(serialTerm\)/);
+  // 清空必须清到“该 tabId 对应分组”的终端上：改造后终端不再是一个模块级常量，
+  // 而是按 groupId 从运行时注册表取。
+  assert.match(renderer, /function clearTerminalByTabId[\s\S]*?clearTerminalOutput\(getSerialTerm\(groupId\)\)/);
   assert.match(renderer, /clearTerminalOutput\(filterTab\.term\)/);
   assert.match(renderer, /const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 \* 1024/);
-  assert.match(renderer, /serialOutputQueuedBytes >= SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES[\s\S]*flushPendingSerialOutput\(\)/);
+  // 水位判断下沉到分桶层，按分组各自评估；渲染层只负责响应 shouldFlush。
+  assert.match(renderer, /if \(result\.shouldFlush\) \{\s*flushPendingSerialOutput\(\);\s*return;\s*\}/);
   assert.match(preferencesHtml, /id="scrollbackLimit" min="1000" max="100000"/);
   // 终端待写入缓冲以回滚行数为主上限，字节硬上限仅作为内存兑底。
   assert.match(renderer, /const TERMINAL_PENDING_OUTPUT_HARD_LIMIT = 32 \* 1024 \* 1024/);
@@ -390,7 +403,8 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   assert.match(renderer, /Display output skipped to limit memory usage/);
   assert.match(renderer, /state\.resetAfterWrite = state\.writing/);
   assert.match(renderer, /if \(state\.resetAfterWrite\) \{[\s\S]*term\.reset\(\)/);
-  assert.match(renderer, /writeTerminalOutput\(serialTerm, mainOutput\)/);
+  // 主终端写入必须走“该分组的运行时”，不能再写死模块级的 serialTerm。
+  assert.match(renderer, /writeTerminalOutput\(runtime\.term, mainOutput\)/);
   assert.match(renderer, /writeTerminalOutput\(tab\.term, output\)/);
 });
 
@@ -1228,8 +1242,8 @@ test('log hot path reuses buffers, batch timestamps, and compiled regexes', () =
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 
-  // A：同一段字节只包装一次 Buffer 并复用给终端队列
-  assert.match(renderer, /const buffer = Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)[\s\S]*?queueSerialOutput\(buffer\)/);
+  // A：同一段字节只包装一次 Buffer 并复用给终端队列；入队时必须带上它所属的分组。
+  assert.match(renderer, /const buffer = Buffer\.from\(bytes\.buffer, bytes\.byteOffset, bytes\.byteLength\)[\s\S]*?queueSerialOutput\(buffer, groupId\)/);
 
   // B：每个刷新批次只计算一次时间戳，逐行复用
   assert.match(renderer, /function formatTimestamp\(now = new Date\(\)\)/);

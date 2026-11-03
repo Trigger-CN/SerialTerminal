@@ -37,11 +37,12 @@ const uPlot = require('uplot');
 const { SerialTextStream } = require('./serial-text-stream');
 const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./chart-parser-ipc-client');
 const { ChartDataModel } = require('./chart-data-model');
-const { SerialGroupRegistry, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
+const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
 const { SerialGroupContextStore } = require('./serial-group-context');
 const { SerialDataParser } = require('./serial-data-parser');
-const { serialContainerId } = require('./serial-group-dom');
+const { mainTabId, serialContainerId } = require('./serial-group-dom');
 const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
+const { SerialOutputBuckets } = require('./serial-output-buckets');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -519,14 +520,102 @@ function applyHighlighting(text, filterRegex = null, globalMatches = null) {
 //
 // 声明成 `let` 是因为模块顶部先执行到这里、终端运行时要到下方才构造。赋值后不再变化。
 let dataParser = null;
-let serialOutputQueue = [];
-let serialOutputQueuedBytes = 0;
+// 输出队列按 groupId 分桶。改造前只有一个数组，任意两个分组的字节会在
+// Buffer.concat 时被拼成同一批，然后写进同一个终端与同一个日志文件。
+const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 * 1024;
+const serialOutputBuckets = new SerialOutputBuckets({
+    highWaterBytes: SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES,
+    defaultGroupId: REGISTRY_DEFAULT_GROUP_ID
+});
 let serialOutputFlushScheduled = false;
 let serialOutputFlushTimer = null;
 let lastSerialOutputFlushAt = 0;
 const SERIAL_OUTPUT_MAX_FPS = 30;
 const SERIAL_OUTPUT_FRAME_MS = 1000 / SERIAL_OUTPUT_MAX_FPS;
-const SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES = 1024 * 1024;
+
+// ---- 分组数据面 ----------------------------------------------------------
+//
+// 终端与行解析器由 serialRuntimes 持有；解码器与 HEX 格式化器体积小、状态也必须
+// 按分组隔离（各自的半个多字节字符、各自的 HEX 偏移），所以在这里单独维护一份，
+// 键同样是 groupId。
+//
+// 为什么未登记的 groupId 一律回落默认分组：注册表里没有的分组既没有终端也没有配置，
+// 若在这里为它新建一套对象，等于在注册表之外悄悄长出第二个终端——数据会进去，
+// 但界面上永远看不到，而且不会报错。回落至少让数据可见。
+
+// 主标签页 id 反查分组：clearTerminal 这类按 tabId 工作的路径需要它。
+function resolveGroupIdForMainTab(tabId) {
+    const target = typeof tabId === 'string' ? tabId : '';
+    for (const id of serialGroupRegistry.listGroupIds()) {
+        if (mainTabId(id) === target) return id;
+    }
+    return REGISTRY_DEFAULT_GROUP_ID;
+}
+
+function resolveSerialGroupId(groupId) {
+    const id = normalizeGroupId(groupId);
+    return serialGroupRegistry.getGroup(id) ? id : REGISTRY_DEFAULT_GROUP_ID;
+}
+
+function isActiveSerialGroup(groupId) {
+    return resolveSerialGroupId(groupId) === serialGroupRegistry.activeGroupId;
+}
+
+// 该分组当前的会话号。注册表是真相源：它按分组各自递增，互不影响。
+function getGroupSessionId(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const group = serialGroupRegistry.getGroup(resolveSerialGroupId(groupId));
+    return group ? group.sessionId : 0;
+}
+
+const serialGroupIo = new Map();
+
+// 每个分组一份解码器与 HEX 格式化器。格式化器的回调必须带上自己的 groupId，
+// 否则它的输出会被写进默认分组的终端。
+function getSerialGroupIo(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    let io = serialGroupIo.get(id);
+    if (!io) {
+        io = {
+            textDecoder: null,
+            hexFormatter: new HexStreamFormatter({}, lines => writeHexLines(id, lines))
+        };
+        serialGroupIo.set(id, io);
+    }
+    return io;
+}
+
+function getTextDecoder(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    return getSerialGroupIo(groupId).textDecoder;
+}
+
+function setTextDecoder(groupId, decoder) {
+    getSerialGroupIo(groupId).textDecoder = decoder;
+}
+
+function getHexFormatter(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    return getSerialGroupIo(groupId).hexFormatter;
+}
+
+// HEX 显示设置是全应用一份，但每个分组的格式化器都要拿到它，否则切到另一个分组
+// 时字节数/大小写/偏移显示会退回默认值。
+function configureAllHexFormatters(settings) {
+    const ids = new Set([...serialGroupRegistry.listGroupIds(), REGISTRY_DEFAULT_GROUP_ID]);
+    ids.forEach(id => getHexFormatter(id).configure(settings));
+}
+
+function flushAllHexFormatters() {
+    const ids = new Set([...serialGroupRegistry.listGroupIds(), REGISTRY_DEFAULT_GROUP_ID]);
+    ids.forEach(id => getHexFormatter(id).flush());
+}
+
+// 终端运行时按 groupId 取；未登记的回落默认分组（模块加载时已断言它存在）。
+function getSerialRuntime(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    return serialRuntimes.get(resolveSerialGroupId(groupId)) || defaultSerialRuntime;
+}
+
+function getSerialTerm(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    return getSerialRuntime(groupId).term;
+}
 // 终端待写入缓冲：以回滚行数为主上限，字节硬上限仅作为内存兜底，避免极端长行撑爆内存。
 const TERMINAL_PENDING_OUTPUT_HARD_LIMIT = 32 * 1024 * 1024;
 // 单次交给 xterm 解析的字节预算：窗口恢复时按此分批写入，避免一次巨型解析阻塞主线程。
@@ -621,26 +710,34 @@ function scheduleSerialOutputFlush() {
 function flushSerialOutputQueue() {
     serialOutputFlushScheduled = false;
     lastSerialOutputFlushAt = performance.now();
-    if (!serialOutputQueue.length) return;
-    const queued = serialOutputQueue;
-    serialOutputQueue = [];
-    serialOutputQueuedBytes = 0;
-    const bytes = Buffer.concat(queued);
+    if (!serialOutputBuckets.hasPending()) return;
+    // 每个批次只含一个分组的字节。这一条由 SerialOutputBuckets 保证，
+    // 消费侧不得再把多个批次合并——那正是改造前串流的成因。
+    for (const batch of serialOutputBuckets.drain()) {
+        dispatchSerialBatch(batch.groupId, batch.buffer);
+    }
+    if (serialOutputBuckets.hasPending() && !serialOutputFlushScheduled) {
+        scheduleSerialOutputFlush();
+    }
+}
+
+// 把一个分组的字节送进它自己的终端与日志。
+function dispatchSerialBatch(groupId, bytes) {
+    const id = resolveSerialGroupId(groupId);
+    const runtime = serialRuntimes.get(id);
+    if (!runtime || !bytes || !bytes.length) return;
     currentBatchTimestamp = formatTimestamp();
     try {
         processQuickSendAutoTriggers(bytes);
         if (receiveDisplayMode === 'hex') {
-            hexFormatter.push(bytes);
+            getHexFormatter(id).push(bytes);
         } else {
-            if (!textDecoder) createTextDecoder();
-            const text = textDecoder.write(bytes);
-            if (text) writeTextLines(dataParser.parse(text));
+            if (!getTextDecoder(id)) createTextDecoder(id);
+            const text = getTextDecoder(id).write(bytes);
+            if (text) writeTextLines(id, runtime.dataParser.parse(text));
         }
     } finally {
         currentBatchTimestamp = null;
-    }
-    if (serialOutputQueue.length && !serialOutputFlushScheduled) {
-        scheduleSerialOutputFlush();
     }
 }
 
@@ -653,32 +750,37 @@ function flushPendingSerialOutput() {
     }
 }
 
-function queueSerialOutput(bytes) {
-    serialOutputQueue.push(bytes);
-    serialOutputQueuedBytes += bytes.length;
-    if (serialOutputQueuedBytes >= SERIAL_OUTPUT_QUEUE_HIGH_WATER_BYTES) {
+// groupId 默认值保证单分组行为与改造前一致。
+function queueSerialOutput(bytes, groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const result = serialOutputBuckets.push(groupId, bytes);
+    if (result.shouldFlush) {
         flushPendingSerialOutput();
         return;
     }
     scheduleSerialOutputFlush();
 }
 
-function writeTextLines(lines) {
-    if (!lines.length) return;
+function writeTextLines(groupId, lines) {
+    const id = resolveSerialGroupId(groupId);
+    const runtime = serialRuntimes.get(id);
+    if (!runtime || !lines.length) return;
     const formattedLines = lines.map(line => {
         const globalMatches = collectGlobalHighlightMatches(line.text);
         return {
             ...line,
-            logPrefix: getLogPrefix(),
+            logPrefix: getLogPrefix(id),
             globalMatches,
             highlighted: applyHighlighting(line.text, null, globalMatches)
         };
     });
     const mainOutput = formattedLines.map(line => `${line.prefix}${line.highlighted}${line.delimiter ? '\r\n' : ''}`).join('');
     if (mainOutput) {
-        writeTerminalOutput(serialTerm, mainOutput);
-        writeMainTabLog(formattedLines.map(line => `${line.logPrefix}${line.highlighted}${line.delimiter}`).join(''));
+        writeTerminalOutput(runtime.term, mainOutput);
+        writeMainTabLog(formattedLines.map(line => `${line.logPrefix}${line.highlighted}${line.delimiter}`).join(''), id);
     }
+    // 过滤标签页全应用只有一份，只跟随激活分组；按分组各一份是后续阶段的工作。
+    // 若不加这道判断，g-2 的字节会同时写进 g-1 的过滤页与日志。
+    if (!isActiveSerialGroup(id)) return;
     filterTabs.forEach(tab => {
         if (tab.showSentOnly === true || tab.dataMode !== 'text') return;
         const formatted = formattedLines.map(({ text, delimiter, prefix, logPrefix, globalMatches }) => {
@@ -692,17 +794,19 @@ function writeTextLines(lines) {
         const output = formatted.map(line => line.terminal).join('');
         if (output) {
             writeTerminalOutput(tab.term, output);
-            writeFilterTabLog(tab, formatted.map(line => line.log).join(''));
+            writeFilterTabLog(tab, formatted.map(line => line.log).join(''), id);
         }
     });
 }
 
-function writeHexLines(lines) {
-    if (!lines.length) return;
+function writeHexLines(groupId, lines) {
+    const id = resolveSerialGroupId(groupId);
+    const runtime = serialRuntimes.get(id);
+    if (!runtime || !lines.length) return;
     const formattedLines = lines.map(line => ({
         text: line.output.replace(/\r?\n$/, ''),
-        prefix: getPrefix(),
-        logPrefix: getLogPrefix(),
+        prefix: getPrefix(id),
+        logPrefix: getLogPrefix(id),
         globalMatches: null,
         highlighted: ''
     }));
@@ -711,8 +815,9 @@ function writeHexLines(lines) {
         line.highlighted = applyHighlighting(line.text, null, line.globalMatches);
     });
     const mainOutput = formattedLines.map(({ text, prefix }) => `${prefix}${text}\r\n`).join('');
-    writeTerminalOutput(serialTerm, mainOutput);
-    writeMainTabLog(formattedLines.map(({ text, logPrefix }) => `${logPrefix}${text}\r\n`).join(''));
+    writeTerminalOutput(runtime.term, mainOutput);
+    writeMainTabLog(formattedLines.map(({ text, logPrefix }) => `${logPrefix}${text}\r\n`).join(''), id);
+    if (!isActiveSerialGroup(id)) return;
     filterTabs.forEach(tab => {
         if (tab.showSentOnly === true || tab.dataMode !== 'hex') return;
         const matched = formattedLines.map(({ text, prefix, logPrefix, globalMatches }) => {
@@ -726,39 +831,44 @@ function writeHexLines(lines) {
         const output = matched.map(line => line.terminal).join('');
         if (output) {
             writeTerminalOutput(tab.term, output);
-            writeFilterTabLog(tab, matched.map(line => line.log).join(''));
+            writeFilterTabLog(tab, matched.map(line => line.log).join(''), id);
         }
     });
 }
 
-const hexFormatter = new HexStreamFormatter({}, writeHexLines);
+// 模块级别名指向默认分组的格式化器：显示设置、清屏这些路径操作的就是主终端。
+const hexFormatter = getHexFormatter(REGISTRY_DEFAULT_GROUP_ID);
 
 // 发送回显使用独立的背景色整行标记，不经过 SerialDataParser，也不占用接收行号。
-function renderSentRecord(record) {
+function renderSentRecord(record, groupId = REGISTRY_DEFAULT_GROUP_ID) {
     if (!echoSentData) return;
+    const id = resolveSerialGroupId(groupId);
+    const runtime = serialRuntimes.get(id);
+    if (!runtime) return;
     const formatted = formatSentRecord(record, {
         label: trFallback('main.txLabel', 'TX'),
         both: echoSentDataBothFormats
     });
     const bg = hexToAnsiBackground(echoSentDataHighlightColor);
     const body = formatted.line;
-    writeTerminalOutput(serialTerm, `${bg}${body}\x1b[0m\r\n`);
-    writeMainTabLog(`${body}\r\n`);
+    writeTerminalOutput(runtime.term, `${bg}${body}\x1b[0m\r\n`);
+    writeMainTabLog(`${body}\r\n`, id);
     if (!echoSentDataInFilterTabs) return;
+    if (!isActiveSerialGroup(id)) return;
     filterTabs.forEach(tab => {
         if (tab.showSentOnly === true) {
             writeTerminalOutput(tab.term, `${bg}${body}\x1b[0m\r\n`);
-            writeFilterTabLog(tab, `${body}\r\n`);
+            writeFilterTabLog(tab, `${body}\r\n`, id);
             return;
         }
         if (tab.filterRegex && !tab.filterRegex.test(body)) return;
         writeTerminalOutput(tab.term, `${bg}${body}\x1b[0m\r\n`);
-        writeFilterTabLog(tab, `${body}\r\n`);
+        writeFilterTabLog(tab, `${body}\r\n`, id);
     });
 }
 
-function createTextDecoder() {
-    textDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8');
+function createTextDecoder(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    setTextDecoder(groupId, iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8'));
 }
 
 function createQuickTriggerDecoder() {
@@ -770,20 +880,27 @@ function resetQuickTriggerReceive() {
     quickTriggerBuffer = '';
 }
 
-function flushTextReceive() {
-    if (textDecoder) {
-        const finalText = textDecoder.end();
-        if (finalText) writeTextLines(dataParser.parse(finalText));
-        textDecoder = null;
+function flushTextReceive(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    const runtime = serialRuntimes.get(id);
+    const decoder = getTextDecoder(id);
+    if (decoder) {
+        const finalText = decoder.end();
+        if (finalText && runtime) writeTextLines(id, runtime.dataParser.parse(finalText));
+        setTextDecoder(id, null);
     }
-    writeTextLines(dataParser.flush());
+    if (runtime) writeTextLines(id, runtime.dataParser.flush());
 }
 
-function resetTextReceive() {
-    textDecoder = null;
-    dataParser.isNewLine = true;
-    dataParser.incomingBuffer = '';
-    if (receiveDisplayMode === 'text') createTextDecoder();
+function resetTextReceive(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    const runtime = serialRuntimes.get(id);
+    setTextDecoder(id, null);
+    if (runtime) {
+        runtime.dataParser.isNewLine = true;
+        runtime.dataParser.incomingBuffer = '';
+    }
+    if (receiveDisplayMode === 'text') createTextDecoder(id);
 }
 
 function updateFilterModeStatuses() {
@@ -1082,11 +1199,14 @@ function focusSearchWithActiveSelection() {
 }
 
 function clearTerminalByTabId(tabId) {
-    if (!tabId || tabId === 'tab-main') {
-        if (receiveDisplayMode === 'hex') hexFormatter.reset({ resetOffset: false });
-        else resetTextReceive();
-        clearTerminalOutput(serialTerm);
-        serialGroupContext.resetLineCounters(REGISTRY_DEFAULT_GROUP_ID);
+    if (!tabId || tabId === 'tab-main' || tabId.startsWith('tab-main-')) {
+        const groupId = resolveGroupIdForMainTab(tabId || 'tab-main');
+        if (receiveDisplayMode === 'hex') getHexFormatter(groupId).reset({ resetOffset: false });
+        else resetTextReceive(groupId);
+        clearTerminalOutput(getSerialTerm(groupId));
+        serialGroupContext.resetLineCounters(groupId);
+        // 尚未上屏的字节也要一起丢掉，否则清空后旧数据会紧接着又冒出来。
+        serialOutputBuckets.clear(groupId);
         return;
     }
     const filterTab = filterTabs.find(t => t.id === tabId);
@@ -2009,8 +2129,12 @@ function updateTabTitles() {
     });
 }
 
-function getMainTabTitle() {
-    return 'Main_Terminal';
+function getMainTabTitle(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    if (id === REGISTRY_DEFAULT_GROUP_ID) return 'Main_Terminal';
+    const groups = Array.isArray(currentConfig?.serialGroups) ? currentConfig.serialGroups : [];
+    const group = groups.find(item => item && item.id === id);
+    return group?.title?.trim() || `Main_Terminal_${id}`;
 }
 
 function getFilterTabLogTitle(tabState) {
@@ -2027,22 +2151,27 @@ function getShellTabLogTitle(tabState) {
     return index >= 0 ? `Shell_${index + 1}` : 'Shell';
 }
 
-function writeTabLog(tabId, title, data) {
+function writeTabLog(tabId, title, data, groupId = REGISTRY_DEFAULT_GROUP_ID) {
     if (!tabId || typeof data !== 'string' || !data) {
         return;
     }
-    ipcRenderer.send('write-tab-log', { tabId, title, data });
+    // 日志归属它所在的分组：主进程按 groupId 解析端口目录。缺了这个字段，
+    // 所有分组的主终端日志都会落进默认分组的端口目录里。
+    ipcRenderer.send('write-tab-log', { tabId, title, data, groupId: resolveSerialGroupId(groupId) });
 }
 
-function writeMainTabLog(data) {
-    writeTabLog('tab-main', getMainTabTitle(), data);
+function writeMainTabLog(data, groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    writeTabLog(mainTabId(id), getMainTabTitle(id), data, id);
 }
 
-function writeFilterTabLog(tabState, data) {
+function writeFilterTabLog(tabState, data, groupId = REGISTRY_DEFAULT_GROUP_ID) {
     if (!tabState) return;
-    writeTabLog(tabState.id, getFilterTabLogTitle(tabState), data);
+    writeTabLog(tabState.id, getFilterTabLogTitle(tabState), data, groupId);
 }
 
+// Shell 标签不属于任何串口分组：主进程按 tab-shell- 前缀把它固定归入 _shell 目录，
+// 所以这里故意不传 groupId。
 function writeShellTabLog(tabState, data) {
     if (!tabState) return;
     writeTabLog(tabState.id, getShellTabLogTitle(tabState), data);
@@ -3451,6 +3580,8 @@ function formatValidation(result, mode, appendCrLf = false) {
 }
 
 async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent = false } = {}) {
+    // 写入必须带上它所属的分组：主进程按 groupId 找会话，缺了就是往默认分组写。
+    const targetGroupId = resolveSerialGroupId(request?.groupId);
     if (!isConnected) {
         const result = { ok: false, code: 'SERIAL_NOT_OPEN', message: trFallback('main.serialNotOpen', 'Serial port is not connected') };
         if (!silent) setActionStatus(result.message);
@@ -3468,16 +3599,16 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
         return validation;
     }
     try {
-        const requestSessionId = serialSessionId;
+        const requestSessionId = getGroupSessionId(targetGroupId);
         const writeRequest = {
-            groupId: DEFAULT_SERIAL_GROUP_ID,
+            groupId: targetGroupId,
             mode: profileRequest.mode, content: profileRequest.content,
             encoding: profileRequest.encoding, appendCrLf: profileRequest.appendCrLf,
             source: request.source || 'renderer', terminalEnter: request.terminalEnter === true,
             newlineMode: request.newlineMode || newlineMode, sessionId: requestSessionId
         };
         const pendingWrite = serialWriteChain.then(() => {
-            if (!isConnected || requestSessionId !== serialSessionId) {
+            if (!isConnected || requestSessionId !== getGroupSessionId(targetGroupId)) {
                 return { ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' };
             }
             return ipcRenderer.invoke('serial-write', writeRequest);
@@ -3496,7 +3627,7 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
                 text: profileRequest.mode === 'text'
                     ? `${profileRequest.content}${profileRequest.appendCrLf ? '\r\n' : ''}`
                     : undefined
-            });
+            }, targetGroupId);
         }
         if (!silent) setActionStatus(result.ok
             ? trFallback('main.bytesSent', 'Sent {count} bytes', { count: result.bytesWritten })
@@ -4413,8 +4544,8 @@ function applyConfig(config) {
 
     applyMainInputConfig(config);
     const hexSettingsKey = JSON.stringify(config.hexDisplaySettings || {});
-    if (appliedHexSettingsKey && appliedHexSettingsKey !== hexSettingsKey) hexFormatter.flush();
-    hexFormatter.configure(config.hexDisplaySettings || {});
+    if (appliedHexSettingsKey && appliedHexSettingsKey !== hexSettingsKey) flushAllHexFormatters();
+    configureAllHexFormatters(config.hexDisplaySettings || {});
     appliedHexSettingsKey = hexSettingsKey;
     const autoSendChanged = applyAutoSendConfig(config.autoSendSettings || {});
     applyQuickSendAutoTriggerConfig(config.quickSendAutoTriggerEnabled);
@@ -4655,31 +4786,38 @@ serialTerm.onData((data) => {
 ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     // P2：入站字节的归属判定统一走分组注册表。旧写法只比一个裸的 serialSessionId，
     // 没有分组概念，多串口下无法区分「这是哪个分组的字节」。
-    const groupId = payload.groupId || REGISTRY_DEFAULT_GROUP_ID;
+    const groupId = resolveSerialGroupId(payload.groupId);
     if (Number.isInteger(payload.sessionId) && !serialGroupRegistry.groupIdForSession(payload.sessionId)) {
-        // 首次见到该会话号（连接刚成功，或旧主进程不带 groupId）：登记到默认分组。
-        serialSessionId = serialGroupRegistry.beginSession(groupId, payload.sessionId);
+        // 首次见到该会话号（连接刚成功，或旧主进程不带 groupId）：登记到它声明的分组。
+        serialGroupRegistry.beginSession(groupId, payload.sessionId);
     }
     const verdict = serialGroupRegistry.accepts({ groupId, sessionId: payload.sessionId });
     if (!verdict.accepted) return;
-    if (Number.isInteger(payload.sessionId) && payload.sessionId !== serialSessionId) {
+    // serialSessionId 只代表默认分组。其它分组的会话号改由注册表按分组持有，
+    // 否则 g-2 的一条入站消息就会覆盖默认分组的会话号，让默认分组的写入被误判为过期。
+    if (Number.isInteger(payload.sessionId) && groupId === REGISTRY_DEFAULT_GROUP_ID) {
         serialSessionId = payload.sessionId;
     }
     const bytes = payload.bytes instanceof Uint8Array ? payload.bytes : Uint8Array.from(payload.bytes || []);
     if (!bytes.length) return;
     const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const receivedAt = Number.isFinite(payload.receivedAt) ? payload.receivedAt : Date.now();
-    chartTabs.forEach(tab => tab.stream?.write(buffer, receivedAt));
+    // 图表标签页目前只有一份，只跟随激活分组，否则两个分组的数据会画进同一张图。
+    if (isActiveSerialGroup(groupId)) chartTabs.forEach(tab => tab.stream?.write(buffer, receivedAt));
     // 复用同一个 Buffer 视图，避免为同一段字节重复包装。
-    queueSerialOutput(buffer);
+    queueSerialOutput(buffer, groupId);
 });
-ipcRenderer.on('serial-error', (event, err) => {
+ipcRenderer.on('serial-error', (event, err, meta = {}) => {
+    const groupId = resolveSerialGroupId(meta?.groupId);
+    const runtime = serialRuntimes.get(groupId);
+    if (!runtime) return;
     const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
-    serialTerm.write(errMsg);
-    writeMainTabLog(errMsg);
+    runtime.term.write(errMsg);
+    writeMainTabLog(errMsg, groupId);
+    if (!isActiveSerialGroup(groupId)) return;
     filterTabs.forEach(tab => {
         tab.term.write(errMsg);
-        writeFilterTabLog(tab, errMsg);
+        writeFilterTabLog(tab, errMsg, groupId);
     });
 });
 
@@ -4825,28 +4963,39 @@ function waitForSerialDisconnected() {
     });
 }
 
-ipcRenderer.on('serial-disconnected', (event, message) => {
-    serialSessionId = serialGroupRegistry.invalidateSession(REGISTRY_DEFAULT_GROUP_ID);
-    serialWriteChain = Promise.resolve();
-    if (receiveDisplayMode === 'hex') hexFormatter.flush();
-    else flushTextReceive();
-    stopAutoSendRuntime();
-    resetQuickTriggerReceive();
-    chartTabs.forEach(tab => {
-        tab.stream?.flush();
-        tab.stream?.reset();
-    });
-    updateSerialConnectionState(false);
-    if (message) {
-        const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
-        serialTerm.write(notice);
-        writeMainTabLog(notice);
-        filterTabs.forEach(tab => {
-            tab.term.write(notice);
-            writeFilterTabLog(tab, notice);
+ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
+    const groupId = resolveSerialGroupId(meta?.groupId);
+    const isDefaultGroup = groupId === REGISTRY_DEFAULT_GROUP_ID;
+    serialGroupRegistry.invalidateSession(groupId);
+    if (receiveDisplayMode === 'hex') getHexFormatter(groupId).flush();
+    else flushTextReceive(groupId);
+    if (isDefaultGroup) {
+        // 全局连接状态、自动发送与重连等待者只属于默认分组：
+        // 关掉 g-2 不应该让默认分组的界面显示成「已断开」。
+        serialSessionId = getGroupSessionId(groupId);
+        serialWriteChain = Promise.resolve();
+        stopAutoSendRuntime();
+        resetQuickTriggerReceive();
+        chartTabs.forEach(tab => {
+            tab.stream?.flush();
+            tab.stream?.reset();
         });
-        setActionStatus(message);
+        updateSerialConnectionState(false);
     }
+    const runtime = serialRuntimes.get(groupId);
+    if (message && runtime) {
+        const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
+        runtime.term.write(notice);
+        writeMainTabLog(notice, groupId);
+        if (isActiveSerialGroup(groupId)) {
+            filterTabs.forEach(tab => {
+                tab.term.write(notice);
+                writeFilterTabLog(tab, notice, groupId);
+            });
+        }
+        if (isDefaultGroup) setActionStatus(message);
+    }
+    if (!isDefaultGroup) return;
     ipcRenderer.send('flush-tab-logs');
     const waiters = serialDisconnectWaiters;
     serialDisconnectWaiters = [];
@@ -5083,8 +5232,9 @@ document.getElementById('save-current-tab-btn').addEventListener('click', async 
     }
 });
 
-async function connectSerialFromUi({ reconnecting = false } = {}) {
+async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DEFAULT_GROUP_ID } = {}) {
     if (serialConnectInProgress) return;
+    const targetGroupId = resolveSerialGroupId(groupId);
     const path = portSelect.value;
     const baudRate = getBaudRate();
     const dataBits = document.getElementById('data-bits-select').value;
@@ -5095,14 +5245,14 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
     if (!path) return;
     serialConnectInProgress = true;
     serialWriteChain = Promise.resolve();
-    hexFormatter.reset({ resetOffset: true });
-    resetTextReceive();
+    getHexFormatter(targetGroupId).reset({ resetOffset: true });
+    resetTextReceive(targetGroupId);
     resetQuickTriggerReceive();
     connectBtn.disabled = true;
     if (reconnecting) setActionStatus(`正在应用新的波特率 ${baudRate}...`);
     try {
         const connectResult = await ipcRenderer.invoke('connect-serial', {
-            groupId: DEFAULT_SERIAL_GROUP_ID,
+            groupId: targetGroupId,
             path,
             baudRate,
             dataBits,
@@ -5111,9 +5261,11 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
             sendEncoding,
             newlineMode
         });
-        // 连接成功后把主进程分配的会话号登记进分组注册表，后续字节归属以它为准。
-        serialSessionId = serialGroupRegistry.beginSession(REGISTRY_DEFAULT_GROUP_ID, connectResult?.sessionId);
-        chartTabs.forEach(clearChartDataSession);
+        // 连接成功后把主进程分配的会话号登记进该分组的注册表，后续字节归属以它为准。
+        // serialSessionId 只在默认分组时同步，其它分组的会话号由注册表持有。
+        const nextSessionId = serialGroupRegistry.beginSession(targetGroupId, connectResult?.sessionId);
+        if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) serialSessionId = nextSessionId;
+        if (isActiveSerialGroup(targetGroupId)) chartTabs.forEach(clearChartDataSession);
 
         ipcRenderer.send('save-config', {
             lastSerialOptions: {
@@ -5129,13 +5281,15 @@ async function connectSerialFromUi({ reconnecting = false } = {}) {
             }
         });
 
-        updateSerialConnectionState(true);
-        updateAutoSendState();
+        // 全局连接状态只跟随默认分组：它驱动的是左侧栏那一个连接按钮。
+        if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) {
+            updateSerialConnectionState(true);
+            updateAutoSendState();
+        }
 
-        serialGroupContext.resetLineCounters(REGISTRY_DEFAULT_GROUP_ID);
+        serialGroupContext.resetLineCounters(targetGroupId);
 
-        serialTerm.write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
-        setActionStatus(reconnecting ? `已重新连接串口 ${path} @ ${baudRate}` : `已连接串口 ${path} @ ${baudRate}`);
+        getSerialTerm(targetGroupId).write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
     } catch (err) {
         setActionStatus(reconnecting ? `串口重连失败：${err}` : `串口连接失败：${err}`);
         alert((reconnecting ? 'Failed to reconnect: ' : 'Failed to connect: ') + err);
