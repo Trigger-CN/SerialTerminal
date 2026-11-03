@@ -576,7 +576,7 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 - 新增 [`serial-group-registry.js`](serial-group-registry.js)：`SerialGroupRegistry` 持有 groupId → `{ sessionId, connected, portPath }` 与 `sessionToGroup` 映射，对外提供 `ensureGroup` / `beginSession` / `invalidateSession` / `groupIdForSession` / `accepts` / `isVisible` / `removeGroup`。它是纯逻辑模块，不依赖 DOM，因此可以脱离 Electron 直接单测。
 - `accepts()` 是「这条字节该不该进本分组的终端」的唯一判定入口，返回 `{ accepted, reason, groupId }`，其中 `reason` 区分 `ok` / `unknown-group` / `session-other-group` / `stale-session`，便于定位到底是丢错了还是本来就该丢。
-- 新增 [`serial-group-context.js`](serial-group-context.js)：`SerialGroupContextStore` 接管**与 DOM 无关的可变状态**——`serialLineCounter` / `logLineCounter` / `serialNewLine` 与收发显示参数（`receiveDisplayMode` / `receiveEncoding` / `sendEncoding` / `newlineMode`）。提供 `resetLineCounters()` 与 `nextLineNumbers()`，后者可选择只推进屏幕行号或只推进日志行号，对应改造前两个独立计数器的语义。
+- 新增 [`serial-group-context.js`](serial-group-context.js)：`SerialGroupContextStore` 提供 `serialLineCounter` / `logLineCounter` / `serialNewLine` 与四个收发显示参数（`receiveDisplayMode` / `receiveEncoding` / `sendEncoding` / `newlineMode`），以及 `resetLineCounters()` / `nextLineNumbers()` / `setDisplay()`。**当前只有三个计数器真正生效**：四个显示参数仍由 `renderer.js` 自己的模块级 `let` 持有，`setDisplay()` 尚未被调用。`nextLineNumbers()` 可选择只推进屏幕行号或只推进日志行号，对应改造前两个独立计数器的语义。
 - `renderer.js` 已接入：`serial-output-bytes` 的归属判定走 `accepts()`；`connectSerialFromUi` 用 `beginSession()`；`disconnectSerial` 与 `serial-disconnected` 用 `invalidateSession()`；`getPrefix()` / `getLogPrefix()` 改从 `groupState(groupId)` 取行号；`clearTerminalByTabId` 与连接成功处改调 `resetLineCounters()`。
 - 新增 [`serial-data-parser.js`](serial-data-parser.js)：把串口接收的行切分逻辑（含跨 chunk 拼接与超长行保护）从 `renderer.js` 抽出。**关键修复**：原 `SerialDataParser` 在 `parse()` / `flush()` 内部直接调用全局 `getPrefix()`，一旦出现多个分组各自的 parser 实例，所有实例都会把行号记到同一个分组上，表现为两个端口的行号互相跳号。现改为构造时注入 `prefixProvider`，每个实例绑定自己的分组。
 - 兼容性：首版只注册 `default` 一个分组，单串口行为不变；不带 `sessionId` 的旧载荷退化为按 groupId 判定。
@@ -587,7 +587,7 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 
 否则得到的只是一个只能挂一个 Terminal 的上下文对象，属于**伪多实例**：看起来分组隔离了，实际第二个分组无处可显示。
 
-因此 P2 的剩余部分应当与 P5（两级分屏 / N pane）合并推进，次序是：先让 `workspace-manager` 支持动态创建 pane 与容器，再把 `serialTerm` 等对象按 `groupId` 实例化并挂到各自的容器上。在这之前继续改写只会产出不可验证的代码。
+因此 P2 的剩余部分必须与 P5 合并推进。**P5 的 DOM 层已完成**（`workspace-manager` 已能驱动任意 pane 数），但「一个分组一个 Terminal 容器」还需要 `index.html` 的动态 pane 创建，而 pane 数量由分组数量驱动，因此归 P3。在这之前下沉 `serialTerm` 只会产出无法验证的代码。
 
 ### P3 — 双层标签栏与添加串口按钮
 
@@ -708,7 +708,7 @@ lastSerialOptions · filterTabs · chartTabs · workspaceLayout
 - [x] `sessionId → groupId` 分流正确 —— `serial-group-registry.js` 已实现并由 10 项单测覆盖
 - [~] 行号、过滤器、图表数据各自独立 —— **行号已独立**（`serial-group-context.js` + `serial-data-parser.js`，共 18 项单测）；过滤器与图表数据仍是全局单例，且受阻于单容器的 DOM 契约
 - [ ] 快捷指令自动发送只向触发来源组发送
-- [ ] **阻塞项**：`#serial-container` 是全局唯一串口终端容器，需先支持每分组独立容器（与 P5 合并）
+- [ ] **阻塞项**：`#serial-container` 是全局唯一串口终端容器，需先支持每分组独立容器。P5 的布局层已不再假设两个 pane，但 `index.html` 的动态 pane 创建归 P3（pane 数量由分组数驱动）
 
 ### P3
 

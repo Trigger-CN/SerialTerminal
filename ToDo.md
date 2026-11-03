@@ -158,9 +158,9 @@
 
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
   - [x] 第一步：新增 `serial-group-registry.js` 分组注册表，`accepts()` 作为「这条字节该不该进本分组终端」的唯一判定入口（带 `reason` 区分丢错与本该丢）；`renderer.js` 的 `serial-output-bytes` 归属性判定、`beginSession`/`invalidateSession` 已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
-  - [x] 第二步：新增 `serial-group-context.js` 分组上下文（`SerialGroupContextStore`），接管 `serialLineCounter`/`logLineCounter`/`serialNewLine` 与收发显示参数；`getPrefix()`、`getLogPrefix()`、`clearTerminalByTabId`、连接成功重置均改走它。配套 `test/serial-group-context.test.js` 8 项全通过。
+  - [x] 第二步：新增 `serial-group-context.js` 分组上下文（`SerialGroupContextStore`），提供 `serialLineCounter`/`logLineCounter`/`serialNewLine` 与四个收发显示参数；**其中只有三个计数器真正生效**（`getPrefix()`、`getLogPrefix()`、`clearTerminalByTabId`、连接成功重置均改走它），`receiveDisplayMode`/`receiveEncoding`/`sendEncoding`/`newlineMode` 仍由 `renderer.js` 自己的模块级 `let` 持有，`setDisplay()` 尚未被调用。配套 `test/serial-group-context.test.js` 8 项全通过。
   - [x] 第三步：抽处 `serial-data-parser.js`，并修复其内部直接调全局 `getPrefix()` 导致多实例行号串用的缺陷（改为注入 `prefixProvider`）。配套 `test/serial-data-parser.test.js` 10 项全通过；`test/markup.test.js` 的相应断言改指向新文件。
-  - [ ] **阻塞项**：`serialTerm`/`filterTabs`/`chartTabs`/`workspaceLayout` 每个分组一份无法单独完成——`#serial-container` 是全页唯一串口终端容器，必须先有「一组一个容器」的 DOM 契约（与 P5 合并）。
+  - [ ] **阻塞项**：`serialTerm`/`filterTabs`/`chartTabs`/`workspaceLayout` 每个分组一份无法单独完成——`#serial-container` 是全页唯一串口终端容器。P5 的布局层已不再假设两个 pane，但 `index.html` 的动态 pane 创建归 P3（pane 数量由分组数驱动）。
 - [ ] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时塌回一层）
 - [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）
 - [~] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）；**也是 P2 剩余部分的前置条件**
@@ -170,7 +170,7 @@
   - [x] DOM 层：`workspace-manager.js` 的 12 处 `pane-1`/`pane-2` 字面量全部改为由布局驱动——`resolvePaneId` 只要求「存在于当前布局」、`getOtherPaneId` 按列表循环、`reconcileEmptyPanes` 宿主取 `layout.activePaneId`、`updatePaneVisibility` 对 index>0 的 pane 统一跟随分屏、`applyPaneSizes` 改为写各 pane 内联 `flexBasis`（不再用两个 CSS 变量）、`collapseSplit` 合入除首个 pane 外的全部 pane、`setPaneSizes` 支持 >2 pane。配套改 `style.css`（删除 `#pane-1`/`#pane-2` 选择器）与 `renderer.js`（`transitionend` 按类名判断）。配套 `test/workspace-pane-n.test.js` 6 项全通过。
   - [ ] 剩余：`index.html` 的静态 `pane-1`/`pane-2` 节点改为可动态创建——归 P3（pane 数量由分组数量驱动）。
 
-P2 剩余部分必须先解 P5 的动态容器，否则做出来是伪多实例。其它阶段逐个开工，不得并行。
+P2 剩余部分必须先解 P3 的动态 pane 创建（P5 的布局层前置已完成），否则做出来是伪多实例。其它阶段逐个开工，不得并行。
 
 ## 验证基线
 
