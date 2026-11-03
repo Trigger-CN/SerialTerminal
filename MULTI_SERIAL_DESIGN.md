@@ -4,8 +4,8 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器、分组终端运行时注册表、分组 DOM 标识契约与终端工厂托管；P3 已完成标签归属/分组增删改/标签栏结构描述三个纯逻辑层，并已完成渲染层接线（数据面按 groupId 路由 + 分组标签栏 + 容器创建与关闭）；配置 v14 → v15 迁移已完成并实测；P5 纯数据层与 DOM 层已完成；P4 与 P5 的分组级/组内级分屏尚未开始。**
-> 当前主进程已按 `groupId` 完全隔离；渲染层的数据面（输出队列、终端实例、解码器、HEX 格式化器、日志路径）也已按 `groupId` 隔离，并已能用「添加串口」建出真实容器、切换分组、关闭分组后回到单层。**侧栏设置（P4）仍固定读写默认分组，`filterTabs` / `chartTabs` 仍是全应用单例，只跟随激活分组。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器、分组终端运行时注册表、分组 DOM 标识契约与终端工厂托管；P3 已全部完成（标签归属/分组增删改/标签栏结构描述/输出分桶四个纯逻辑层 + 渲染层数据面按 groupId 路由 + 分组标签栏 + 容器创建与关闭 + **Shell 标签的两层升降**）；配置 v14 → v15 迁移已完成并实测；P5 纯数据层与 DOM 层已完成；P4 与 P5 的分组级/组内级分屏尚未开始。**
+> 当前主进程已按 `groupId` 完全隔离；渲染层的数据面（输出队列、终端实例、解码器、HEX 格式化器、日志路径）也已按 `groupId` 隔离，并已能用「添加串口」建出真实容器、切换分组、关闭分组后回到单层；多分组时 Shell 标签与分组标签同处上层，单分组时回落到底层标签行。**侧栏设置（P4）仍固定读写默认分组，`filterTabs` / `chartTabs` 仍是全应用单例，只跟随激活分组。**
 > 验证手段（本阶段新增）：除单测与模块加载门禁外，多了一轮**真实窗口 + CDP 真实点击**验证。这是必要的：分组标签栏首版在 `node --check`、加载门禁与 437 项全量测试下全绿，却存在「两个分组标签拿到同一个 id」导致关闭分组完全点不到的缺陷。详见 6.1B 与第 12 节。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -409,7 +409,12 @@ COM5 / COM7 的 data 回调同样在排队，三个端口的 UI 一起卡
 | 关闭非当前分组 | 保持当前选择不变 | 关别人不该把当前视图抢走 |
 | 单分组模式 | `groupLayer` 只含 Shell，串口标签在下层 | 只有一个分组时再显示分组标签是纯噪声，必须与改造前完全一致 |
 
-> **接线状态（2026-11-05 更新）**：归属判定模型已作为 `serial-group-tabs.js` 保留，但**当前渲染层的双层标签栏并没有直接消费它**——实际接线走的是下面 6.1B 的 `serial-group-tab-bar.js`（分组栏作为独立一行，只数分组 ≥2 时显示）加上 `serial-group-tabs.js` 的规则作为后续双层的归属依据。换句话说：单/多分组升降层已真实可运行，但「Shell 标签与分组标签同级」的两个层次投影尚未驱动 DOM。
+> **接线状态（2026-11-06 更新）**：两层投影已落地。实际有两种分工：
+>
+> - `serial-group-tab-bar.js` 负责**分组标签本身的节点描述**（id / 按钮 / 是否可关闭 / 可见性）；
+> - `serial-group-tabs.js` 的 17 项规则是**归属判定的权威表述**，但其 `buildTabBarModel()` 假设「下层是某分组自己的标签列表」，与重构后「每个分组一个主终端标签 `tab-main-<g>`」的架构不符，因此**没有直接调用它**。
+>
+> Shell 标签的两层升降由 `renderer.js` 的 `syncShellTabLayer()` 实际执行（见 6.7），判据就是 `serialGroups.length > 1`，与 `buildTabBarModel()` 的 `isMultiGroup` 完全一致。
 
 
 ### 6.1B 分组标签栏的结构描述层（已落地）
@@ -543,6 +548,37 @@ wrapper.id = serialContainerId(id); // 默认 'serial-container'，其它 'seria
 4. `getMainTabTitle(groupId)`：默认分组仍返回 `'Main_Terminal'`（零变化），其它分组取配置里的 title。
 
 **本层仍是单例的部分（不得当作已完成）**：`filterTabs` 与 `chartTabs` 全应用只有一份，只跟随激活分组。按分组各一份属于后续阶段。
+
+### 6.7 Shell 标签的两层升降（已落地）
+
+用户描述的形态是「多串口时上层为串口分组标签 + Shell 标签（同级），下层为该分组的标签页」。实现上是**移动既有节点**，不是重建。
+
+```js
+// renderer.js
+function syncShellTabLayer() {
+    // 单分组：按 pane.tabIds 的相对顺序用 insertBefore 落回 pane 标签行
+    // 多分组：appendChild 到 #serial-group-tab-list（排在分组标签之后）
+}
+```
+
+**为什么必须移动节点而不能重建**：Shell 的 `onclick` / `ondblclick` / 关闭监听都绑在按钮节点自身，终端在 `tabPane` 里的 `terminalWrapper`。重建会丢掉监听、多出一个无人引用的 xterm 实例，而且用户可能对那个 Shell 滚动/输入到某个位置，重来一次缓冲区内容也没了。
+
+**单分组回到 pane 行时必须用 `insertBefore` 而不是 `appendChild`**：用户可以把 Shell 拖到主标签前面，直接用 `appendChild` 会把它推到末尾，即「切到多分组再切回来」就静默改掉了用户的标签顺序。落位锚点取 `pane.tabIds` 里该 Shell 之后第一个仍在 DOM 里的标签。
+
+**`workspace-manager.js` 为此改了两处**（不是新增 API，而是补全原有假设）：
+
+| 位置 | 原假设 | 问题 |
+| --- | --- | --- |
+| `hasRenderableTab()` | 按钮一定在 `paneEl` 内 | Shell 搬到分组层后按钮找不到 → `prunePaneTabIds()` 会把它从 `tabIds` 里删掉 → **Shell 标签彻底消失** |
+| `applyLayoutToDom()` | 把每个按钮 `appendChild` 回所属 pane 的 `tabsList` | 任何布局刷新（切分组、加标签、分屏）都会把 Shell 拽回 pane 行 |
+
+因此新增两个**可选注入**：`resolveTabButtonHost(tabId, paneId)`（返回按钮应挂到哪个容器，返回 `null` 沿用 pane 的 `tabsList`）与 `findTabButton(tabId, paneId)`（放宽按钮查找范围）。两者都为 `undefined` 时行为与改造前逐字一致。
+
+**还有一处容易漏的**：`applyActiveTabToPane()` 原本只在 `paneEl` 内清 `active` 类。Shell 被搬到分组层后不在 `paneEl` 里，会导致它残留上一个激活态，表现为「两个标签同时亮」。现改为按 `dataset.paneId` 全文档清理。
+
+**调用时机**：`renderSerialGroupTabBar()` 末尾、`listEl.replaceChildren()` **之后**。`replaceChildren` 会把上一轮搬上来的 Shell 节点一并摘除，所以必须在它之后放回去；同时 `onLayoutApplied` 也会再调一次，保证任何布局重排后位置正确。
+
+**已验证（真实点击 29/29）**：单分组在 pane 行且不在分组层；多分组升到分组层并排在分组标签之后；点击后终端切到该标签且仍在分组层；关闭多分组后回落 pane 行；全程 `shellCount` 恒为 1（未被复制）、渲染进程零未捕获错误。
 
 ---
 
@@ -865,9 +901,9 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 | 分组标签栏 DOM 接入 | ✅ 分组层作为独立一行，分组数 ≥2 显示、=1 隐藏 |
 | 添加串口与真实容器创建 | ✅ 建 `serial-container-<g>` / `tab-main-<g>` / `tab-main-<g>-button` |
 | 分组关闭与回落单层 | ✅ 含已连接二次确认；关到剩一组后分组栏回到 `hidden` |
-| **Shell 标签与分组标签同级的两个层次投影** | ❌ **尚未驱动 DOM**。当前实现是「分组栏独立一行 + 主标签行」两份；`serial-group-tabs.js` 的双层模型已具备但未接线 |
+| **Shell 标签与分组标签同级的两个层次投影** | ✅ **已接线**。多分组时 Shell 按钮搬到 `#serial-group-tab-list` 且排在分组标签之后；单分组时按 `tabIds` 相对顺序回到 pane 标签行（见 6.7） |
 
-> 最后一行的差异必须如实说明：用户描述的「多串口时 Shell 标签与分组标签同级」的形态尚未实现。当前实现下分组栏只列分组，Shell 仍在 pane 标签行，视觉上是三行（分组行 / pane 标签行 / 终端）而不是两层。这是下一步要做的事，不得计入已完成。
+> 两层投影的做法是**移动节点**而不是重建：`syncShellTabLayer()` 直接 `appendChild` / `insertBefore`，监听与 xterm 实例全部保留。`workspace-manager.js` 为此补了两个可选注入（`resolveTabButtonHost` / `findTabButton`），不注入时行为与改造前逐字一致。
 
 ### P4 — 设置侧栏跟随
 
@@ -1041,9 +1077,11 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 - [x] 新分组真实建出容器与主标签 —— CDP 实测 `serial-container-g-1` / `tab-main-g-1` / `tab-main-g-1-button` 均存在
 - [x] 点击分组标签切换激活分组 —— CDP 实测切回默认后高亮与主标签都正确
 - [x] 分组关闭（断开 + 销毁子标签与终端 + 回落到单层）—— CDP 实测关闭后 `barHidden: true` / `groupTabs: 0` / `containerGone: true` / `mainTabGone: true` / `defaultStillThere: true`
-- [ ] **Shell 标签与分组标签同级的两个层次投影** —— 当前分组栏是独立一行、Shell 仍在 pane 标签行；`serial-group-tabs.js` 的双层模型已具备但未接线（见第 10 节 P3 进度表）
+- [x] **Shell 标签与分组标签同级的两个层次投影** —— CDP 实测：单分组时 `inPaneRow:true / inGroupRow:false`；多分组时升到分组层且顺序为 `[分组标签..., Shell]`；点击后终端切到该标签且仍留在分组层；关闭多分组后回落 pane 行；全程 `shellCount` 恒为 1（未被复制）（见 6.7）
 
-> **已验证的方式（重要）**：上述 DOM 层各项全部由**真实窗口 + CDP 真实点击**验证（`Runtime.evaluate` 驱动 `.click()` 并断言 DOM），共 **19 项全 PASS**。这不是推断——因为同一组功能在 `node --check`、renderer 模块加载门禁与 437 项单测下全部全绿时，实际上存在「两个分组标签拿到同一个 id」的致命缺陷（见 6.1B 结尾）。**凡涉及真实 DOM 结构或交互的改动，必须补这一层验证。**
+> **已验证的方式（重要）**：上述 DOM 层各项全部由**真实窗口 + CDP 真实点击**验证（`Runtime.evaluate` 驱动 `.click()` 并断言 DOM），共 **29 项全 PASS、退出码 0**。这不是推断——因为同一组功能在 `node --check`、renderer 模块加载门禁与 437 项单测下全部全绿时，实际上存在「两个分组标签拿到同一个 id」的致命缺陷（见 6.1B 结尾）。**凡涉及真实 DOM 结构或交互的改动，必须补这一层验证。**
+>
+> 另外两条同样值得记录的教训：① 验证脚本本身也会写错（本轮曾因多重插一次 `click()` 在已关闭的分组上取到 null，以及用 `element.id` 去匹配 `dataset.target` 导致断言恒假）——**断言出错时先修断言，绝不改期望值**；② 「只移动节点不重建」这条决定如果在实现时图省事换成重建，监听与 xterm 实例都会静默丢失，而三层门禁都拦不住。
 
 ### P4
 

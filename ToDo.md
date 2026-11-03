@@ -192,8 +192,12 @@
   - **真实点击验证 19/19 PASS**：单分组时分组栏隐藏、点「添加串口」后建出 `serial-container-g-1`/`tab-main-g-1`/`tab-main-g-1-button` 且新分组成为 active、切回默认分组高亮正确、关闭后分组栏回 `hidden` 且容器与主标签均移除、默认分组不受影响、渲染进程无未捕获错误。
   - **过程中修掉一个只有真实点击能暴露的缺陷**：`renderSerialGroupTabBar()` 把 `describeGroupTabBar()` 的 `tabs` 又喂回 `describeGroupTab()`，而后者用 `source.id` 取 groupId（spec 上只有 `groupId`），导致所有分组回落 `'default'`——两个标签同一 id、新分组不高亮、`tab-group-g-1-close` 不存在、关闭流程完全点不到。修复：直接消费 `tabs`，不再二次描述。
 
-- [ ] **P3：Shell 标签与分组标签同级的两个层次投影**（当前分组栏独立一行，Shell 仍在 pane 标签行；`serial-group-tabs.js` 的双层模型已具备但未接线）
-
+- [x] **P3：Shell 标签与分组标签同级的两个层次投影**
+  - `renderer.js` 新增 `syncShellTabLayer()`：多分组时把 Shell 按钮搬到 `#serial-group-tab-list`（排在分组标签之后），单分组时按 `pane.tabIds` 相对顺序 `insertBefore` 落回 pane 标签行。**只移动节点、不重建**（监听与 xterm 实例全部保留）。
+  - `workspace-manager.js` 新增两个**可选注入**：`resolveTabButtonHost`（按钮挂哪个容器）与 `findTabButton`（放宽按钮查找范围）。不注入时行为与改造前逐字一致。
+  - 两条不改就会错的细节：① 不补 `findTabButton`，被搬走的 Shell 会被 `prunePaneTabIds()` 判为不可渲染并从 `tabIds` 删除（**标签彻底消失**）；② 不补 `resolveTabButtonHost`，`applyLayoutToDom()` 会把按钮强制拽回 pane 行。
+  - `applyActiveTabToPane()` 的 `active` 清理改为按 `dataset.paneId` 全文档清，否则被搬走的 Shell 会残留激活态（「两个标签同时亮」）。
+  - CDP 实测：单分组 `inPaneRow:true`；多分组顺序 `[分组标签..., Shell]`；点击后终端切到该标签且仍在分组层；关闭多分组后回落 pane 行；`shellCount` 恒为 1。
 - [~] P2：渲染层分组上下文对象化（`isConnected`/`serialTerm`/`dataParser`/`hexFormatter`/`textDecoder`/`filterTabs`/`chartTabs`/`workspaceLayout` 收进分组对象，消费侧丢弃不匹配会话的字节）
   - [x] 第一步：新增 `serial-group-registry.js` 分组注册表，`accepts()` 作为「这条字节该不该进本分组终端」的唯一判定入口（带 `reason` 区分丢错与本该丢）；`renderer.js` 的 `serial-output-bytes` 归属性判定、`beginSession`/`invalidateSession` 已接入。配套 `test/serial-group-registry.test.js` 10 项全通过。
   - [x] 第二步：新增 `serial-group-context.js` 分组上下文（`SerialGroupContextStore`），提供 `serialLineCounter`/`logLineCounter`/`serialNewLine` 与四个收发显示参数；**其中只有三个计数器真正生效**（`getPrefix()`、`getLogPrefix()`、`clearTerminalByTabId`、连接成功重置均改走它），`receiveDisplayMode`/`receiveEncoding`/`sendEncoding`/`newlineMode` 仍由 `renderer.js` 自己的模块级 `let` 持有，`setDisplay()` 尚未被调用。配套 `test/serial-group-context.test.js` 8 项全通过。
@@ -208,8 +212,8 @@
   - [x] markup 计数断言已按预期改写：`enableTerminalUnicode11(term);` 由 2 → **3**（串口工厂/过滤/Shell）；另有一条改为断言 `buildSerialTerminalOptions()` 模板与工厂调用（模板才是唯一真相源）。
   - [x] **阻塞项已解除**：`#serial-container` 不再全局唯一——`ensureSerialGroupMainTabDom()` 为每个非默认分组建出 `serial-container-<groupId>`，并由 `serialRuntimes.getOrCreate(groupId)` 惰性构造终端；`getSerialRuntime(groupId)` / `getSerialTerm(groupId)` 已按分组取用且未登记回落默认。
 - [~] P3：双层标签栏与「添加串口」按钮（多分组两层，Shell 标签始终在分组层；只剩一组时回到单层）
-  - 已完成的子项见上方 P3 各条（标签归属/结构描述/输出分桶/数据面路由/DOM 接入与容器创建关闭）。
-  - **未完成**：Shell 标签与分组标签同级的两个层次投影。当前实现是「分组栏独立一行 + pane 标签行」两份，`serial-group-tabs.js` 的双层模型已具备但未接线。
+  - 已完成的子项见上方 P3 各条（标签归属/结构描述/输出分桶/数据面路由/DOM 接入与容器创建关闭/Shell 两层升降）。
+  - **仅剩的边界**：`filterTabs` / `chartTabs` 仍按全应用单例处理，只跟随激活分组。
 - [ ] P4：设置侧栏跟随 `activeGroupId`（串口参数按组，显示类与快捷指令保持全局）；**前置**：`setDisplay()` 至今零调用，需先把四个显示参数从模块级 `let` 下沉
 - [~] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）；**也是 P2 剩余部分的前置条件**
   - [x] 纯数据层：新增 `workspace-layout-shape.js`（`normalizePaneSizes` / `reconcileEmptyPanes` / `normalizeLayoutShape` / `createDefaultLayout`），`workspace-manager.js` 的同名函数改为委托调用。**硬约束：pane 数为 2 时输出必须与改造前逐字段一致**，由测试内嵌的 `legacyNormalize()` 用 10 组用例做 `assert.deepEqual` 对比。配套 `test/workspace-layout-shape.test.js` 16 项全通过。
