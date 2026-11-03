@@ -40,9 +40,11 @@ const { ChartDataModel } = require('./chart-data-model');
 const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
 const { SerialGroupContextStore } = require('./serial-group-context');
 const { SerialDataParser } = require('./serial-data-parser');
-const { mainTabId, serialContainerId } = require('./serial-group-dom');
+const { mainTabId, mainTabButtonId, serialContainerId } = require('./serial-group-dom');
 const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { SerialOutputBuckets } = require('./serial-output-buckets');
+const { addSerialGroup, removeSerialGroup } = require('./serial-groups-model');
+const { describeGroupTabBar, describeGroupTab } = require('./serial-group-tab-bar');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -277,6 +279,9 @@ const shellQuickCommandAppendEnterInput = document.getElementById('shell-quick-c
 const shellQuickCommandValidation = document.getElementById('shell-quick-command-validation');
 const workspaceRootEl = document.getElementById('workspace-root');
 const workspaceSplitterEl = document.getElementById('workspace-splitter');
+const serialGroupTabBarEl = document.getElementById('serial-group-tab-bar');
+const serialGroupTabListEl = document.getElementById('serial-group-tab-list');
+const addSerialGroupBtn = document.getElementById('add-serial-group-btn');
 let suppressMainInputFocus = false;
 const DEFAULT_SHORTCUTS = {
     sendMainInput: 'Ctrl+Enter',
@@ -2083,6 +2088,312 @@ function syncNextShellTabId(tabId) {
     if (Number.isFinite(numericId) && numericId >= nextShellTabId) {
         nextShellTabId = numericId + 1;
     }
+}
+
+// ---- 多串口分组：状态、标签栏、容器创建 -------------------------------------
+//
+// 这一层放在这里而不是文件顶部，是因为它要用到 getPaneTabsList / switchPaneTab /
+// addTabToPane 等已经定义好的函数；放到上方会在模块加载时碰到 TDZ。
+
+// 分组的权威列表。首版从配置的 serialGroups 初始化；空列表会回落到单个默认分组——
+// 用户可能把分组全关了，但渲染层必须至少有一个终端可以显示。
+let serialGroups = [];
+let activeGroupId = REGISTRY_DEFAULT_GROUP_ID;
+let isApplyingSessionGroups = false;
+
+function createDefaultSerialGroupState() {
+    const options = currentConfig?.lastSerialOptions || {};
+    return {
+        id: REGISTRY_DEFAULT_GROUP_ID,
+        title: typeof options.path === 'string' && options.path.trim() ? options.path.trim() : 'Serial 1',
+        portPath: typeof options.path === 'string' ? options.path.trim() : '',
+        status: 'disconnected',
+        sessionId: null,
+        serialOptions: {
+            baudRate: options.baudRate || '115200',
+            dataBits: String(options.dataBits || '8'),
+            stopBits: String(options.stopBits || '1'),
+            parity: options.parity || 'none',
+            receiveDisplayMode: options.receiveDisplayMode || receiveDisplayMode,
+            receiveEncoding: options.receiveEncoding || receiveEncoding,
+            sendEncoding: options.sendEncoding || sendEncoding,
+            newlineMode: options.newlineMode || newlineMode
+        },
+        filterTabs: [],
+        chartTabs: [],
+        workspaceLayout: null
+    };
+}
+
+function normalizeSerialGroupState(groups) {
+    const list = Array.isArray(groups) ? groups.filter(item => item && typeof item === 'object') : [];
+    const seen = new Set();
+    const normalized = [];
+    list.forEach((group, index) => {
+        const id = typeof group.id === 'string' && group.id.trim() ? group.id.trim() : '';
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        normalized.push({
+            ...group,
+            id,
+            title: typeof group.title === 'string' && group.title.trim() ? group.title.trim() : `Serial ${index + 1}`,
+            status: typeof group.status === 'string' ? group.status : 'disconnected'
+        });
+    });
+    if (!normalized.length) normalized.push(createDefaultSerialGroupState());
+    return normalized;
+}
+
+// 从配置里同步分组列表。只在首次加载与外部 config-updated 时调用。
+//
+// 关键：注册表必须对每个分组 ensureGroup，否则 serial-output-bytes 会以
+// unknown-group 把这些分组的全部字节静默丢弃。
+function syncSerialGroupsFromConfig(config) {
+    const next = normalizeSerialGroupState(config?.serialGroups);
+    serialGroups = next;
+    next.forEach(group => {
+        serialGroupRegistry.ensureGroup(group.id, { portPath: group.portPath });
+        serialGroupContext.ensureContext(group.id);
+    });
+    if (!next.some(group => group.id === activeGroupId)) {
+        activeGroupId = next[0].id;
+    }
+    serialGroupRegistry.setActiveGroup(activeGroupId);
+    next.forEach(group => {
+        ensureSerialGroupMainTabDom(group.id, group.title);
+    });
+    renderSerialGroupTabBar();
+    applyActiveSerialGroup({ fit: false });
+}
+
+// 为一个分组建主标签按钮 + 标签面板 + xterm 容器。
+//
+// 为什么不是在建分组时才建：配置里已经存在的分组（重启后）同样需要这些节点。
+// 已存在则直接返回，保证反复调用无副作用。
+function ensureSerialGroupMainTabDom(groupId, title) {
+    const id = resolveSerialGroupId(groupId);
+    const tabId = mainTabId(id);
+    const buttonId = mainTabButtonId(id);
+    const containerId = serialContainerId(id);
+    if (document.getElementById(containerId)) return true;
+
+    const paneId = 'pane-1';
+    const tabsList = getPaneTabsList(paneId);
+    const tabsContent = getPaneTabsContent(paneId);
+    if (!tabsList || !tabsContent) return false;
+
+    // 1. 标签按钮。与 index.html 里的静态主标签保持同一结构（title + close）。
+    //    默认分组已经有静态按钮，不会走到这里。
+    if (!document.getElementById(buttonId)) {
+        const button = document.createElement('button');
+        button.className = 'main-tab';
+        button.type = 'button';
+        button.id = buttonId;
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', 'false');
+        button.setAttribute('aria-controls', tabId);
+        button.dataset.target = tabId;
+        button.dataset.paneId = paneId;
+        const titleEl = document.createElement('span');
+        titleEl.className = 'main-tab-title';
+        titleEl.textContent = title || `Serial ${serialGroups.length}`;
+        button.appendChild(titleEl);
+        button.addEventListener('click', () => {
+            switchPaneTab(paneId, tabId);
+        });
+        tabsList.appendChild(button);
+    }
+
+    // 2. 标签面板 + 终端容器。容器必须先存在，createSerialRuntime 才能 open()。
+    const tabPane = document.createElement('div');
+    tabPane.className = 'main-tab-pane';
+    tabPane.id = tabId;
+    tabPane.setAttribute('role', 'tabpanel');
+    tabPane.setAttribute('aria-labelledby', buttonId);
+    tabPane.dataset.paneId = paneId;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'terminal-wrapper';
+    wrapper.id = containerId;
+    tabPane.appendChild(wrapper);
+    tabsContent.appendChild(tabPane);
+
+    // 3. 把这一个主标签登记进布局，否则 switchPaneTab 会因 tabIds 不含它而直接返回。
+    //    persist:false —— 布局持久化属于 P5，这里只在内存里保持一致。
+    addTabToPane(tabId, paneId, { activate: false, persist: false });
+    return true;
+}
+
+function getSerialGroupById(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    return serialGroups.find(group => group.id === id) || null;
+}
+
+// 切换激活分组：注册表、可见标签页、标签栏高亮一起改。
+function applyActiveSerialGroup({ fit = true } = {}) {
+    activeGroupId = resolveSerialGroupId(activeGroupId);
+    serialGroupRegistry.setActiveGroup(activeGroupId);
+
+    // 标签栏：active 类与 aria-selected 必须同步，否则键盘/读屏看到的选中项
+    // 与视觉上的高亮不一致。
+    document.querySelectorAll('.serial-group-tab').forEach(button => {
+        const isActive = button.dataset.groupId === activeGroupId;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-selected', String(isActive));
+    });
+
+    // 标签页：每个分组的主标签都是一个独立的 tab-pane，只让激活的那个 .active。
+    // 其余分组的标签若留在 pane.tabIds 里也无害——它们只是没有 .active。
+    const paneId = 'pane-1';
+    const targetTabId = mainTabId(activeGroupId);
+    if (document.getElementById(targetTabId)) {
+        switchPaneTab(paneId, targetTabId, { persist: false });
+    }
+    if (fit) fitWorkspaceTerminals();
+}
+
+// 重画分组标签栏。分组数 >= 2 时显示，=1 时隐藏（退回单层）。
+function renderSerialGroupTabBar() {
+    const barEl = document.getElementById('serial-group-tab-bar');
+    const listEl = document.getElementById('serial-group-tab-list');
+    if (!barEl || !listEl) return;
+
+    const model = describeGroupTabBar({
+        groups: serialGroups.map(group => ({
+            id: group.id,
+            title: group.title,
+            active: group.id === activeGroupId,
+            connected: group.status === 'connected'
+        })),
+        isMultiGroup: serialGroups.length > 1,
+        defaultGroupId: REGISTRY_DEFAULT_GROUP_ID
+    });
+
+    barEl.hidden = model.hidden;
+    listEl.replaceChildren();
+
+    model.tabs.forEach(spec => {
+        const tab = describeGroupTab(spec, { isDefault: spec.groupId === REGISTRY_DEFAULT_GROUP_ID });
+        const button = document.createElement('button');
+        button.className = tab.className;
+        button.type = 'button';
+        button.id = tab.buttonId;
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', String(tab.active));
+        button.dataset.groupId = tab.groupId;
+
+        const titleEl = document.createElement('span');
+        titleEl.className = 'main-tab-title';
+        titleEl.textContent = tab.title;
+        button.appendChild(titleEl);
+
+        // 双击重命名：与过滤页/图表页的交互一致，不给分组另造一套手势。
+        button.addEventListener('click', event => {
+            if (event.target.closest('.main-tab-close')) return;
+            activateSerialGroup(tab.groupId);
+        });
+
+        const closeEl = document.createElement('span');
+        closeEl.className = 'main-tab-close';
+        closeEl.id = tab.closeButtonId;
+        closeEl.title = tr('main.closeTab');
+        closeEl.appendChild(createMaterialIcon('close'));
+        if (!tab.closable) {
+            // 默认分组不可关闭，但按钮保留占位：若直接不渲染，标签宽度会在
+            // 分组之间跳变，点击位置也会跟着漂移。
+            closeEl.classList.add('disabled');
+        } else {
+            closeEl.addEventListener('click', event => {
+                event.stopPropagation();
+                closeSerialGroup(tab.groupId);
+            });
+        }
+        button.appendChild(closeEl);
+
+        listEl.appendChild(button);
+    });
+}
+
+function activateSerialGroup(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    if (id === activeGroupId) return;
+    activeGroupId = id;
+    applyActiveSerialGroup();
+}
+
+// 「添加串口」：新建分组后**保持 disconnected**，等用户手动点连接（产品决定）。
+function addSerialGroupFromUi() {
+    const current = getSerialGroupById(activeGroupId);
+    const result = addSerialGroup(serialGroups, { inheritFrom: current || undefined });
+    serialGroups = result.groups;
+    const groupId = result.groupId;
+    serialGroupRegistry.ensureGroup(groupId);
+    serialGroupContext.ensureContext(groupId);
+    ensureSerialGroupMainTabDom(groupId, result.group.title);
+    activeGroupId = groupId;
+    persistSerialGroups();
+    renderSerialGroupTabBar();
+    applyActiveSerialGroup();
+    setActionStatus(`已添加串口分组 ${result.group.title}`);
+
+    // 新分组是 disconnected，没有任何端口可用，把侧栏焦点交给用户去选端口。
+    if (portSelect) portSelect.focus();
+    return result.group;
+}
+
+function persistSerialGroups() {
+    ipcRenderer.send('save-config', { serialGroups });
+}
+
+// 关闭一个分组：断开连接 → 释放终端 → 移除节点 → 从列表移除 → 切到邻居。
+function closeSerialGroup(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    if (id === REGISTRY_DEFAULT_GROUP_ID) return false;
+    const group = getSerialGroupById(id);
+    if (!group) return false;
+
+    // 已连接时二次确认：直接关掉会静默中断正在收数据的端口。
+    if (group.status === 'connected' && !window.confirm(`串口分组「${group.title}」仍处于连接状态，关闭将断开该端口。是否继续？`)) {
+        return false;
+    }
+
+    ipcRenderer.send('disconnect-serial', { groupId: id });
+    const tabId = mainTabId(id);
+    const buttonId = mainTabButtonId(id);
+    const containerId = serialContainerId(id);
+    serialRuntimes.release(id);
+    serialGroupIo.delete(id);
+    serialOutputBuckets.clear(id);
+    serialGroupContext.removeContext(id);
+    serialGroupRegistry.removeGroup(id);
+    document.getElementById(buttonId)?.remove();
+    document.getElementById(tabId)?.remove();
+    document.getElementById(containerId)?.remove();
+    removeTabFromWorkspace(tabId, { fallbackTabId: mainTabId(REGISTRY_DEFAULT_GROUP_ID), persist: false });
+
+    const previousGroups = serialGroups;
+    const removal = removeSerialGroup(serialGroups, id);
+    serialGroups = removal.groups;
+    if (!serialGroups.length) serialGroups = [createDefaultSerialGroupState()];
+    activeGroupId = resolveGroupAfterClose(previousGroups, id, activeGroupId);
+    if (!activeGroupId) activeGroupId = serialGroups[0].id;
+
+    persistSerialGroups();
+    renderSerialGroupTabBar();
+    applyActiveSerialGroup();
+    setActionStatus(`已关闭串口分组 ${group.title}`);
+    return true;
+}
+
+// 关闭分组后选哪个：优先右邻，没有右邻再左邻（与 serial-group-tabs.js 同一规则）。
+function resolveGroupAfterClose(groups, closedGroupId, currentActiveGroupId) {
+    const list = Array.isArray(groups) ? groups.filter(group => group && typeof group.id === 'string') : [];
+    const closedIndex = list.findIndex(group => group.id === closedGroupId);
+    if (closedIndex === -1) return currentActiveGroupId;
+    const remaining = list.filter(group => group.id !== closedGroupId);
+    if (!remaining.length) return null;
+    if (closedGroupId !== currentActiveGroupId) return currentActiveGroupId;
+    const nextIndex = Math.min(closedIndex, remaining.length - 1);
+    return remaining[nextIndex].id;
 }
 
 function updateTabTitles() {
@@ -4658,6 +4969,11 @@ function applyConfig(config) {
         lastAppliedWorkspaceLayoutKey = JSON.stringify(cloneWorkspaceLayout(workspaceLayout));
     }
 
+    // 分组列表与分组容器：放在布局恢复之后，确保 pane 的 tabs-list/tabs-content
+    // 已经在 DOM 里。首次加载时这里会把 serialGroups 从配置里同步进来；
+    // 之后 config-updated（含我们自己的 persistSerialGroups 回声）会重同步一次。
+    if (!isApplyingSessionGroups) syncSerialGroupsFromConfig(config);
+
     serialFitAddon.fit();
 
     fitWorkspaceTerminals();
@@ -5332,6 +5648,13 @@ async function toggleSerialConnection() {
 }
 
 connectBtn.addEventListener('click', toggleSerialConnection);
+
+// ---- 多串口分组：UI 事件 -------------------------------------------------
+
+// 「添加串口」：新建分组后保持 disconnected，等用户手动点连接。
+addSerialGroupBtn?.addEventListener('click', () => {
+    addSerialGroupFromUi();
+});
 
 // refreshPorts(); // Moved to config load chain
 

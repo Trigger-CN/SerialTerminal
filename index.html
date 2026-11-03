@@ -271,6 +271,14 @@
     </div>
 
     <div class="main-container">
+        <!-- 分组层：只有分组数 >= 2 时显示。位于 pane 标签行之上，Shell 标签不归属任何分组，
+             因此它在双层模式下与分组标签同级、在单层模式下与串口标签混排。 -->
+        <div class="serial-group-tab-bar" id="serial-group-tab-bar" hidden>
+            <div class="main-tabs-list serial-group-tab-list" id="serial-group-tab-list" role="tablist"></div>
+            <div class="serial-group-tab-actions">
+                <button id="add-serial-group-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
+            </div>
+        </div>
         <div class="workspace-root" id="workspace-root">
             <div class="workspace-pane active" id="pane-1" data-pane-id="pane-1">
                 <div class="main-tabs-header pane-tabs-header">
