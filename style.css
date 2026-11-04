@@ -1850,6 +1850,77 @@ html.custom-titlebar .window-titlebar {
     height: 100vh;
 }
 
+/* 分组级（外层）分屏容器：横向排列若干“分组工作区”，每项就是一个完整的 workspace-root。
+   默认分组那项就是静态 #workspace-root；其余分组是 #serial-group-workspace-<g>。 */
+.group-workspace {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+}
+/* 纵向分组级分屏：容器转 column，每一项的 flex-basis 由 JS 写在行内。 */
+.group-workspace.split-vertical {
+    flex-direction: column;
+}
+
+/* 每个分组自己的工作区：它自己又是一个 .workspace-root，内部还有组内分屏。
+   默认分组不套这层（它直接就是静态 #workspace-root），所以这里只服务非默认分组。 */
+.serial-group-workspace {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+}
+.serial-group-workspace[hidden] {
+    display: none;
+}
+
+/* 分组级拖动分界条。样式与组内分界条一致，只是它作用于外层容器。 */
+.group-workspace-splitter {
+    flex: 0 0 10px;
+    background: transparent;
+    cursor: col-resize;
+    position: relative;
+    z-index: 2;
+}
+.group-workspace-splitter[hidden] {
+    display: none;
+}
+.group-workspace-splitter::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    transform: translateX(-50%);
+    background: var(--border-color);
+}
+.group-workspace.split-vertical .group-workspace-splitter {
+    flex-basis: 10px;
+    width: 100%;
+    cursor: row-resize;
+}
+.group-workspace.split-vertical .group-workspace-splitter::before {
+    top: 50%;
+    bottom: auto;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 1px;
+    transform: translateY(-50%);
+}
+.group-workspace-splitter:hover {
+    background: rgba(0, 122, 204, 0.08);
+}
+.group-workspace-splitter:hover::before {
+    background: var(--accent-color);
+}
+
 .workspace-root {
     flex: 1;
     min-height: 0;

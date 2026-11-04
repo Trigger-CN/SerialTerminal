@@ -279,6 +279,11 @@
                 <button id="add-serial-group-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
             </div>
         </div>
+        <!-- 分组级（外层）分屏容器：每个直接子元素就是“一个分组的工作区”。
+             默认分组直接用它内部那个静态 #workspace-root（id 与内部结构逐字不变，
+             因为 #serial-container 在模块加载期就被 xterm open() 了），
+             其余分组是 #serial-group-workspace-<g> 这类动态容器。 -->
+        <div class="group-workspace" id="group-workspace">
         <div class="workspace-root" id="workspace-root">
             <div class="workspace-pane active" id="pane-1" data-pane-id="pane-1">
                 <div class="main-tabs-header pane-tabs-header">
@@ -309,6 +314,8 @@
                 </div>
                 <div class="main-tabs-content pane-tabs-content" id="pane-2-tabs-content"></div>
             </div>
+        </div>
+            <div class="group-workspace-splitter" id="group-workspace-splitter" hidden></div>
         </div>
         <div class="main-input-panel" id="main-input-panel">
             <div class="main-input-row">

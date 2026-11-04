@@ -7,11 +7,15 @@ const path = require('node:path');
 
 const {
   DEFAULT_GROUP_PANE_COUNT,
+  GROUP_WORKSPACE_CONTAINER_ID,
+  GROUP_WORKSPACE_SPLITTER_ID,
   groupWorkspaceSuffix,
   groupWorkspaceRootId,
   groupPaneId,
   groupSplitterId,
   groupWorkspaceContainerId,
+  groupWorkspaceEntryId,
+  resolveGroupWorkspaceEntries,
   describeGroupPanes,
   describeGroupWorkspace,
   findMissingGroupPaneIds
@@ -122,6 +126,37 @@ test('findMissingGroupPaneIds degrades safely without a predicate', () => {
   const workspace = describeGroupWorkspace('g-1', { paneCount: 2 });
   assert.deepEqual(findMissingGroupPaneIds(workspace), ['pane-1-g-1', 'pane-2-g-1']);
   assert.deepEqual(findMissingGroupPaneIds(null), []);
+});
+
+test('the default group occupies the static workspace-root directly, others get a wrapper', () => {
+  // 外层条目就是「一个分组在分组级容器里占的那一格」。默认分组复用静态 #workspace-root，
+  // 因此不能给它再包一层容器（会改变 #serial-container 的祖先链，而 xterm 已在模块加载期
+  // open() 了它）。其它分组才是 #serial-group-workspace-<g>。
+  assert.equal(groupWorkspaceEntryId('default'), 'workspace-root');
+  assert.equal(groupWorkspaceEntryId('g-1'), 'serial-group-workspace-g-1');
+});
+
+test('resolveGroupWorkspaceEntries maps every group to its own outer entry', () => {
+  // paneIds 必须跟着分组走：把默认分组的 pane-1 给 g-1 用，会两个分组抢同一个 DOM 节点，
+  // 表现为「切了分组但界面没变」，且没有任何报错。
+  const entries = resolveGroupWorkspaceEntries(['default', 'g-1']);
+  assert.deepEqual(entries, [
+    { groupId: 'default', entryId: 'workspace-root', paneIds: ['pane-1'] },
+    { groupId: 'g-1', entryId: 'serial-group-workspace-g-1', paneIds: ['pane-1-g-1'] }
+  ]);
+  assert.deepEqual(resolveGroupWorkspaceEntries(null), []);
+  assert.deepEqual(resolveGroupWorkspaceEntries(['default', '']), [
+    { groupId: 'default', entryId: 'workspace-root', paneIds: ['pane-1'] }
+  ]);
+});
+
+test('outer splitter ids match the real static markup in index.html', () => {
+  // 与默认分组 pane 的那条同理：只断言函数返回字符串不够，必须证明这些 id 真的在页面里。
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.equal(GROUP_WORKSPACE_CONTAINER_ID, 'group-workspace');
+  assert.equal(GROUP_WORKSPACE_SPLITTER_ID, 'group-workspace-splitter');
+  assert.match(html, /id="group-workspace"/);
+  assert.match(html, /id="group-workspace-splitter"/);
 });
 
 test('every group workspace id is unique across a realistic group set', () => {

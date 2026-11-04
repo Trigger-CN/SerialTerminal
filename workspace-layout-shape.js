@@ -14,15 +14,27 @@ const DEFAULT_PANE_ID = 'pane-1';
 const MAIN_TAB_ID = 'tab-main';
 
 function createDefaultLayout() {
+  return createDefaultLayoutFor();
+}
+
+// 按分组构造默认布局。P5 两级分屏后每个分组各有一套 pane，
+// pane id 与主标签 id 都必须跟着分组走（'pane-1-g-1' / 'tab-main-g-1'）。
+//
+// 默认参数保持 pane-1/pane-2 与 tab-main，因此不传参时输出与改造前逐字段一致。
+function createDefaultLayoutFor({ paneIds = null, mainTabId = MAIN_TAB_ID } = {}) {
+  const ids = (Array.isArray(paneIds) && paneIds.length) ? [...paneIds] : ['pane-1', 'pane-2'];
+  const paneSizes = {};
+  ids.forEach(id => { paneSizes[id] = 1 / ids.length; });
   return {
     splitEnabled: false,
     orientation: 'horizontal',
-    activePaneId: DEFAULT_PANE_ID,
-    paneSizes: { 'pane-1': 0.5, 'pane-2': 0.5 },
-    panes: [
-      { id: 'pane-1', activeTabId: MAIN_TAB_ID, tabIds: [MAIN_TAB_ID] },
-      { id: 'pane-2', activeTabId: null, tabIds: [] }
-    ]
+    activePaneId: ids[0],
+    paneSizes,
+    panes: ids.map((id, index) => ({
+      id,
+      activeTabId: index === 0 ? mainTabId : null,
+      tabIds: index === 0 ? [mainTabId] : []
+    }))
   };
 }
 
@@ -116,8 +128,8 @@ function reconcileEmptyPanes(layout) {
 
 // 归一化任意布局对象。pane 列表以调用方给出的 paneIds 为准：
 // 传入 paneIds 时按它构造（用于新增/删除 pane），否则沿用 source 的 pane 顺序。
-function normalizeLayoutShape(layout, { paneIds = null, defaultLayout = null } = {}) {
-  const base = defaultLayout ? JSON.parse(JSON.stringify(defaultLayout)) : createDefaultLayout();
+function normalizeLayoutShape(layout, { paneIds = null, defaultLayout = null, mainTabId = MAIN_TAB_ID } = {}) {
+  const base = defaultLayout ? JSON.parse(JSON.stringify(defaultLayout)) : createDefaultLayoutFor({ paneIds, mainTabId });
   const source = layout && typeof layout === 'object' ? layout : {};
 
   const sourcePanes = Array.isArray(source.panes) ? source.panes : [];
@@ -146,9 +158,11 @@ function normalizeLayoutShape(layout, { paneIds = null, defaultLayout = null } =
     target.activeTabId = target.tabIds.includes(activeTabId) ? activeTabId : (target.tabIds[0] || null);
   });
 
-  if (!usedTabIds.has(MAIN_TAB_ID) && normalized.panes.length) {
-    normalized.panes[0].tabIds.unshift(MAIN_TAB_ID);
-    normalized.panes[0].activeTabId ||= MAIN_TAB_ID;
+  // 主标签必须跟着分组走：非默认分组的主标签是 'tab-main-g-1'，把它替换成全局
+  // 'tab-main' 会让两个分组抢同一个标签 id。主标签已经在的话就不补，避免重复插入。
+  if (!usedTabIds.has(mainTabId) && normalized.panes.length) {
+    normalized.panes[0].tabIds.unshift(mainTabId);
+    normalized.panes[0].activeTabId ||= mainTabId;
   }
 
   if (!normalized.panes.find(pane => pane.id === normalized.activePaneId)?.tabIds.length) {
@@ -163,6 +177,7 @@ module.exports = {
   DEFAULT_PANE_ID,
   MAIN_TAB_ID,
   createDefaultLayout,
+  createDefaultLayoutFor,
   normalizePaneSizes,
   normalizeLayoutShape,
   reconcileEmptyPanes

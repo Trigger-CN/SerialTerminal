@@ -51,11 +51,47 @@ function createWorkspaceManager(options = {}) {
         resolveTabButtonHost,
         // 可选：按 data-target 查找标签按钮。默认只在 pane 内找，但被搬到外层的按钮
         // 不在那个 pane 里，必须允许调用方提供更宽的查找。
-        findTabButton
+        findTabButton,
+        // 可选：把「本分组的工作区根节点 / 分组内分界条 / 本分组的 pane 元素列表」
+        // 接管成注入式。P5 两级分屏后每个分组各有一套 root 与 splitter，id 带分组后缀（非默认
+        // 分组是 workspace-root-g-1 这类），全局 getElementById('workspace-root') 会永远
+        // 取到默认分组那份。不注入时逐字沿用改造前的全局写法，单串口行为零变化。
+        getWorkspaceRoot,
+        getSplitter,
+        getPaneElements
     } = options;
 
     function getLayoutState() {
         return getLayout();
+    }
+
+    // 以下三个解析器是 P5 两级分屏的接入点：每个分组各有一套 root / splitter / pane 集合，
+    // 默认回调逐字沿用改造前的全局写法（单串口行为零变化），非默认分组由调用方注入。
+    function resolveWorkspaceRoot() {
+        if (typeof getWorkspaceRoot === 'function') {
+            const root = getWorkspaceRoot();
+            if (root) return root;
+        }
+        return document.getElementById('workspace-root');
+    }
+
+    function resolveSplitter() {
+        if (typeof getSplitter === 'function') {
+            const splitter = getSplitter();
+            if (splitter) return splitter;
+        }
+        return document.getElementById('workspace-splitter');
+    }
+
+    // 注意必须返回「本分组自己的」pane 元素。用 document.querySelectorAll('.workspace-pane')
+    // 会把其它分组的 pane 一并算进来：两组同时存在时切 activePaneId 会把两个分组的 pane
+    // 激活态一起改，表现为「切一个分组，另一个分组的边框也亮了」。
+    function resolvePaneElements() {
+        if (typeof getPaneElements === 'function') {
+            const list = getPaneElements();
+            if (Array.isArray(list)) return list;
+        }
+        return Array.from(document.querySelectorAll('.workspace-pane'));
     }
 
     // 布局可能包含 DOM 里还不存在的 pane（静态页只有两个，而布局层已支持 N 个）。
@@ -229,7 +265,7 @@ function createWorkspaceManager(options = {}) {
         const layout = getLayoutState();
         const paneIds = getPaneIds();
         layout.activePaneId = paneIds.includes(paneId) ? paneId : (paneIds[0] || 'pane-1');
-        document.querySelectorAll('.workspace-pane').forEach(paneEl => {
+        resolvePaneElements().forEach(paneEl => {
             paneEl.classList.toggle('active', paneEl.dataset.paneId === layout.activePaneId);
         });
         if (persist) {
@@ -249,8 +285,8 @@ function createWorkspaceManager(options = {}) {
     }
 
     function updatePaneVisibility() {
-        const root = document.getElementById('workspace-root');
-        const splitter = document.getElementById('workspace-splitter');
+        const root = resolveWorkspaceRoot();
+        const splitter = resolveSplitter();
         if (!root) return;
         root.classList.toggle('split-vertical', getOrientation() === 'vertical');
         root.classList.toggle('split-horizontal', getOrientation() !== 'vertical');
@@ -264,7 +300,7 @@ function createWorkspaceManager(options = {}) {
     }
 
     function applyPaneSizes() {
-        const root = document.getElementById('workspace-root');
+        const root = resolveWorkspaceRoot();
         if (!root) return;
         // 旧实现用两个 CSS 变量（--pane-1-size / --pane-2-size）表达尺寸，pane 一多就无法表达。
         // 改为把尺寸直接写到每个 pane 的 flex-basis 上，任意 pane 数都成立。

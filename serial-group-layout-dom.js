@@ -99,13 +99,48 @@ function findMissingGroupPaneIds(workspace, hasPaneElement) {
   return paneIds.filter(paneId => !hasPaneElement(paneId));
 }
 
+// ---- 外层（分组级）分屏的 id 契约 ----
+//
+// 两级分屏的外层容器把「每个分组的工作区」当作一个外层面板。它与内层 pane 是两套独立概念：
+// 内层 pane id 是 `pane-<n><后缀>`，外层容器 id 是 `serial-group-workspace-<g>`，
+// 两者不能混用，否则「哪个分组在哪个外层面板」就无从表达。
+const GROUP_WORKSPACE_CONTAINER_ID = 'group-workspace';
+const GROUP_WORKSPACE_SPLITTER_ID = 'group-workspace-splitter';
+
+// 这是第一个分支的 id：默认分组不额外包一层，它自己就是静态 #workspace-root。
+// 其它分组则套一个 .serial-group-workspace 容器。
+//
+// 为什么默认分组不包：把 #workspace-root 再包一层会改变 #serial-container 的祖先链，
+// 而 xterm 在模块加载期就 open() 了它。现在的做法是「默认分组直接占外层容器的一个位置」，
+// 启动路径的 DOM 结构除了多一个父层（#group-workspace）之外完全不变。
+function groupWorkspaceEntryId(groupId) {
+  const id = normalizeGroupId(groupId);
+  if (id === DEFAULT_SERIAL_GROUP_ID) return groupWorkspaceRootId(id);
+  return groupWorkspaceContainerId(id);
+}
+
+// 找出「应该显示的外层条目」。分组数 >= 2 时才用分组级分屏；
+// 只有一个分组时外层只留默认分组那一条，且不分屏。
+function resolveGroupWorkspaceEntries(groupIds) {
+  const ids = Array.isArray(groupIds) ? groupIds.filter(id => typeof id === 'string' && id) : [];
+  return ids.map(groupId => ({
+    groupId: normalizeGroupId(groupId),
+    entryId: groupWorkspaceEntryId(groupId),
+    paneIds: describeGroupWorkspace(groupId).paneIds
+  }));
+}
+
 module.exports = {
   DEFAULT_GROUP_PANE_COUNT,
+  GROUP_WORKSPACE_CONTAINER_ID,
+  GROUP_WORKSPACE_SPLITTER_ID,
   groupWorkspaceSuffix,
   groupWorkspaceRootId,
   groupPaneId,
   groupSplitterId,
   groupWorkspaceContainerId,
+  groupWorkspaceEntryId,
+  resolveGroupWorkspaceEntries,
   describeGroupPanes,
   describeGroupWorkspace,
   findMissingGroupPaneIds
