@@ -3085,6 +3085,37 @@ function updateSidebarActiveGroupLabel() {
         container.dataset.groupId = activeGroupId;
         container.dataset.connected = group?.status === 'connected' ? 'true' : 'false';
     }
+    syncAllGroupMainTabTitles();
+}
+
+// 让每个分组的主标签按钮显示**它自己的分组名**。
+//
+// 默认分组的主标签来自 index.html 的静态标记，带着 data-i18n="main.mainTerminal"，
+// 国际化一跑就被改回「主终端」。于是多分组时会出现「新建的分组叫 COM2、
+// 默认分组却叫主终端」这种不一致，用户会觉得两者是两种不同的东西。
+//
+// 这里统一改成分组名，并移除 data-i18n，避免下一次 applyConfig 又把它覆盖回去。
+function syncAllGroupMainTabTitles() {
+    serialGroups.forEach(group => {
+        const button = document.getElementById(mainTabButtonId(group.id));
+        if (!button) return;
+        const title = group.title || group.id;
+        // 静态按钮的文案是直接文本节点，动态按钮里包了一层 .main-tab-title。
+        const titleEl = button.querySelector('.main-tab-title');
+        if (titleEl) {
+            titleEl.textContent = title;
+        } else if (!button.querySelector('.main-tab-close')) {
+            button.textContent = title;
+        } else {
+            // 静态按钮：文本节点 + 关闭占位符，只改文本节点。
+            const textNode = Array.from(button.childNodes)
+                .find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+            if (textNode) textNode.textContent = title;
+            else button.insertBefore(document.createTextNode(title), button.firstChild);
+        }
+        button.removeAttribute('data-i18n');
+        button.title = title;
+    });
 }
 
 // 切换到一个 Shell 标签。
