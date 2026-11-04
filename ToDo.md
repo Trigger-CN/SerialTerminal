@@ -248,6 +248,12 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 - [x] **静态未定义标识符扫描**：`.me/tmp/*/scan-undefined.js` 扫 50 个候选标识符，`checked=50 / missing=none`。它是第三层保险，**不做真正的作用域分析**，用途只是「新写的代码里漏了 require 或漏了声明」。
 - [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **54/54 PASS、退出码 0**。覆盖：单分组时分组栏隐藏、建出 `serial-container-g-1`/`tab-main-g-1`/`tab-main-g-1-button`、新分组成为 active、切回默认分组高亮正确、关闭后分组栏与容器均移除、默认分组不受影响、Shell 两层升降 10 项、**P4 侧栏参数隔离 6 项**、**P5 两级分屏 9 项**（外层容器、外层分界条可见、两组各自拥有 root/pane-1/标签行、主标签不串行、两组工作区同时可见、`#serial-container` 仍在静态 pane-1 内、g-1 终端容器在自己的 pane-1）、**多串口入口 9 项**（单分组时 inline 入口可见且在 `pane-1-tab-actions`；多分组时 inline 被隐藏、恰好一个入口可见且是 `#add-serial-group-btn`、全文档只存在两个入口实例）、渲染进程零未捕获错误。
 - [x] **两层入口互斥（`a4dac1f` 之后的修复）**：单分组亮 `#add-serial-group-inline-btn`，多分组亮 `#add-serial-group-btn`。根因不是 JS——`style.css` 全局 `button { display: inline-flex }` 覆盖了 `[hidden]`，导致 `el.hidden = true` 对按钮无效；已在 `button` 规则后补 `[hidden] { display: none !important }`，并用 `probe-hidden-regression.js` 逐项复验 14 个依赖 `[hidden]` 的元素（`violations=[]`）。
+- [x] **分组工作区可见性模型（`bf016a4`）**：未分屏时**只显示激活分组**（`resolveVisibleGroupWorkspaceEntryIds()`）；已分屏时显示参与分屏的分组并强制加入激活分组；Shell 覆盖时额外加上默认分组。实测：三组时从 `visibleLabelRows: 3`（三套各 387px 并排）变为 `visibleLabelRows: 1`（占满 799px），关中间组仍为 1，关激活组正确回落默认分组。
+- [x] **Shell 回归修复（未提交时的验证）**：`verify-shell.js` **16/16 PASS、exit=0**（`verify-shell-out2.txt`，隔离实例 `userdata-diag4`）。覆盖：单分组建 Shell → 加分组切到 g-1（默认分组 `display:none` 且 rect 为 0）→ 点分组层 Shell 标签（ `#workspace-root` 重新有尺寸、Shell 面板 `.active` 且 w/h > 0）→ **`activeGroupId` 仍为 g-1** → 点回 g-1 主标签（默认分组重新隐藏，override 已清空）。
+- [x] **主标签文案与侧栏分组名**：`verify-titles.js` **6/6 PASS**，实测 `default → "Serial 1"`、`g-1 → "Serial 2"`，且 `hasI18n === false`。
+- [ ] **`verify-groups.js` 的 54 项断言已部分过期**：凡假设「多分组 ⇒ 多工作区同时可见」的项都因 `bf016a4` 的语义变更而失败——**失败原因是断言过期（「两组工作区同时可见」已不再是默认行为），不是产品缺陷**。重跑前必须先更新这些断言。
+- [ ] **分组级分屏无 UI 入口（阻塞项）**：`setGroupWorkspaceSplit()` / `bindGroupWorkspaceSplitter()` / `placeGroupWorkspaceSplitter()` 已落地，但没有任何 UI 能调到它们。因此并排显示、分界条拖动、分界条位置修正**全部无真实点击证据**。另：`.group-split-vertical` / `.group-split-horizontal` 的 CSS `flex-direction` 规则尚未补。
+- [ ] **新建分组的终端右键菜单未做 CDP 验证**：代码已补绑（`term` 传函数惰性取本组 xterm），但未真的在新分组终端上派发 `contextmenu` 事件并断言菜单请求。
 - [ ] **两级分屏的拖动与 fit 未覆盖**：分界条的实际比例换算与「拖动非默认分组的标签」只有静态审查；切回 `display:none` 容器后的 `fit()` 未肉眼确认。
 - [x] 配置迁移磁盘验证：独立 `--user-data-dir` 连启两次，`config.json` 均为 v15 + 1 组，旧字段保留，`config.v14.backup.json` 保持 21667 字节的 v14 原件且第二次启动未覆盖。
 - [x] 实机启动：主窗口正常出现，`main.log` 与渲染进程 stderr 均无 JS 错误，electron 进程清理后 `remaining: 0`。

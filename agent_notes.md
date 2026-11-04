@@ -1251,6 +1251,84 @@ let workspaceLayout = null;                // 同上
 **验证**：54/54 CDP PASS、`npm test` 467/467。新增 9 项含「全文档只存在两个入口实例」的全量清点（按标题而非 id 识别，因为动态 pane 的 id 带 paneId 前缀无法枚举）。另用 `probe-hidden-regression.js` 逐项复验 14 个依赖 `[hidden]` 的元素，`violations=[]`。
 
 **仍未验证**：分屏后的入口互斥没有单独 CDP 用例——分屏由主进程右键菜单 IPC 触发，CDP 无法直接调起。依据是「`buttonSpecs` 已不含 group 项」的代码事实 + 全文档清点的间接保障。
+### 分组工作区可见性、分组级分屏与 Shell 覆盖（已落地）
+
+**可见性模型（`bf016a4` 起）**：分组工作区不再「有几个分组就并排几套」。`syncGroupWorkspaceVisibility()` 委托 `resolveVisibleGroupWorkspaceEntryIds()`：
+
+- **未分屏（默认）**：只返回激活分组的 entryId —— 一套下层标签行。
+- **已分屏**：返回 `groupWorkspaceSplit.groupIds` 中仍存在的分组，**并强制加入激活分组**（否则切到一个没参与分屏的分组会导致屏幕全空）。
+- **Shell 覆盖**：若 `shellWorkspaceOverride` 有值，把该分组的 entryId 也加进可见集合。
+- **外层分界条**：`hidden = !(enabled && visibleSize > 1)`。
+
+修复前的实测形态是三套并排、各 387px、`visibleLabelRows: 3`；修复后只显示激活分组、占满可用宽度、`visibleLabelRows: 1`（`diag-tabs-out3.txt`）。
+
+**分组级分屏状态机**：
+
+```js
+const groupWorkspaceSplit = {
+    enabled: false,          // 默认关闭 —— 分屏必须是用户主动能力
+    groupIds: [],            // 参与并排的分组，有序决定左右/上下
+    orientation: 'horizontal',
+    sizes: {}                // groupId -> 比例
+};
+```
+
+| 函数 | 职责 |
+|---|---|
+| `resetGroupWorkspaceSplit()` | 复位到未分屏 |
+| `getGroupSplitCandidates()` | 需 `serialGroups.length >= 2`，否则返回空 |
+| `pruneGroupWorkspaceSplit()` | 清掉已不存在的分组；剩余 < 2 时自动退出分屏 |
+| `setGroupWorkspaceSplit(enabled, { groupIds, orientation })` | 开启/关闭；参与组不足 2 时默认取「激活组 + 邻居」 |
+| `applyGroupWorkspaceSplitLayout()` | 先清所有条目的 `flex-basis`/`flex`，再给参与分屏的写 `flexBasis` + `flexGrow:0` + `flexShrink:0` |
+| `bindGroupWorkspaceSplitter()` | 委托 `[data-group-splitter="group"]` 的 pointerdown；比例按**外层** `#group-workspace` 矩形算 |
+| `placeGroupWorkspaceSplitter()` | 把分界条移到「第一个可见分组之后」；已在正确位置则 no-op |
+
+**退出分屏必须清 `flex-basis`**，否则上次比例残留，表现为「退出分屏后当前分组只占半宽」。
+
+**拖动比例的一个顺序陷阱**：`bindGroupWorkspaceSplitter()` 的 `flush()` 里必须先算旧权重、再覆写 `groupWorkspaceSplit.sizes`。倒过来会把右侧全变成 0——因为「其余分组按原权重瓜分剩余」需要读取覆写前的值。
+
+**分界条位置**：`#group-workspace-splitter` 原先放在 `#group-workspace` 末尾（flex 排列下自然落到最右），且 `ensureSerialGroupWorkspaceDom()` 用 `insertBefore(container, outerSplitter)` 每加一组就把它再往右推。现由 `placeGroupWorkspaceSplitter()` 在每次同步可见性时重排到第一个可见分组之后。
+
+**Shell 覆盖（`shellWorkspaceOverride`）**：Shell 面板住在**默认分组**的 `pane-1` 里（`switchShellTab` 固定走 `getGroupWorkspaceManager(REGISTRY_DEFAULT_GROUP_ID)`）。一旦可见性改成「只显示激活分组」，切到 g-1 后默认分组整条被 `hidden`，`switchShellTab()` 只切默认分组的布局与 `.active` 类 → 标签高亮但屏幕全空，用户报「点 shell 标签没反应」。
+
+```js
+// 必须声明在 switchPaneTab 之前：那里会清空它，模块加载期就可能被调用。
+let shellWorkspaceOverride = null;
+
+function switchShellTab(tabId) {
+    const defaultManager = getGroupWorkspaceManager(REGISTRY_DEFAULT_GROUP_ID);
+    const paneId = defaultManager.getPaneIdForTabId(tabId);
+    shellWorkspaceOverride = REGISTRY_DEFAULT_GROUP_ID;
+    syncGroupWorkspaceVisibility();
+    const switched = defaultManager.switchPaneTab(paneId, tabId);
+    fitWorkspaceTerminals();
+    return switched;
+}
+
+function switchPaneTab(paneId, tabId, options = {}) {
+    // 任何串口标签的切换都意味着离开了 Shell。
+    if (shellWorkspaceOverride) {
+        shellWorkspaceOverride = null;
+        syncGroupWorkspaceVisibility();
+    }
+    return workspaceManager.switchPaneTab(paneId, tabId, options);
+}
+```
+
+**关键不变量：`shellWorkspaceOverride` 只影响可见性，绝不修改 `activeGroupId`。** 侧栏必须仍停留在原来那个串口分组。
+
+**主标签文案 = 分组名**：默认分组的主标签来自 `index.html` 静态标记，带 `data-i18n="main.mainTerminal"`，国际化一跑就改回「主终端」，导致「新分组叫 Serial 2、默认分组叫主终端」的不一致。`syncAllGroupMainTabTitles()` 遍历 `serialGroups`，把每个主标签按钮文案改为分组名，并 **`button.removeAttribute('data-i18n')`** 防下次覆盖。两种 DOM 结构都要处理：动态按钮内有 `.main-tab-title`，静态按钮是裸文本节点 + 关闭占位符。**`getMainTabTitle()` 不改**——它用于日志文件名（`Main_Terminal` / `Main_Terminal_<g>`）。
+
+**各分组终端必须逐个绑定右键菜单**：`bindTerminalContextMenu` 原先只在模块加载期对默认分组的 `#serial-container` 绑一次，新分组的容器是后建的 → 「新建的串口窗口没有右键菜单」。补绑时 **`term` 必须传函数而非实例**（`term: () => getSerialTerm(id)`）：新分组的 xterm 由 `createSerialRuntime` 在切标签时才建，此刻 `getSerialRuntime` 会回落到 `defaultSerialRuntime`，右键菜单里的选区/清屏全部作用于**错的终端**。
+
+**解构参数里不能写 getter**：`function f({ get term() { ... } })` 报 `SyntaxError: Invalid destructuring assignment target`。必须用普通参数 + 内部 `resolveTerm()`。
+
+**验证**：CDP `verify-titles.js` 6/6（侧栏分组名 + 主标签文案）；CDP `verify-shell.js` **16/16、exit=0**（`verify-shell-out2.txt`，隔离实例 `userdata-diag4`）覆盖 Shell 覆盖的完整生命周期：单分组建 Shell → 加分组切到 g-1（断言默认分组 `display:none` 且 rect 为 0）→ 点分组层的 Shell 标签（断言 `#workspace-root` 重新有尺寸、Shell 面板 `.active` 且 w/h > 0）→ **断言 `activeGroupId` 仍为 g-1** → 点回 g-1 主标签（断言默认分组重新隐藏，override 已清空）。
+
+**仍未验证**：分组级分屏**没有任何 UI 入口**——`setGroupWorkspaceSplit()` 在模块内，用户看不到「左右分屏 / 上下分屏 / 关闭分屏」，这是「开两个串口分组没有分屏手段」的直接原因。另：`#group-workspace.group-split-vertical` / `.group-split-horizontal` 的 CSS `flex-direction` 规则尚未补，上下分屏目前不会真正改方向。
+
+**验证脚本自身的一次失效（必记）**：`verify-shell.js` 第一版把「归一化到单分组」断言成 `.serial-group-tab` 数量 === 1，实测为 0。查 `renderSerialGroupTabBar()` 确认：单分组时 `barEl.hidden = true` 且 `listEl.replaceChildren()`，**列表本就是空的**。这是断言写错而非产品缺陷，按判据（改动不让被验证行为更正确）改为断「栏隐藏 + 列表为空」。
+
 
 
 **本轮两条工具层面的实证**：

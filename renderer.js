@@ -2053,6 +2053,15 @@ function getPaneIdForTabId(tabId) {
     return workspaceManager.getPaneIdForTabId(tabId);
 }
 
+// 点开 Shell 标签时临时亮出默认分组的工作区。
+//
+// Shell 面板住在默认分组的 pane-1 里，而分组级可见性默认只显示激活分组。
+// 不亮出默认分组，用户点 Shell 标签后标签高亮了但屏幕上看不到终端，
+// 表现为「选中串口组 2 再点 Shell 标签没反应」。
+//
+// 必须声明在 switchPaneTab 之前：那里会清空它，模块加载期就可能被调用。
+let shellWorkspaceOverride = null;
+
 function ensurePaneActiveTab(paneId) {
     return workspaceManager.ensurePaneActiveTab(paneId);
 }
@@ -2062,6 +2071,12 @@ function setActivePane(paneId, options = {}) {
 }
 
 function switchPaneTab(paneId, tabId, options = {}) {
+    // 任何串口标签的切换都意味着离开了 Shell，默认分组不再需要额外亮着。
+    // Shell 自己的切换不走这个函数（见 switchShellTab）。
+    if (shellWorkspaceOverride) {
+        shellWorkspaceOverride = null;
+        syncGroupWorkspaceVisibility();
+    }
     return workspaceManager.switchPaneTab(paneId, tabId, options);
 }
 
@@ -2816,14 +2831,19 @@ function placeGroupWorkspaceSplitter() {
 // 未分屏时只有激活分组一条；已分屏时是参与分屏的集合（保证一定包含激活分组，
 // 否则会出现「切到一个没参与分屏的分组，屏幕上却什么都不显示」）。
 function resolveVisibleGroupWorkspaceEntryIds() {
-    if (!groupWorkspaceSplit.enabled) {
-        return new Set([groupWorkspaceEntryId(activeGroupId)]);
-    }
-    const visible = new Set(groupWorkspaceSplit.groupIds
-        .filter(id => serialGroups.some(group => group.id === id))
-        .map(id => groupWorkspaceEntryId(id)));
+    const visible = groupWorkspaceSplit.enabled
+        ? new Set(groupWorkspaceSplit.groupIds
+            .filter(id => serialGroups.some(group => group.id === id))
+            .map(id => groupWorkspaceEntryId(id)))
+        : new Set();
     // 激活分组必须始终可见：用户切过去的那个分组不能被分屏集合漏掉。
     visible.add(groupWorkspaceEntryId(activeGroupId));
+    // Shell 面板住在默认分组里。点开一个 Shell 标签时它的面板必须可见，
+    // 否则标签高亮了却看不到终端（用户报为「点 shell 标签没反应」）。
+    // 注意这不会改变 activeGroupId，侧栏仍留在原来的串口分组。
+    if (shellWorkspaceOverride) {
+        visible.add(groupWorkspaceEntryId(shellWorkspaceOverride));
+    }
     return visible;
 }
 
@@ -3124,10 +3144,24 @@ function syncAllGroupMainTabTitles() {
 // 分组层，但面板与 tabIds 始终留在默认分组的 pane-1 里。因此这里不能用模块级别名
 // `switchPaneTab`——那个指向**当前激活分组**的布局，切到 g-1 后它找不到 tab-shell-1，
 // 直接 return false，表现为「点了 Shell 标签但终端不切」。
+//
+// 另一个必须做的一步：切换工作区可见性。
+//
+// 分组级可见性改成「只显示激活分组」之后，Shell 面板（在默认分组里）会跟着默认分组
+// 一起被隐藏。此时只切 layout 的话，标签高亮了但屏幕上看不到终端——
+// 用户报告为「选中串口组 2 再点 shell 标签没反应」。
+// Shell 是上层的，不属于任何分组，所以点它时必须把默认分组那条工作区亮起来：
+// 否则它没有「所在分组」可供显示。
 function switchShellTab(tabId) {
     const defaultManager = getGroupWorkspaceManager(REGISTRY_DEFAULT_GROUP_ID);
     const paneId = defaultManager.getPaneIdForTabId(tabId);
-    return defaultManager.switchPaneTab(paneId, tabId);
+    // shellTabsShowDefaultWorkspace 让 syncGroupWorkspaceVisibility 额外亮出默认分组，
+    // 而不需要把 activeGroupId 改成默认分组（用户的侧栏仍停留在原来那个串口）。
+    shellWorkspaceOverride = REGISTRY_DEFAULT_GROUP_ID;
+    syncGroupWorkspaceVisibility();
+    const switched = defaultManager.switchPaneTab(paneId, tabId);
+    fitWorkspaceTerminals();
+    return switched;
 }
 
 // 重画分组标签栏。分组数 >= 2 时显示，=1 时隐藏（退回单层）。
