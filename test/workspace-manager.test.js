@@ -105,8 +105,9 @@ test('prunes tabs that are rendered in a different pane', () => {
     classList: { toggle() {} },
     querySelector: selector => {
       const tabId = selector.match(/(?:data-target="|#)([^"\]]+)/)?.[1];
-      return tabIds.has(tabId) ? { classList: { add() {} } } : null;
-    }
+      return tabIds.has(tabId) ? { classList: { add() {}, remove() {} } } : null;
+    },
+    querySelectorAll: () => []
   }]));
   const root = {
     classList: { toggle() {} },
@@ -157,13 +158,15 @@ test('applying a normalized layout synchronizes persisted pane ownership', () =>
       hidden: false,
       dataset: { paneId: 'pane-1' },
       classList: { toggle() {} },
-      querySelector: selector => selector.includes('.main-tab-pane') ? tabPane : tabButton
+      querySelector: selector => selector.includes('.main-tab-pane') ? tabPane : tabButton,
+      querySelectorAll: () => []
     },
     'pane-2': {
       hidden: false,
       dataset: { paneId: 'pane-2' },
       classList: { toggle() {} },
-      querySelector: () => null
+      querySelector: () => null,
+      querySelectorAll: () => []
     }
   };
   const root = { classList: { toggle() {} }, style: { removeProperty() {}, setProperty() {} } };
@@ -220,8 +223,9 @@ test('closing the last second-pane tab preserves the primary active tab', () => 
     classList: { toggle() {} },
     querySelector: selector => {
       const tabId = selector.match(/(?:data-target="|#)([^"\]]+)/)?.[1];
-      return tabIds.has(tabId) ? { classList: { add() {} }, setAttribute() {} } : null;
-    }
+      return tabIds.has(tabId) ? { classList: { add() {}, remove() {} }, setAttribute() {} } : null;
+    },
+    querySelectorAll: () => []
   }]));
   const root = { classList: { toggle() {} }, style: { removeProperty() {}, setProperty() {} } };
   const previousDocument = global.document;

@@ -41,6 +41,17 @@ const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID: REGISTRY
 const { SerialGroupContextStore } = require('./serial-group-context');
 const { SerialDataParser } = require('./serial-data-parser');
 const { mainTabId, mainTabButtonId, serialContainerId } = require('./serial-group-dom');
+const {
+    groupPaneId,
+    groupSplitterId,
+    groupWorkspaceRootId,
+    groupWorkspaceContainerId,
+    GROUP_WORKSPACE_CONTAINER_ID,
+    GROUP_WORKSPACE_SPLITTER_ID,
+    groupWorkspaceEntryId,
+    describeGroupWorkspace
+} = require('./serial-group-layout-dom');
+const { createDefaultLayoutFor } = require('./workspace-layout-shape');
 const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { SerialOutputBuckets } = require('./serial-output-buckets');
 const { createGroupTabListStore } = require('./serial-group-tab-lists');
@@ -179,6 +190,14 @@ const DEFAULT_WORKSPACE_LAYOUT = {
 };
 
 let workspaceLayout = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
+// 每分组各一套布局与一套布局管理器（两级分屏的基础）。
+//
+// 为什么用 Map + 模块级别名而不逐处传 groupId：渲染层里 `workspaceManager.xxx` 与
+// `workspaceLayout` 合计 60 余处读取点，它们都应该作用于**当前激活分组**。
+// 逐处改写的风险是漏一处就静默错布局；集中在一个切换函数上则只需对一次。
+// 这与 P4 的显示参数缓存、本阶段前半段的 filterTabs 别名是同一手法。
+const groupWorkspaceLayouts = new Map();
+const groupWorkspaceManagers = new Map();
 let workspaceManager = null;
 let lastAppliedWorkspaceLayoutKey = '';
 let isRestoringWorkspaceSession = false;
@@ -1732,9 +1751,13 @@ function getPaneTabsContent(paneId) {
 // index.html 里 pane-1 / pane-2 是静态写死的，行为与改造前完全一致；
 // 但布局层已经支持 N 个 pane（P5），多出来的 pane 必须能现建。
 // 不建的话，appendChild(null) 会静默把标签页丢掉——这是最难查的一类空面板缺陷。
-function createPaneElement(paneId) {
+//
+// rootId 默认 `workspace-root`（默认分组，普通单串口路径与改造前一致）。
+// 多分组时调用方传本分组自己的 root（`workspace-root-<g>`），否则新建的 pane
+// 会全部挂进默认分组的工作区，表现为「g-1 里点新分屏没反应」。
+function createPaneElement(paneId, rootId = 'workspace-root') {
     if (!paneId || getPaneDom(paneId)) return null;
-    const root = document.getElementById('workspace-root');
+    const root = document.getElementById(rootId);
     if (!root) return null;
 
     const paneEl = document.createElement('div');
@@ -1799,58 +1822,137 @@ function getChartTabState(tabId) {
     return chartTabs.find(tab => tab.id === tabId) || null;
 }
 
-function persistWorkspaceLayout() {
-    if (!currentConfig) return;
-    currentConfig.workspaceLayout = cloneWorkspaceLayout(workspaceLayout);
-    ipcRenderer.send('save-config', { workspaceLayout: currentConfig.workspaceLayout });
+// 每个分组的布局存在 Map 里；模块级 `workspaceLayout` 只是**当前激活分组**那份的别名。
+//
+// 注意这里用 normalizeGroupId 而不是 resolveSerialGroupId：后者对未登记的分组会
+// 回落默认分组，那会把新分组的布局静默存到默认分组头上。
+function getGroupWorkspaceLayout(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = normalizeGroupId(groupId);
+    let layout = groupWorkspaceLayouts.get(id);
+    if (!layout) {
+        layout = normalizeWorkspaceLayoutShape(
+            createDefaultLayoutForGroup(id),
+            { mainTabId: mainTabId(id) }
+        );
+        groupWorkspaceLayouts.set(id, layout);
+    }
+    return layout;
 }
 
-workspaceManager = createWorkspaceManager({
-    getLayout: () => workspaceLayout,
-    setLayout: (nextLayout) => {
-        workspaceLayout = nextLayout;
-    },
-    cloneLayout: cloneWorkspaceLayout,
-    normalizeLayout: ensureWorkspaceLayoutShape,
-    persistLayout: persistWorkspaceLayout,
-    getPaneDom,
-    getPaneTabsList,
-    getPaneTabsContent,
-    onTabActivated: ({ tabId, paneId }) => {
-        window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId, paneId } }));
-    },
-    onTabMoved: ({ tabId, targetPaneId }) => {
-        const filterTab = filterTabs.find(tab => tab.id === tabId);
-        if (filterTab) {
-            filterTab.paneId = targetPaneId;
-            persistFilterTabs();
-            return;
-        }
-        const shellTab = getShellTabState(tabId);
-        if (shellTab) {
-            shellTab.paneId = targetPaneId;
-            persistShellTabs();
-            return;
-        }
-        const chartTab = getChartTabState(tabId);
-        if (chartTab) {
-            chartTab.paneId = targetPaneId;
-            persistChartTabs();
-        }
-    },
-    ensurePaneElement: createPaneElement,
-    fitWorkspace: fitWorkspaceTerminals,
-    // 多分组时 Shell 的按钮挂在分组层，但它的面板与 tabIds 归属仍是 pane-1。
-    // 这两个钩子让布局层既能找到外层的按钮，也不会把它当成「不可渲染」而清掉。
-    findTabButton: findWorkspaceTabButton,
-    resolveTabButtonHost: resolveWorkspaceTabButtonHost,
-    // 布局重排会把被接管的按钮按 resolveTabButtonHost 重新挂载，但它也可能在
-    // 某些路径上（如 reconcileEmptyPanes 把 pane 合并）把按钮探到别处。
-    // 每次布局落地后再对一次，保证分组数与实际位置始终一致。
-    onLayoutApplied: () => {
-        syncShellTabLayer();
+function createDefaultLayoutForGroup(groupId) {
+    const id = normalizeGroupId(groupId);
+    return createDefaultLayoutFor({
+        paneIds: describeGroupWorkspace(id, { paneCount: 1 }).paneIds,
+        mainTabId: mainTabId(id)
+    });
+}
+
+// 把布局持久化到**当前分组**。
+//
+// 双写是必要的：serialGroups[].workspaceLayout 是该分组自己的布局（多分组时唯一真相源），
+// currentConfig.workspaceLayout 继续写默认分组那份作兼容镜像——旧版与未迁移的读取路径
+// 只看它，且新建分组继承的就是默认分组的布局。
+function persistWorkspaceLayout() {
+    if (!currentConfig) return;
+    const payload = cloneWorkspaceLayout(workspaceLayout);
+    const target = serialGroups.find(group => group && group.id === activeGroupId);
+    if (target) target.workspaceLayout = payload;
+    if (activeGroupId === REGISTRY_DEFAULT_GROUP_ID) {
+        currentConfig.workspaceLayout = payload;
     }
-});
+    ipcRenderer.send('save-config', { workspaceLayout: payload, serialGroups });
+}
+
+// 为一个分组造一套布局管理器。
+//
+// 每个分组各有一套 pane，因此 root / splitter / pane 集合必须按分组作用域注入
+// （见 workspace-manager.js 的 getWorkspaceRoot / getSplitter / getPaneElements）。
+// 不注入时布局层会退回全局 document.getElementById('workspace-root')，
+// 那会永远拿到默认分组那一套——非默认分组的可见性与尺寸就全部失效。
+function createGroupWorkspaceManager(groupId) {
+    const id = normalizeGroupId(groupId);
+    return createWorkspaceManager({
+        getLayout: () => getGroupWorkspaceLayout(id),
+        setLayout: (nextLayout) => {
+            groupWorkspaceLayouts.set(id, nextLayout);
+            if (id === activeGroupId) workspaceLayout = nextLayout;
+        },
+        cloneLayout: cloneWorkspaceLayout,
+        normalizeLayout: ensureWorkspaceLayoutShape,
+        persistLayout: persistWorkspaceLayout,
+        getPaneDom,
+        getPaneTabsList,
+        getPaneTabsContent,
+        getWorkspaceRoot: () => document.getElementById(groupWorkspaceRootId(id)),
+        getSplitter: () => document.getElementById(groupSplitterId(id)),
+        // 只返回本分组布局里的 pane 元素。用全局 .workspace-pane 会把其它分组的 pane
+        // 一并算进来，切 activePaneId 时两个分组的边框会同时亮。
+        getPaneElements: () => getGroupWorkspaceLayout(id).panes
+            .map(pane => document.getElementById(pane.id))
+            .filter(Boolean),
+        onTabActivated: ({ tabId, paneId }) => {
+            window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId, paneId } }));
+        },
+        onTabMoved: ({ tabId, targetPaneId }) => {
+            const filterTab = filterTabs.find(tab => tab.id === tabId);
+            if (filterTab) {
+                filterTab.paneId = targetPaneId;
+                persistFilterTabs();
+                return;
+            }
+            const shellTab = getShellTabState(tabId);
+            if (shellTab) {
+                shellTab.paneId = targetPaneId;
+                persistShellTabs();
+                return;
+            }
+            const chartTab = getChartTabState(tabId);
+            if (chartTab) {
+                chartTab.paneId = targetPaneId;
+                persistChartTabs();
+            }
+        },
+        // 新建的第 3 个及以后 pane 必须挂在**本分组的 root** 下，
+        // 否则多分组的 pane 会全部跑进默认分组的工作区。
+        ensurePaneElement: (paneId) => createPaneElement(paneId, groupWorkspaceRootId(id)),
+        fitWorkspace: fitWorkspaceTerminals,
+        // 多分组时 Shell 的按钮挂在分组层，但它的面板与 tabIds 归属仍是 pane-1。
+        // 这两个钩子让布局层既能找到外层的按钮，也不会把它当成「不可渲染」而清掉。
+        findTabButton: findWorkspaceTabButton,
+        resolveTabButtonHost: resolveWorkspaceTabButtonHost,
+        // 布局重排会把被接管的按钮按 resolveTabButtonHost 重新挂载，但它也可能在
+        // 某些路径上（如 reconcileEmptyPanes 把 pane 合并）把按钮探到别处。
+        // 每次布局落地后再对一次，保证分组数与实际位置始终一致。
+        onLayoutApplied: () => {
+            syncShellTabLayer();
+        }
+    });
+}
+
+// 拿到某个分组的布局管理器（惰性创建）。
+function getGroupWorkspaceManager(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = normalizeGroupId(groupId);
+    let manager = groupWorkspaceManagers.get(id);
+    if (!manager) {
+        manager = createGroupWorkspaceManager(id);
+        groupWorkspaceManagers.set(id, manager);
+    }
+    return manager;
+}
+
+// 把模块级别名切到目标分组。
+//
+// **必须早于任何布局读写**：`workspaceManager.xxx` 与 `workspaceLayout` 的 60 余处
+// 消费点读的都是这两个别名，切晚了就会把上一个分组的布局当成当前分组的。
+function setActiveGroupWorkspace(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = normalizeGroupId(groupId);
+    workspaceManager = getGroupWorkspaceManager(id);
+    workspaceLayout = getGroupWorkspaceLayout(id);
+    return { workspaceManager, workspaceLayout };
+}
+
+// 启动时就把默认分组那一套建好：renderer 顶层有大量在模块加载期就要读布局的表达式。
+setActiveGroupWorkspace(REGISTRY_DEFAULT_GROUP_ID);
 
 let workspaceFitFrame = null;
 
@@ -1964,7 +2066,10 @@ function moveTabToPane(tabId, targetPaneId, options = {}) {
 let workspaceTabDragState = null;
 
 function getWorkspaceTabDropTarget(clientX, clientY) {
-    return ['pane-1', 'pane-2'].map(paneId => ({ paneId, list: getPaneTabsList(paneId) }))
+    // pane 列表按当前分组的布局枚举，不能写死 pane-1 / pane-2：
+    // 非默认分组的 pane 叫 pane-1-<g>，写死会让拖动落点永远找不到目标。
+    const paneIds = workspaceLayout.panes.map(pane => pane.id);
+    return paneIds.map(paneId => ({ paneId, list: getPaneTabsList(paneId) }))
         .find(({ list }) => {
             if (!list || list.closest('.workspace-pane')?.hidden) return false;
             const rect = list.getBoundingClientRect();
@@ -2025,22 +2130,30 @@ function finishWorkspaceTabDrag(state) {
 }
 
 function bindWorkspaceTabDragging() {
-    ['pane-1', 'pane-2'].forEach(paneId => {
-        getPaneTabsList(paneId)?.addEventListener('pointerdown', event => {
-            const tabButton = event.target.closest('.main-tab');
-            if (!tabButton || event.target.closest('.main-tab-close')) return;
-            if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
-            workspaceTabDragState = {
-                pointerId: event.pointerId,
-                tabId: tabButton.dataset.target,
-                tabButton,
-                startX: event.clientX,
-                startY: event.clientY,
-                lastX: event.clientX,
-                lastY: event.clientY,
-                dragging: false
-            };
-        });
+    // 事件委托到 document，用 `.pane-tabs-list` 限定范围。
+    //
+    // 为什么不在模块加载期逐 pane 绑定：非默认分组的 pane 是**后续动态创建**的，
+    // 而且第 3 个及以后的 pane 也是现建的——写死 pane-1/pane-2 会让那些面板上的
+    // 标签完全拖不动（没有任何报错，只是“拖了没反应”）。
+    //
+    // `.serial-group-tab-list` 不含 `pane-tabs-list` 类名，因此分组层标签不会被误绑。
+    document.addEventListener('pointerdown', event => {
+        const list = event.target.closest?.('.pane-tabs-list');
+        if (!list) return;
+        const tabButton = event.target.closest('.main-tab');
+        if (!tabButton || !list.contains(tabButton)) return;
+        if (event.target.closest('.main-tab-close')) return;
+        if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        workspaceTabDragState = {
+            pointerId: event.pointerId,
+            tabId: tabButton.dataset.target,
+            tabButton,
+            startX: event.clientX,
+            startY: event.clientY,
+            lastX: event.clientX,
+            lastY: event.clientY,
+            dragging: false
+        };
     });
     document.addEventListener('pointermove', event => {
         const state = workspaceTabDragState;
@@ -2082,6 +2195,31 @@ function addTabToPane(tabId, paneId, options = {}) {
     return workspaceManager.addTabToPane(tabId, paneId, options);
 }
 
+// 把标签登记到 **paneId 所属的那个分组** 的布局里。
+//
+// 为什么不能直接用 addTabToPane（模块级别名）：创建标签时 `resolvedPaneId` 可能属于
+// 非激活分组（例如 syncSerialGroupsFromConfig 逐组恢复、或新建分组后还没切别名），
+// 而别名指向的是当前激活分组。走别名会把 tab-main-g-1 登记进默认分组的布局，
+// 结果是 g-1 自己的标签行永远是空的，且两个「Main」挤在同一行。
+//
+// 归属判定只能看 pane id 本身：`pane-1-g-1` → g-1，`pane-1` → 默认分组。
+function addTabToOwningGroupPane(tabId, paneId, options = {}) {
+    const id = resolveGroupIdFromPaneId(paneId);
+    return getGroupWorkspaceManager(id).addTabToPane(tabId, paneId, options);
+}
+
+// 从 pane id 反推分组 id。规则与 serial-group-layout-dom 的命名一一对应：
+// `pane-<n>` 属于默认分组；`pane-<n>-<groupSuffix>` 属于后缀对应的分组。
+function resolveGroupIdFromPaneId(paneId) {
+    if (typeof paneId !== 'string' || !paneId) return REGISTRY_DEFAULT_GROUP_ID;
+    // 匹配 pane-<数字> 之后可能跟着的 -<后缀>。后缀本身不含『-数字』开头，
+    // 但分组 id 可能是 g-1 这种带连字符的形式，因此按『第一个 - 之后的全部』取。
+    const match = /^pane-\d+(?:-(.+))?$/.exec(paneId);
+    if (!match || !match[1]) return REGISTRY_DEFAULT_GROUP_ID;
+    // pane-1-g-1 的 match[1] 是 'g-1'，与分组 id 逐字一致。
+    return normalizeGroupId(match[1]);
+}
+
 function setPaneSizes(pane1Ratio, options = {}) {
     return workspaceManager.setPaneSizes(pane1Ratio, options);
 }
@@ -2091,6 +2229,10 @@ function bindWorkspaceSplitter() {
 
     let rafId = null;
     let pendingRatio = null;
+    // 当前正被拖动的那个分组的 root。拖动比例必须相对**本分组**的工作区算，
+    // 用全局 workspaceRootEl 会让非默认分组的分界条按默认分组的宽度换算，
+    // 表现为「拖了但比例完全不对」。
+    let activeBoundsEl = workspaceRootEl;
 
     const flushPaneResize = () => {
         rafId = null;
@@ -2103,7 +2245,7 @@ function bindWorkspaceSplitter() {
     const handlePointerMove = (event) => {
         if (!isSplitEnabled()) return;
         const isVertical = getOrientation() === 'vertical';
-        const rect = workspaceRootEl.getBoundingClientRect();
+        const rect = activeBoundsEl.getBoundingClientRect();
         const total = isVertical ? rect.height : rect.width;
         const offset = isVertical ? (event.clientY - rect.top) : (event.clientX - rect.left);
         if (total <= 0) return;
@@ -2119,18 +2261,25 @@ function bindWorkspaceSplitter() {
             flushPaneResize();
         }
         isDraggingWorkspaceSplitter = false;
-        workspaceRootEl.classList.remove('resizing');
+        activeBoundsEl.classList.remove('resizing');
         document.removeEventListener('pointermove', handlePointerMove);
         document.removeEventListener('pointerup', handlePointerUp);
         persistWorkspaceLayout();
         fitWorkspaceTerminals();
     };
 
-    workspaceSplitterEl.addEventListener('pointerdown', (event) => {
-        if (!isSplitEnabled()) return;
+    // 分界条按 data-group-splitter 委托到 document，这样每个分组（含后续新建的）
+    // 的分界条都能生效，不需要逐个绑定。
+    document.addEventListener('pointerdown', (event) => {
+        const splitter = event.target.closest?.('[data-group-splitter="pane"]');
+        if (!splitter) return;
+        const groupId = splitter.dataset.groupId || REGISTRY_DEFAULT_GROUP_ID;
+        const boundsEl = document.getElementById(groupWorkspaceRootId(groupId));
+        if (!boundsEl || !isSplitEnabled()) return;
         event.preventDefault();
+        activeBoundsEl = boundsEl;
         isDraggingWorkspaceSplitter = true;
-        workspaceRootEl.classList.add('resizing');
+        boundsEl.classList.add('resizing');
         document.addEventListener('pointermove', handlePointerMove);
         document.addEventListener('pointerup', handlePointerUp);
     });
@@ -2267,19 +2416,152 @@ function restorePerGroupTabsFromConfig(config) {
             if (!filterConfigs.length && !chartConfigs.length) return;
             if (filterTabsStore.count(id) > 0 && chartTabsStore.count(id) > 0) return;
             setActiveGroupTabLists(id);
-            // paneId 暂时仍是全局 pane-1：每分组一套 pane 属于 Plan 3 的两级分屏接线，
-            // 现在传 groupPaneId 会让 createFilterTab 拿到尚不存在的容器而抛错。
+            // 标签必须建在**本分组的** pane-1 里。以前传字面量 'pane-1'，
+            // 于是所有分组的过滤页/图表页都挤进默认分组那一套容器。
+            const groupPane = groupPaneId(id, 1);
             if (filterTabsStore.count(id) === 0) {
-                filterConfigs.forEach(tabConfig => createFilterTab(tabConfig, 'pane-1'));
+                filterConfigs.forEach(tabConfig => createFilterTab(tabConfig, groupPane));
             }
             if (chartTabsStore.count(id) === 0) {
-                chartConfigs.forEach(tabConfig => createChartTab(tabConfig, 'pane-1'));
+                chartConfigs.forEach(tabConfig => createChartTab(tabConfig, groupPane));
             }
         });
     } finally {
         setActiveGroupTabLists(savedPaneId);
         isRestoringWorkspaceSession = savedFlag;
     }
+}
+
+// 为一个非默认分组建外层工作区容器 `#serial-group-workspace-<g>`，内含自己的
+// `#workspace-root-<g>`、`#workspace-splitter-<g>` 与 `#pane-1-<g>` 等。
+//
+// 默认分组**不建**：它自己就是静态 `#workspace-root`，直接作为外层容器的一个条目。
+// 这条不是省事，而是启动时序要求——`#serial-container` 在静态 `pane-1` 内，
+// 而默认分组的 xterm 在模块加载期就 open() 了它。
+//
+// 幂等：已存在就直接返回。
+function ensureSerialGroupWorkspaceDom(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    if (id === REGISTRY_DEFAULT_GROUP_ID) return document.getElementById('workspace-root');
+    const containerId = groupWorkspaceContainerId(id);
+    const existing = document.getElementById(containerId);
+    if (existing) return existing;
+    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    if (!outer) return null;
+
+    const container = document.createElement('div');
+    container.className = 'serial-group-workspace';
+    container.id = containerId;
+    container.dataset.groupId = id;
+
+    // 每个分组首版只建 1 个 pane（不分屏）；后续分屏由布局层的 ensurePaneElement 追加。
+    const workspace = describeGroupWorkspace(id, { paneCount: 1 });
+    const rootEl = document.createElement('div');
+    rootEl.className = 'workspace-root';
+    rootEl.id = workspace.rootId;
+    rootEl.dataset.groupId = id;
+
+    workspace.panes.forEach(entry => {
+        rootEl.appendChild(createGroupPaneElement(id, entry.paneId));
+    });
+
+    const splitter = document.createElement('div');
+    splitter.className = 'workspace-splitter';
+    splitter.id = workspace.splitterId;
+    splitter.hidden = true;
+    splitter.dataset.groupSplitter = 'pane';
+    splitter.dataset.groupId = id;
+
+    container.appendChild(rootEl);
+    container.appendChild(splitter);
+
+    // 插在默认分组之后、外层分界条之前，保证「默认分组在左、新分组往右排」。
+    const outerSplitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
+    if (outerSplitter && outerSplitter.parentNode === outer) {
+        outer.insertBefore(container, outerSplitter);
+    } else {
+        outer.appendChild(container);
+    }
+    return container;
+}
+
+// 造一个分组自己的 pane 节点（含标签行、操作按钮与内容区）。
+//
+// 与 createPaneElement 的区别：这个从零建，因为非默认分组的 pane-1 没有静态标记。
+// 两者的 DOM 结构必须一致，否则布局层按 id 找容器时会差别对待。
+function createGroupPaneElement(groupId, paneId) {
+    const id = resolveSerialGroupId(groupId);
+    const paneEl = document.createElement('div');
+    paneEl.className = 'workspace-pane active';
+    paneEl.id = paneId;
+    paneEl.dataset.paneId = paneId;
+
+    const header = document.createElement('div');
+    header.className = 'main-tabs-header pane-tabs-header';
+    const tabsList = document.createElement('div');
+    tabsList.className = 'main-tabs-list pane-tabs-list';
+    tabsList.id = `${paneId}-tabs-list`;
+    tabsList.setAttribute('role', 'tablist');
+    const actions = document.createElement('div');
+    actions.className = 'pane-tab-actions';
+
+    const buttonSpecs = [
+        { kind: 'shell', icon: 'terminal', title: tr('main.newShellTab'), create: () => createShellTab({ profileId: getDefaultShellProfileId() }, paneId) },
+        { kind: 'filter', icon: 'filter_alt', title: tr('main.newFilterTab'), create: () => createFilterTab({}, paneId) },
+        { kind: 'chart', icon: 'show_chart', title: tr('main.newChartTab'), create: () => createChartTab({}, paneId) }
+    ];
+    buttonSpecs.forEach(spec => {
+        const button = document.createElement('button');
+        button.id = `${paneId}-new-${spec.kind}-tab-btn`;
+        button.className = 'secondary pane-new-tab-btn';
+        button.type = 'button';
+        button.title = spec.title;
+        button.appendChild(createMaterialIcon(spec.icon, 'material-icon'));
+        button.addEventListener('click', spec.create);
+        actions.appendChild(button);
+    });
+
+    header.appendChild(tabsList);
+    header.appendChild(actions);
+
+    const content = document.createElement('div');
+    content.className = 'main-tabs-content pane-tabs-content';
+    content.id = `${paneId}-tabs-content`;
+
+    paneEl.appendChild(header);
+    paneEl.appendChild(content);
+    paneEl.addEventListener('mousedown', () => {
+        // 外层面板被点击时把该分组切成激活分组，否则侧栏/标签栏会与可见内容错位。
+        if (activeGroupId !== id) {
+            activeGroupId = id;
+            applyActiveSerialGroup({ fit: false });
+        }
+        setActivePane(paneId);
+    });
+    return paneEl;
+}
+
+// 同步外层容器的可见性：只有分组数 >= 2 时才启用分组级分屏。
+//
+// 单分组时外层只显示默认分组这一条，并且 `#group-workspace-splitter` 隐藏——
+// 否则用户会看到一个没有意义的拖动条。
+function syncGroupWorkspaceVisibility() {
+    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    const outerSplitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
+    if (!outer) return;
+    const isMultiGroup = serialGroups.length > 1;
+    const entries = new Set(serialGroups.map(group => groupWorkspaceEntryId(group.id)));
+    // 非本配置里的分组容器（例如刚被关掉的那个）必须一并隐藏，
+    // 否则它仍占着 flex-basis，表现为「关了一个分组但剩下那个只有半宽」。
+    Array.from(outer.children).forEach(child => {
+        if (!child.id || child.id === GROUP_WORKSPACE_SPLITTER_ID) return;
+        if (child.id === 'workspace-root') {
+            child.hidden = false;
+            return;
+        }
+        child.hidden = !entries.has(child.id);
+    });
+    if (outerSplitter) outerSplitter.hidden = !isMultiGroup;
 }
 
 // 从配置里同步分组列表。只在首次加载与外部 config-updated 时调用。
@@ -2297,13 +2579,17 @@ function syncSerialGroupsFromConfig(config) {
         activeGroupId = next[0].id;
     }
     serialGroupRegistry.setActiveGroup(activeGroupId);
+    // 先把每个分组的外层容器建好（默认分组用静态 root，不建）。
+    // ensureSerialGroupMainTabDom 需要本分组的 pane 容器已存在才能挂主标签。
     next.forEach(group => {
+        ensureSerialGroupWorkspaceDom(group.id);
         ensureSerialGroupMainTabDom(group.id, group.title);
     });
-    // 每分组标签恢复必须排在 ensureSerialGroupMainTabDom 之后（容器已建）与
+    // 每分组标签恢复必须排在外层容器与主标签都建完之后（容器已建）与
     // applyActiveSerialGroup 之前（别名即将被切到 activeGroupId）。
     restorePerGroupTabsFromConfig(config);
     renderSerialGroupTabBar();
+    syncGroupWorkspaceVisibility();
     applyActiveSerialGroup({ fit: false });
 }
 
@@ -2318,7 +2604,10 @@ function ensureSerialGroupMainTabDom(groupId, title) {
     const containerId = serialContainerId(id);
     if (document.getElementById(containerId)) return true;
 
-    const paneId = 'pane-1';
+    // 本分组自己的 pane-1。默认分组 → 'pane-1'，其它 → 'pane-1-<g>'。
+    // 以前这里写死 'pane-1'，导致所有分组的主标签都塞进默认分组那一套 pane：
+    // 两个分组时标签行里同时挂着两个「Main」。
+    const paneId = groupPaneId(id, 1);
     const tabsList = getPaneTabsList(paneId);
     const tabsContent = getPaneTabsContent(paneId);
     if (!tabsList || !tabsContent) return false;
@@ -2358,9 +2647,15 @@ function ensureSerialGroupMainTabDom(groupId, title) {
     tabPane.appendChild(wrapper);
     tabsContent.appendChild(tabPane);
 
-    // 3. 把这一个主标签登记进布局，否则 switchPaneTab 会因 tabIds 不含它而直接返回。
-    //    persist:false —— 布局持久化属于 P5，这里只在内存里保持一致。
-    addTabToPane(tabId, paneId, { activate: false, persist: false });
+    // 3. 把这一个主标签登记进**本分组的**布局，否则 switchPaneTab 会因 tabIds
+    //    不含它而直接返回。
+    //
+    //    这里绝不能走模块级别名 addTabToPane：新建分组时 activeGroupId 还没切过去
+    //    （或者在 syncSerialGroupsFromConfig 里就不是本组），那个别名指向默认分组的
+    //    布局，于是 tab-main-g-1 被登记到默认分组，g-1 自己的标签行永远为空，
+    //    表现为「两个「Main」挤在同一行、g-1 的终端切不过去」。
+    //    persist:false —— 布局持久化由 persistWorkspaceLayout 统一负责。
+    getGroupWorkspaceManager(id).addTabToPane(tabId, paneId, { activate: false, persist: false });
     return true;
 }
 
@@ -2463,6 +2758,10 @@ function applyActiveSerialGroup({ fit = true } = {}) {
     // 分组的列表，表现为「切了分组但过滤页数量没变」。
     setActiveGroupTabLists(activeGroupId);
 
+    // 布局别名同理，而且必须早于 switchPaneTab：后者通过 workspaceManager 读 tabIds，
+    // 晚切一步就会在上一个分组的布局里找这个主标签，直接返回不切。
+    setActiveGroupWorkspace(activeGroupId);
+
     // 标签栏：active 类与 aria-selected 必须同步，否则键盘/读屏看到的选中项
     // 与视觉上的高亮不一致。
     document.querySelectorAll('.serial-group-tab').forEach(button => {
@@ -2471,19 +2770,33 @@ function applyActiveSerialGroup({ fit = true } = {}) {
         button.setAttribute('aria-selected', String(isActive));
     });
 
-    // 标签页：每个分组的主标签都是一个独立的 tab-pane，只让激活的那个 .active。
-    // 其余分组的标签若留在 pane.tabIds 里也无害——它们只是没有 .active。
-    const paneId = 'pane-1';
+    // 标签页：每个分组的主标签都在**自己分组的** pane-1 里，只让激活的那个 .active。
+    const paneId = groupPaneId(activeGroupId, 1);
     const targetTabId = mainTabId(activeGroupId);
     if (document.getElementById(targetTabId)) {
         switchPaneTab(paneId, targetTabId, { persist: false });
     }
+    // 外层可见性：只有分组数 >= 2 时才把各分组并排显示，否則其余分组要保持隐藏，
+    // 不然关掉分组后旧容器还在 flex 里占位。
+    syncGroupWorkspaceVisibility();
     // 侧栏设置必须跟着切换：否则用户看到的是上一个分组的端口与参数，
     // 却以为改的是当前分组的。连接按钮同理，它代表的是当前这一个分组。
     applyGroupSerialOptionsToSidebar(activeGroupId);
     refreshConnectButtonState();
     updateFilterModeStatuses();
     if (fit) fitWorkspaceTerminals();
+}
+
+// 切换到一个 Shell 标签。
+//
+// **Shell 标签不归属任何串口分组**（已锁定的产品决定）：它的按钮在多分组时被搬到
+// 分组层，但面板与 tabIds 始终留在默认分组的 pane-1 里。因此这里不能用模块级别名
+// `switchPaneTab`——那个指向**当前激活分组**的布局，切到 g-1 后它找不到 tab-shell-1，
+// 直接 return false，表现为「点了 Shell 标签但终端不切」。
+function switchShellTab(tabId) {
+    const defaultManager = getGroupWorkspaceManager(REGISTRY_DEFAULT_GROUP_ID);
+    const paneId = defaultManager.getPaneIdForTabId(tabId);
+    return defaultManager.switchPaneTab(paneId, tabId);
 }
 
 // 重画分组标签栏。分组数 >= 2 时显示，=1 时隐藏（退回单层）。
@@ -2628,10 +2941,16 @@ function addSerialGroupFromUi() {
     const groupId = result.groupId;
     serialGroupRegistry.ensureGroup(groupId);
     serialGroupContext.ensureContext(groupId);
+    // 必须先建外层容器（含本分组的 pane-1）再建主标签：
+    // ensureSerialGroupMainTabDom 靠 groupPaneId(groupId, 1) 找 pane 容器，
+    // 它不存在时会直接 return false，于是新分组既没有主标签也没有终端。
+    ensureSerialGroupWorkspaceDom(groupId);
     ensureSerialGroupMainTabDom(groupId, result.group.title);
     activeGroupId = groupId;
     persistSerialGroups();
     renderSerialGroupTabBar();
+    // 多分组时外层要开始并排显示，这个必须在 applyActiveSerialGroup 之前对一次。
+    syncGroupWorkspaceVisibility();
     applyActiveSerialGroup();
     setActionStatus(`已添加串口分组 ${result.group.title}`);
 
@@ -2664,14 +2983,21 @@ function closeSerialGroup(groupId) {
     serialGroupIo.delete(id);
     serialOutputBuckets.clear(id);
     serialGroupContext.removeContext(id);
-    // 该分组的过滤页与图表页条目一起丢掉：removeList 直接删掉整个桶，
-    // 不需要先 clearList（那只会多一次原地清空）。
     filterTabsStore.removeList(id);
     chartTabsStore.removeList(id);
+    // 该分组的布局与布局管理器一起丢掉：留着它们会让下次同名分组继承旧布局，
+    // 也会让 groupWorkspaceManagers 一直增长。
+    groupWorkspaceLayouts.delete(id);
+    groupWorkspaceManagers.delete(id);
     serialGroupRegistry.removeGroup(id);
     document.getElementById(buttonId)?.remove();
     document.getElementById(tabId)?.remove();
     document.getElementById(containerId)?.remove();
+    // 外层容器要整个拿掉（它包着 root / splitter / pane），
+    // 只删 internal 节点会留下一个空的 flex 条目占着位置。
+    document.getElementById(groupWorkspaceContainerId(id))?.remove();
+    // 关掉的正好是当前激活分组时，别名还指着已释放的布局，先切回默认分组。
+    if (activeGroupId === id) setActiveGroupWorkspace(REGISTRY_DEFAULT_GROUP_ID);
     removeTabFromWorkspace(tabId, { fallbackTabId: mainTabId(REGISTRY_DEFAULT_GROUP_ID), persist: false });
 
     const previousGroups = serialGroups;
@@ -2683,6 +3009,9 @@ function closeSerialGroup(groupId) {
 
     persistSerialGroups();
     renderSerialGroupTabBar();
+    // 外层可见性必须在 applyActiveSerialGroup 之前先对一次：
+    // 它决定哪些分组容器参与 flex 布局，进而影响 fit() 算出的尺寸。
+    syncGroupWorkspaceVisibility();
     applyActiveSerialGroup();
     setActionStatus(`已关闭串口分组 ${group.title}`);
     return true;
@@ -2842,7 +3171,8 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     tabBtn.append(shellTitle, shellClose);
     tabBtn.onclick = (e) => {
         if (e.target.closest('.main-tab-close')) return;
-        switchPaneTab(tabBtn.dataset.paneId || getPaneIdForTabId(tabId), tabId);
+        // Shell 标签始终走默认分组布局，不能走模块级别名（见 switchShellTab 的注释）。
+        switchShellTab(tabId);
     };
     tabBtn.querySelector('.main-tab-close').onclick = () => {
         closeShellTab(tabId);
@@ -2935,7 +3265,8 @@ function createShellTab(initialState = {}, targetPaneId = null) {
 
     shellTabs.push(tabState);
     updateTabTitles();
-    addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
+    // 登记到 paneId 所属的分组，而不是模块级别名（见 addTabToOwningGroupPane 的注释）。
+    addTabToOwningGroupPane(tabId, resolvedPaneId, { activate: false, persist: false });
     if (!isRestoringWorkspaceSession) {
         switchPaneTab(resolvedPaneId, tabId, { persist: false });
         persistShellTabs();
@@ -3347,7 +3678,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     filterTabs.push(tabState);
     updateTabTitles();
     updateFilterModeStatuses();
-    addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
+    addTabToOwningGroupPane(tabId, resolvedPaneId, { activate: false, persist: false });
     if (!isRestoringWorkspaceSession) {
         switchPaneTab(resolvedPaneId, tabId, { persist: false });
         persistFilterTabs();
@@ -3794,7 +4125,7 @@ function createChartTab(initialState = {}, targetPaneId = null) {
 
     chartTabs.push(tab);
     updateTabTitles();
-    addTabToPane(tabId, resolvedPaneId, { activate: false, persist: false });
+    addTabToOwningGroupPane(tabId, resolvedPaneId, { activate: false, persist: false });
     if (tab.fields.length) configureChartTab(tab);
     else updateChartStatus(tab);
     if (!isRestoringWorkspaceSession) {
@@ -5239,33 +5570,37 @@ function applyConfig(config) {
     // Preload shell profiles for the sidebar
     loadShellProfiles();
 
+    // 按布局里**实际存在的** pane 建队列，不再写死 pane-1 / pane-2。
+    // 分屏到第 3 个及以后 pane 时，写死的队列会让那些 pane 上的标签拿不到 id，
+    // 结果是恢复出来的标签全挤在 pane-1，或者干脆丢掉。
     const layoutTabToPaneMap = new Map();
-    const layoutTabIdsByPane = {
-        'pane-1': [],
-        'pane-2': []
-    };
+    const layoutTabIdsByPane = {};
     normalizedWorkspaceLayout.panes.forEach(pane => {
+        layoutTabIdsByPane[pane.id] = [];
         if (Array.isArray(pane.tabIds)) {
             pane.tabIds.forEach(tabId => {
                 if (typeof tabId === 'string') {
                     layoutTabToPaneMap.set(tabId, pane.id);
-                    if (pane.id === 'pane-1' || pane.id === 'pane-2') {
-                        layoutTabIdsByPane[pane.id].push(tabId);
-                    }
+                    layoutTabIdsByPane[pane.id].push(tabId);
                 }
             });
         }
     });
+    const primaryPaneId = normalizedWorkspaceLayout.panes[0]?.id || 'pane-1';
+    const makePaneQueue = pattern => {
+        const queue = {};
+        Object.keys(layoutTabIdsByPane).forEach(paneId => {
+            queue[paneId] = layoutTabIdsByPane[paneId].filter(id => pattern.test(id));
+        });
+        return queue;
+    };
 
     if (filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
-            const paneFilterQueue = {
-                'pane-1': layoutTabIdsByPane['pane-1'].filter(id => /^tab-filter-\d+$/.test(id)),
-                'pane-2': layoutTabIdsByPane['pane-2'].filter(id => /^tab-filter-\d+$/.test(id))
-            };
+            const paneFilterQueue = makePaneQueue(/^tab-filter-\d+$/);
             config.filterTabs.forEach(tabConfig => {
-                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || 'pane-1';
+                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
                 if (!tabConfig.id) {
                     const queue = paneFilterQueue[targetPaneId] || [];
                     const nextId = queue.shift();
@@ -5283,12 +5618,9 @@ function applyConfig(config) {
     if (shellTabs.length === 0 && Array.isArray(config.shellTabs) && config.shellTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
-            const paneShellQueue = {
-                'pane-1': layoutTabIdsByPane['pane-1'].filter(id => /^tab-shell-\d+$/.test(id)),
-                'pane-2': layoutTabIdsByPane['pane-2'].filter(id => /^tab-shell-\d+$/.test(id))
-            };
+            const paneShellQueue = makePaneQueue(/^tab-shell-\d+$/);
             config.shellTabs.forEach(tabConfig => {
-                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || 'pane-1';
+                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
                 if (!tabConfig.id) {
                     const queue = paneShellQueue[targetPaneId] || [];
                     const nextId = queue.shift();
@@ -5307,12 +5639,9 @@ function applyConfig(config) {
     if (chartTabs.length === 0 && Array.isArray(config.chartTabs) && config.chartTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
-            const paneChartQueue = {
-                'pane-1': layoutTabIdsByPane['pane-1'].filter(id => /^tab-chart-\d+$/.test(id)),
-                'pane-2': layoutTabIdsByPane['pane-2'].filter(id => /^tab-chart-\d+$/.test(id))
-            };
+            const paneChartQueue = makePaneQueue(/^tab-chart-\d+$/);
             config.chartTabs.forEach(tabConfig => {
-                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || 'pane-1';
+                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
                 if (!tabConfig.id) tabConfig.id = paneChartQueue[targetPaneId]?.shift();
                 createChartTab(tabConfig, targetPaneId);
             });

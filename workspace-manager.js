@@ -327,11 +327,26 @@ function createWorkspaceManager(options = {}) {
         const layout = getLayoutState();
         updatePaneVisibility();
         applyPaneSizes();
-        document.querySelectorAll('.main-tab').forEach(el => {
-            el.classList.remove('active');
-            el.setAttribute?.('aria-selected', 'false');
+        // 清激活态必须**限定在本分组自己的 pane 内**。
+        //
+        // 原实现用全局 `.main-tab` / `.main-tab-pane` 清，多分组时会把别的分组
+        // 已经激活的标签一起清掉：那个分组的布局状态没变，不会重算，于是它的
+        // 主标签面板永远停在「没有 active」的状态——表现为「加了一个分组，另一个
+        // 分组的 Main 就白掉了」。
+        //
+        // 被搬到外层容器的按钮（多分组时的 Shell）不在 paneEl 里，所以按 tabId 再找一次。
+        layout.panes.forEach(pane => {
+            const paneEl = getPaneDom(pane.id);
+            if (!paneEl) return;
+            paneEl.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
+            pane.tabIds.forEach(tabId => {
+                const button = findTabButton
+                    ? findTabButton(tabId, pane.id)
+                    : paneEl.querySelector(`.main-tab[data-target="${tabId}"]`);
+                button?.classList.remove('active');
+                button?.setAttribute?.('aria-selected', 'false');
+            });
         });
-        document.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
         layout.panes.forEach(pane => {
             const tabsList = getPaneTabsList(pane.id);
             const tabsContent = getPaneTabsContent(pane.id);
