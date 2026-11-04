@@ -1,0 +1,137 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const {
+  DEFAULT_GROUP_PANE_COUNT,
+  groupWorkspaceSuffix,
+  groupWorkspaceRootId,
+  groupPaneId,
+  groupSplitterId,
+  groupWorkspaceContainerId,
+  describeGroupPanes,
+  describeGroupWorkspace,
+  findMissingGroupPaneIds
+} = require('../serial-group-layout-dom');
+
+const root = path.join(__dirname, '..');
+
+test('the default group reuses the exact static workspace ids', () => {
+  // 这是整份契约最重要的一条，理由不是「省事」而是**启动时序**：
+  // 默认分组的 xterm 在 renderer.js 模块加载期就 open(#serial-container) 了，
+  // 而 #serial-container 位于静态 pane-1 内。默认分组的三个 id 只要与静态标记
+  // 逐字一致，这条启动路径就完全不受两级分屏重构影响。
+  assert.equal(groupWorkspaceSuffix('default'), '');
+  assert.equal(groupWorkspaceRootId('default'), 'workspace-root');
+  assert.equal(groupPaneId('default', 1), 'pane-1');
+  assert.equal(groupPaneId('default', 2), 'pane-2');
+  assert.equal(groupSplitterId('default'), 'workspace-splitter');
+});
+
+test('default group pane ids match the real static markup in index.html', () => {
+  // 防止契约与静态标记漂移。前一条只证明函数返回字符串，这条证明那些字符串
+  // 真的存在于页面里——否则整套 id 计算就是自说自话。
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.match(html, /id="workspace-root"/);
+  assert.match(html, /id="pane-1"/);
+  assert.match(html, /id="workspace-splitter"/);
+});
+
+test('non-default groups get suffixed ids that cannot collide with the default ones', () => {
+  const ids = ['default', 'g-1', 'g-2', 'g-10'].map(id => groupPaneId(id, 1));
+  assert.deepEqual(new Set(ids).size, ids.length);
+  assert.equal(groupPaneId('g-1', 1), 'pane-1-g-1');
+  assert.equal(groupPaneId('g-1', 2), 'pane-2-g-1');
+  assert.equal(groupWorkspaceRootId('g-1'), 'workspace-root-g-1');
+  assert.equal(groupSplitterId('g-1'), 'workspace-splitter-g-1');
+});
+
+test('the suffix sits at the tail so prefix lookups still work', () => {
+  // 与 serial-container-<g> 同一取舍：保持 'pane-<n>' 前缀，
+  // [id^="pane-"] 这类批量查找才可能生效。
+  assert.ok(groupPaneId('g-1', 1).startsWith('pane-'));
+  assert.ok(groupPaneId('g-1', 1).endsWith('-g-1'));
+});
+
+test('dirty group ids are sanitized instead of producing invalid selectors', () => {
+  // 配置是用户可编辑的文本文件；含空格或冒号的 id 直接进 querySelector 会抛 SyntaxError。
+  const id = groupPaneId('my port:1', 1);
+  assert.equal(id, 'pane-1-my_port_1');
+  assert.doesNotThrow(() => new Function(`return document.querySelector('[id="${id}"]')`));
+});
+
+test('pane index is clamped to a positive integer', () => {
+  assert.equal(groupPaneId('default', 0), 'pane-1');
+  assert.equal(groupPaneId('default', -3), 'pane-1');
+  assert.equal(groupPaneId('default', 2.7), 'pane-2');
+  assert.equal(groupPaneId('default', 'x'), 'pane-1');
+});
+
+test('empty or missing group ids fall back to the default group', () => {
+  // normalizeGroupId 空串回落到 'default'，否则会得到永不存在的 'pane-1-'
+  assert.equal(groupPaneId('', 1), 'pane-1');
+  assert.equal(groupPaneId(null, 1), 'pane-1');
+  assert.equal(groupWorkspaceSuffix(undefined), '');
+});
+
+test('describeGroupPanes yields the requested count and marks the primary one', () => {
+  const panes = describeGroupPanes('g-2', { paneCount: 3 });
+  assert.deepEqual(panes.map(pane => pane.paneId), ['pane-1-g-2', 'pane-2-g-2', 'pane-3-g-2']);
+  assert.equal(panes[0].isPrimary, true);
+  assert.equal(panes[1].isPrimary, false);
+  assert.equal(panes[0].index, 1);
+});
+
+test('describeGroupPanes defaults to a single pane', () => {
+  // 首版每个分组默认不分屏；分屏由布局层按需追加 pane。
+  const panes = describeGroupPanes('g-1');
+  assert.equal(panes.length, DEFAULT_GROUP_PANE_COUNT);
+  assert.deepEqual(panes.map(pane => pane.paneId), ['pane-1-g-1']);
+  assert.equal(describeGroupPanes('g-1', { paneCount: 0 }).length, 1);
+});
+
+test('describeGroupWorkspace bundles every id a group needs', () => {
+  const workspace = describeGroupWorkspace('g-1', { paneCount: 2 });
+  assert.equal(workspace.groupId, 'g-1');
+  assert.equal(workspace.containerId, 'serial-group-workspace-g-1');
+  assert.equal(workspace.rootId, 'workspace-root-g-1');
+  assert.equal(workspace.splitterId, 'workspace-splitter-g-1');
+  assert.deepEqual(workspace.paneIds, ['pane-1-g-1', 'pane-2-g-1']);
+});
+
+test('the outer container id is suffixed even for the default group', () => {
+  // 与 pane/root/splitter 不同：外层容器是**新增**元素，没有静态标记依赖，
+  // 统一带后缀可避免「默认分组的容器到底叫什么」这类特例记忆负担。
+  assert.equal(groupWorkspaceContainerId('default'), 'serial-group-workspace-default');
+  assert.equal(groupWorkspaceContainerId('g-1'), 'serial-group-workspace-g-1');
+});
+
+test('findMissingGroupPaneIds reports only panes absent from the DOM', () => {
+  const workspace = describeGroupWorkspace('g-1', { paneCount: 3 });
+  const missing = findMissingGroupPaneIds(workspace, paneId => paneId !== 'pane-2-g-1');
+  assert.deepEqual(missing, ['pane-2-g-1']);
+  assert.deepEqual(findMissingGroupPaneIds(workspace, () => true), []);
+});
+
+test('findMissingGroupPaneIds degrades safely without a predicate', () => {
+  // 没有判据时返回全部 id —— 让调用方暴露出「忘了传」的问题，
+  // 而不是静默认为「一个都不缺」。
+  const workspace = describeGroupWorkspace('g-1', { paneCount: 2 });
+  assert.deepEqual(findMissingGroupPaneIds(workspace), ['pane-1-g-1', 'pane-2-g-1']);
+  assert.deepEqual(findMissingGroupPaneIds(null), []);
+});
+
+test('every group workspace id is unique across a realistic group set', () => {
+  // 同一套规则作用在一组分组上时不得产生任何碰撞——碰撞的失败方式是两个分组
+  // 抢同一个 DOM 节点，表现为「切了分组但界面没变」，没有报错。
+  const groups = ['default', 'g-1', 'g-2', 'g-3'];
+  const all = [];
+  groups.forEach(groupId => {
+    const workspace = describeGroupWorkspace(groupId, { paneCount: 2 });
+    all.push(workspace.containerId, workspace.rootId, workspace.splitterId, ...workspace.paneIds);
+  });
+  assert.deepEqual(new Set(all).size, all.length);
+});
