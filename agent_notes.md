@@ -1325,7 +1325,37 @@ function switchPaneTab(paneId, tabId, options = {}) {
 
 **验证**：CDP `verify-titles.js` 6/6（侧栏分组名 + 主标签文案）；CDP `verify-shell.js` **16/16、exit=0**（`verify-shell-out2.txt`，隔离实例 `userdata-diag4`）覆盖 Shell 覆盖的完整生命周期：单分组建 Shell → 加分组切到 g-1（断言默认分组 `display:none` 且 rect 为 0）→ 点分组层的 Shell 标签（断言 `#workspace-root` 重新有尺寸、Shell 面板 `.active` 且 w/h > 0）→ **断言 `activeGroupId` 仍为 g-1** → 点回 g-1 主标签（断言默认分组重新隐藏，override 已清空）。
 
-**仍未验证**：分组级分屏**没有任何 UI 入口**——`setGroupWorkspaceSplit()` 在模块内，用户看不到「左右分屏 / 上下分屏 / 关闭分屏」，这是「开两个串口分组没有分屏手段」的直接原因。另：`#group-workspace.group-split-vertical` / `.group-split-horizontal` 的 CSS `flex-direction` 规则尚未补，上下分屏目前不会真正改方向。
+**分组级分屏的 UI 入口（已落地）**：入口在**分组标签的右键菜单**上，不在工具栏。分屏是低频且带方向的开关（左右 / 上下 / 关闭三选一），排成按钮会把标签栏挤满——用户在布局图里明确要求分组标签不挤在一起。
+
+链路：分组标签 `contextmenu` → `requestSerialGroupContextMenu(groupId)` → `show-terminal-context-menu`（`terminalType: 'group'`）→ `main.js` 的三段条件菜单模板 → `terminal-context-menu-action` → `handleTerminalContextMenuAction` 的四个 case。
+
+**复用 `show-terminal-context-menu` 而不另开 IPC**：主进程那份菜单模板与回流逻辑已经存在，再造一条会让「渲染进程发什么、主进程回什么」变成两套。
+
+**动作名必须与组内分屏区分**：`split-horizontal` / `split-vertical` 是「把单个标签搬到另一个 pane」（组内 pane 分屏），`split-group-horizontal` / `split-group-vertical` 是「哪些分组并排显示」（分组级）。两者名字相近但作用面完全不同，**不得合并**。
+
+**入口守卫必须给 group 开口子**：`handleTerminalContextMenuAction` 开头有一句「拿不到目标终端就 return」。分组级动作不承诺任何终端，不改守卫的话四个 case 永远走不到：
+
+```js
+const isGroup = terminalType === 'group';
+const targetTerm = (isChart || isGroup) ? null : (...);
+if (!isGroup && ((isChart && !chartTab) || (!isChart && !targetTerm && action !== 'paste-send'))) return;
+```
+
+**关闭分屏必须重写一次布局**：`setGroupWorkspaceSplit(false)` 只调 `resetGroupWorkspaceSplit()` + `syncGroupWorkspaceVisibility()` 是**不够的**——reset 只改状态对象，DOM 上的 `group-split-vertical` 类名与 `flex-basis` 仍在。实测关闭后 `flexDirection` 仍是 `column`、`splitVerticalClass` 仍是 `true`。必须补 `applyGroupWorkspaceSplitLayout()`。
+
+**CSS 类名必须与 JS 完全一致**：`applyGroupWorkspaceSplitLayout()` 切换的是 `group-split-vertical` / `group-split-horizontal`，而 CSS 原先写的是 `.group-workspace.split-vertical`。**类名不匹配不会报任何错，只是上下分屏完全不生效**。已统一为 `.group-workspace.group-split-vertical`（含两条 `::before` 与分界条 cursor 共三条规则）。
+
+**i18n 文案必须能区分**：已有的 `main.splitHorizontal` 是「左右分屏」，新的分组级项若也叫「左右分屏」，用户在两个同名菜单项之间无法判断。中文用「左右分屏（分组）」。
+
+**CDP 验证分两层，缺一不可**：
+
+- 第 1 层：真实右键分组标签，断言标签可见、派发 `contextmenu` 后渲染进程零错误。原生菜单无法 CDP 点击，这一层只能证到「用户能触达入口」。
+- 第 2 层：直接调 `window.__handleContextMenuAction`（即 `ipcRenderer.on('terminal-context-menu-action')` 的真实回调，不是另写的测试分支），断言外层容器的可见条目数、`flexDirection`、方向类名、分界条显隐与位置、两列/两行尺寸约等分。
+
+**实测（`verify-group-split.js` 19/19、exit=0，`verify-group-split-out2.txt`，`userdata-diag6`）**：两分组基线（1 条可见、分界条隐藏）→ 左右分屏（2 条可见、`row`、类名、分界条显示且紧跟第一个可见条目、宽度 400/400 约等分）→ 上下分屏（2 条可见、`column`、类名、高度约等分）→ 关闭分屏（1 条可见、分界条隐藏、类名清空、无残留 flex-basis 且占满 799px）。
+
+**仍未验证**：`bindGroupWorkspaceSplitter()` 的真实鼠标拖动。CDP 的 `Input.dispatchMouseEvent` 可以模拟 pointer 事件，但拖动比例换算依赖真实 `getBoundingClientRect` 与 pointer capture，现有脚本未覆盖——**拖动逻辑目前只有静态审查**。
+
 
 **验证脚本自身的一次失效（必记）**：`verify-shell.js` 第一版把「归一化到单分组」断言成 `.serial-group-tab` 数量 === 1，实测为 0。查 `renderSerialGroupTabBar()` 确认：单分组时 `barEl.hidden = true` 且 `listEl.replaceChildren()`，**列表本就是空的**。这是断言写错而非产品缺陷，按判据（改动不让被验证行为更正确）改为断「栏隐藏 + 列表为空」。
 

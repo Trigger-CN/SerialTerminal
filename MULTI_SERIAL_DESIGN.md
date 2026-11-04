@@ -1103,15 +1103,18 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 
 **6）分屏场景下的入口互斥未做 CDP 用例。** 两层入口的互斥（§6.2）已由 54 项 CDP 断言覆盖，含「全文档只存在两个入口实例」的全量清点；但**分屏后**（新增 pane 与分裂 pane）的场景没有单独驱动——因为分屏由主进程右键菜单 IPC 触发，CDP 无法直接调起。当前依据是「`createPaneElement` / `createGroupPaneElement` 的 `buttonSpecs` 已不含 group 项」这条代码事实，加上全文档清点的间接保障。
 
-**7）分组级分屏没有任何 UI 入口（阻塞项）。** `setGroupWorkspaceSplit()` / `bindGroupWorkspaceSplitter()` / `placeGroupWorkspaceSplitter()` 均已落地，但**没有任何 UI 能调到它们**：分组标签上没有分屏入口，`main.js` 的右键菜单只服务终端面板。`#group-workspace-splitter` 只在 `groupWorkspaceSplit.enabled === true` 时显示，而 `enabled` 永远为 `false`。用户实测反馈的「开两个串口分组没有分屏手段」就是这个。因此「并排显示」与「拖动分界条」**都还没有被真实点击验证过**。另：`#group-workspace.group-split-vertical` / `.group-split-horizontal` 的 CSS `flex-direction` 规则尚未补，上下分屏目前不会真正改方向。
+**7）分组级分屏的分界条拖动仍未验证。** 分屏本身的 UI 入口已落地（见下方「已修复」），并已用 CDP 19 项断言覆盖开启/切换方向/关闭三个动作的真实效果；但 `bindGroupWorkspaceSplitter()` 的**真实鼠标拖动**仍未验证——CDP 的 `Input.dispatchMouseEvent` 可以模拟 pointer 事件，但拖动比例换算依赖真实 `getBoundingClientRect` 与 pointer capture，现有脚本未覆盖。因此拖动逻辑目前只有静态审查。
+
 
 **已修复的相关项（已不再属于未验证）**：
 
 - **可见性「混乱」已修正**：原实现「分组存在于配置就显示」，导致三套下层标签行并排各 387px、`visibleLabelRows: 3`、三个标签同时 `active`。现改为「未分屏只显示激活分组」，CDP 实测 `visibleLabelRows: 1`（`diag-tabs-out3.txt`）。
 - **切到非默认分组后点 Shell 标签看不到终端（回归）已修正并用 CDP 验证**：根因是 Shell 面板住在默认分组、而可见性只显示激活分组。新增 `shellWorkspaceOverride` 临时亮出默认分组，且**不修改 `activeGroupId`**。CDP `verify-shell.js` **16/16、exit=0**（`verify-shell-out2.txt`，`userdata-diag4`）。
 - **新建分组终端缺右键菜单已修正**：`bindTerminalContextMenu` 补绑到每个新分组的终端容器，`term` 改传**函数**以惰性取本组 xterm 实例（否则会绑到默认分组的 term 上）。**尚未做 CDP 行为验证**（未真的在新分组终端上派发 `contextmenu` 事件并断言菜单请求）。
-- **分界条被挤到最右边已修正**：`placeGroupWorkspaceSplitter()` 每次同步可见性时把它重排到第一个可见分组之后。**无 CDP 证据**（分屏本身还开不起来）。
+- **分界条被挤到最右边已修正**：`placeGroupWorkspaceSplitter()` 每次同步可见性时把它重排到第一个可见分组之后。CDP `verify-group-split.js` 的 `horizontal-split-splitter-after-first-entry` 已直接断言分界条的前一个兄弟元素就是第一个可见分组。
 - **默认分组主标签仍叫「主终端」已修正**：`syncAllGroupMainTabTitles()` 改用分组名并移除 `data-i18n`。CDP `verify-titles.js` 6/6。
+- **分组级分屏的 UI 入口已落地**：入口在分组标签的**右键菜单**（左右分屏 / 上下分屏 / 关闭分组分屏 / 添加串口），不在工具栏——分屏是低频带方向的开关，排成按钮会把标签栏挤满，而用户明确要求分组标签不挤在一起。链路为 `contextmenu` → `requestSerialGroupContextMenu` → `show-terminal-context-menu`（`terminalType: 'group'`）→ 主进程三段条件菜单模板 → `terminal-context-menu-action` → `handleTerminalContextMenuAction` 的四个 case。**CDP `verify-group-split.js` 19/19、exit=0**（`verify-group-split-out2.txt`，`userdata-diag6`）：两分组基线（1 条可见、分界条隐藏）→ 左右分屏（2 条可见、`flex-direction:row`、类名、分界条显示且位置正确、宽度 400/400 约等分）→ 上下分屏（2 条可见、`column`、类名、高度约等分）→ 关闭分屏（1 条可见、分界条隐藏、类名清空、无残留 flex-basis 且占满 799px）。
+- **修掉两处只有真实点击能发现的静默缺陷**：① `setGroupWorkspaceSplit(false)` 原先只 reset 状态对象、不重写 DOM，关闭后 `flex-direction` 仍是 `column`、方向类名仍存在；② CSS 里写的是 `.group-workspace.split-vertical`，而 JS 切的是 `group-split-vertical`——**类名不匹配不会报任何错，只是上下分屏完全不生效**。两者均已修正。
 
 
 

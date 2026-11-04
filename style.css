@@ -1902,7 +1902,10 @@ html.custom-titlebar .window-titlebar {
     overflow: hidden;
 }
 /* 纵向分组级分屏：容器转 column，每一项的 flex-basis 由 JS 写在行内。 */
-.group-workspace.split-vertical {
+/* 纵向分组级分屏：容器转 column，每一项的 flex-basis 由 JS 写在行内。 */
+/* 类名必须与 applyGroupWorkspaceSplitLayout() 中的 group-split-vertical 完全一致；
+   写成 .split-vertical 时切换不会报错但完全不生效，表现为「上下分屏没反应」。 */
+.group-workspace.group-split-vertical {
     flex-direction: column;
 }
 
@@ -1940,12 +1943,12 @@ html.custom-titlebar .window-titlebar {
     transform: translateX(-50%);
     background: var(--border-color);
 }
-.group-workspace.split-vertical .group-workspace-splitter {
+.group-workspace.group-split-vertical .group-workspace-splitter {
     flex-basis: 10px;
     width: 100%;
     cursor: row-resize;
 }
-.group-workspace.split-vertical .group-workspace-splitter::before {
+.group-workspace.group-split-vertical .group-workspace-splitter::before {
     top: 50%;
     bottom: auto;
     left: 0;

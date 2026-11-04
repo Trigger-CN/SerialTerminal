@@ -2296,7 +2296,9 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   const hasSelection = Boolean(payload.hasSelection);
   const isConnected = Boolean(payload.isConnected);
   const canLocateInMain = Boolean(payload.canLocateInMain);
-  const terminalType = ['main', 'filter', 'shell', 'chart'].includes(payload.terminalType)
+  // 分组级分屏至少需要两个分组才有意义；单分组时菜单项禁用而不是隐藏。
+  const isMultiGroup = Boolean(payload.isMultiGroup);
+  const terminalType = ['main', 'filter', 'shell', 'chart', 'group'].includes(payload.terminalType)
     ? payload.terminalType
     : 'main';
   const labels = payload.labels || {};
@@ -2310,7 +2312,35 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     });
   };
 
-  const template = terminalType === 'chart' ? [
+  // 分组级分屏走单独的一套菜单：动作作用于「分组」而不是某个标签页。
+  // 它与下面的组内 pane 分屏（split-horizontal / split-vertical）是两件事，
+  // 后者把单个标签移动另一个 pane，前者决定哪些分组并排显示。
+  const template = terminalType === 'group' ? [
+    {
+      label: labels.groupSplitHorizontal || 'Split Groups Left/Right',
+      ...menuIcon('vertical_split'),
+      enabled: isMultiGroup,
+      click: () => sendAction('split-group-horizontal')
+    },
+    {
+      label: labels.groupSplitVertical || 'Split Groups Top/Bottom',
+      ...menuIcon('horizontal_split'),
+      enabled: isMultiGroup,
+      click: () => sendAction('split-group-vertical')
+    },
+    {
+      label: labels.groupSplitClose || 'Close Group Split',
+      ...menuIcon('close_fullscreen'),
+      enabled: Boolean(payload.groupSplitEnabled),
+      click: () => sendAction('close-group-split')
+    },
+    { type: 'separator' },
+    {
+      label: labels.addSerialPort || 'Add Serial Port',
+      ...menuIcon('add'),
+      click: () => sendAction('add-serial-group')
+    }
+  ] : terminalType === 'chart' ? [
     {
       label: payload.paused ? (labels.chartResume || 'Resume') : (labels.chartPause || 'Pause'),
       ...menuIcon(payload.paused ? 'play_arrow' : 'pause'),

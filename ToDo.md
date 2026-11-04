@@ -252,7 +252,8 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 - [x] **Shell 回归修复（未提交时的验证）**：`verify-shell.js` **16/16 PASS、exit=0**（`verify-shell-out2.txt`，隔离实例 `userdata-diag4`）。覆盖：单分组建 Shell → 加分组切到 g-1（默认分组 `display:none` 且 rect 为 0）→ 点分组层 Shell 标签（ `#workspace-root` 重新有尺寸、Shell 面板 `.active` 且 w/h > 0）→ **`activeGroupId` 仍为 g-1** → 点回 g-1 主标签（默认分组重新隐藏，override 已清空）。
 - [x] **主标签文案与侧栏分组名**：`verify-titles.js` **6/6 PASS**，实测 `default → "Serial 1"`、`g-1 → "Serial 2"`，且 `hasI18n === false`。
 - [ ] **`verify-groups.js` 的 54 项断言已部分过期**：凡假设「多分组 ⇒ 多工作区同时可见」的项都因 `bf016a4` 的语义变更而失败——**失败原因是断言过期（「两组工作区同时可见」已不再是默认行为），不是产品缺陷**。重跑前必须先更新这些断言。
-- [ ] **分组级分屏无 UI 入口（阻塞项）**：`setGroupWorkspaceSplit()` / `bindGroupWorkspaceSplitter()` / `placeGroupWorkspaceSplitter()` 已落地，但没有任何 UI 能调到它们。因此并排显示、分界条拖动、分界条位置修正**全部无真实点击证据**。另：`.group-split-vertical` / `.group-split-horizontal` 的 CSS `flex-direction` 规则尚未补。
+- [x] **分组级分屏的 UI 入口已落地并验证**：入口在分组标签的右键菜单（左右分屏 / 上下分屏 / 关闭分组分屏 / 添加串口）。CDP `verify-group-split.js` **19/19 PASS、exit=0**（`verify-group-split-out2.txt`，`userdata-diag6`）：两分组基线 → 左右分屏（2 条可见、`row`、分界条显示且位置正确、宽度约等分）→ 上下分屏（2 条可见、`column`、高度约等分）→ 关闭分屏（1 条可见、分界条隐藏、类名清空、无残留 flex-basis）。同时修掉两处只有真实点击能发现的静默缺陷：关闭分屏不重写 DOM 导致方向类名残留；CSS 写 `.split-vertical` 而 JS 切 `group-split-vertical`，类名不匹配导致上下分屏完全不生效。
+- [ ] **分组级分界条的真实鼠标拖动未验证**：`bindGroupWorkspaceSplitter()` 的比例换算依赖真实 `getBoundingClientRect` 与 pointer capture，现有 CDP 脚本未覆盖，拖动逻辑仍只有静态审查。
 - [ ] **新建分组的终端右键菜单未做 CDP 验证**：代码已补绑（`term` 传函数惰性取本组 xterm），但未真的在新分组终端上派发 `contextmenu` 事件并断言菜单请求。
 - [ ] **两级分屏的拖动与 fit 未覆盖**：分界条的实际比例换算与「拖动非默认分组的标签」只有静态审查；切回 `display:none` 容器后的 `fit()` 未肉眼确认。
 - [x] 配置迁移磁盘验证：独立 `--user-data-dir` 连启两次，`config.json` 均为 v15 + 1 组，旧字段保留，`config.v14.backup.json` 保持 21667 字节的 v14 原件且第二次启动未覆盖。

@@ -1090,7 +1090,11 @@ function getContextMenuLabels() {
         chartExportWindow: tr('main.chartExportWindow'),
         chartExportAll: tr('main.chartExportAll'),
         chartSettings: tr('main.chartSettings'),
-        chartClose: tr('main.chartClose')
+        chartClose: tr('main.chartClose'),
+        groupSplitHorizontal: trFallback('main.groupSplitHorizontal', 'Split Groups Left/Right'),
+        groupSplitVertical: trFallback('main.groupSplitVertical', 'Split Groups Top/Bottom'),
+        groupSplitClose: trFallback('main.groupSplitClose', 'Close Group Split'),
+        addSerialPort: tr('main.addSerialPort')
     };
 }
 
@@ -1147,6 +1151,25 @@ function bindShellTextModeWheel(tabState, element) {
 function requestTerminalContextMenu(payload) {
     ipcRenderer.send('show-terminal-context-menu', {
         ...payload,
+        labels: getContextMenuLabels()
+    });
+}
+
+// 弹分组标签的右键菜单（分组级分屏入口）。
+//
+// 复用 show-terminal-context-menu 这条 IPC，只是把 terminalType 换成 'group'，
+// 而不是另开一条通道：主进程那份菜单模板和发送回流逻辑已经存在，再造一条会让
+// 「渲染进程发什么、主进程回什么」这套对应关系变成两套。
+//
+// tabId 留空：分屏是分组维度的动作，不针对任何标签页。
+function requestSerialGroupContextMenu(groupId) {
+    ipcRenderer.send('show-terminal-context-menu', {
+        terminalType: 'group',
+        tabId: '',
+        paneId: '',
+        groupId,
+        isMultiGroup: serialGroups.length > 1,
+        groupSplitEnabled: groupWorkspaceSplit.enabled,
         labels: getContextMenuLabels()
     });
 }
@@ -1350,11 +1373,13 @@ async function handleTerminalContextMenuAction(payload = {}) {
     const isFilter = terminalType === 'filter';
     const isShell = terminalType === 'shell';
     const isChart = terminalType === 'chart';
+    const isGroup = terminalType === 'group';
     const filterTab = isFilter ? filterTabs.find(tab => tab.id === tabId) : null;
     const shellTab = isShell ? getShellTabState(tabId) : null;
     const chartTab = isChart ? getChartTabState(tabId) : null;
-    const targetTerm = isChart ? null : (isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialTerm));
-    if ((isChart && !chartTab) || (!isChart && !targetTerm && action !== 'paste-send')) return;
+    const targetTerm = (isChart || isGroup) ? null : (isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialTerm));
+    // 分组级动作不承诺任何终端：它们作用于分组容器本身，不能因拿不到 term 就被拦掉。
+    if (!isGroup && ((isChart && !chartTab) || (!isChart && !targetTerm && action !== 'paste-send'))) return;
 
     switch (action) {
         case 'copy-all': {
@@ -1416,6 +1441,30 @@ async function handleTerminalContextMenuAction(payload = {}) {
         case 'new-filter-tab': {
             createFilterTab({}, resolvePaneId(paneId, tabId));
             setActionStatus('已新建过滤标签页');
+            break;
+        }
+        // ---- 分组级分屏 -------------------------------------------------
+        //
+        // 与下面的 split-horizontal / split-vertical 区别：那两个把**单个标签**搬到另一个
+        // pane（组内分屏），这三个决定**哪些分组**并排显示（分组级分屏）。
+        // 两者名称相近但作用面完全不同，不要合并。
+        case 'split-group-horizontal': {
+            setGroupWorkspaceSplit(true, { orientation: 'horizontal' });
+            setActionStatus('已启用左右分屏（分组级）');
+            break;
+        }
+        case 'split-group-vertical': {
+            setGroupWorkspaceSplit(true, { orientation: 'vertical' });
+            setActionStatus('已启用上下分屏（分组级）');
+            break;
+        }
+        case 'close-group-split': {
+            setGroupWorkspaceSplit(false);
+            setActionStatus('已关闭分组级分屏');
+            break;
+        }
+        case 'add-serial-group': {
+            addSerialGroupFromUi();
             break;
         }
         case 'split-horizontal': {
@@ -2082,6 +2131,13 @@ function switchPaneTab(paneId, tabId, options = {}) {
 
 window.__switchWorkspaceTab = switchPaneTab;
 
+// 仅供 CDP 验证脚本调用。
+//
+// 原生右键菜单由主进程弹出，CDP 点不到菜单项，只能绕过菜单直接驱动同一条动作处理函数。
+// 它走的就是 ipcRenderer.on('terminal-context-menu-action') 的回调本身，
+// 所以验证到的是真实代码路径，而不是另写一套仅供测试的分支。
+window.__handleContextMenuAction = handleTerminalContextMenuAction;
+
 function ensurePaneTabMembership(paneId, tabId) {
     return workspaceManager.ensurePaneTabMembership(paneId, tabId);
 }
@@ -2600,6 +2656,10 @@ function setGroupWorkspaceSplit(enabled, options = {}) {
     if (!enabled) {
         resetGroupWorkspaceSplit();
         syncGroupWorkspaceVisibility();
+        // 必须重新写一次布局：reset 只改了状态对象，方向类名与 flex-basis 仍在 DOM 上，
+        // 不补这一步就会出现「关闭分屏后仍是 flex-direction:column、仍占半高」。
+        // CDP 实测过这个残留（verify-group-split.js 的 close-split-classes-cleared）。
+        applyGroupWorkspaceSplitLayout();
         return;
     }
     const candidates = getGroupSplitCandidates();
@@ -3208,6 +3268,17 @@ function renderSerialGroupTabBar() {
         button.addEventListener('click', event => {
             if (event.target.closest('.main-tab-close')) return;
             activateSerialGroup(tab.groupId);
+        });
+
+        // 分组级分屏的唯一入口就在这里。
+        //
+        // 不用工具栏按钮：分屏是低频且带方向的开关（左右 / 上下 / 关闭三选一），
+        // 排成按钮会占用标签栏而把它挤满——用户在布局图里明确要求分组标签不挤在一起。
+        // 右键菜单与旁边过滤页/图表页的做法一致。
+        button.addEventListener('contextmenu', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            requestSerialGroupContextMenu(tab.groupId);
         });
 
         const closeEl = document.createElement('span');

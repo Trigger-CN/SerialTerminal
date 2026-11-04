@@ -596,6 +596,39 @@ Object.assign(translations.fr.main, { addSerialPort: 'Ajouter un port série' })
 Object.assign(translations.ru.main, { addSerialPort: 'Добавить последовательный порт' });
 Object.assign(translations.de.main, { addSerialPort: 'Seriellen Port hinzufügen' });
 
+// 分组标签右键菜单中的分组级分屏项。它们与 splitHorizontal / splitVertical
+// 不是同一批键：后者是「把标签搬到另一个 pane」（组内分屏），这里是「哪些分组并排」。
+// 文案必须能区分，否则用户在两个同名菜单项之间无法判断。
+Object.assign(translations.en.main, {
+  groupSplitHorizontal: 'Split Groups Left/Right',
+  groupSplitVertical: 'Split Groups Top/Bottom',
+  groupSplitClose: 'Close Group Split'
+});
+Object.assign(translations['zh-CN'].main, {
+  groupSplitHorizontal: '左右分屏（分组）',
+  groupSplitVertical: '上下分屏（分组）',
+  groupSplitClose: '关闭分组分屏'
+});
+Object.assign(translations['zh-TW'].main, {
+  groupSplitHorizontal: '左右分屏（分組）',
+  groupSplitVertical: '上下分屏（分組）',
+  groupSplitClose: '關閉分組分屏'
+});
+Object.assign(translations.fr.main, {
+  groupSplitHorizontal: 'Diviser les groupes à gauche/droite',
+  groupSplitVertical: 'Diviser les groupes en haut/bas',
+  groupSplitClose: 'Fermer la division des groupes'
+});
+Object.assign(translations.ru.main, {
+  groupSplitHorizontal: 'Разделить группы слева/справа',
+  groupSplitVertical: 'Разделить группы сверху/снизу',
+  groupSplitClose: 'Закрыть разделение групп'
+});
+Object.assign(translations.de.main, {
+  groupSplitHorizontal: 'Gruppen links/rechts teilen',
+  groupSplitVertical: 'Gruppen oben/unten teilen',
+  groupSplitClose: 'Gruppenteilung schließen'
+});
 // 侧栏顶部「当前控制的分组」标识。同样必须六种语言齐备。
 Object.assign(translations.en.main, { controllingGroup: 'CONTROLLING' });
 Object.assign(translations['zh-CN'].main, { controllingGroup: '当前控制' });
