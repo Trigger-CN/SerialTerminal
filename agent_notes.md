@@ -1495,6 +1495,29 @@ function isShellColumnActive() {
 
 **仍未验证**：Shell 归入某分组后的长期行为（关组回落、跨多次切分组）只有 DOM 层证据，没有真实双端口端到端验证。
 
+
+### 新分组右键菜单与分组标签高亮（第 4 / 6 项，已闭环）
+
+这两项长期只有「代码已提交」而没有行为证据，现已用 `verify-context-menu-and-highlight.js` **17/17 PASS、exit=0** 闭合（`verify-ctx-highlight-fix4.txt`，`userdata-diag31`）。
+
+**第 4 项（新分组终端右键菜单）的判据与做法**：
+
+原生菜单由主进程弹出，CDP 点不到菜单项。所以脚本在渲染进程里**旁路记录** `ipcRenderer.send`（只记录 `show-terminal-context-menu`，其余转发给真实 `send`，不阻止主进程弹菜单），然后在终端容器上派发真实 `contextmenu` 事件，断言：
+
+1. 默认分组（对照组）：发出 IPC，payload 为 `terminalType:'main' / tabId:'tab-main' / paneId:'pane-1'`；
+2. 新分组：发出 IPC，payload 为 `terminalType:'main' / tabId:'tab-main-g-1' / paneId:'pane-1-g-1'`。
+
+**写这条断言时踩到的一个陷阱（必须记住）**：**非默认分组的 runtime 在生产代码里只在连接串口时才建**。`serialRuntimes.getOrCreate` 全局只有两处调用——模块加载期的默认分组，以及验证钩子 `__seedGroupSentinel`。所以：
+
+- 「点一下该分组的主标签」**不会**建出 xterm（实测 `xtermAfter:false`）；
+- 若不管这一点直接右键，`getSerialTerm('g-1')` 会走 `getSerialRuntime` 的**回落分支**拿到默认分组 term，`bindTerminalContextMenu` 里 `if (!currentTerm) return;` 也就不会拦（它非空），于是「新分组右键有反应」变成恒真的假结论。
+
+脚本因此先用 `window.__seedGroupSentinel()` 把 runtime 建出来，并断言 `.xterm` 真的挂在 `#serial-container-g-1` 里，再右键。
+
+**第 6 项（只高亮当前分组的标签）的判据**：不是「代码里有没有 `.active`」，而是三条同时成立——带 `.active` 的分组标签**恰好一个**、其 `groupId` 等于激活分组、且它**可见**（`offsetParent` + 实际宽高）。未分屏与已分屏各测一次：分屏时两列的行同时可见，是最容易出现「都亮」的形态；另外还断言非激活列的分组标签**不带** `.active`。
+
+
+
 ### 侧栏控件按当前分组分发（已落地）
 
 **这是最容易反复错的一层**：`renderer.js` 里有三类「当前」读法，含义各不相同：
