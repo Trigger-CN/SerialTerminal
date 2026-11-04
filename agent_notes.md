@@ -1355,6 +1355,48 @@ if (!isGroup && ((isChart && !chartTab) || (!isChart && !targetTerm && action !=
 **实测（`verify-group-split.js` 19/19、exit=0，`verify-group-split-out2.txt`，`userdata-diag6`）**：两分组基线（1 条可见、分界条隐藏）→ 左右分屏（2 条可见、`row`、类名、分界条显示且紧跟第一个可见条目、宽度 400/400 约等分）→ 上下分屏（2 条可见、`column`、类名、高度约等分）→ 关闭分屏（1 条可见、分界条隐藏、类名清空、无残留 flex-basis 且占满 799px）。
 
 **仍未验证**：`bindGroupWorkspaceSplitter()` 的真实鼠标拖动。CDP 的 `Input.dispatchMouseEvent` 可以模拟 pointer 事件，但拖动比例换算依赖真实 `getBoundingClientRect` 与 pointer capture，现有脚本未覆盖——**拖动逻辑目前只有静态审查**。
+### 分组列结构与两行标签栏（第 9 项，已落地）
+
+**用户原话**：`便签栏显示的时候，分组标签不能挤在一起，而是位于自己分组页的上方，shell标签页如果独立一组，则该组只显示一行标签栏`。
+
+**结构变化**：`#group-workspace` 的直接子元素从「分组工作区」变成「分组列」。每个分组（含默认分组）都占一列，列内自上而下是「本组的分组标签行 → 本组的工作区」。
+
+```
+#group-workspace
+  ├─ .group-column.serial-group-workspace#serial-group-workspace-default   ← index.html 静态新增
+  │    ├─ .group-tab-row#serial-group-tab-bar        （原有 id 逐字保留，只是挪进了列首）
+  │    └─ .workspace-root#workspace-root → #pane-1 → #serial-container      （全部后代 id 不变）
+  ├─ #group-workspace-splitter
+  └─ .group-column.serial-group-workspace#serial-group-workspace-g-1         （动态建）
+       ├─ .group-tab-row#serial-group-tab-bar-g-1
+       └─ .workspace-root-g-1 → #pane-1-g-1
+```
+
+**关键设计：只用一条静态行，靠「借用」改变归属。** `#serial-group-tab-bar` 不复制多份，而是在列之间搬移：
+
+- **未分屏**：它被搬到当前激活列的列首，里面渲染**全部**分组标签（否则用户没法切分组）。
+- **已分屏**：它留在默认分组列，只渲染默认分组自己那一个；其它列各有一条自己的行，各自只渲染自己那一个。
+
+不复制静态 DOM 是有原因的：复制会产生重复 id，而 `describeGroupTabBar()` 返回的 `tabs` 每项**已经是** `describeGroupTab()` 的完整结果（没有 `id` 字段），再喂回去会让所有分组回落 `'default'`。
+
+**`groupWorkspaceEntryId()` 语义变了**：现在**始终返回列容器 id**，默认分组也从 `workspace-root` 变成 `serial-group-workspace-default`。因此 `applyGroupWorkspaceSplitLayout()` / `syncGroupWorkspaceVisibility()` / `placeGroupWorkspaceSplitter()` 里的 `document.getElementById(groupWorkspaceEntryId(...))` 自动就落在列上，JS 逻辑不用改。
+
+**`serial-group-layout-dom.js` 新增两个 id 函数**：`groupTabRowId(groupId)` / `groupTabListId(groupId)`。默认分组沿用静态 `serial-group-tab-bar` / `serial-group-tab-list`，其它分组带后缀。
+
+**必须记住的三个陷阱**：
+
+1. **关闭列前必须把静态行与「添加串口」按钮抢回来**。`closeSerialGroup()` 里的 `document.getElementById(groupWorkspaceContainerId(id))?.remove()` 会把整列删掉，而静态行可能正被 borrow 在那一列里（未分屏时它就住在激活列首）。不先调 `reclaimSharedGroupTabRow()` + `reclaimGroupAddButton()`，分组栏与按钮就永久消失，**且没有任何报错**。
+2. **一列里本就有两条 `.group-tab-row`**：本组自己那条（未分屏时 hidden）+ 借来的静态行。所以断言「一列只有一条行」是错的，应断言「**可见**行恰好一条」。
+3. **未分屏时其它列的行必须 hidden**。否则一列里会出现两条标签行（上一条还是空的），看起来就是「标签栏多了一条空白」。
+
+**过程中真实抓到一个只有启动才能发现的缺陷**：`renderSerialGroupTabBar()` 引用了未 require 的 `GROUP_TAB_BAR_ID` / `GROUP_TAB_LIST_ID`，真实启动即抛 `ReferenceError`。`node --check` 只解析不执行、模块加载门禁不会走到这个函数（它只在 `applyConfig` 的 Promise 回调里被调），**两轮全绿**；只有 `app-diag9-err.log` 的 `[RENDERER DIAGNOSTIC]` 才暴露。已把 13 个新标识补进 `scan-undefined.js` 候选表（`checked=63`）。
+
+**验证**：CDP `verify-group-columns.js` **39/39 PASS、exit=0**（`verify-group-columns-out4.txt`，`userdata-diag11`）。断言全部量真实布局：静态列存在且行是其首子元素、`#serial-container` 祖先链完整、单分组基线只一列可见且行隐藏、加分组后共享行进入激活列且在内容之上、切回默认行跟着搬、分屏时每列各一条行且行内只有自己那一个标签、Shell 落在默认列的组行里且不新开列、关闭分屏回单列、关掉分组后静态行与按钮存活且 inline 入口恢复可见。
+
+**回归**：`verify-group-split.js` 19/19、`verify-shell.js` 16/16、`verify-sidebar-groups.js` 14/14、`verify-titles.js` 6/6、`npm test` 468/468。
+
+**两处断言按判据更新**（改的是验证代码，不是产品行为）：`verify-shell.js` 两处已改为量 `#serial-group-workspace-default` 列容器——`#workspace-root` 现在不是外层条目，它永远 `hidden=false` 而实际 w/h=0（父列被隐藏），量它会得到恒真的假结论。
+
 
 ### 侧栏控件按当前分组分发（已落地）
 

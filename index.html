@@ -277,56 +277,62 @@
     </div>
 
     <div class="main-container">
-        <!-- 分组层：只有分组数 >= 2 时显示。位于 pane 标签行之上，Shell 标签不归属任何分组，
-             因此它在双层模式下与分组标签同级、在单层模式下与串口标签混排。 -->
-        <div class="serial-group-tab-bar" id="serial-group-tab-bar" hidden>
-            <div class="main-tabs-list serial-group-tab-list" id="serial-group-tab-list" role="tablist"></div>
-            <div class="serial-group-tab-actions">
-                <button id="add-serial-group-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
-            </div>
-        </div>
-        <!-- 分组级（外层）分屏容器：每个直接子元素就是“一个分组的工作区”。
-             默认分组直接用它内部那个静态 #workspace-root（id 与内部结构逐字不变，
-             因为 #serial-container 在模块加载期就被 xterm open() 了），
-             其余分组是 #serial-group-workspace-<g> 这类动态容器。 -->
+        <!-- 分组级（外层）分屏容器：每个直接子元素是“一个分组列”，列内自上而下是
+             该组自己的分组标签行（.group-tab-row）与它自己的工作区。
+             分组标签行住在列内部，而不是容器顶部的一条共享行——否则多分组并排时
+             所有分组标签依旧挤在一起，与「位于自己分组页上方」的布局要求相背。
+             默认分组的列是静态标记：内部 #workspace-root 及其全部后代 id 逐字不变，
+             因为 #serial-container 在模块加载期就被 xterm open() 了；祖先链只多一层
+             不会重新 open，改 id 会。 -->
         <div class="group-workspace" id="group-workspace">
-        <div class="workspace-root" id="workspace-root">
-            <div class="workspace-pane active" id="pane-1" data-pane-id="pane-1">
-                <div class="main-tabs-header pane-tabs-header">
-                    <div class="main-tabs-list pane-tabs-list" id="pane-1-tabs-list" role="tablist">
-                        <button class="main-tab active" id="tab-main-button" type="button" role="tab" aria-controls="tab-main" aria-selected="true" data-target="tab-main" data-pane-id="pane-1" data-i18n="main.mainTerminal">Main Terminal</button>
-                    </div>
-                    <div class="pane-tab-actions" id="pane-1-tab-actions">
-                        <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
-                        <button id="pane-1-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
-                        <button id="pane-1-new-chart-tab-btn" class="secondary pane-new-tab-btn" title="New Chart Tab" data-i18n-title="main.newChartTab"><span class="material-icon-placeholder" data-material-icon="show_chart"></span></button>
-                        <!-- 多串口入口（单层）。常驻在 pane 标签行，因为分组栏在单分组时是 hidden：
-                             若只在分组栏里提供入口，用户首次启动就没法开启多串口。
-                             多分组时由 syncSerialGroupAddButtonLayer() 把它置为 hidden，只留分组栏那个，
-                             两层始终恰好一个可见。 -->
-                        <button id="add-serial-group-inline-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
+            <div class="group-column serial-group-workspace" id="serial-group-workspace-default" data-group-id="default">
+                <!-- 默认分组的分组标签行。只有分组数 >= 2 时显示（hidden）。
+                     Shell 标签不归属任何串口分组：多分组时它被搬到这一行，与分组标签同级；
+                     单分组时回到 pane 标签行与串口标签混排。 -->
+                <div class="group-tab-row serial-group-tab-bar" id="serial-group-tab-bar" hidden>
+                    <div class="main-tabs-list serial-group-tab-list" id="serial-group-tab-list" role="tablist"></div>
+                    <div class="serial-group-tab-actions">
+                        <button id="add-serial-group-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
                     </div>
                 </div>
-                <div class="main-tabs-content pane-tabs-content" id="pane-1-tabs-content">
-                    <div class="main-tab-pane active" id="tab-main" data-pane-id="pane-1" role="tabpanel" aria-labelledby="tab-main-button">
-                        <div class="terminal-wrapper" id="serial-container"></div>
+                <div class="workspace-root" id="workspace-root">
+                    <div class="workspace-pane active" id="pane-1" data-pane-id="pane-1">
+                        <div class="main-tabs-header pane-tabs-header">
+                            <div class="main-tabs-list pane-tabs-list" id="pane-1-tabs-list" role="tablist">
+                                <button class="main-tab active" id="tab-main-button" type="button" role="tab" aria-controls="tab-main" aria-selected="true" data-target="tab-main" data-pane-id="pane-1" data-i18n="main.mainTerminal">Main Terminal</button>
+                            </div>
+                            <div class="pane-tab-actions" id="pane-1-tab-actions">
+                                <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
+                                <button id="pane-1-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
+                                <button id="pane-1-new-chart-tab-btn" class="secondary pane-new-tab-btn" title="New Chart Tab" data-i18n-title="main.newChartTab"><span class="material-icon-placeholder" data-material-icon="show_chart"></span></button>
+                                <!-- 多串口入口（单层）。常驻在 pane 标签行，因为分组栏在单分组时是 hidden：
+                                     若只在分组栏里提供入口，用户首次启动就没法开启多串口。
+                                     多分组时由 syncSerialGroupAddButtonLayer() 把它置为 hidden，只留分组栏那个，
+                                     两层始终恰好一个可见。 -->
+                                <button id="add-serial-group-inline-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
+                            </div>
+                        </div>
+                        <div class="main-tabs-content pane-tabs-content" id="pane-1-tabs-content">
+                            <div class="main-tab-pane active" id="tab-main" data-pane-id="pane-1" role="tabpanel" aria-labelledby="tab-main-button">
+                                <div class="terminal-wrapper" id="serial-container"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="workspace-splitter" id="workspace-splitter" data-group-splitter="pane" data-group-id="default" hidden></div>
+                    <div class="workspace-pane" id="pane-2" data-pane-id="pane-2" hidden>
+                        <div class="main-tabs-header pane-tabs-header">
+                            <div class="main-tabs-list pane-tabs-list" id="pane-2-tabs-list" role="tablist"></div>
+                            <div class="pane-tab-actions">
+                                <button id="pane-2-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
+                                <button id="pane-2-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
+                                <button id="pane-2-new-chart-tab-btn" class="secondary pane-new-tab-btn" title="New Chart Tab" data-i18n-title="main.newChartTab"><span class="material-icon-placeholder" data-material-icon="show_chart"></span></button>
+                            </div>
+                        </div>
+                        <div class="main-tabs-content pane-tabs-content" id="pane-2-tabs-content"></div>
                     </div>
                 </div>
             </div>
-            <div class="workspace-splitter" id="workspace-splitter" data-group-splitter="pane" data-group-id="default" hidden></div>
-            <div class="workspace-pane" id="pane-2" data-pane-id="pane-2" hidden>
-                <div class="main-tabs-header pane-tabs-header">
-                    <div class="main-tabs-list pane-tabs-list" id="pane-2-tabs-list" role="tablist"></div>
-                    <div class="pane-tab-actions">
-                        <button id="pane-2-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
-                        <button id="pane-2-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
-                        <button id="pane-2-new-chart-tab-btn" class="secondary pane-new-tab-btn" title="New Chart Tab" data-i18n-title="main.newChartTab"><span class="material-icon-placeholder" data-material-icon="show_chart"></span></button>
-                    </div>
-                </div>
-                <div class="main-tabs-content pane-tabs-content" id="pane-2-tabs-content"></div>
-            </div>
-        </div>
-            <!-- 分组级分屏的分界条。必须紧跟在第一个分组之后：放在容器末尾会落到最右边，
+            <!-- 分组级分屏的分界条。必须紧跟在第一个分组列之后：放在容器末尾会落到最右边，
                  用户拖到的位置与它实际调整的边界对不上。 -->
             <div class="group-workspace-splitter" id="group-workspace-splitter" data-group-splitter="group" hidden></div>
         </div>

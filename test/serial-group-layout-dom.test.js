@@ -15,6 +15,8 @@ const {
   groupSplitterId,
   groupWorkspaceContainerId,
   groupWorkspaceEntryId,
+  groupTabRowId,
+  groupTabListId,
   resolveGroupWorkspaceEntries,
   describeGroupPanes,
   describeGroupWorkspace,
@@ -128,12 +130,18 @@ test('findMissingGroupPaneIds degrades safely without a predicate', () => {
   assert.deepEqual(findMissingGroupPaneIds(null), []);
 });
 
-test('the default group occupies the static workspace-root directly, others get a wrapper', () => {
-  // 外层条目就是「一个分组在分组级容器里占的那一格」。默认分组复用静态 #workspace-root，
-  // 因此不能给它再包一层容器（会改变 #serial-container 的祖先链，而 xterm 已在模块加载期
-  // open() 了它）。其它分组才是 #serial-group-workspace-<g>。
-  assert.equal(groupWorkspaceEntryId('default'), 'workspace-root');
+test('every group, including the default one, occupies its own column container', () => {
+  // 外层条目就是「一个分组在分组级容器里占的那一列」。列内自上而下是
+  // 「本组的分组标签行 → 本组的工作区（.workspace-root）」。
+  //
+  // 默认分组也要有自己的列（静态 #serial-group-workspace-default），否则它的分组
+  // 标签只能挤在容器顶部的一条共享行里，与它自己那一列脱开。
+  //
+  // 「默认分组的 root/pane/splitter id 逐字不变」这条约束仍然成立：祖先链多一层
+  // div 不会让 xterm 重新 open()，改 id 才会。
+  assert.equal(groupWorkspaceEntryId('default'), 'serial-group-workspace-default');
   assert.equal(groupWorkspaceEntryId('g-1'), 'serial-group-workspace-g-1');
+  assert.notEqual(groupWorkspaceEntryId('default'), groupWorkspaceRootId('default'));
 });
 
 test('resolveGroupWorkspaceEntries maps every group to its own outer entry', () => {
@@ -141,12 +149,12 @@ test('resolveGroupWorkspaceEntries maps every group to its own outer entry', () 
   // 表现为「切了分组但界面没变」，且没有任何报错。
   const entries = resolveGroupWorkspaceEntries(['default', 'g-1']);
   assert.deepEqual(entries, [
-    { groupId: 'default', entryId: 'workspace-root', paneIds: ['pane-1'] },
+    { groupId: 'default', entryId: 'serial-group-workspace-default', paneIds: ['pane-1'] },
     { groupId: 'g-1', entryId: 'serial-group-workspace-g-1', paneIds: ['pane-1-g-1'] }
   ]);
   assert.deepEqual(resolveGroupWorkspaceEntries(null), []);
   assert.deepEqual(resolveGroupWorkspaceEntries(['default', '']), [
-    { groupId: 'default', entryId: 'workspace-root', paneIds: ['pane-1'] }
+    { groupId: 'default', entryId: 'serial-group-workspace-default', paneIds: ['pane-1'] }
   ]);
 });
 
@@ -156,7 +164,28 @@ test('outer splitter ids match the real static markup in index.html', () => {
   assert.equal(GROUP_WORKSPACE_CONTAINER_ID, 'group-workspace');
   assert.equal(GROUP_WORKSPACE_SPLITTER_ID, 'group-workspace-splitter');
   assert.match(html, /id="group-workspace"/);
+  assert.match(html, /id="group-workspace"/);
   assert.match(html, /id="group-workspace-splitter"/);
+});
+
+test('the static column container and its in-column tab rows exist in index.html', () => {
+  // 第 9 项（分组标签位于自己分组页上方）的静态前提。
+  //
+  // 默认分组必须真的有一层列容器，且它里面真的有分组标签行 —— 否则标签只能
+  // 回落成容器顶部的一条共享行，与「在自己分组页上方」相背。
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.equal(groupWorkspaceContainerId('default'), 'serial-group-workspace-default');
+  assert.match(html, /id="serial-group-workspace-default"/);
+  assert.match(html, /class="group-column serial-group-workspace" id="serial-group-workspace-default"/);
+  // 静态分组标签行沿用改造前的两个 id，只是从容器顶层挪进了默认分组列的列首。
+  assert.equal(groupTabRowId('default'), 'serial-group-tab-bar');
+  assert.equal(groupTabListId('default'), 'serial-group-tab-list');
+  assert.match(html, /class="group-tab-row serial-group-tab-bar" id="serial-group-tab-bar"/);
+  // 非默认分组的行/列表 id 必须带后缀，否则两个分组会抢同一节点。
+  assert.equal(groupTabRowId('g-1'), 'serial-group-tab-bar-g-1');
+  assert.equal(groupTabListId('g-1'), 'serial-group-tab-list-g-1');
+  assert.notEqual(groupTabRowId('default'), groupTabRowId('g-1'));
+  assert.notEqual(groupTabListId('default'), groupTabListId('g-1'));
 });
 
 test('every group workspace id is unique across a realistic group set', () => {

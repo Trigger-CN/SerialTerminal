@@ -107,20 +107,41 @@ function findMissingGroupPaneIds(workspace, hasPaneElement) {
 const GROUP_WORKSPACE_CONTAINER_ID = 'group-workspace';
 const GROUP_WORKSPACE_SPLITTER_ID = 'group-workspace-splitter';
 
-// 这是第一个分支的 id：默认分组不额外包一层，它自己就是静态 #workspace-root。
-// 其它分组则套一个 .serial-group-workspace 容器。
+// 外层条目 = 「一个分组在分组级容器里占的那一列」。列内自上而下是「本组的分组标签行 →
+// 本组的工作区（.workspace-root）」。
 //
-// 为什么默认分组不包：把 #workspace-root 再包一层会改变 #serial-container 的祖先链，
-// 而 xterm 在模块加载期就 open() 了它。现在的做法是「默认分组直接占外层容器的一个位置」，
-// 启动路径的 DOM 结构除了多一个父层（#group-workspace）之外完全不变。
+// 改名背后的结构变化：改造前默认分组直接拿静态 #workspace-root 当外层条目，
+// 于是分组标签只能挤在容器顶部的一条共享行里，与它自己那一列脱开。现在每个分组
+// （含默认分组）都有一层列容器：默认分组是 index.html 里的静态
+// #serial-group-workspace-default，内部 #workspace-root 及其全部后代 id 逐字不变。
+//
+// 「默认分组不能改 root 的 id」这条约束依然成立：xterm 在模块加载期就 open() 了
+// #serial-container，祖先链**多一层** div 不会重新 open，改 id 才会。
 function groupWorkspaceEntryId(groupId) {
+  return groupWorkspaceContainerId(groupId);
+}
+
+// 每列顶部的分组标签行。
+//
+// 结构与 groupWorkspaceContainerId 同一套规则：默认分组沿用静态标记
+// （`serial-group-tab-bar` / `serial-group-tab-list`，index.html 里已有），
+// 其它分组带后缀。分组标签行必须住在**列内部**，否则它会变成一条跨列的共享顶栏，
+// 用户看到的仍是「所有分组标签挤在一条行里」，而不是「位于自己分组页上方」。
+function groupTabRowId(groupId) {
   const id = normalizeGroupId(groupId);
-  if (id === DEFAULT_SERIAL_GROUP_ID) return groupWorkspaceRootId(id);
-  return groupWorkspaceContainerId(id);
+  if (id === DEFAULT_SERIAL_GROUP_ID) return 'serial-group-tab-bar';
+  return `serial-group-tab-bar${groupWorkspaceSuffix(id)}`;
+}
+
+function groupTabListId(groupId) {
+  const id = normalizeGroupId(groupId);
+  if (id === DEFAULT_SERIAL_GROUP_ID) return 'serial-group-tab-list';
+  return `serial-group-tab-list${groupWorkspaceSuffix(id)}`;
 }
 
 // 找出「应该显示的外层条目」。分组数 >= 2 时才用分组级分屏；
-// 只有一个分组时外层只留默认分组那一条，且不分屏。
+// 只有一个分组时外层只留默认分组那一列，且不分屏。
+// 列内部的工作区根用 rootId 表示，两套 id 不能混用。
 function resolveGroupWorkspaceEntries(groupIds) {
   const ids = Array.isArray(groupIds) ? groupIds.filter(id => typeof id === 'string' && id) : [];
   return ids.map(groupId => ({
@@ -140,6 +161,8 @@ module.exports = {
   groupSplitterId,
   groupWorkspaceContainerId,
   groupWorkspaceEntryId,
+  groupTabRowId,
+  groupTabListId,
   resolveGroupWorkspaceEntries,
   describeGroupPanes,
   describeGroupWorkspace,

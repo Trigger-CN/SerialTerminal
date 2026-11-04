@@ -49,6 +49,8 @@ const {
     GROUP_WORKSPACE_CONTAINER_ID,
     GROUP_WORKSPACE_SPLITTER_ID,
     groupWorkspaceEntryId,
+    groupTabRowId,
+    groupTabListId,
     describeGroupWorkspace
 } = require('./serial-group-layout-dom');
 const { createDefaultLayoutFor } = require('./workspace-layout-shape');
@@ -56,7 +58,7 @@ const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { SerialOutputBuckets } = require('./serial-output-buckets');
 const { createGroupTabListStore } = require('./serial-group-tab-lists');
 const { addSerialGroup, removeSerialGroup } = require('./serial-groups-model');
-const { describeGroupTabBar } = require('./serial-group-tab-bar');
+const { describeGroupTabBar, GROUP_TAB_BAR_ID, GROUP_TAB_LIST_ID } = require('./serial-group-tab-bar');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
 const {
@@ -2129,12 +2131,32 @@ function getPaneIdForTabId(tabId) {
     return workspaceManager.getPaneIdForTabId(tabId);
 }
 
-// 点开 Shell 标签时临时亮出默认分组的工作区。
+// Shell 标签归属的串口分组。
+//
+// `null` = 不归属任何分组（锁定决策的默认值）：Shell 的按钮与面板都住在默认分组的
+// pane-1 里，多分组时它出现在默认分组列的分组标签行上，与分组标签同级。
+// `string` = 用户把它拖进了某个分组（第 8 项的行为），此时它的按钮与面板都在那列里。
+//
+// 为什么需要它：Shell 面板的 id 固定是 `tab-shell-<n>`，不随分组后缀变化，因此
+// “它到底在哪一列”必须另外表达。仅靠 `getPaneIdForTabId()` 也不行——那读的是
+// 模块级别名指向的分组，而 Shell 的归属与用户当前看哪个分组是两件事。
+let shellOwnerGroupId = null;
+
+// Shell 当前实际所在的列。未归属任何分组时回到默认分组列。
+function getShellHostGroupId() {
+    if (shellOwnerGroupId && serialGroups.some(group => group.id === shellOwnerGroupId)) {
+        return shellOwnerGroupId;
+    }
+    return REGISTRY_DEFAULT_GROUP_ID;
+}
+
+// 点开 Shell 标签时临时亮出它所在的那一列。
 //
 // Shell 面板住在默认分组的 pane-1 里，而分组级可见性默认只显示激活分组。
-// 不亮出默认分组，用户点 Shell 标签后标签高亮了但屏幕上看不到终端，
+// 不亮出那一列，用户点 Shell 标签后标签高亮了但屏幕上看不到终端，
 // 表现为「选中串口组 2 再点 Shell 标签没反应」。
 //
+// **只影响可见性，绝不修改 activeGroupId**：侧栏必须仍停留在用户选的串口分组。
 // 必须声明在 switchPaneTab 之前：那里会清空它，模块加载期就可能被调用。
 let shellWorkspaceOverride = null;
 
@@ -2147,7 +2169,7 @@ function setActivePane(paneId, options = {}) {
 }
 
 function switchPaneTab(paneId, tabId, options = {}) {
-    // 任何串口标签的切换都意味着离开了 Shell，默认分组不再需要额外亮着。
+    // 任何串口标签的切换都意味着离开了 Shell，那一列不再需要额外亮着。
     // Shell 自己的切换不走这个函数（见 switchShellTab）。
     if (shellWorkspaceOverride) {
         shellWorkspaceOverride = null;
@@ -2735,6 +2757,8 @@ function setGroupWorkspaceSplit(enabled, options = {}) {
         // 不补这一步就会出现「关闭分屏后仍是 flex-direction:column、仍占半高」。
         // CDP 实测过这个残留（verify-group-split.js 的 close-split-classes-cleared）。
         applyGroupWorkspaceSplitLayout();
+        // 退出分屏后只剩一列，分组标签行也必须跟着回到那一列的列首。
+        renderSerialGroupTabBar();
         return;
     }
     const candidates = getGroupSplitCandidates();
@@ -2754,11 +2778,17 @@ function setGroupWorkspaceSplit(enabled, options = {}) {
     }
     syncGroupWorkspaceVisibility();
     applyGroupWorkspaceSplitLayout();
+    // 分屏后每列要有自己那一条分组标签行（否则就退回「全部挤在一条共享行」）。
+    renderSerialGroupTabBar();
 }
 
-// 把分屏状态写到外层容器的 DOM 上：方向类名与各条的 flex-basis。
+// 把分屏状态写到外层容器的 DOM 上：方向类名与各列的 flex-basis。
 //
-// 未分屏时清掉所有比例，让 CSS 的 flex:1 把唯一一条撞满——否则上一次性分屏的比例
+// 比例必须写在**列容器**（`.group-column`）上。列内部还有 .workspace-root，
+// 若写在内层而外层仍是 flex:1 1 0，分屏比例会静默失效 —— 两条都不报错，
+// 只是拖动没反应。这里靠 `groupWorkspaceEntryId()` 返回列容器 id 来保证。
+//
+// 未分屏时清掉所有比例，让 CSS 的 flex:1 把唯一一列撞满——否则上一次分屏的比例
 // 会残留，表现为「退出分屏后当前分组只占半宽」。
 function applyGroupWorkspaceSplitLayout() {
     const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
@@ -2790,17 +2820,19 @@ function applyGroupWorkspaceSplitLayout() {
     });
 }
 
-// 为一个非默认分组建外层工作区容器 `#serial-group-workspace-<g>`，内含自己的
-// `#workspace-root-<g>`、`#workspace-splitter-<g>` 与 `#pane-1-<g>` 等。
+// 为一个非默认分组建列容器 `#serial-group-workspace-<g>`，内含自己的分组标签行
+// `#serial-group-tab-bar-<g>`、`#workspace-root-<g>`、`#workspace-splitter-<g>` 与 `#pane-1-<g>`。
 //
-// 默认分组**不建**：它自己就是静态 `#workspace-root`，直接作为外层容器的一个条目。
-// 这条不是省事，而是启动时序要求——`#serial-container` 在静态 `pane-1` 内，
-// 而默认分组的 xterm 在模块加载期就 open() 了它。
+// 默认分组**不建**：它对应 index.html 里静态的 `#serial-group-workspace-default`，
+// 内部 `#workspace-root` 及其全部后代 id 逐字不变。这条不是省事，而是启动时序要求——
+// `#serial-container` 在静态 `pane-1` 内，而默认分组的 xterm 在模块加载期就 open() 了它。
 //
 // 幂等：已存在就直接返回。
 function ensureSerialGroupWorkspaceDom(groupId) {
     const id = resolveSerialGroupId(groupId);
-    if (id === REGISTRY_DEFAULT_GROUP_ID) return document.getElementById('workspace-root');
+    if (id === REGISTRY_DEFAULT_GROUP_ID) {
+        return document.getElementById(groupWorkspaceEntryId(id));
+    }
     const containerId = groupWorkspaceContainerId(id);
     const existing = document.getElementById(containerId);
     if (existing) return existing;
@@ -2808,9 +2840,14 @@ function ensureSerialGroupWorkspaceDom(groupId) {
     if (!outer) return null;
 
     const container = document.createElement('div');
-    container.className = 'serial-group-workspace';
+    // 列容器同时带 serial-group-workspace 与 group-column 两个类：
+    // 前者管「占满可用空间」，后者管「纵向排列：标签行 → 工作区」。
+    container.className = 'serial-group-workspace group-column';
     container.id = containerId;
     container.dataset.groupId = id;
+
+    // 列首的分组标签行。必须先于 .workspace-root 插入，且后续永不被重排走。
+    container.appendChild(createGroupTabRowElement(id));
 
     // 每个分组首版只建 1 个 pane（不分屏）；后续分屏由布局层的 ensurePaneElement 追加。
     const workspace = describeGroupWorkspace(id, { paneCount: 1 });
@@ -2841,6 +2878,96 @@ function ensureSerialGroupWorkspaceDom(groupId) {
         outer.appendChild(container);
     }
     return container;
+}
+
+// 造一个非默认分组的分组标签行（含标签列表与「添加串口」占位）。
+//
+// 「添加串口」按钮**不在**每列各造一个：它只保留静态那一个，由
+// placeGroupAddButton() 移到当前激活列。多列各一个会让用户同时看到好几个同样的按钮。
+function createGroupTabRowElement(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    const row = document.createElement('div');
+    row.className = 'group-tab-row serial-group-tab-bar';
+    row.id = groupTabRowId(id);
+    row.hidden = true;
+
+    const list = document.createElement('div');
+    list.className = 'main-tabs-list serial-group-tab-list';
+    list.id = groupTabListId(id);
+    list.setAttribute('role', 'tablist');
+    row.appendChild(list);
+    return row;
+}
+
+// 取（必要时建）某个分组的分组标签行。默认分组走静态标记，永不重建。
+function getGroupTabRow(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    const rowId = groupTabRowId(id);
+    const existing = document.getElementById(rowId);
+    if (existing) return existing;
+    if (id === REGISTRY_DEFAULT_GROUP_ID) return null;
+    const column = document.getElementById(groupWorkspaceEntryId(id));
+    if (!column) return null;
+    // 列首没有标签行时补一个（历史数据或手工改造过的 DOM）。
+    const created = createGroupTabRowElement(id);
+    column.insertBefore(created, column.firstChild);
+    return created;
+}
+
+// 取某个分组的分组标签列表容器。
+function getGroupTabList(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    return document.getElementById(groupTabListId(id));
+}
+
+// 把静态分组标签行搬回默认分组列首。
+//
+// 关闭非默认分组时必须先调一次：静态行可能正被 borrow 在那个即将删除的列里，
+// 跟着容器一起 remove 掉之后，分组栏就永久消失且没有任何报错。
+function reclaimSharedGroupTabRow() {
+    const home = document.getElementById(groupWorkspaceEntryId(REGISTRY_DEFAULT_GROUP_ID));
+    const row = document.getElementById(GROUP_TAB_BAR_ID);
+    if (!home || !row) return;
+    if (row.parentElement === home) return;
+    home.insertBefore(row, home.firstChild);
+}
+
+// 把静态「添加串口」按钮从即将删除的列里抢回来。
+//
+// 按钮住在某个列的标签行里（见 placeGroupAddButton），而列会被 remove。
+// 不抢回来就跟着一起消失，而且没有任何报错——分组栏上的「添加串口」再不出现。
+// 抢回来先丢到静态行里，之后 placeGroupAddButton 会把它放到正确位置。
+function reclaimGroupAddButton() {
+    if (!addSerialGroupBtn) return;
+    const home = document.getElementById(GROUP_TAB_BAR_ID);
+    if (!home || home.contains(addSerialGroupBtn)) return;
+    let actions = home.querySelector('.serial-group-tab-actions');
+    if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'serial-group-tab-actions';
+        home.appendChild(actions);
+    }
+    actions.appendChild(addSerialGroupBtn);
+}
+
+// 「添加串口」按钮只能出现在当前激活那一列的标签行里。
+//
+// 未分屏时静态行本身就在激活列首，按钮白送；分屏时每列各有一行，
+// 必须显式把按钮移过去，否则它停在默认分组那列，而默认分组可能根本没参与分屏
+// （于是按钮跟着被隐藏的列一起消失）。
+function placeGroupAddButton() {
+    if (!addSerialGroupBtn) return;
+    const hostRow = getGroupTabRow(activeGroupId);
+    if (!hostRow) return;
+    let actions = hostRow.querySelector('.serial-group-tab-actions');
+    if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'serial-group-tab-actions';
+        hostRow.appendChild(actions);
+    }
+    if (addSerialGroupBtn.parentElement !== actions) {
+        actions.appendChild(addSerialGroupBtn);
+    }
 }
 
 // 造一个分组自己的 pane 节点（含标签行、操作按钮与内容区）。
@@ -3210,10 +3337,13 @@ function applyActiveSerialGroup({ fit = true } = {}) {
     if (document.getElementById(targetTabId)) {
         switchPaneTab(paneId, targetTabId, { persist: false });
     }
-    // 外层可见性：未分屏时只显示激活分组那一条（下层只有一套标签行）；
+    // 外层可见性：未分屏时只显示激活分组那一列（下层只有一套标签行）；
     // 已分屏时并排显示参与分屏的分组。关掉分组后旧容器必须一并隐藏，
     // 否则它仍占着 flex-basis，表现为「关了一个分组但剩下那个只有半宽」。
     syncGroupWorkspaceVisibility();
+    // 分组标签行必须跟着激活分组走：未分屏时它属于激活列，必须画在**那一列**的首行。
+    // 漏这一步就会变成「切了分组，但分组标签还留在上一列里」。
+    renderSerialGroupTabBar();
     // 侧栏设置必须跟着切换：否则用户看到的是上一个分组的端口与参数，
     // 却以为改的是当前分组的。连接按钮同理，它代表的是当前这一个分组。
     applyGroupSerialOptionsToSidebar(activeGroupId);
@@ -3275,35 +3405,59 @@ function syncAllGroupMainTabTitles() {
 
 // 切换到一个 Shell 标签。
 //
-// **Shell 标签不归属任何串口分组**（已锁定的产品决定）：它的按钮在多分组时被搬到
-// 分组层，但面板与 tabIds 始终留在默认分组的 pane-1 里。因此这里不能用模块级别名
-// `switchPaneTab`——那个指向**当前激活分组**的布局，切到 g-1 后它找不到 tab-shell-1，
-// 直接 return false，表现为「点了 Shell 标签但终端不切」。
+// **Shell 标签默认不归属任何串口分组**（已锁定的产品决定）：它的按钮与面板都住在
+// 默认分组的 pane-1 里，多分组时它出现在默认分组列的分组标签行上，与分组标签同级。
+// 归属列由 `getShellHostGroupId()` 回答（第 8 项让用户可以把它拖进某个分组）。
+//
+// 不能用模块级别名 `switchPaneTab`：那个指向**当前激活分组**的布局，切到 g-1 后它
+// 找不到 tab-shell-1，直接 return false，表现为「点了 Shell 标签但终端不切」。
 //
 // 另一个必须做的一步：切换工作区可见性。
 //
-// 分组级可见性改成「只显示激活分组」之后，Shell 面板（在默认分组里）会跟着默认分组
-// 一起被隐藏。此时只切 layout 的话，标签高亮了但屏幕上看不到终端——
-// 用户报告为「选中串口组 2 再点 shell 标签没反应」。
-// Shell 是上层的，不属于任何分组，所以点它时必须把默认分组那条工作区亮起来：
-// 否则它没有「所在分组」可供显示。
+// 分组级可见性改成「只显示激活分组」之后，Shell 所在的那一列会跟着被隐藏。此时只切
+// layout 的话，标签高亮了但屏幕上看不到终端——用户报告为「选中串口组 2 再点 shell
+// 标签没反应」。所以点 Shell 时必须把那一列亮起来：否则它没有「所在分组」可供显示。
 function switchShellTab(tabId) {
-    const defaultManager = getGroupWorkspaceManager(REGISTRY_DEFAULT_GROUP_ID);
-    const paneId = defaultManager.getPaneIdForTabId(tabId);
-    // shellTabsShowDefaultWorkspace 让 syncGroupWorkspaceVisibility 额外亮出默认分组，
-    // 而不需要把 activeGroupId 改成默认分组（用户的侧栏仍停留在原来那个串口）。
-    shellWorkspaceOverride = REGISTRY_DEFAULT_GROUP_ID;
+    const ownerId = getShellHostGroupId();
+    const ownerManager = getGroupWorkspaceManager(ownerId);
+    const paneId = ownerManager.getPaneIdForTabId(tabId);
+    // Shell 所在的那一列必须亮出来：它可能不在激活分组那一列（默认归属是默认分组，
+    // 而用户可能正在看 g-2）。亮出那一列而不改 activeGroupId —— 侧栏仍然停留在
+    // 用户选的那个串口分组，否则点一下 Shell 就把侧栏切跑了。
+    shellWorkspaceOverride = ownerId;
     syncGroupWorkspaceVisibility();
-    const switched = defaultManager.switchPaneTab(paneId, tabId);
+    const switched = ownerManager.switchPaneTab(paneId, tabId);
     fitWorkspaceTerminals();
     return switched;
 }
 
 // 重画分组标签栏。分组数 >= 2 时显示，=1 时隐藏（退回单层）。
+//
+// 分组标签必须长在**各自分组列的首行**里，而不是容器顶部的一条共享行：
+// 用户要的是「分组标签位于自己分组页上方」。实现上用一条静态行
+// （`#serial-group-tab-bar`，它本身就是默认分组列的首行）在各列之间借用：
+//
+// - 未分屏：它被搬到当前激活列的列首，里面渲染**全部**分组标签（否则无法切分组）。
+//   此时屏幕上只有这一列，所以默认分组列缺一条行也无所谓。
+// - 已分屏：它留在默认分组列，只渲染默认分组自己那一个；其它参与分屏的列各有一行
+//   （由 ensureSerialGroupWorkspaceDom 建），各自只渲染自己那一个。
+//
+// 分组标签只渲染分组，**Shell 标签不由这里创建**：Shell 是既有节点，升降层靠搬移
+// （见 syncShellTabLayer）而不是重建——重建会丢 xterm 实例与监听。但 replaceChildren()
+// 会把之前搬上来的 Shell 节点一并移除，所以搬移必须在本函数末尾做。
 function renderSerialGroupTabBar() {
-    const barEl = document.getElementById('serial-group-tab-bar');
-    const listEl = document.getElementById('serial-group-tab-list');
-    if (!barEl || !listEl) return;
+    const barEl = document.getElementById(GROUP_TAB_BAR_ID);
+    if (!barEl) return;
+    const isSplit = groupWorkspaceSplit.enabled && groupWorkspaceSplit.groupIds.length > 1;
+
+    // 第一步：静态行归位。未分屏时它属于当前激活列（屏幕上只有这一列），
+    // 已分屏时回到默认分组列。搬的是整条行（含 Actions），子节点跟着走。
+    const targetColumn = document.getElementById(groupWorkspaceEntryId(
+        isSplit ? REGISTRY_DEFAULT_GROUP_ID : activeGroupId
+    ));
+    if (targetColumn && barEl.parentElement !== targetColumn) {
+        targetColumn.insertBefore(barEl, targetColumn.firstChild);
+    }
 
     const model = describeGroupTabBar({
         groups: serialGroups.map(group => ({
@@ -3317,68 +3471,94 @@ function renderSerialGroupTabBar() {
     });
 
     barEl.hidden = model.hidden;
-    listEl.replaceChildren();
 
-    // 注意：分组标签只渲染分组，**Shell 标签不由这里创建**。Shell 是既有节点，
-    // 升降层靠搬移（见 syncShellTabLayer）而不是重建——重建会丢 xterm 实例与监听。
-    // 但 replaceChildren() 会把之前搬上来的 Shell 节点一并移除，所以搬移必须在本函数之后做。
-    //
+    // 第二步：清空所有分组标签列表，并统一每列首行的可见性。
+    // 未分屏时只有静态行可见，其它列的行必须 hidden —— 否则一列里会出现两条标签行，
+    // 而且上一条是空的，看起来就是「标签栏多了一条空白」。
+    serialGroups.forEach(group => {
+        if (group.id !== REGISTRY_DEFAULT_GROUP_ID) {
+            const row = getGroupTabRow(group.id);
+            if (row) row.hidden = !isSplit;
+        }
+        getGroupTabList(group.id)?.replaceChildren();
+    });
+    // 静态行自己的列表再清一次：上一行的循环可能被「激活列恰好不是默认列」绕过。
+    document.getElementById(GROUP_TAB_LIST_ID)?.replaceChildren();
+
+    // 第三步：渲染分组标签。
     // model.tabs 的每一项已经是 describeGroupTab() 的完整结果，绝不能再喂回它：
     // describeGroupTab 用 source.id 取 groupId，而这里只有 groupId，会全部回落 'default'。
     model.tabs.forEach(tab => {
-        const button = document.createElement('button');
-        button.className = tab.className;
-        button.type = 'button';
-        button.id = tab.buttonId;
-        button.setAttribute('role', 'tab');
-        button.setAttribute('aria-selected', String(tab.active));
-        button.dataset.groupId = tab.groupId;
-
-        const titleEl = document.createElement('span');
-        titleEl.className = 'main-tab-title';
-        titleEl.textContent = tab.title;
-        button.appendChild(titleEl);
-
-        // 双击重命名：与过滤页/图表页的交互一致，不给分组另造一套手势。
-        button.addEventListener('click', event => {
-            if (event.target.closest('.main-tab-close')) return;
-            activateSerialGroup(tab.groupId);
-        });
-
-        // 分组级分屏的唯一入口就在这里。
-        //
-        // 不用工具栏按钮：分屏是低频且带方向的开关（左右 / 上下 / 关闭三选一），
-        // 排成按钮会占用标签栏而把它挤满——用户在布局图里明确要求分组标签不挤在一起。
-        // 右键菜单与旁边过滤页/图表页的做法一致。
-        button.addEventListener('contextmenu', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            requestSerialGroupContextMenu(tab.groupId);
-        });
-
-        const closeEl = document.createElement('span');
-        closeEl.className = 'main-tab-close';
-        closeEl.id = tab.closeButtonId;
-        closeEl.title = tr('main.closeTab');
-        closeEl.appendChild(createMaterialIcon('close'));
-        if (!tab.closable) {
-            // 默认分组不可关闭，但按钮保留占位：若直接不渲染，标签宽度会在
-            // 分组之间跳变，点击位置也会跟着漂移。
-            closeEl.classList.add('disabled');
-        } else {
-            closeEl.addEventListener('click', event => {
-                event.stopPropagation();
-                closeSerialGroup(tab.groupId);
-            });
+        if (!isSplit) {
+            // 未分屏：全部标签集中在静态行里（用户靠它切分组）。
+            document.getElementById(GROUP_TAB_LIST_ID)?.appendChild(buildGroupTabButton(tab));
+            return;
         }
-        button.appendChild(closeEl);
-
-        listEl.appendChild(button);
+        // 已分屏：每个分组只在自己列的那条行里出现。
+        getGroupTabList(tab.groupId)?.appendChild(buildGroupTabButton(tab));
     });
+
+    // 第四步：「添加串口」按钮只留静态那一个，挪到当前激活列的标签行里。
+    placeGroupAddButton();
 
     // 分组标签重建完后才能搬 Shell：replaceChildren() 已经把上一轮搬上来的节点摘掉了。
     syncShellTabLayer();
     syncSerialGroupAddButtonLayer();
+}
+
+// 把一个分组标签的模型描述变成真实按钮。
+//
+// 拆出来是因为分屏时每列的标签要在不同的循环里创建，两处都要同一套结构 ——
+// 复制一份意味着「为什么这列能关、那列不能关」这类漂移。
+function buildGroupTabButton(tab) {
+    const button = document.createElement('button');
+    button.className = tab.className;
+    button.type = 'button';
+    button.id = tab.buttonId;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(tab.active));
+    button.dataset.groupId = tab.groupId;
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'main-tab-title';
+    titleEl.textContent = tab.title;
+    button.appendChild(titleEl);
+
+    // 点击切分组。分屏时点自己那一列的标签不应该改变激活分组以外的任何东西，
+    // 所以这里仍然是同一个 activateSerialGroup —— 侧栏必须跟着走。
+    button.addEventListener('click', event => {
+        if (event.target.closest('.main-tab-close')) return;
+        activateSerialGroup(tab.groupId);
+    });
+
+    // 分组级分屏的唯一入口就在这里。
+    //
+    // 不用工具栏按钮：分屏是低频且带方向的开关（左右 / 上下 / 关闭三选一），
+    // 排成按钮会占用标签栏而把它挤满——用户在布局图里明确要求分组标签不挤在一起。
+    // 右键菜单与旁边过滤页/图表页的做法一致。
+    button.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        requestSerialGroupContextMenu(tab.groupId);
+    });
+
+    const closeEl = document.createElement('span');
+    closeEl.className = 'main-tab-close';
+    closeEl.id = tab.closeButtonId;
+    closeEl.title = tr('main.closeTab');
+    closeEl.appendChild(createMaterialIcon('close'));
+    if (!tab.closable) {
+        // 默认分组不可关闭，但按钮保留占位：若直接不渲染，标签宽度会在
+        // 分组之间跳变，点击位置也会跟着漂移。
+        closeEl.classList.add('disabled');
+    } else {
+        closeEl.addEventListener('click', event => {
+            event.stopPropagation();
+            closeSerialGroup(tab.groupId);
+        });
+    }
+    button.appendChild(closeEl);
+    return button;
 }
 
 // 决定「添加串口」按钮显示在哪一层。
@@ -3403,15 +3583,18 @@ function syncSerialGroupAddButtonLayer() {
     }
 }
 
-// Shell 标签应该挂在哪一层：多分组时在分组层，单分组时回到 pane 标签行。
+// Shell 标签应该挂在哪一层：多分组时跟着分组标签走，单分组时回到 pane 标签行。
 //
 // 只移动节点，不重建。Shell 的点击/关闭/双击监听绑在节点自身，终端在 tabPane 里，
 // 两者都不会因 appendChild 而失效；反过来若在这里重建，每次切分组都会多出一个
 // 旧的 xterm 实例与一堆悬空监听。
+//
+// 多分组时它进的是 Shell **宿主分组**那一列的标签行。未分屏时那一行恰好就是
+// 被搬到激活列首的静态行，所以 Shell 自然与分组标签同级；已分屏时静态行留在
+// 默认分组列，Shell 也跟着留在那里。
 function syncShellTabLayer() {
-    const listEl = document.getElementById('serial-group-tab-list');
     const paneList = getPaneTabsList('pane-1');
-    if (!listEl || !paneList) return;
+    if (!paneList) return;
     const isMultiGroup = serialGroups.length > 1;
     if (!isMultiGroup) {
         // 单分组：Shell 回到 pane 标签行，且必须按布局里 tabIds 的相对顺序落位。
@@ -3430,11 +3613,13 @@ function syncShellTabLayer() {
         });
         return;
     }
+    const hostList = getGroupTabList(getShellHostGroupId());
+    if (!hostList) return;
     shellTabs.forEach(tabState => {
         const button = tabState?.btn;
         if (!button) return;
         // 多分组：Shell 与分组标签同级，且排在分组标签之后。
-        if (button.parentElement !== listEl) listEl.appendChild(button);
+        if (button.parentElement !== hostList) hostList.appendChild(button);
     });
 }
 
@@ -3452,7 +3637,7 @@ function findWorkspaceTabButton(tabId, paneId) {
 function resolveWorkspaceTabButtonHost(tabId, paneId) {
     if (serialGroups.length <= 1) return null;
     if (!isShellTabId(tabId)) return null;
-    return document.getElementById('serial-group-tab-list');
+    return getGroupTabList(getShellHostGroupId());
 }
 
 function isShellTabId(tabId) {
@@ -3527,7 +3712,11 @@ function closeSerialGroup(groupId) {
     document.getElementById(buttonId)?.remove();
     document.getElementById(tabId)?.remove();
     document.getElementById(containerId)?.remove();
-    // 外层容器要整个拿掉（它包着 root / splitter / pane），
+    // 先把静态分组标签行挪回默认分组列。它可能正被 borrow 在**这个即将删除的列**里
+    // （未分屏时它就住在激活列首），跟着容器一起 remove 掉后，分组栏会永久消失且静默。
+    reclaimSharedGroupTabRow();
+    reclaimGroupAddButton();
+    // 外层容器要整个拿掉（它包着标签行 / root / splitter / pane），
     // 只删 internal 节点会留下一个空的 flex 条目占着位置。
     document.getElementById(groupWorkspaceContainerId(id))?.remove();
     // 关掉的正好是当前激活分组时，别名还指着已释放的布局，先切回默认分组。
@@ -3542,10 +3731,14 @@ function closeSerialGroup(groupId) {
     if (!activeGroupId) activeGroupId = serialGroups[0].id;
 
     persistSerialGroups();
+    // 分屏集合里可能还列着刚关掉的分组；不清掉会留下一条指向已删除列的比例，
+    // 表现为「关了一个分组，剩下那个只有半宽」。
+    pruneGroupWorkspaceSplit();
     renderSerialGroupTabBar();
     // 外层可见性必须在 applyActiveSerialGroup 之前先对一次：
     // 它决定哪些分组容器参与 flex 布局，进而影响 fit() 算出的尺寸。
     syncGroupWorkspaceVisibility();
+    applyGroupWorkspaceSplitLayout();
     applyActiveSerialGroup();
     setActionStatus(`已关闭串口分组 ${group.title}`);
     return true;
