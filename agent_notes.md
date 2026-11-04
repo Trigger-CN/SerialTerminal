@@ -6,7 +6,7 @@
 
 - 当前配置 schema：**v15**。版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 以 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。v14 → v15 迁移已落地并实测，详见 13A 节与 `MULTI_SERIAL_DESIGN.md` 第 9 节。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；pane 数不再固定为两个（`workspace-manager.js` 已 N pane 化，`pane-3` 及以后按需创建），支持左右/上下分屏、拖动排序和跨 pane 移动。
-- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位）；**P2 已完成**（分组注册表 10、分组上下文 8、行解析器 10、终端运行时注册表 19、DOM 标识契约 8、终端工厂托管 + 加载门禁 4）；**P3 已全部完成**：四个纯逻辑层（标签归属 17、分组增删改 17、标签栏结构描述 15、输出分桶 12）+ **渲染层数据面按 `groupId` 路由** + **分组标签栏与容器创建/关闭** + **Shell 标签的两层升降**（新增 `serial-container-<g>` / `tab-main-<g>` / `tab-main-<g>-button`）。**仍未完成**：`filterTabs` / `chartTabs` 按分组各一份（仍是全应用单例且只跟随激活分组）、P4 设置侧栏跟随、P5 分组级/组内级两级分屏。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
+- 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位）；**P2 已完成**（分组注册表 10、分组上下文 8、行解析器 10、终端运行时注册表 19、DOM 标识契约 8、终端工厂托管 + 加载门禁 4）；**P3 已全部完成**：四个纯逻辑层（标签归属 17、分组增删改 17、标签栏结构描述 15、输出分桶 12）+ **渲染层数据面按 `groupId` 路由** + **分组标签栏与容器创建/关闭** + **Shell 标签的两层升降**（新增 `serial-container-<g>` / `tab-main-<g>` / `tab-main-<g>-button`）；**P4 已完成**：四个显示参数真正下沉到 `SerialGroupContextStore`（`get/setGroupDisplay`）+ 侧栏 9 个控件与连接按钮随 `activeGroupId` 回显与回写。**仍未完成**：`filterTabs` / `chartTabs` 按分组各一份（仍是全应用单例且只跟随激活分组）、P5 分组级/组内级两级分屏。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
 - 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -998,10 +998,10 @@ npm run dist:linux
    - Shell IPC/输入链路与串口模式完全独立，Hex 改动不得复用到 Shell tab
    - Raw 写盘失败会保留待写 Buffer 并记录 `rawBinaryFlushError`/electron-log；在待写数据成功刷盘前拒绝开始新连接，避免重连覆盖缓冲。当前仍没有独立的用户可见恢复界面
 
-## 13A. 多串口支持（P1 已实现；配置迁移已完成；P2 已完成；P3 全部完成；P5 纯数据层与 DOM 层已落地）
+## 13A. 多串口支持（P1 已实现；配置迁移已完成；P2 已完成；P3 全部完成；P4 已完成；P5 纯数据层与 DOM 层已落地）
 
 - 完整设计文档：[`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)，包含数据模型、主进程多实例、IPC 分流、双层标签栏、设置跟随、两级分屏、配置迁移、分阶段落地与风险清单。
-- **当前进度：P1（主进程多实例化）已完成并通过验证；配置 v14 → v15 迁移已完成并实测；P2 已完成（注册表/上下文/行解析器/运行时注册表/DOM 标识契约/终端工厂托管）；P3 已全部完成（四个纯逻辑层 + 渲染层数据面按 groupId 路由 + 分组标签栏 + 容器创建/关闭 + Shell 标签的两层升降）；P5 的纯数据层与 DOM 层均已完成。** 仍未完成：`filterTabs`/`chartTabs` 按分组各一份、P4 设置侧栏跟随、P5 分组级/组内级两级分屏。
+- **当前进度：P1（主进程多实例化）已完成并通过验证；配置 v14 → v15 迁移已完成并实测；P2 已完成（注册表/上下文/行解析器/运行时注册表/DOM 标识契约/终端工厂托管）；P3 已全部完成（四个纯逻辑层 + 渲染层数据面按 groupId 路由 + 分组标签栏 + 容器创建/关闭 + Shell 标签的两层升降）；P4 已完成（四个显示参数下沉 + 侧栏 9 个控件与连接按钮随 activeGroupId 回显与回写）；P5 的纯数据层与 DOM 层均已完成。** 仍未完成：`filterTabs`/`chartTabs` 按分组各一份、P5 分组级/组内级两级分屏。
 - P3 标签归属纯逻辑层（`serial-group-tabs.js`，17 项单测）：
   - `buildTabBarModel()` 输出两层内容；三条硬规则：Shell 永不归属分组、group 数 ≥2 双层 / =1 塌回一层、切换分组只换下层集合。抽成纯函数的原因是归属判定错了在浏览器里只能靠肉眼发现。
   - 已固定的非显然行为：`activeGroupId` 不存在退回第一个分组（否则下层整层空掉且无法恢复）；`activeTabId` 失效退回该组第一个标签；重复分组 id 去重（两个相同标签都指向同一 id，点击像没反应）；空标题给 `Serial N`；关闭当前分组优先选**右邻**（总退回第一个会让焦点反复跳回最左）；关闭非当前分组保持当前选择；单分组时 `groupLayer` 只含 Shell且串口标签排在 Shell 之前。
@@ -1152,6 +1152,39 @@ npm run dist:linux
 - 调用时机：`renderSerialGroupTabBar()` 末尾、`listEl.replaceChildren()` **之后**（`replaceChildren` 会把上一轮搬上来的节点一并摘掉）；另由 `onLayoutApplied` 再调一次，保证任何布局重排后位置正确。
 - 判定：`serialGroups.length > 1`，与 `serial-group-tabs.js` 的 `isMultiGroup` 一致。**`serial-group-tabs.js` 的 `buildTabBarModel()` 本身没有直接使用**——它假设「下层是某分组自己的标签列表」，与「每分组一个主终端标签 `tab-main-<g>`」的现架构不符。
 - 验证：单分组 `inPaneRow:true / inGroupRow:false`；多分组顺序 `[tab-group-default-button, tab-group-g-1-button, tab-shell-1]`；点击后 `activePane:['tab-shell-1']` 且 `stillInGroupRow:true`；关闭多分组后 `backInPaneRow:true`；全程 `shellCount` 恒为 1。
+
+### P4：四个显示参数下沉 + 侧栏跟随（已落地）
+
+**核心手法：保留四个模块级 `let` 作为「默认分组的缓存」**，新增两个访问器，只改真正需要隔离的点。
+
+```js
+function getGroupDisplay(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    const state = serialGroupContext.get(id);
+    return { receiveDisplayMode, receiveEncoding, sendEncoding, newlineMode };  // 取自 state
+}
+function setGroupDisplay(groupId, patch = {}) {
+    const id = resolveSerialGroupId(groupId);
+    const state = serialGroupContext.setDisplay(id, patch);
+    if (id === REGISTRY_DEFAULT_GROUP_ID) { receiveDisplayMode = state.receiveDisplayMode; /* 其余三个同理 */ }
+    return state;
+}
+```
+
+**不一次性改 64 处的理由**：默认分组的值与四个 `let` 恒等，现有裸变量读取点（日志、快捷指令等）行为零变化，风险与收益不成比例。**代价是必须记住：任何非默认分组必须走 `getGroupDisplay()`，不得读那四个变量。**
+
+- **默认参数必须用常量 `REGISTRY_DEFAULT_GROUP_ID`，绝不能用 `activeGroupId`。** 模块顶层有 `getHexFormatter(REGISTRY_DEFAULT_GROUP_ID)` 这样的立即求值表达式，而 `activeGroupId` 声明在其后；默认参数引用它会直接重演 TDZ 启动崩溃。
+- **按分组必须读的 7 类消费点**：`dispatchSerialBatch`（hex/text 判定，最实质）、`createTextDecoder`、`clearTerminalByTabId` 与 `serial-disconnected` 的 flush 判据、`sendSerialRequest`（编码 + `newlineMode`）、`getMainInputRequest`、新建过滤页的 `dataMode`、右键菜单的 `receiveDisplayMode`。
+- **三个 `switch*` 的控件守卫**：都新增 `groupId` 参数，但**只在 `id === activeGroupId` 时才改侧栏控件与 `refreshSendConsumers()`**。否则关闭/后台配置变更作用于非激活分组时，用户正在看的界面会无端跳变。
+- **双写持久化**：`persistActiveGroupSerialOptions()` 同时写 `serialGroups[activeGroupId].serialOptions`（该组自己的一份）与 `lastSerialOptions`（新分组的继承来源）。只写前者重启后丢设置；只写后者会让「切到 g-1 改波特率」把默认分组也改掉。
+- **侧栏回显**：`applyActiveSerialGroup()` 末尾调 `applyGroupSerialOptionsToSidebar(activeGroupId)` + `refreshConnectButtonState()` + `updateFilterModeStatuses()`。回显 9 个控件：端口/波特率/数据位/停止位/校验/换行/接收模式/接收编码（含 `disabled`）/发送编码。
+- **回显函数必须全用 `document.getElementById` 而非模块级 `const`。** 它会被 `applyActiveSerialGroup` 在模块加载早期（`syncSerialGroupsFromConfig`）触发，那时下方的 `portSelect` / `baudSelect` 等 `const` 还在 TDZ 里。
+- **回显期间置 `isApplyingSessionGroups = true` 并在 `finally` 恢复。** 否则程序写入控件会触发 `change` → `saveSerialModeConfig()` → 把回显值当成新值再写一次配置。
+- **端口与波特率只在选项真的存在时才选中。** `refreshPorts()` 是异步的；强制 `select.value='COM9'` 而选项还没建出来时，`<select>` 会静默变成空值。
+- **`isGroupConnected(groupId)` 读注册表而非全局 `isConnected`**。用全局值判定会让「切到 g-1 后往它的终端里打字」被默认分组的状态拦掉。
+- **必须保留的例外**：`createQuickTriggerDecoder()` 仍用默认分组接收编码；快捷指令与自动发送的 `sendEncoding` 仍读模块级缓存。快捷指令作用域本身就是全局共享（已锁定决策），不得盲目改成 `activeGroupId`。
+- **验证**：CDP 真实点击 **37/37 PASS、exit=0**（`verify-groups-out6.txt`）。P4 新增 6 项：单分组编码可读 → 在 g-1 改成 `gbk` 生效 → 切回默认仍为 `utf8` → 切回 g-1 回显 `gbk` → 关闭 g-1 后塔回单层 → 默认分组编码未被污染。
+- **未验证**：真实双端口字节流（A 组 text / B 组 hex 同时接收，两个终端是否真的各按自己的模式渲染）。代码与单测支持这个结论，但**字节级证据仍然缺失**。
 
 ---
 

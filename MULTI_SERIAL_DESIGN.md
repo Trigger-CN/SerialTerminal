@@ -4,8 +4,8 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器、分组终端运行时注册表、分组 DOM 标识契约与终端工厂托管；P3 已全部完成（标签归属/分组增删改/标签栏结构描述/输出分桶四个纯逻辑层 + 渲染层数据面按 groupId 路由 + 分组标签栏 + 容器创建与关闭 + **Shell 标签的两层升降**）；配置 v14 → v15 迁移已完成并实测；P5 纯数据层与 DOM 层已完成；P4 与 P5 的分组级/组内级分屏尚未开始。**
-> 当前主进程已按 `groupId` 完全隔离；渲染层的数据面（输出队列、终端实例、解码器、HEX 格式化器、日志路径）也已按 `groupId` 隔离，并已能用「添加串口」建出真实容器、切换分组、关闭分组后回到单层；多分组时 Shell 标签与分组标签同处上层，单分组时回落到底层标签行。**侧栏设置（P4）仍固定读写默认分组，`filterTabs` / `chartTabs` 仍是全应用单例，只跟随激活分组。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器、分组终端运行时注册表、分组 DOM 标识契约与终端工厂托管；P3 已全部完成（标签归属/分组增删改/标签栏结构描述/输出分桶四个纯逻辑层 + 渲染层数据面按 groupId 路由 + 分组标签栏 + 容器创建与关闭 + **Shell 标签的两层升降**）；配置 v14 → v15 迁移已完成并实测；P4（侧栏设置跟随）已完成（四个显示参数真正下沉到分组上下文 + 侧栏回显与写回绑定 activeGroupId）；P5 纯数据层与 DOM 层已完成；P5 的分组级/组内级两级分屏尚未开始。**
+> 当前主进程已按 `groupId` 完全隔离；渲染层的数据面（输出队列、终端实例、解码器、HEX 格式化器、日志路径）也已按 `groupId` 隔离，并已能用「添加串口」建出真实容器、切换分组、关闭分组后回到单层；多分组时 Shell 标签与分组标签同处上层，单分组时回落到底层标签行；切分组时侧栏 9 个串口控件与连接按钮跟随该分组回显。**仍未完成：`filterTabs` / `chartTabs` 仍是全应用单例（只跟随激活分组），以及 P5 的两级分屏。**
 > 验证手段（本阶段新增）：除单测与模块加载门禁外，多了一轮**真实窗口 + CDP 真实点击**验证。这是必要的：分组标签栏首版在 `node --check`、加载门禁与 437 项全量测试下全绿，却存在「两个分组标签拿到同一个 id」导致关闭分组完全点不到的缺陷。详见 6.1B 与第 12 节。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -582,27 +582,109 @@ function syncShellTabLayer() {
 
 ---
 
-## 7. 设置侧栏跟随
+## 7. 设置侧栏跟随（P4，已落地）
+
+### 7.1 作用域划分
 
 左侧设置 tab 的绑定对象从「全局唯一」改为 `activeGroupId`：
 
 | 设置项 | 作用域 |
 | --- | --- |
-| 波特率 / 数据位 / 停止位 / 校验 | **按组** |
-| 接收模式 / 接收编码 / 发送编码 / 换行模式 | **按组** |
+| 端口 / 波特率 / 数据位 / 停止位 / 校验 | **按组**（存 `group.portPath` / `group.serialOptions`） |
+| 接收模式 / 接收编码 / 发送编码 / 换行模式 | **按组**（存 `SerialGroupContextStore`） |
 | 字体 / 高亮配色 / 壁纸 / 暗色遮罩 | 全局 |
 | 时间戳 / 行号 / 滚回行数 | 全局 |
 | 发送回显三开关 / 回显背景色 | 全局 |
 | 日志自动保存 / 保存范围 / Shell 日志开关 | 全局（路径按组隔离） |
-| 快捷指令 | 全局 |
+| 快捷指令 / 自动发送总开关 | 全局（已定决策） |
 
-切换分组时：
+### 7.2 四个显示参数的下沉手法（实际实现）
 
-1. 读取该组 `serialOptions` 重新渲染控件
-2. 同步顶部连接状态按钮与端口显示
-3. 同步该组终端引用（搜索框、过滤输入框等焦点相关控件）
+关键在于**保留四个模块级 `let` 作为默认分组的缓存**，而没有一次性改写全部 64 处读写点：
 
-控件变更时写回 `activeGroup.serialOptions` 并持久化，**不得**写全局 `lastSerialOptions`（后者仅作为新分组的默认值来源）。
+```js
+function getGroupDisplay(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    const state = serialGroupContext.get(id);
+    return { receiveDisplayMode, receiveEncoding, sendEncoding, newlineMode };  // 取自 state
+}
+
+function setGroupDisplay(groupId, patch = {}) {
+    const id = resolveSerialGroupId(groupId);
+    const state = serialGroupContext.setDisplay(id, patch);
+    if (id === REGISTRY_DEFAULT_GROUP_ID) {
+        receiveDisplayMode = state.receiveDisplayMode;   // 同步模块级缓存
+        receiveEncoding = state.receiveEncoding;
+        sendEncoding = state.sendEncoding;
+        newlineMode = state.newlineMode;
+    }
+    return state;
+}
+```
+
+**代价与约束**：默认分组的值与四个 `let` 始终恒等，因此现有裸变量读取点（日志、快捷指令等）行为零变化；**但任何非默认分组必须走 `getGroupDisplay()`，不得读那四个变量。**
+
+**默认参数必须用常量 `REGISTRY_DEFAULT_GROUP_ID`，绝不能用 `activeGroupId`**：`renderer.js` 模块顶层有 `getHexFormatter(REGISTRY_DEFAULT_GROUP_ID)` 这样的立即求值表达式，而 `activeGroupId` 声明在其后；默认参数引用它会直接重演本项目已经踩过一次的 TDZ 启动崩溃。
+
+### 7.3 按分组读取的消费点
+
+| 位置 | 为何必须按分组 |
+| --- | --- |
+| `dispatchSerialBatch(id, bytes)` | `receiveDisplayMode` 决定这批字节走 HEX 还是文本。不按分组读就无法让 A 组 text、B 组 hex |
+| `createTextDecoder(id)` | 解码器实例本来就按分组存，但「用哪种编码解码」以前是全局的 |
+| `clearTerminalByTabId` / `serial-disconnected` 的 flush 判据 | 否则 flush 错分组的 formatter |
+| `sendSerialRequest` | 写入目标分组的发送编码与换行模式，`newlineMode` 不能缺省 |
+| `getMainInputRequest` | 发送输入框发送的是激活分组的端口 |
+| 新建过滤页的 `dataMode` | 过滤页新建时跟随当前可见终端的显示模式 |
+| 右键菜单的 `receiveDisplayMode` | 菜单只开在可见终端上 |
+
+### 7.4 侧栏回显与写回
+
+`applyActiveSerialGroup()` 切完可见标签页后依次调用三个函数：
+
+```text
+applyGroupSerialOptionsToSidebar(activeGroupId)   // 9 个控件回显
+refreshConnectButtonState()                        // 连接按钮跟随该分组
+updateFilterModeStatuses()                         // 过滤页暂停态重算
+```
+
+`applyGroupSerialOptionsToSidebar()` 回显的控件：`port-select` / `baud-select` / `data-bits-select` / `stop-bits-select` / `parity-select` / `newline-mode-select` / `receive-mode-select` / `receive-encoding-select`（含 `disabled` 同步）/ `send-encoding-select`。
+
+三条非显然的实现约束：
+
+1. **全部用 `document.getElementById` 而不是模块级 `const`。** 该函数会被 `applyActiveSerialGroup` 在模块加载早期（`syncSerialGroupsFromConfig`）触发，那时下方的 `portSelect` / `baudSelect` 等 `const` 还在 TDZ 里。
+2. **回显期间置 `isApplyingSessionGroups = true` 并在 `finally` 恢复。** 否则程序写入控件会触发 `change` → `saveSerialModeConfig()` → 把回显值当成新值再写一次配置。
+3. **端口与波特率只在选项真的存在时才选中。** `refreshPorts()` 是异步的；若强制 `select.value = 'COM9'` 而选项还没建出来，`<select>` 会静默变成空值。
+
+控件变更时写回两条路径（`persistActiveGroupSerialOptions()`）：
+
+- `serialGroups[activeGroupId].serialOptions` —— 该分组自己的一份；
+- `lastSerialOptions` —— 全局默认值，**只作为新建分组的继承来源**。
+
+只写前者会让重启后丢设置；只写后者会让「切到 g-1 改波特率」把默认分组的波特率也改掉。
+
+### 7.5 三个 `switch*` 的控件守卫
+
+`switchReceiveMode` / `switchReceiveEncoding` / `switchSendEncoding` 都新增了 `groupId` 参数，但**只有 `id === activeGroupId` 时才去改侧栏控件与刷新发送校验**。理由：关闭或后台配置变更可能针对非激活分组，此时去改可见控件会让用户正在看的界面无端跳变。
+
+### 7.6 快捷指令的例外（已定决策）
+
+`createQuickTriggerDecoder()` 继续用**默认分组**的接收编码，快捷指令与自动发送的 `sendEncoding` 也继续读模块级缓存。因为快捷指令作用域本身就是全局共享——不得盲目改成 `activeGroupId`。
+
+### 7.7 已验证
+
+真实窗口 + CDP 真实点击 **37/37 通过**（`verify-groups-out6.txt`，exit=0），其中 P4 新增 6 项：
+
+| 断言 | 实测 |
+| --- | --- |
+| 单分组时接收编码可读 | `{encoding:"utf8", mode:"text"}` |
+| 在 g-1 侧栏改接收编码能生效 | `{value:"gbk", activeGroup:"g-1"}` |
+| 切回默认分组后侧栏回显未变 | `{encoding:"utf8", activeGroup:"default"}` |
+| 切回 g-1 后侧栏回显新值 | `{encoding:"gbk", activeGroup:"g-1"}` |
+| 关闭 g-1 后分组栏塔回单层 | `{groupTabs:0, barHidden:true}` |
+| 关闭 g-1 后默认分组编码未被污染 | `{encoding:"utf8"}` |
+
+**尚未验证**：真实双端口字节流隔离（从未做过）；分组切换后 xterm `fit()` 在 `display:none` 容器切回来的尺寸。
 
 ---
 
@@ -905,11 +987,14 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 
 > 两层投影的做法是**移动节点**而不是重建：`syncShellTabLayer()` 直接 `appendChild` / `insertBefore`，监听与 xterm 实例全部保留。`workspace-manager.js` 为此补了两个可选注入（`resolveTabButtonHost` / `findTabButton`），不注入时行为与改造前逐字一致。
 
-### P4 — 设置侧栏跟随
+### P4 — 设置侧栏跟随（已完成）
 
-按第 7 节绑定 `activeGroupId`。
+按第 7 节绑定 `activeGroupId`。实现分两步：
 
-验收：切换分组时设置正确回显与回写；全局设置不受分组切换影响。
+1. **四个显示参数下沉**：`getGroupDisplay()` / `setGroupDisplay()` 成为唯一访问入口，保留模块级 `let` 仅作默认分组缓存；数据面、解码器、发送路径、右键菜单、新建过滤页共 7 类消费点改按分组读。
+2. **侧栏回显与写回**：`applyActiveSerialGroup()` 末尾回显 9 个控件并刷新连接按钮；`persistActiveGroupSerialOptions()` 双写 `serialGroups[activeGroupId].serialOptions` 与 `lastSerialOptions`。
+
+验收：切分组时设置正确回显与回写；全局设置不受分组切换影响；两个分组可各用一种接收编码。**均已通过真实窗口 + CDP 验证（37/37，其中 P4 6 项）**。
 
 ### P5 — 两级分屏
 
@@ -980,12 +1065,13 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 
 - 两个分组同时接收时，各自的终端是否真的只显示自己的数据（单测证明分桶函数正确，但不证明接线后的端到端行为）
 - 两个分组的主终端日志是否真的落进两个不同的端口目录
-- 切换分组后 xterm 的 `fit()` 是否真的正确���理论依据：在 `display:none` 容器里 `fit()` 会算出 0 尺寸，切回来时字符被压扁或右侧被裁掉；`applyActiveSerialGroup` 已调 `fitWorkspaceTerminals()`，但没有观测过效果）
+- 切换分组后 xterm 的 `fit()` 是否真的正确（理论依据：在 `display:none` 容器里 `fit()` 会算出 0 尺寸，切回来时字符被压扁或右侧被裁掉；`applyActiveSerialGroup` 已调 `fitWorkspaceTerminals()`，但没有观测过效果）
 
 **2）libuv 线程池在并发端口数 > 4 时的行为未测量。** 串口读用的是 binding 自带的 `ReadThread`（见 5A.1），但在 Linux/macOS 上走 libuv poller；默认线程池只有 4 个线程。
 
 **3）分组级 / 组内级两级分屏完全未验证。** P5 的纯数据层与 DOM 层已完成，但分组级分屏尚未接线；两级共存时的 `fit` 更是无从谈起。
 
+**4）P4 的“两个分组各用一种显示模式”只在 DOM 层验证过。** CDP 断言证明了能存两份不同的 `receiveEncoding` 并正确回显，**但没有用真实字节流证明**：A 组设 `text`、B 组设 `hex` 同时收数据时，两个终端是否真的各按自己的模式渲染。`dispatchSerialBatch` 已改为按本批字节所属分组读显示模式，单测与代码审阅支持这个结论，但**字节级证据仍然缺失**。
 
 ### 11.2 已知风险
 
@@ -1086,13 +1172,15 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 ### P4
 
 - [x] 四个显示参数在 `serial-group-context.js` 里有存储位（`receiveDisplayMode` / `receiveEncoding` / `sendEncoding` / `newlineMode`）
-- [ ] **`setDisplay()` 真正接入** —— 当前 `renderer.js` 里对它的调用数为 **0**，`receiveDisplayMode` 的 17 处读写全部落在模块级 `let` 上。不先做这一步，P4 剩下的两项无从谈起
-- [ ] 全部收发参数读写点改走分组上下文（当前估计 40+ 处）
-- [ ] 切换分组设置正确切换
-- [ ] 全局设置不被分组切换影响
-- [ ] 新分组继承合理的默认参数
+- [x] **`setDisplay()` 真正接入** —— `getGroupDisplay()` / `setGroupDisplay()` 成为唯一访问入口，`switch*` 三个函数与 `connectSerialFromUi` 都真实调用它
+- [x] 全部收发参数读写点改走分组上下文——按分组读取的 7 类消费点已全部落地（见 7.3）；保留的模块级 `let` 仅作默认分组缓存
+- [x] 切换分组设置正确切换——`applyGroupSerialOptionsToSidebar()` 回显 9 个控件，`refreshConnectButtonState()` 同步连接按钮（CDP 实测 6 项全 PASS）
+- [x] 全局设置不被分组切换影响——快捷指令 / 自动发送 / 外观 / 时间戳 / 行号仍为全局
+- [x] 新分组继承合理的默认参数——`serialOptions` 继承自当前分组，`portPath` / `filterTabs` / `chartTabs` / `layout` 清空，`status='disconnected'`
+- [x] 两个分组各存一份 `serialOptions.receiveEncoding`（CDP 实测：先在 g-1 改成 `gbk`，切回默认分组仍为 `utf8`，再切到 g-1 回显 `gbk`）
+- [x] 关闭分组后的默认分组值不被污染
 
-> **起点被低估的事实（2026-11-03 核实）**：设计文档 §7 与早期记录把 P4 描述成「侧栏绑 `activeGroupId`」，但 `SerialGroupContextStore.setDisplay()` **至今没有任何调用方**。也就是说 P4 不是接线工作，而是「状态真的下沉」：先把四个参数从模块级 `let` 搬进分组上下文，再把 40+ 处读写改过去，最后才轮到侧栏跟随。这是一个独立的、量级与 P4 同档的前置阶段，不应当成接线处理。
+> **已完成阶段的起点订正（保留以作教训）**：早期记录把 P4 描述成「侧栏绑 `activeGroupId`」的接线工作，但 `SerialGroupContextStore.setDisplay()` 当时 **零调用**。它实际上是「状态真的下沉」：先把四个参数从模块级 `let` 搬进分组上下文，再把 40+ 处读写改过去，最后才轮到侧栏跟随。实际落地时的关键在于**保留模块级 `let` 作默认分组缓存**——否则要同时改 64 处，风险与收益不成比例。
 
 ### P5
 
