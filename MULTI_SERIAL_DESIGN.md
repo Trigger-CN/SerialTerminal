@@ -452,7 +452,21 @@ describeGroupVisibility(groups, activeGroupId)
 
 ### 6.2 「添加串口」按钮
 
-位于分组层右端。点击即完成三件事：
+**入口有两个，且显隐必须互斥。** 这是用户原始需求的直接推论：`点击添加串口按钮相当于开启多串口后，终端的标签栏将分为两层`。也就是说，**单层模式下入口就必须可见**。
+
+| id | 静态位置 | 归属层 |
+|---|---|---|
+| `#add-serial-group-inline-btn` | `#pane-1-tab-actions`（pane 标签行） | 单层 |
+| `#add-serial-group-btn` | `#serial-group-tab-bar` 内的 `.serial-group-tab-actions` | 分组层 |
+
+`syncSerialGroupAddButtonLayer()` 在 `renderSerialGroupTabBar()` 末尾按 `serialGroups.length > 1` 切换两者的 `hidden`：单分组亮 inline 那个（分组栏整体 `hidden`，静态按钮本就看不见），多分组亮分组栏那个。**只改 `hidden`，不搬移节点**——早期版本把 inline 按钮 `appendChild` 进分组栏容器，那里已经有静态按钮，于是多分组时并排两份「添加串口」。
+
+**动态创建的 pane 不再提供第三份入口。** `createPaneElement` 的 `buttonSpecs` 只有 Shell / 过滤 / 图表三项。分屏后每个 pane 各有一套标签行，若那里也埋「添加串口」，会排出一行重复按钮；而全局动作的入口在两层间始终可见，不需要逐 pane 复制。
+
+> **CSS 前提（踩过的坑，必读）**：`style.css` 全局 `button { display: inline-flex; }` 会**覆盖浏览器默认的 `[hidden] { display: none }`**——同层优先级下作者样式胜出。因此 `el.hidden = true` 对任何按钮都**完全不生效，也不报错**。`#add-serial-group-btn` 早期看起来能隐藏，纯粹是因为它的祖先 `#serial-group-tab-bar[hidden]` 有 `display:none`（属性选择器比元素选择器高）。现在 `style.css` 紧跟 `button` 规则之后统一加了一条 `[hidden] { display: none !important; }`，全应用所有 `[hidden]` 元素才真正生效。
+> 这类「hidden 不生效」的缺陷在 51 项 CDP 全绿期间长期存在，原因是断言只调 `.click()`——**对隐藏元素调 `.click()` 同样会触发监听器**。可见性断言必须测量 `offsetParent`、`getBoundingClientRect()` 的实际尺寸与祖先可见链。
+
+点击后完成三件事：
 
 1. 创建一个未连接的新分组，`serialOptions` 继承当前分组（无当前分组则用 `lastSerialOptions`）
 2. 若原本只有 1 个分组 → 触发升层，新分组成为 active
@@ -460,7 +474,7 @@ describeGroupVisibility(groups, activeGroupId)
 
 即「点击添加串口」这个动作本身就是进入多串口模式，不需要额外的模式开关。
 
-**落地记录（`renderer.js` 的 `addSerialGroupFromUi`）**：`addSerialGroup(serialGroups, { inheritFrom: current })` → `serialGroupRegistry.ensureGroup` + `serialGroupContext.ensureContext`（**缺这两步会让 `serial-output-bytes` 以 `unknown-group` 把该分组全部字节静默丢弃**）→ `persistSerialGroups()` → `ensureSerialGroupMainTabDom` → `renderSerialGroupTabBar` → `applyActiveSerialGroup` → `portSelect.focus()`。
+**落地记录（`renderer.js` 的 `addSerialGroupFromUi`）**：`addSerialGroup(serialGroups, { inheritFrom: current })` → `serialGroupRegistry.ensureGroup` + `serialGroupContext.ensureContext`（**缺这两步会让 `serial-output-bytes` 以 `unknown-group` 把该分组全部字节静默丢弃**）→ `ensureSerialGroupWorkspaceDom`（**必须早于主标签：`ensureSerialGroupMainTabDom` 靠 `groupPaneId(groupId, 1)` 找 pane，找不到会直接 return false**）→ `ensureSerialGroupMainTabDom` → `persistSerialGroups` → `renderSerialGroupTabBar` → `syncGroupWorkspaceVisibility` → `applyActiveSerialGroup` → `portSelect.focus()`。
 
 **新分组保持 `status = 'disconnected'`，不自动连接，等用户手动点连接**——这是用户明确确认的产品决定，不要改成自动连接。
 
@@ -1014,7 +1028,7 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 - **`applyLayoutToDom()` 清激活态必须限定在本分组自己的 pane 内。** 原实现用全局 `.main-tab` / `.main-tab-pane` 清，一个分组重排会把另一个分组已激活的标签与面板一并清空；而后者布局没变不会重算，表现为「加了一个分组，另一个分组的 Main 就白掉了」。这**不是**断言问题，是真实缺陷，由 CDP 实测发现。
 - **标签拖动与分界条拖动必须事件委托，不能模块加载期逐 pane 绑定。** 非默认分组的 pane 与第 3 个及以后的 pane 都是后续动态创建的，写死 `pane-1`/`pane-2` 会让那些面板上的标签完全拖不动（没有任何报错，只是「拖了没反应」）。分界条的拖动比例必须相对**本分组**的 root 计算，用全局 root 会让非默认分组按默认分组宽度换算。
 
-**已知未验证项**：分组级拖动分界条的实际比例换算、「拖动非默认分组的标签」这两条只有静态审查，没有 CDP 用例；两级分屏的断言（46 项）覆盖 DOM 结构与真实点击，不覆盖字节流。见第 11.1 节。
+**已知未验证项**：分组级拖动分界条的实际比例换算、「拖动非默认分组的标签」这两条只有静态审查，没有 CDP 用例；两级分屏的断言（54 项）覆盖 DOM 结构与真实点击，不覆盖字节流。见第 11.1 节。
 
 ### 纯数据层：`workspace-layout-shape.js`
 
@@ -1081,11 +1095,15 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 
 **2）libuv 线程池在并发端口数 > 4 时的行为未测量。** 串口读用的是 binding 自带的 `ReadThread`（见 5A.1），但在 Linux/macOS 上走 libuv poller；默认线程池只有 4 个线程。
 
-**3）两级分屏只有 DOM 层与点击验证。** P5 已接线完成，CDP 46 项覆盖了外层容器、两组各自拥有 root/pane-1/标签行、主标签不串行、两组工作区同时可见、`#serial-container` 仍在静态 `pane-1` 内等结构断言，但**不覆盖**：分组级拖动分界条的实际比例换算（`activeBoundsEl` 的改动只有静态审查）、拖动非默认分组的标签（委托化改动同样只有静态审查）、两级共存时两个分组同时收数据时各自的终端渲染。
+**3）两级分屏只有 DOM 层与点击验证。** P5 已接线完成，CDP 54 项覆盖了外层容器、两组各自拥有 root/pane-1/标签行、主标签不串行、两组工作区同时可见、`#serial-container` 仍在静态 `pane-1` 内等结构断言，但**不覆盖**：分组级拖动分界条的实际比例换算（`activeBoundsEl` 的改动只有静态审查）、拖动非默认分组的标签（委托化改动同样只有静态审查）、两级共存时两个分组同时收数据时各自的终端渲染。
 
 **4）P4 的“两个分组各用一种显示模式”只在 DOM 层验证过。** CDP 断言证明了能存两份不同的 `receiveEncoding` 并正确回显，**但没有用真实字节流证明**：A 组设 `text`、B 组设 `hex` 同时收数据时，两个终端是否真的各按自己的模式渲染。`dispatchSerialBatch` 已改为按本批字节所属分组读显示模式，单测与代码审阅支持这个结论，但**字节级证据仍然缺失**。
 
 **5）P5 的节点搬迁未做压力验证。** 分组数从 1 增到 2、再减回 1 时，布局层会调用 `applyLayoutToDom()` 把按钮与面板 `appendChild` 回各自的容器。已用 CDP 多次真实点击验证「不重复、不消失、顺序正确」，但未测大量分组（如 8 组以上）下反复切换的稳定性与性能。
+
+**6）分屏场景下的入口互斥未做 CDP 用例。** 两层入口的互斥（§6.2）已由 54 项 CDP 断言覆盖，含「全文档只存在两个入口实例」的全量清点；但**分屏后**（新增 pane 与分裂 pane）的场景没有单独驱动——因为分屏由主进程右键菜单 IPC 触发，CDP 无法直接调起。当前依据是「`createPaneElement` / `createGroupPaneElement` 的 `buttonSpecs` 已不含 group 项」这条代码事实，加上全文档清点的间接保障。
+
+
 
 ### 11.2 已知风险
 

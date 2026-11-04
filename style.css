@@ -104,6 +104,14 @@ button {
     line-height: 1.5;
 }
 
+/* [hidden] 必须能压过作者样式里的 display。
+   UA 样式表只给 [hidden] 一个 display:none，而上面的 button 规则设置了
+   display:inline-flex——同一优先级下作者样式胜出，于是 el.hidden = true
+   对按钮完全无效，且不会报任何错，只是「应该消失的按钮」继续留在界面上。 */
+[hidden] {
+    display: none !important;
+}
+
 .material-icon,
 svg[data-material-icon] {
     width: 18px;

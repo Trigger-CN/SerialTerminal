@@ -1227,7 +1227,31 @@ let workspaceLayout = null;                // 同上
 
 **其它已同步的改动**：`applyConfig` 的三处 `paneFilterQueue` / `paneShellQueue` / `paneChartQueue` 从写死 `pane-1`/`pane-2` 改为按布局枚举 + `makePaneQueue(pattern)`；`closeSerialGroup()` 清理 `groupWorkspaceLayouts` / `groupWorkspaceManagers` / 外层容器，并在关掉激活分组时把别名切回默认分组；`persistWorkspaceLayout()` 双写 `serialGroups[activeGroupId].workspaceLayout`（多分组时的唯一真相源）与 `currentConfig.workspaceLayout`（仅默认分组，作兼容镜像）。
 
-**验证**：CDP 真实点击 **46/46 PASS、exit=0**（`verify-groups-out15.txt`），`npm test` **467/467**。两级分屏新增 9 项结构断言。另新增一个独立探针 `probe-shell.js` 用于把「产品行为」与「验证逻辑」分离开——本轮就是靠它确认「点 Shell 后不切换」实际是断言用错了全局列表，产品本身正常。
+**验证**：CDP 真实点击 **54/54 PASS、exit=0**（`verify-groups-out26.txt`），`npm test` **467/467**。两级分屏新增 9 项结构断言，两层入口互斥新增 9 项。另新增一个独立探针 `probe-shell.js` 用于把「产品行为」与「验证逻辑」分离开——本轮就是靠它确认「点 Shell 后不切换」实际是断言用错了全局列表，产品本身正常。
+
+### 「添加串口」入口：两层显隐互斥（已落地）
+
+**需求原句是一切的判据**：`点击添加串口按钮相当于开启多串口后，终端的标签栏将分为两层`。因此入口必须在**单层模式下就可见**。
+
+两个入口：
+
+| id | 静态位置 | 归属层 |
+|---|---|---|
+| `#add-serial-group-inline-btn` | `#pane-1-tab-actions` | 单层 |
+| `#add-serial-group-btn` | `#serial-group-tab-bar` 内的 `.serial-group-tab-actions` | 分组层 |
+
+`syncSerialGroupAddButtonLayer()`（在 `renderSerialGroupTabBar()` 末尾调用）按 `serialGroups.length > 1` 切换两者的 `hidden`。**只改 `hidden`，绝不搬移节点**——早期版本把 inline 按钮 `appendChild` 进分组栏容器，而那里已经有静态按钮，于是多分组时并排两份「添加串口」，用户直接看到重复按钮。
+
+**动态 pane 不提供第三份入口。** `createPaneElement` / `createGroupPaneElement` 的 `buttonSpecs` 只有 Shell / 过滤 / 图表三项。分屏后每个 pane 各有一套标签行，若那里也埋「添加串口」，会排出一行重复按钮；而全局动作在两层间始终可见，不需要逐 pane 复制。
+
+**两层缺陷的真实根因（必记）**：`style.css` 全局 `button { display: inline-flex; }` **覆盖了浏览器默认的 `[hidden] { display: none }`**。同层优先级下作者样式胜出，因此 `el.hidden = true` 对任何按钮**完全不生效，且不报错**。`#add-serial-group-btn` 早期看起来能隐藏，纯粹是因为它的祖先 `#serial-group-tab-bar[hidden]` 有 `display:none`（属性选择器高于元素选择器）。现已在 `button` 规则之后补一条全局 `[hidden] { display: none !important; }`。
+
+**为什么 51 项 CDP 全绿却仍有缺陷**：旧断言只调 `.click()`，而**对隐藏元素调 `.click()` 同样会触发监听器**。「能找到元素并点击成功」与「用户看得见它」是两件事。可见性断言必须测量 `offsetParent !== null`、`getBoundingClientRect()` 的实际宽高与祖先可见链。
+
+**验证**：54/54 CDP PASS、`npm test` 467/467。新增 9 项含「全文档只存在两个入口实例」的全量清点（按标题而非 id 识别，因为动态 pane 的 id 带 paneId 前缀无法枚举）。另用 `probe-hidden-regression.js` 逐项复验 14 个依赖 `[hidden]` 的元素，`violations=[]`。
+
+**仍未验证**：分屏后的入口互斥没有单独 CDP 用例——分屏由主进程右键菜单 IPC 触发，CDP 无法直接调起。依据是「`buttonSpecs` 已不含 group 项」的代码事实 + 全文档清点的间接保障。
+
 
 **本轮两条工具层面的实证**：
 
