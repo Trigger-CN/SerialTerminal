@@ -4,8 +4,8 @@
 
 本文是多串口（Serial Group）能力的**设计基线与实施约束**。
 
-> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器、分组终端运行时注册表、分组 DOM 标识契约与终端工厂托管；P3 已全部完成（标签归属/分组增删改/标签栏结构描述/输出分桶四个纯逻辑层 + 渲染层数据面按 groupId 路由 + 分组标签栏 + 容器创建与关闭 + **Shell 标签的两层升降**）；配置 v14 → v15 迁移已完成并实测；P4（侧栏设置跟随）已完成（四个显示参数真正下沉到分组上下文 + 侧栏回显与写回绑定 activeGroupId）；P5 纯数据层与 DOM 层已完成；P5 的分组级/组内级两级分屏尚未开始。**
-> 当前主进程已按 `groupId` 完全隔离；渲染层的数据面（输出队列、终端实例、解码器、HEX 格式化器、日志路径）也已按 `groupId` 隔离，并已能用「添加串口」建出真实容器、切换分组、关闭分组后回到单层；多分组时 Shell 标签与分组标签同处上层，单分组时回落到底层标签行；切分组时侧栏 9 个串口控件与连接按钮跟随该分组回显。**仍未完成：`filterTabs` / `chartTabs` 仍是全应用单例（只跟随激活分组），以及 P5 的两级分屏。**
+> **实施进度：P1（主进程多实例化）已完成并通过验证；P2 已完成分组注册表、分组上下文、行解析器、分组终端运行时注册表、分组 DOM 标识契约与终端工厂托管；P3 已全部完成（标签归属/分组增删改/标签栏结构描述/输出分桶四个纯逻辑层 + 渲染层数据面按 groupId 路由 + 分组标签栏 + 容器创建与关闭 + **Shell 标签的两层升降**）；配置 v14 → v15 迁移已完成并实测；P4（侧栏设置跟随）已完成（四个显示参数真正下沉到分组上下文 + 侧栏回显与写回绑定 activeGroupId）；P5 已全部完成（每分组独立的 pane 结构 + 每分组独立的布局与布局管理器 + 过滤页/图表页按分组各一份）。**
+> 当前主进程已按 `groupId` 完全隔离；渲染层的数据面（输出队列、终端实例、解码器、HEX 格式化器、日志路径）也已按 `groupId` 隔离，并已能用「添加串口」建出真实容器、切换分组、关闭分组后回到单层；多分组时 Shell 标签与分组标签同处上层，单分组时回落到底层标签行；切分组时侧栏 9 个串口控件与连接按钮跟随该分组回显。**每个串口分组现在拥有自己的 root / pane / splitter / 标签行 / 过滤页 / 图表页 / 布局状态，多分组时并排显示；仍未在真实字节流层面验证的项见第 11.1 节。**
 > 验证手段（本阶段新增）：除单测与模块加载门禁外，多了一轮**真实窗口 + CDP 真实点击**验证。这是必要的：分组标签栏首版在 `node --check`、加载门禁与 437 项全量测试下全绿，却存在「两个分组标签拿到同一个 id」导致关闭分组完全点不到的缺陷。详见 6.1B 与第 12 节。
 > P1 的已核实实现细节以 `main.js` 为准，摘要见 `agent_notes.md` 第 13A 节。
 
@@ -1002,7 +1002,19 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 
 验收：分组级左右/上下分屏；组内级左右/上下分屏；两级同时存在时 fit 正确；关闭分组后布局收敛。
 
-**进度：纯数据层与 DOM 层均已完成；`index.html` 的 pane 节点仍为静态两项（动态创建归 P3）。**
+**进度：已完成并提交（`f65fb98` 外层容器与可注入作用域、`a31ee20` 每分组独立布局与管理器）。**下面四条实现决定值得保留，它们都不属于「顺手接线」：
+
+1. **默认分组沿用静态 id。** `workspace-root` / `pane-1` / `workspace-splitter` / `tab-main` / `serial-container` 逐字不变，只在外层多了一层 `#group-workspace` 父节点。这是**启动时序要求**而不是省事：默认分组的 xterm 在 `renderer.js` 模块加载期就 `open(#serial-container)`，只要这条祖先链不变，重构不可能引入「xterm 重复 open 丢内容」这类静默故障。非默认分组用后缀 id（`pane-1-<g>` / `workspace-root-<g>`），它们的终端本就是惰性创建。
+2. **布局与管理器用 Map + 模块级别名，不逐处改写。** `groupWorkspaceLayouts` / `groupWorkspaceManagers` 按 groupId 存，模块级的 `workspaceManager` / `workspaceLayout` 降级为「指向激活分组」的别名，由 `setActiveGroupWorkspace()` 统一切换。理由：这两者合计 60 余处消费点全部应作用于激活分组，逐处改成 `getGroupWorkspaceManager(id)` 的风险是漏一处就静默铺错布局。
+3. **Map 的键运算一律用 `normalizeGroupId`，不用 `resolveSerialGroupId`。** 后者会把未登记分组回落默认分组，那样新分组的布局会被静默存到默认分组头上。
+4. **标签登记按 pane id 反推分组，不按 activeGroupId。** `addTabToOwningGroupPane()` / `resolveGroupIdFromPaneId()` 从 `pane-1-g-1` 反推 `g-1`。原因：创建标签时 `resolvedPaneId` 可能属于非激活分组（`syncSerialGroupsFromConfig` 逐组恢复、或新建分组后还没切别名），按 activeGroupId 判定必然错。同理，Shell 标签不归属任何分组（已锁定决策），它的切换与登记**永远**走默认分组的 manager（`switchShellTab`）。
+
+另外两条与前面阶段同构但不显然的结论：
+
+- **`applyLayoutToDom()` 清激活态必须限定在本分组自己的 pane 内。** 原实现用全局 `.main-tab` / `.main-tab-pane` 清，一个分组重排会把另一个分组已激活的标签与面板一并清空；而后者布局没变不会重算，表现为「加了一个分组，另一个分组的 Main 就白掉了」。这**不是**断言问题，是真实缺陷，由 CDP 实测发现。
+- **标签拖动与分界条拖动必须事件委托，不能模块加载期逐 pane 绑定。** 非默认分组的 pane 与第 3 个及以后的 pane 都是后续动态创建的，写死 `pane-1`/`pane-2` 会让那些面板上的标签完全拖不动（没有任何报错，只是「拖了没反应」）。分界条的拖动比例必须相对**本分组**的 root 计算，用全局 root 会让非默认分组按默认分组宽度换算。
+
+**已知未验证项**：分组级拖动分界条的实际比例换算、「拖动非默认分组的标签」这两条只有静态审查，没有 CDP 用例；两级分屏的断言（46 项）覆盖 DOM 结构与真实点击，不覆盖字节流。见第 11.1 节。
 
 ### 纯数据层：`workspace-layout-shape.js`
 
@@ -1069,9 +1081,11 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 
 **2）libuv 线程池在并发端口数 > 4 时的行为未测量。** 串口读用的是 binding 自带的 `ReadThread`（见 5A.1），但在 Linux/macOS 上走 libuv poller；默认线程池只有 4 个线程。
 
-**3）分组级 / 组内级两级分屏完全未验证。** P5 的纯数据层与 DOM 层已完成，但分组级分屏尚未接线；两级共存时的 `fit` 更是无从谈起。
+**3）两级分屏只有 DOM 层与点击验证。** P5 已接线完成，CDP 46 项覆盖了外层容器、两组各自拥有 root/pane-1/标签行、主标签不串行、两组工作区同时可见、`#serial-container` 仍在静态 `pane-1` 内等结构断言，但**不覆盖**：分组级拖动分界条的实际比例换算（`activeBoundsEl` 的改动只有静态审查）、拖动非默认分组的标签（委托化改动同样只有静态审查）、两级共存时两个分组同时收数据时各自的终端渲染。
 
 **4）P4 的“两个分组各用一种显示模式”只在 DOM 层验证过。** CDP 断言证明了能存两份不同的 `receiveEncoding` 并正确回显，**但没有用真实字节流证明**：A 组设 `text`、B 组设 `hex` 同时收数据时，两个终端是否真的各按自己的模式渲染。`dispatchSerialBatch` 已改为按本批字节所属分组读显示模式，单测与代码审阅支持这个结论，但**字节级证据仍然缺失**。
+
+**5）P5 的节点搬迁未做压力验证。** 分组数从 1 增到 2、再减回 1 时，布局层会调用 `applyLayoutToDom()` 把按钮与面板 `appendChild` 回各自的容器。已用 CDP 多次真实点击验证「不重复、不消失、顺序正确」，但未测大量分组（如 8 组以上）下反复切换的稳定性与性能。
 
 ### 11.2 已知风险
 
@@ -1197,12 +1211,13 @@ DOM 层：
 - [x] `style.css` 不再用 `#pane-1` / `#pane-2` 选择器设 `flex-basis`，改用 `.workspace-pane` 统一过渡
 - [x] `renderer.js` 的 `transitionend` 过滤按 `.workspace-pane` 类名判断
 - [x] 第 3 个及以后的 pane 可按需创建 —— `pane-layout-dom.js` + `ensurePaneElements()` + `createPaneElement()`，由 9 项 + 2 项单测覆盖
-- [ ] `index.html` 的静态 `pane-1` / `pane-2` 也改为动态创建 —— **阻塞于** `serialTerm` 在模块加载时就 `open(#serial-container)`，需与 P2 剩余部分一并做
-- [ ] 分组级左右/上下分屏（需先有分组概念，归 P3 之后）
-- [ ] 组内级左右/上下分屏
-- [ ] 两级共存时 fit 正确
-- [ ] 关闭分组后布局正确收敛
-- [ ] 键盘输入严格跟随焦点组
+- [x] **静态 pane 标记的处理方式已定并落地** —— 用户接受了「每个分组一套 pane」的方案。实现上**默认分组仍沿用静态 `workspace-root` / `pane-1` / `workspace-splitter`**（启动时序要求，见第 10 节 P5），非默认分组的 `#serial-group-workspace-<g>` → `#workspace-root-<g>` → `#pane-1-<g>` 由 `ensureSerialGroupWorkspaceDom()` 动态创建。原计划的「静态标记全部改动态」因此**不必要**，且会引入真实的启动回归风险。
+- [x] 分组级左右/上下分屏 —— `#group-workspace` 为 flex row（`.split-vertical` 转 column），每个直接子元素就是一个分组的工作区；分组数 >= 2 时 `#group-workspace-splitter` 可见。CDP 实测：`outerExists: true` / `outerSplitterVisible: true` / `defaultRoot` 与 `g1Root` 同时可见
+- [x] 组内级左右/上下分屏 —— 每个分组都有自己的一套 `describeGroupWorkspace().panes`，由该分组的 manager 驱动；`applyConfig` 的三处 `pane-1`/`pane-2` 硬编码已改为按布局枚举。CDP 实测：两组各自拥有 `pane-1` 与 `pane-1-g-1`，主标签不串行
+- [x] 关闭分组后布局正确收敛 —— `closeSerialGroup()` 清理 `groupWorkspaceLayouts` / `groupWorkspaceManagers` / 外层容器，并在关掉激活分组时把别名切回默认分组。CDP 实测：关闭后 `barHidden: true` / `containerGone: true` / `mainTabGone: true` / `defaultStillThere: true`
+- [ ] 两级共存时 fit 正确 —— `applyActiveSerialGroup()` 与各 manager 都调 `fitWorkspaceTerminals()`，但**未肉眼确认**（在 `display:none` 容器里 `fit()` 会算出 0 尺寸，切回来是否被压扁/裁切属理论推断，见第 11.1 节）
+- [ ] 键盘输入严格跟随焦点组 —— 未验证（这是有物理后果的风险，见 11.2 第 5 条）
+- [x] 过滤页与图表页按分组各一份 —— `serial-group-tab-lists.js`（13 项单测）+ `filterTabsStore` / `chartTabsStore`，`applyActiveSerialGroup()` 首批切别名，写入/持久化/关闭清理/重启恢复全部按 groupId 取桶；原先 `isActiveSerialGroup()` 临时边界导致的「非激活分组字节不进过滤页」已消除
 
 ---
 

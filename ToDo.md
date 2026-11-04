@@ -140,7 +140,7 @@
 - [ ] 控制大型维护文档漂移
   - 行为变化同步更新 `README.md` 和 `agent_notes.md`；专项计划只记录设计基线与剩余验证，已落地模块不再使用“计划新增”的当前时态。
 
-## P3 - 多串口支持（P1 已完成；配置 v14 → v15 迁移已完成；P2 已完成；P3 数据面与分组 DOM 已落地；P5 纯数据层与 DOM 层已落地）
+## P3 - 多串口支持（P1–P5 全部完成；剩余为验证缺口）
 
 完整设计见 [`MULTI_SERIAL_DESIGN.md`](MULTI_SERIAL_DESIGN.md)。已定决策：快捷指令全局共享；分屏首版分组级 + 组内级同时做。
 
@@ -224,24 +224,30 @@
   - [x] 保留的例外（已锁定决策）：快捷指令与自动发送的 `sendEncoding` 仍为全局（默认分组）。
   - [x] 验证：CDP 真实点击 **37/37 PASS、exit=0**；其中 P4 新增 6 项（含「g-1 改成 gbk → 切回默认仍 utf8 → 再切 g-1 回显 gbk」与「关闭 g-1 后默认分组未被污染」）。
   - [ ] 未验证：真实双端口字节流下「A 组 text / B 组 hex 同时接收」的渲染结果（字节级证据缺失）。
-- [~] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）；**也是 P2 剩余部分的前置条件**
-  - [x] 纯数据层：新增 `workspace-layout-shape.js`（`normalizePaneSizes` / `reconcileEmptyPanes` / `normalizeLayoutShape` / `createDefaultLayout`），`workspace-manager.js` 的同名函数改为委托调用。**硬约束：pane 数为 2 时输出必须与改造前逐字段一致**，由测试内嵌的 `legacyNormalize()` 用 10 组用例做 `assert.deepEqual` 对比。配套 `test/workspace-layout-shape.test.js` 16 项全通过。
+- [x] P5：两级分屏（`workspace-manager.js` 从固定两 pane 扩展为 N pane，外层分组级 + 内层组内级）——**已完成并提交（`f65fb98` + `a31ee20`）**
+  - [x] 纯数据层：新增 `workspace-layout-shape.js`（`normalizePaneSizes` / `reconcileEmptyPanes` / `normalizeLayoutShape` / `createDefaultLayout` / `createDefaultLayoutFor`），`workspace-manager.js` 的同名函数改为委托调用。**硬约束：pane 数为 2 时输出必须与改造前逐字段一致**，由测试内嵌的 `legacyNormalize()` 用 10 组用例做 `assert.deepEqual` 对比。配套 `test/workspace-layout-shape.test.js` 16 项全通过。
   - [x] 过程中修掉四处真实问题：缺项补位不能有 `1/n` 回退（否则把已占满的 pane 缩小）；只在「全空」或「只剩一个非空」时收敛（否则拆散合法三 pane 布局）；宿主 pane 选择按 pane 数分叉（两 pane 选 `pane-1` 保证等价，N>2 选有内容的）；收敛时必须保留被搬 pane 的 `activeTabId`。
   - [x] 另一个隐蔽判定错误：`moveWorkspaceTab` 搬空某 pane 后会残留陈旧 `activeTabId`，合并时若用合并**后**的列表判定会让它错误通过；现改为用合并前记录的 `primaryTabIdsBefore` 判定。
-  - [x] DOM 层：`workspace-manager.js` 的 12 处 `pane-1`/`pane-2` 字面量全部改为由布局驱动——`resolvePaneId` 只要求「存在于当前布局」、`getOtherPaneId` 按列表循环、`reconcileEmptyPanes` 宿主取 `layout.activePaneId`、`updatePaneVisibility` 对 index>0 的 pane 统一跟随分屏、`applyPaneSizes` 改为写各 pane 内联 `flexBasis`（不再用两个 CSS 变量）、`collapseSplit` 合入除首个 pane 外的全部 pane、`setPaneSizes` 支持 >2 pane。配套改 `style.css`（删除 `#pane-1`/`#pane-2` 选择器）与 `renderer.js`（`transitionend` 按类名判断）。配套 `test/workspace-pane-n.test.js` 6 项全通过。
-  - [x] pane 节点：新增 `pane-layout-dom.js`（纯数据描述，9 项单测）、`workspace-manager.js` 的 `ensurePaneElements()`（先补节点再布局，防 `appendChild(null)` 静默丢标签页）、`renderer.js` 的 `createPaneElement(paneId)`。第 3 个及以后的 pane 可按需创建；`test/workspace-pane-n.test.js` 补至 8 项全通过。
-  - [ ] 剩余：`index.html` 的静态 `pane-1`/`pane-2` 也改为动态创建——**阻塞于** `serialTerm` 在模块加载时就 `open(#serial-container)`；现已有 `serial-container-<groupId>` 机制，但静态 pane 本身仍未改。
-  - [ ] 分组级 / 组内级两级分屏接线与验证
+  - [x] DOM 层：`workspace-manager.js` 的 12 处 `pane-1`/`pane-2` 字面量全部改为由布局驱动——`resolvePaneId` 只要求「存在于当前布局」、`getOtherPaneId` 按列表循环、`reconcileEmptyPanes` 宿主取 `layout.activePaneId`、`updatePaneVisibility` 对 index>0 的 pane 统一跟随分屏、`applyPaneSizes` 改为写各 pane 内联 `flexBasis`（不再用两个 CSS 变量）、`collapseSplit` 合入除首个 pane 外的全部 pane、`setPaneSizes` 支持 >2 pane。配套改 `style.css`（删除 `#pane-1`/`#pane-2` 选择器）与 `renderer.js`（`transitionend` 按类名判断）。
+  - [x] pane 节点：新增 `pane-layout-dom.js`（纯数据描述，9 项单测）、`workspace-manager.js` 的 `ensurePaneElements()`（先补节点再布局，防 `appendChild(null)` 静默丢标签页）、`renderer.js` 的 `createPaneElement(paneId)`。第 3 个及以后的 pane 可按需创建。
+  - [x] **分组级布局的 DOM 标识契约**：新增 `serial-group-layout-dom.js`（17 项单测，`groupWorkspaceRootId` / `groupPaneId` / `groupSplitterId` / `groupWorkspaceContainerId` / `groupWorkspaceEntryId` / `resolveGroupWorkspaceEntries` / `describeGroupPanes` / `describeGroupWorkspace`）。**默认分组的三个 id 与静态标记逐字一致**（启动时序要求，由一条用例直接读 `index.html` 断言）。
+  - [x] **外层容器与可注入作用域**（`f65fb98`）：`index.html` 新增 `#group-workspace` 包住静态 `#workspace-root` + `#group-workspace-splitter`；`workspace-manager.js` 新增可选注入 `getWorkspaceRoot` / `getSplitter` / `getPaneElements`，三处全局硬编码改走解析器（不注入时逐字沿用旧写法）。
+  - [x] **每分组独立布局与布局管理器**（`a31ee20`）：`groupWorkspaceLayouts` / `groupWorkspaceManagers` + 模块级别名，`setActiveGroupWorkspace()` 统一切换；标签登记按 pane id 反推分组（`addTabToOwningGroupPane` / `resolveGroupIdFromPaneId`）；Shell 始终走默认分组（`switchShellTab`）；标签拖动与分界条拖动改事件委托；`applyConfig` 三处 pane 硬编码改为按布局枚举。
+  - [x] 修掉 `applyLayoutToDom()` 用全局选择器清激活态的真实缺陷（一个分组重排会把另一个分组已激活的标签清空，且后者布局未变不会重算）。
+  - [x] 说明：原计划的「`index.html` 静态 `pane-1`/`pane-2` 也改为动态创建」**已出于启动时序原因放弃**——默认分组沿用静态 id 才是正确做法，重排会面临「xterm 重复 open 丢内容」的真实风险。
+  - [ ] 未验证：两级分屏的 `fit`（切回 `display:none` 容器时是否被压扁/裁切）；分组级拖动分界条的实际比例换算；拖动非默认分组的标签；两个分组同时收数据时各自的终端渲染。
 
-P2 剩余部分必须先解 P3 的动态 pane 创建（P5 的布局层前置已完成），否则做出来是伪多实例。其它阶段逐个开工，不得并行。
+P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口**（需真实双端口 / 人工 GUI），不是待实现的代码。其它阶段已完成，不再需要并行推进的约束。
 
 ## 验证基线
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **437/437 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项、`test/serial-group-tab-bar.test.js` 15 项、`test/serial-output-buckets.test.js` 12 项与 `test/renderer-module-load.test.js` 4 项）。
-- [x] **renderer 模块加载门禁**：`node scripts/check-renderer-module-load.js` 退出码 0；反向对照（故意 TDZ）确实非零退出。**边界**：它的 `document.getElementById` 每次返回新 stub，**无法表达 id 重复或真实 DOM 交互**（本轮已实际踩到）。
-- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **37/37 PASS、退出码 0**。覆盖：单分组时分组栏隐藏、建出 `serial-container-g-1`/`tab-main-g-1`/`tab-main-g-1-button`、新分组成为 active、切回默认分组高亮正确、关闭后分组栏与容器均移除、默认分组不受影响、Shell 两层升降 10 项、**P4 侧栏参数隔离 6 项**（g-1 改 gbk → 切回默认仍 utf8 → 再切 g-1 回显 gbk → 关闭后默认未被污染）、渲染进程零未捕获错误。
+- [x] `npm test` 当前 **467/467 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-manager.test.js` 11 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项、`test/serial-group-tab-bar.test.js` 15 项、`test/serial-group-layout-dom.test.js` 17 项、`test/serial-group-tab-lists.test.js` 13 项、`test/serial-output-buckets.test.js` 12 项与 `test/renderer-module-load.test.js` 4 项）。
+- [x] **renderer 模块加载门禁**：`node scripts/check-renderer-module-load.js` 退出码 0；反向对照（故意 TDZ）确实非零退出。**边界**：它的 `document.getElementById` 每次返回新 stub，**无法表达 id 重复或真实 DOM 交互**（本轮已实际踩到）；也**覆盖不到异步回调**（`applyConfig` 里的 `ReferenceError` 只能靠真实启动窗口暴露）。
+- [x] **静态未定义标识符扫描**：`.me/tmp/*/scan-undefined.js` 扫 50 个候选标识符，`checked=50 / missing=none`。它是第三层保险，**不做真正的作用域分析**，用途只是「新写的代码里漏了 require 或漏了声明」。
+- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **46/46 PASS、退出码 0**。覆盖：单分组时分组栏隐藏、建出 `serial-container-g-1`/`tab-main-g-1`/`tab-main-g-1-button`、新分组成为 active、切回默认分组高亮正确、关闭后分组栏与容器均移除、默认分组不受影响、Shell 两层升降 10 项、**P4 侧栏参数隔离 6 项**、**P5 两级分屏 9 项**（外层容器、外层分界条可见、两组各自拥有 root/pane-1/标签行、主标签不串行、两组工作区同时可见、`#serial-container` 仍在静态 pane-1 内、g-1 终端容器在自己的 pane-1）、渲染进程零未捕获错误。
+- [ ] **两级分屏的拖动与 fit 未覆盖**：分界条的实际比例换算与「拖动非默认分组的标签」只有静态审查；切回 `display:none` 容器后的 `fit()` 未肉眼确认。
 - [x] 配置迁移磁盘验证：独立 `--user-data-dir` 连启两次，`config.json` 均为 v15 + 1 组，旧字段保留，`config.v14.backup.json` 保持 21667 字节的 v14 原件且第二次启动未覆盖。
 - [x] 实机启动：主窗口正常出现，`main.log` 与渲染进程 stderr 均无 JS 错误，electron 进程清理后 `remaining: 0`。
 - [ ] **多串口行为的人工 GUI 验证**：连接、收发、日志写入从未在真实窗口中手工跑过；现有结论来自单测、源码断言与 CDP DOM 断言，**没有任何字节流层面的端到端证据**。
