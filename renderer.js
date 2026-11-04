@@ -83,6 +83,9 @@ const SUPPORTED_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 let currentConfig = null;
 let currentLanguage = 'en';
 let isApplyingConfig = false;
+// 这四个参数曾经是模块级全局值，P4 起改为“每个串口分组一份”。
+// 保留这四个 `let` 只作为**默认分组的缓存**，目的是不改变现有 30+ 处读取点的写法；
+// 任何非默认分组必须走 getGroupDisplay()，不得读这四个变量。
 let receiveDisplayMode = 'text';
 let receiveEncoding = 'utf8';
 let sendEncoding = 'utf8';
@@ -109,6 +112,35 @@ let showLineNumbers = false;
 const serialGroupContext = new SerialGroupContextStore({ defaultGroupId: REGISTRY_DEFAULT_GROUP_ID });
 function groupState(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     return serialGroupContext.get(groupId);
+}
+
+// 读一个分组的四个收发显示参数。
+//
+// 默认分组的默认参数**必须**用常量 REGISTRY_DEFAULT_GROUP_ID 而不是 activeGroupId：
+// 模块顶层（getHexFormatter(REGISTRY_DEFAULT_GROUP_ID) 那一行）会立即调用它，
+// 而 activeGroupId 声明在后面。默认参数里引用它会直接触发 TDZ 启动崩溃。
+function getGroupDisplay(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    const state = serialGroupContext.get(id);
+    return {
+        receiveDisplayMode: state.receiveDisplayMode,
+        receiveEncoding: state.receiveEncoding,
+        sendEncoding: state.sendEncoding,
+        newlineMode: state.newlineMode
+    };
+}
+
+// 写回一个分组的显示参数。默认分组同步模块级缓存，供现有 30+ 处读取点继续使用。
+function setGroupDisplay(groupId, patch = {}) {
+    const id = resolveSerialGroupId(groupId);
+    const state = serialGroupContext.setDisplay(id, patch);
+    if (id === REGISTRY_DEFAULT_GROUP_ID) {
+        receiveDisplayMode = state.receiveDisplayMode;
+        receiveEncoding = state.receiveEncoding;
+        sendEncoding = state.sendEncoding;
+        newlineMode = state.newlineMode;
+    }
+    return state;
 }
 let logIncludeTimestamp = false;
 let logIncludeLineNumbers = false;
@@ -566,6 +598,13 @@ function isActiveSerialGroup(groupId) {
     return resolveSerialGroupId(groupId) === serialGroupRegistry.activeGroupId;
 }
 
+// 该分组是否已连接。注册表是唯一真相源——用全局 isConnected 判定会让
+// 「切到 g-1 后往它的终端里打字」被默认分组的状态拦掉。
+function isGroupConnected(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const group = serialGroupRegistry.getGroup(resolveSerialGroupId(groupId));
+    return group ? group.connected === true : false;
+}
+
 // 该分组当前的会话号。注册表是真相源：它按分组各自递增，互不影响。
 function getGroupSessionId(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     const group = serialGroupRegistry.getGroup(resolveSerialGroupId(groupId));
@@ -734,7 +773,9 @@ function dispatchSerialBatch(groupId, bytes) {
     currentBatchTimestamp = formatTimestamp();
     try {
         processQuickSendAutoTriggers(bytes);
-        if (receiveDisplayMode === 'hex') {
+        // 显示模式必须按**本批字节所属分组**读：否则两个分组只能是同一种显示模式，
+        // A 组设成 HEX 会把 B 组的文本输出也变成 HEX。
+        if (getGroupDisplay(id).receiveDisplayMode === 'hex') {
             getHexFormatter(id).push(bytes);
         } else {
             if (!getTextDecoder(id)) createTextDecoder(id);
@@ -873,11 +914,18 @@ function renderSentRecord(record, groupId = REGISTRY_DEFAULT_GROUP_ID) {
 }
 
 function createTextDecoder(groupId = REGISTRY_DEFAULT_GROUP_ID) {
-    setTextDecoder(groupId, iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8'));
+    // 解码器实例本来就按分组存（setTextDecoder），但「用哪种编码解码」以前是全局的：
+    // 两个分组无法各用一种编码。这里按本分组取。
+    const id = resolveSerialGroupId(groupId);
+    const encoding = getGroupDisplay(id).receiveEncoding;
+    setTextDecoder(id, iconv.getDecoder(SUPPORTED_ENCODINGS.has(encoding) ? encoding : 'utf8'));
 }
 
+// 快捷指令的自动触发解码器是全局的（快捷指令作用域本身就是全局共享），
+// 因此这里继续用默认分组的接收编码，与改造前一致。
 function createQuickTriggerDecoder() {
-    quickTriggerDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(receiveEncoding) ? receiveEncoding : 'utf8');
+    const encoding = getGroupDisplay(REGISTRY_DEFAULT_GROUP_ID).receiveEncoding;
+    quickTriggerDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(encoding) ? encoding : 'utf8');
 }
 
 function resetQuickTriggerReceive() {
@@ -905,12 +953,13 @@ function resetTextReceive(groupId = REGISTRY_DEFAULT_GROUP_ID) {
         runtime.dataParser.isNewLine = true;
         runtime.dataParser.incomingBuffer = '';
     }
-    if (receiveDisplayMode === 'text') createTextDecoder(id);
+    if (getGroupDisplay(id).receiveDisplayMode === 'text') createTextDecoder(id);
 }
 
 function updateFilterModeStatuses() {
     filterTabs.forEach(tab => {
-        const paused = tab.dataMode !== receiveDisplayMode;
+        // 过滤页目前全应用一份，只跟随激活分组，所以暂停态也按激活分组算。
+        const paused = tab.dataMode !== getGroupDisplay(activeGroupId).receiveDisplayMode;
         if (tab.modeStatus) {
             tab.modeStatus.textContent = paused
                 ? `${tab.dataMode.toUpperCase()} ${trFallback('main.filterPaused', 'paused')}`
@@ -920,33 +969,42 @@ function updateFilterModeStatuses() {
     });
 }
 
-function switchReceiveMode(nextMode, { persist = true } = {}) {
+// 切换接收显示模式。groupId 缺省为默认分组，保证单分组调用点无需改动。
+function switchReceiveMode(nextMode, { persist = true, groupId = REGISTRY_DEFAULT_GROUP_ID } = {}) {
+    const id = resolveSerialGroupId(groupId);
     const normalized = nextMode === 'hex' ? 'hex' : 'text';
+    const previous = getGroupDisplay(id).receiveDisplayMode;
+    const formatter = getHexFormatter(id);
     flushPendingSerialOutput();
-    if (normalized !== receiveDisplayMode) {
-        if (receiveDisplayMode === 'text') flushTextReceive();
-        else hexFormatter.flush();
-        receiveDisplayMode = normalized;
-        if (normalized === 'text') createTextDecoder();
-        else hexFormatter.reset({ resetOffset: false });
-    } else if (normalized === 'text' && !textDecoder) {
-        createTextDecoder();
+    if (normalized !== previous) {
+        if (previous === 'text') flushTextReceive(id);
+        else formatter.flush();
+        setGroupDisplay(id, { receiveDisplayMode: normalized });
+        if (normalized === 'text') createTextDecoder(id);
+        else formatter.reset({ resetOffset: false });
+    } else if (normalized === 'text' && !getTextDecoder(id)) {
+        createTextDecoder(id);
     }
-    if (receiveModeSelect) receiveModeSelect.value = normalized;
-    if (receiveEncodingSelect) receiveEncodingSelect.disabled = normalized === 'hex';
-    updateFilterModeStatuses();
+    // 侧栏控件反映的是激活分组，切非激活分组时不能去改可见控件。
+    if (id === activeGroupId) {
+        if (receiveModeSelect) receiveModeSelect.value = normalized;
+        if (receiveEncodingSelect) receiveEncodingSelect.disabled = normalized === 'hex';
+        updateFilterModeStatuses();
+    }
     if (persist && !isApplyingConfig) saveSerialModeConfig();
 }
 
-function switchReceiveEncoding(nextEncoding, { persist = true } = {}) {
+function switchReceiveEncoding(nextEncoding, { persist = true, groupId = REGISTRY_DEFAULT_GROUP_ID } = {}) {
+    const id = resolveSerialGroupId(groupId);
     const normalized = SUPPORTED_ENCODINGS.has(nextEncoding) ? nextEncoding : 'utf8';
-    if (normalized !== receiveEncoding) {
-        if (receiveDisplayMode === 'text') flushTextReceive();
-        receiveEncoding = normalized;
-        if (receiveDisplayMode === 'text') createTextDecoder();
+    const previous = getGroupDisplay(id).receiveDisplayMode === 'text';
+    if (normalized !== getGroupDisplay(id).receiveEncoding) {
+        if (previous) flushTextReceive(id);
+        setGroupDisplay(id, { receiveEncoding: normalized });
+        if (previous) createTextDecoder(id);
         resetQuickTriggerReceive();
     }
-    if (receiveEncodingSelect) receiveEncodingSelect.value = normalized;
+    if (id === activeGroupId && receiveEncodingSelect) receiveEncodingSelect.value = normalized;
     if (persist && !isApplyingConfig) saveSerialModeConfig();
 }
 
@@ -1140,7 +1198,9 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
             wholeWord: Boolean(tabState?.wholeWord),
             useRegex: Boolean(tabState?.useRegex),
             shellTextMode: Boolean(tabState?.textMode),
-            receiveDisplayMode
+            // 右键菜单只能开在可见的终端上，而可见的只有激活分组；
+            // 菜单里“清屏 / 重置 HEX 偏移”的选项因此按激活分组算。
+            receiveDisplayMode: getGroupDisplay(activeGroupId).receiveDisplayMode
         });
     });
 }
@@ -1206,7 +1266,7 @@ function focusSearchWithActiveSelection() {
 function clearTerminalByTabId(tabId) {
     if (!tabId || tabId === 'tab-main' || tabId.startsWith('tab-main-')) {
         const groupId = resolveGroupIdForMainTab(tabId || 'tab-main');
-        if (receiveDisplayMode === 'hex') getHexFormatter(groupId).reset({ resetOffset: false });
+        if (getGroupDisplay(groupId).receiveDisplayMode === 'hex') getHexFormatter(groupId).reset({ resetOffset: false });
         else resetTextReceive(groupId);
         clearTerminalOutput(getSerialTerm(groupId));
         serialGroupContext.resetLineCounters(groupId);
@@ -1310,7 +1370,8 @@ async function handleTerminalContextMenuAction(payload = {}) {
         case 'create-filter-from-selection': {
             const text = targetTerm?.getSelection();
             if (text) {
-                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false, dataMode: receiveDisplayMode }, resolvePaneId(paneId, tabId));
+                // 新建的过滤页跟着可见终端走，也就是激活分组的显示模式。
+                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false, dataMode: getGroupDisplay(activeGroupId).receiveDisplayMode }, resolvePaneId(paneId, tabId));
                 setActionStatus('已用选中文本新建过滤标签页');
             }
             break;
@@ -2113,6 +2174,9 @@ let isApplyingSessionGroups = false;
 
 function createDefaultSerialGroupState() {
     const options = currentConfig?.lastSerialOptions || {};
+    // 兜底值从默认分组上下文读，而不是读那四个模块级 let：后者只是默认分组的缓存，
+    // 一旦某个调用点让它们与上下文不同步，这里就会把陈旧值写进新分组的状态。
+    const display = getGroupDisplay(REGISTRY_DEFAULT_GROUP_ID);
     return {
         id: REGISTRY_DEFAULT_GROUP_ID,
         title: typeof options.path === 'string' && options.path.trim() ? options.path.trim() : 'Serial 1',
@@ -2124,10 +2188,10 @@ function createDefaultSerialGroupState() {
             dataBits: String(options.dataBits || '8'),
             stopBits: String(options.stopBits || '1'),
             parity: options.parity || 'none',
-            receiveDisplayMode: options.receiveDisplayMode || receiveDisplayMode,
-            receiveEncoding: options.receiveEncoding || receiveEncoding,
-            sendEncoding: options.sendEncoding || sendEncoding,
-            newlineMode: options.newlineMode || newlineMode
+            receiveDisplayMode: options.receiveDisplayMode || display.receiveDisplayMode,
+            receiveEncoding: options.receiveEncoding || display.receiveEncoding,
+            sendEncoding: options.sendEncoding || display.sendEncoding,
+            newlineMode: options.newlineMode || display.newlineMode
         },
         filterTabs: [],
         chartTabs: [],
@@ -2238,6 +2302,90 @@ function getSerialGroupById(groupId) {
     return serialGroups.find(group => group.id === id) || null;
 }
 
+
+// 把某个分组的串口参数回显到左侧设置面板。
+//
+// 这里全部走 document.getElementById 而不是模块级 const：这个函数会被
+// applyActiveSerialGroup 调用，而它可能在模块加载早期就被 syncSerialGroupsFromConfig
+// 触发，那时下方的 portSelect / baudSelect 等 const 还没初始化（TDZ）。
+//
+// 回显期间置 isApplyingSessionGroups：这些都是程序写入控件，不能被当成用户
+// 修改而反过来触发 saveSerialModeConfig()——否则切一次分组就会把回显值当
+// 新值再写回配置。
+function applyGroupSerialOptionsToSidebar(groupId) {
+    const group = getSerialGroupById(groupId);
+    if (!group) return;
+    const options = group.serialOptions || {};
+    const display = getGroupDisplay(groupId);
+
+    const previousGuard = isApplyingSessionGroups;
+    isApplyingSessionGroups = true;
+    try {
+        // 端口：只在选项里真的存在时选中，否则保留当前值（刷新端口前可能还没有该选项）。
+        const portEl = document.getElementById('port-select');
+        if (portEl) {
+            const wanted = typeof group.portPath === 'string' ? group.portPath : '';
+            const hasOption = wanted
+                ? Array.from(portEl.options).some(option => option.value === wanted)
+                : true;
+            if (hasOption) portEl.value = wanted;
+        }
+
+        // 波特率走自定义波特率机制：它会重建自定义选项并选中目标值。
+        const baudRate = normalizeBaudRate(options.baudRate) || '115200';
+        if (typeof previousBaudRate !== 'undefined') previousBaudRate = baudRate;
+        const baudEl = document.getElementById('baud-select');
+        if (baudEl) {
+            const hasOption = Array.from(baudEl.options).some(option => option.value === baudRate);
+            if (hasOption) baudEl.value = baudRate;
+        }
+
+        const dataBitsEl = document.getElementById('data-bits-select');
+        if (dataBitsEl && options.dataBits) dataBitsEl.value = String(options.dataBits);
+        const stopBitsEl = document.getElementById('stop-bits-select');
+        if (stopBitsEl && options.stopBits) stopBitsEl.value = String(options.stopBits);
+        const parityEl = document.getElementById('parity-select');
+        if (parityEl && options.parity) parityEl.value = options.parity;
+        const newlineEl = document.getElementById('newline-mode-select');
+        if (newlineEl) newlineEl.value = display.newlineMode;
+
+        const modeEl = document.getElementById('receive-mode-select');
+        if (modeEl) modeEl.value = display.receiveDisplayMode;
+        const receiveEncodingEl = document.getElementById('receive-encoding-select');
+        if (receiveEncodingEl) {
+            receiveEncodingEl.value = display.receiveEncoding;
+            // HEX 显示模式下接收编码无意义，必须跟着置灰，否则用户以为改它能生效。
+            receiveEncodingEl.disabled = display.receiveDisplayMode === 'hex';
+        }
+        const sendEncodingEl = document.getElementById('send-encoding-select');
+        if (sendEncodingEl) sendEncodingEl.value = display.sendEncoding;
+    } finally {
+        isApplyingSessionGroups = previousGuard;
+    }
+}
+
+// 连接按钮与状态提示跟随激活分组：多分组时按钮代表的是当前这一组，
+// 不能总是显示默认分组的连接状态。
+function refreshConnectButtonState() {
+    const connected = isGroupConnected(activeGroupId);
+    const label = document.getElementById('connect-btn-label');
+    if (label) {
+        const translationKey = connected ? 'main.disconnect' : 'main.connect';
+        label.dataset.i18n = translationKey;
+        label.textContent = tr(translationKey);
+    }
+    const button = document.getElementById('connect-btn');
+    button?.classList.toggle('connect-action', !connected);
+    button?.classList.toggle('disconnect-action', connected);
+    const sidebarButton = document.getElementById('sidebar-connect-btn');
+    sidebarButton?.classList.toggle('connect-action', !connected);
+    sidebarButton?.classList.toggle('disconnect-action', connected);
+    if (sidebarButton) {
+        sidebarButton.title = tr(connected ? 'main.disconnect' : 'main.connect');
+        sidebarButton.setAttribute('aria-label', sidebarButton.title);
+    }
+}
+
 // 切换激活分组：注册表、可见标签页、标签栏高亮一起改。
 function applyActiveSerialGroup({ fit = true } = {}) {
     activeGroupId = resolveSerialGroupId(activeGroupId);
@@ -2258,6 +2406,11 @@ function applyActiveSerialGroup({ fit = true } = {}) {
     if (document.getElementById(targetTabId)) {
         switchPaneTab(paneId, targetTabId, { persist: false });
     }
+    // 侧栏设置必须跟着切换：否则用户看到的是上一个分组的端口与参数，
+    // 却以为改的是当前分组的。连接按钮同理，它代表的是当前这一个分组。
+    applyGroupSerialOptionsToSidebar(activeGroupId);
+    refreshConnectButtonState();
+    updateFilterModeStatuses();
     if (fit) fitWorkspaceTerminals();
 }
 
@@ -2896,7 +3049,9 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         wholeWord: false,
         useRegex: false,
         filterText: '',
-        dataMode: initialState.dataMode === 'hex' ? 'hex' : (initialState.dataMode === 'text' ? 'text' : receiveDisplayMode),
+        // 未指定数据模式时跟随激活分组：过滤页新建时用户正在看哪个分组，
+        // 就按那个分组的显示模式。
+        dataMode: initialState.dataMode === 'hex' ? 'hex' : (initialState.dataMode === 'text' ? 'text' : getGroupDisplay(activeGroupId).receiveDisplayMode),
         contextLine: null,
         contextLine: null,
         showSentOnly: initialState.showSentOnly === true,
@@ -3973,10 +4128,13 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
         if (!silent) setActionStatus(result.message);
         return result;
     }
+    // 发送编码与换行模式按**写入目标分组**取：两个分组可以各用一种发送编码，
+    // 不能用默认分组的缓存值。
+    const targetDisplay = getGroupDisplay(targetGroupId);
     const profileRequest = {
         ...request,
         mode: request.mode === 'hex' ? 'hex' : 'text',
-        encoding: sendEncoding,
+        encoding: targetDisplay.sendEncoding,
         appendCrLf: request.source === 'terminal' ? false : request.appendCrLf === true
     };
     const validation = validateSendContent(profileRequest.mode, profileRequest.content, profileRequest.encoding, maxBytes - (profileRequest.appendCrLf ? 2 : 0));
@@ -3991,7 +4149,7 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
             mode: profileRequest.mode, content: profileRequest.content,
             encoding: profileRequest.encoding, appendCrLf: profileRequest.appendCrLf,
             source: request.source || 'renderer', terminalEnter: request.terminalEnter === true,
-            newlineMode: request.newlineMode || newlineMode, sessionId: requestSessionId
+            newlineMode: request.newlineMode || targetDisplay.newlineMode, sessionId: requestSessionId
         };
         const pendingWrite = serialWriteChain.then(() => {
             if (!isConnected || requestSessionId !== getGroupSessionId(targetGroupId)) {
@@ -4585,10 +4743,13 @@ function clearMainInput() {
 }
 
 function getMainInputRequest() {
+    // 发送输入框发送的是**激活分组**的端口，所以编码与换行模式取激活分组的值。
+    const display = getGroupDisplay(activeGroupId);
     return {
         mode: mainInputMode,
         content: mainSendInput.value,
-        encoding: sendEncoding,
+        encoding: display.sendEncoding,
+        newlineMode: display.newlineMode,
         appendCrLf: mainSendAppendCrlfCb?.checked === true
     };
 }
@@ -4755,19 +4916,50 @@ bindShellSidebarEvents();
 bindSidebarToolbarEvents();
 
 function getSerialOptionsFromUi() {
+    // 侧栏控件反映的是**激活分组**，所以这里从该分组读四个显示参数，
+    // 而不是从默认分组的模块级缓存读——否则切到 g-1 改编码会写回默认分组。
+    const display = getGroupDisplay(activeGroupId);
     return {
         path: document.getElementById('port-select')?.value || currentConfig?.lastSerialOptions?.path || '',
         baudRate: typeof getBaudRate === 'function' ? getBaudRate() : (currentConfig?.lastSerialOptions?.baudRate || '9600'),
         dataBits: document.getElementById('data-bits-select')?.value || '8',
         stopBits: document.getElementById('stop-bits-select')?.value || '1',
         parity: document.getElementById('parity-select')?.value || 'none',
-        receiveDisplayMode, receiveEncoding, sendEncoding, newlineMode
+        receiveDisplayMode: display.receiveDisplayMode,
+        receiveEncoding: display.receiveEncoding,
+        sendEncoding: display.sendEncoding,
+        newlineMode: display.newlineMode
     };
+}
+
+// 把侧栏当前的串口参数持久化。
+//
+// 两条写入路径：`lastSerialOptions` 是全局默认值（新建分组时继承它）；
+// `serialGroups[activeGroupId].serialOptions` 是**该分组自己的**一份。
+// 只写前者会让「切到 g-1 改波特率」重启后变成「默认分组的波特率也变了」。
+function persistActiveGroupSerialOptions() {
+    const options = getSerialOptionsFromUi();
+    const target = serialGroups.find(group => group && group.id === activeGroupId);
+    if (!target) return options;
+    target.serialOptions = {
+        ...target.serialOptions,
+        baudRate: options.baudRate,
+        dataBits: options.dataBits,
+        stopBits: options.stopBits,
+        parity: options.parity,
+        receiveDisplayMode: options.receiveDisplayMode,
+        receiveEncoding: options.receiveEncoding,
+        sendEncoding: options.sendEncoding,
+        newlineMode: options.newlineMode
+    };
+    target.portPath = options.path || target.portPath || '';
+    persistSerialGroups();
+    return options;
 }
 
 function saveSerialModeConfig() {
     if (isApplyingConfig) return;
-    const lastSerialOptions = getSerialOptionsFromUi();
+    const lastSerialOptions = persistActiveGroupSerialOptions();
     const customBaudRates = normalizeCustomBaudRates(currentConfig?.customBaudRates);
     if (currentConfig) {
         currentConfig.lastSerialOptions = lastSerialOptions;
@@ -4776,10 +4968,15 @@ function saveSerialModeConfig() {
     ipcRenderer.send('save-config', { lastSerialOptions, customBaudRates });
 }
 
-function switchSendEncoding(nextEncoding, { persist = true, refresh = true } = {}) {
-    sendEncoding = SUPPORTED_ENCODINGS.has(nextEncoding) ? nextEncoding : 'utf8';
-    if (sendEncodingSelect) sendEncodingSelect.value = sendEncoding;
-    if (refresh) refreshSendConsumers();
+function switchSendEncoding(nextEncoding, { persist = true, refresh = true, groupId = REGISTRY_DEFAULT_GROUP_ID } = {}) {
+    const id = resolveSerialGroupId(groupId);
+    const normalized = SUPPORTED_ENCODINGS.has(nextEncoding) ? nextEncoding : 'utf8';
+    setGroupDisplay(id, { sendEncoding: normalized });
+    // 侧栏控件与发送校验/预览只服务激活分组，切非激活分组时不去碰它们。
+    if (id === activeGroupId) {
+        if (sendEncodingSelect) sendEncodingSelect.value = normalized;
+        if (refresh) refreshSendConsumers();
+    }
     if (persist && !isApplyingConfig) saveSendEncoding();
 }
 
@@ -4807,11 +5004,11 @@ function saveSendEncoding() {
     ipcRenderer.send('save-config', config);
 }
 
-receiveModeSelect?.addEventListener('change', () => switchReceiveMode(receiveModeSelect.value));
-receiveEncodingSelect?.addEventListener('change', () => switchReceiveEncoding(receiveEncodingSelect.value));
-sendEncodingSelect?.addEventListener('change', () => switchSendEncoding(sendEncodingSelect.value));
+receiveModeSelect?.addEventListener('change', () => switchReceiveMode(receiveModeSelect.value, { groupId: activeGroupId }));
+receiveEncodingSelect?.addEventListener('change', () => switchReceiveEncoding(receiveEncodingSelect.value, { groupId: activeGroupId }));
+sendEncodingSelect?.addEventListener('change', () => switchSendEncoding(sendEncodingSelect.value, { groupId: activeGroupId }));
 document.getElementById('newline-mode-select')?.addEventListener('change', event => {
-    newlineMode = event.target.value;
+    setGroupDisplay(activeGroupId, { newlineMode: event.target.value });
     saveSerialModeConfig();
 });
 
@@ -4918,7 +5115,10 @@ function applyConfig(config) {
         
         const nl = document.getElementById('newline-mode-select');
         if (nl) nl.value = config.lastSerialOptions.newlineMode;
-        newlineMode = config.lastSerialOptions.newlineMode || 'crlf';
+        // 启动时的 lastSerialOptions 是**默认分组**的初值（新分组继承它）。
+        // 必须走 setGroupDisplay 而不是直接给模块级 let 赋值，否则上下文里的
+        // 默认分组状态会停在 createDefaultState() 的初始值上，后续读上下文时不一致。
+        setGroupDisplay(REGISTRY_DEFAULT_GROUP_ID, { newlineMode: config.lastSerialOptions.newlineMode || 'crlf' });
         switchReceiveEncoding(config.lastSerialOptions.receiveEncoding, { persist: false });
         switchReceiveMode(config.lastSerialOptions.receiveDisplayMode, { persist: false });
         switchSendEncoding(config.lastSerialOptions.sendEncoding, { persist: false, refresh: false });
@@ -5163,13 +5363,16 @@ ipcRenderer.on('shell-tab-exit', (event, payload = {}) => {
 });
 
 // Serial Logic
+// 主终端的键盘输入属于默认分组：其它分组目前没有自己的 onData 监听，
+// 因此这里按默认分组取发送编码与换行模式，与改造前一致。
 serialTerm.onData((data) => {
     if (!isConnected) {
         return;
     }
+    const display = getGroupDisplay(REGISTRY_DEFAULT_GROUP_ID);
     sendSerialRequest({
-        mode: 'text', content: data, encoding: sendEncoding, source: 'terminal',
-        terminalEnter: data === '\r', newlineMode
+        mode: 'text', content: data, encoding: display.sendEncoding, source: 'terminal',
+        terminalEnter: data === '\r', newlineMode: display.newlineMode
     }, SEND_LIMITS.terminal).then(result => {
         if (result.ok) serialTerm.write(data === '\r' ? '\r\n' : data);
     });
@@ -5358,7 +5561,9 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
     const groupId = resolveSerialGroupId(meta?.groupId);
     const isDefaultGroup = groupId === REGISTRY_DEFAULT_GROUP_ID;
     serialGroupRegistry.invalidateSession(groupId);
-    if (receiveDisplayMode === 'hex') getHexFormatter(groupId).flush();
+    // 断开的判定必须按**它自己所属的分组**读：关掉 g-2 时默认分组可能还是 text，
+    // 用模块级缓存会 flush 错分组的 formatter。
+    if (getGroupDisplay(groupId).receiveDisplayMode === 'hex') getHexFormatter(groupId).flush();
     else flushTextReceive(groupId);
     if (isDefaultGroup) {
         // 全局连接状态、自动发送与重连等待者只属于默认分组：
@@ -5631,7 +5836,10 @@ async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DE
     const dataBits = document.getElementById('data-bits-select').value;
     const stopBits = document.getElementById('stop-bits-select').value;
     const parity = document.getElementById('parity-select').value;
-    newlineMode = document.getElementById('newline-mode-select').value;
+    // 侧栏的换行选择属于**这个分组**，必须先写回它的上下文再读，否则下发 IPC 的
+    // 会是默认分组的值。
+    setGroupDisplay(targetGroupId, { newlineMode: document.getElementById('newline-mode-select').value });
+    const targetDisplay = getGroupDisplay(targetGroupId);
 
     if (!path) return;
     serialConnectInProgress = true;
@@ -5649,8 +5857,8 @@ async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DE
             dataBits,
             stopBits,
             parity,
-            sendEncoding,
-            newlineMode
+            sendEncoding: targetDisplay.sendEncoding,
+            newlineMode: targetDisplay.newlineMode
         });
         // 连接成功后把主进程分配的会话号登记进该分组的注册表，后续字节归属以它为准。
         // serialSessionId 只在默认分组时同步，其它分组的会话号由注册表持有。
@@ -5665,10 +5873,10 @@ async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DE
                 dataBits,
                 stopBits,
                 parity,
-                receiveDisplayMode,
-                receiveEncoding,
-                sendEncoding,
-                newlineMode
+                receiveDisplayMode: targetDisplay.receiveDisplayMode,
+                receiveEncoding: targetDisplay.receiveEncoding,
+                sendEncoding: targetDisplay.sendEncoding,
+                newlineMode: targetDisplay.newlineMode
             }
         });
 

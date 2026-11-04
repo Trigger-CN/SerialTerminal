@@ -355,7 +355,10 @@ test('serial output is batched per animation frame before terminal rendering', (
   assert.match(main, /Buffer\.concat\(entries\.map\(entry => entry\.data\), byteCount\)/);
   assert.match(main, /queueSerialOutput\(session, data, connectionSessionId\)/);
   assert.match(renderer, /function flushPendingSerialOutput\(\)/);
-  assert.match(renderer, /flushPendingSerialOutput\(\);\s*if \(normalized !== receiveDisplayMode\)/);
+  // P4：比较基准从模块级 receiveDisplayMode 改为本分组切换前的值 previous，
+  // 否则非默认分组的切换会拿默认分组的值做比较。两条不变量依然成立：
+  // 先 flush 待处理输出，再判断是否需要真正切换。
+  assert.match(renderer, /const previous = getGroupDisplay\(id\)\.receiveDisplayMode;[\s\S]*?flushPendingSerialOutput\(\);\s*if \(normalized !== previous\)/);
   // 日志写入必须把 groupId 透传给主进程：否则所有分组的主终端日志都会落进默认端口目录。
   assert.match(renderer, /ipcRenderer\.send\('write-tab-log', \{ tabId, title, data, groupId: resolveSerialGroupId\(groupId\) \}\)/);
   assert.match(main, /writeTabLog\(payload\.tabId, payload\.title, payload\.data, payload\.groupId\)/);
