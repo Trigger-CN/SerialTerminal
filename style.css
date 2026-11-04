@@ -1947,6 +1947,12 @@ html.custom-titlebar .window-titlebar {
 }
 
 /* 分组级拖动分界条。样式与组内分界条一致，只是它作用于外层容器。 */
+/* Shell 独立列：整列只有一行标签栏，上面是 Shell 标签，下面直接是内容区。
+   它复用 .group-column / .serial-group-tab-bar 的全套样式，这里只补一条分隔线，
+   让用户能看出它不是串口分组。 */
+.shell-column .group-tab-row {
+    background: var(--bg-tertiary);
+}
 .group-workspace-splitter {
     flex: 0 0 10px;
     background: transparent;

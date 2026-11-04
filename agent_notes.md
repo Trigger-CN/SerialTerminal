@@ -1398,6 +1398,103 @@ if (!isGroup && ((isChart && !chartTab) || (!isChart && !targetTerm && action !=
 **两处断言按判据更新**（改的是验证代码，不是产品行为）：`verify-shell.js` 两处已改为量 `#serial-group-workspace-default` 列容器——`#workspace-root` 现在不是外层条目，它永远 `hidden=false` 而实际 w/h=0（父列被隐藏），量它会得到恒真的假结论。
 
 
+### Shell 标签跨层拖动（第 8 项，已落地）
+
+**用户原话**：`shell标签页应该可以拖动，拖动到分组标签栏意味着和所有串口标签页分屏显示，自己成为独立一组，拖动到某个组的下层标签栏，意味着在所在的组中显示`。
+
+**三态语义**（全部由用户原话推导，不是设计自由发挥）：
+
+```js
+let shellOwnerGroupId = null;   // null | SHELL_COLUMN_GROUP_ID | <串口分组 id>
+```
+
+| 值 | 含义 | 拖到这个落点时产生 |
+|---|---|---|
+| `null` | 不归属任何分组，位于**上层共享行**（与分组标签同级）。未分屏时共享行就在激活列，所以看得见 | 默认值；关闭分屏时也会降回它 |
+| `SHELL_COLUMN_GROUP_ID`（`'__shell__'`） | **独立成组**：自占一列，该列只有一行标签栏 | 拖到某列的 `.group-tab-row`（分组标签栏） |
+| `<groupId>` | 归属该分组：标签在那组的**下层** pane 标签行，面板在那组的 `pane-1` | 拖到某列的 `.pane-tabs-list`（下层标签栏） |
+
+**为什么必须是三态**：上层共享行只在**未分屏**时存在（分屏后每列只显示本组标签），所以「不归属」与「独立成组」不是同一件事。二态方案（`null` = 独立成组）曾被实现过并被实测推翻——用户说的是「**拖动到**分组标签栏意味着自己成为独立一组」，没拖过就不该凭空多出一列。
+
+```js
+function getShellOwnerGroupId() {
+    if (shellOwnerGroupId === SHELL_COLUMN_GROUP_ID) return SHELL_COLUMN_GROUP_ID;
+    if (shellOwnerGroupId && serialGroups.some(g => g.id === shellOwnerGroupId)) return shellOwnerGroupId;
+    return null;
+}
+function getShellHostGroupId() {
+    const owner = getShellOwnerGroupId();
+    if (owner) return owner;
+    if (isShellColumnActive()) return SHELL_COLUMN_GROUP_ID;
+    return activeGroupId;   // 不归属 → **激活**列，不是默认列
+}
+function isShellColumnActive() {
+    return getShellOwnerGroupId() === SHELL_COLUMN_GROUP_ID
+        && serialGroups.length > 1
+        && shellTabs.length > 0;
+}
+```
+
+**`__shell__` 复用分组命名，不另起一套**：`shellColumnId()` / `shellTabRowId()` / `shellTabListId()` / `shellWorkspaceRootId()` / `shellPaneId()` / `shellPaneTabsContentId()` 全部是 `groupWorkspaceContainerId` / `groupTabRowId` / `groupTabListId` / `groupWorkspaceRootId` / `groupPaneId` 对伪 id `'__shell__'` 的计算结果。独立列在结构上就是「一个只有单行标签栏的分组列」，复用同一套运算后它才能**自动**进入现有的可见性遍历、分屏比例写回与 pane 布局层（`getPaneTabsList(paneId)` 就是 `getElementById(paneId + '-tabs-list')`），不必在二十多处写「这是不是 shell」的分支。代价是所有早期字面量（`'serial-group-workspace-shell'` 等）全部失效，验证脚本必须改为调用契约函数。
+
+**独立列的 DOM 形态**（无第二层标签行，正是用户「该组只显示一行标签栏」的字面要求）：
+
+```
+.group-column.shell-column#serial-group-workspace-__shell__   [data-group-id="__shell__"][data-shell-column="true"]
+  ├─ .group-tab-row.serial-group-tab-bar#serial-group-tab-bar-__shell__
+  │    └─ .main-tabs-list.serial-group-tab-list#serial-group-tab-list-__shell__
+  └─ .workspace-root#workspace-root-__shell__
+       └─ .workspace-pane.active#pane-1-__shell__
+            └─ .main-tabs-content.pane-tabs-content#pane-1-__shell__-tabs-content
+```
+
+仍保留一个 `.workspace-pane`：xterm 的 `fit()` 需要真实尺寸链，而 `.main-tab-pane` 是绝对定位、依赖最近的已定位祖先（`.main-tabs-content` 有 `position: relative`）。
+
+**`placeShellTabs()` 是 DOM + 布局同步的唯一入口，四个分支**：
+
+| 条件 | `buttonHost` | `contentHost` | `layoutHost` |
+|---|---|---|---|
+| `hostId === SHELL_COLUMN_GROUP_ID` | 独立列列首列表 | 独立列内容区 | `SHELL_COLUMN_GROUP_ID` |
+| 单分组（`!isMultiGroup`） | `pane-1-tabs-list` | `pane-1-tabs-content` | 默认分组 |
+| 多分组 + `owner === null` | **借来的静态行** `GROUP_TAB_LIST_ID` | **激活列** `pane-1` 内容区 | 激活列分组 |
+| 多分组 + 归属某分组 | 该组 **pane 标签行** `groupPaneId(hostId,1)-tabs-list` | 该组 pane-1 内容区 | `hostId` |
+
+**三条必须记住的规则**：
+
+1. **按钮与面板必须同属一列**。按钮在列 A 而行内其余内容在列 B 时，xterm 会在隐藏列里——表现为「标签亮着但看不到终端」。
+2. **「共享上层行」不能写成 `getGroupTabList(activeGroupId)`**。非默认分组自己那条行在未分屏时是 `hidden` 的（屏幕上的标签是借来的静态行），往那里 append 得到的标签用户根本看不到。
+3. **归属某分组时按钮进的是 pane 标签行，不是上层行**。放到上层行就变成「与分组标签同级」，与用户要求相反。
+
+**`syncShellLayoutOwnership(hostGroupId)` 是必须的**：面板搬到另一列的 DOM 后，源分组布局仍把它列在 `tabIds` 里，下一次 `applyLayoutToDom` 要么把它拽回去（「拖过去又跳回来」），要么因 `hasRenderableTab()` 找不到而 `prune`（标签凭空消失）。它**逐个标签、逐个分组**摘出（多个 Shell 标签可能分散在不同分组布局里），再向宿主登记，并**显式 `switchPaneTab`** —— `addTabToPane({ activate: false })` 只把它排进行里，用户点开之前看不到任何东西。
+
+**`isSyncingShellLayer` 重入闸**：调用链会成环——`placeShellTabs()` → `addTabToPane` → `applyLayoutToDom` → `onLayoutApplied` → `syncShellTabLayer()` → `placeShellTabs()`。不拦住会无限递归且每轮都动 DOM（表现为界面卡死）。
+
+**拖放机制的四处改动**（原机制在 `renderer.js` 的 `bindWorkspaceTabDragging()` 一带）：
+
+1. `getWorkspaceTabDropTarget()` 原来用**模块级别名** `workspaceLayout.panes`（即当前激活分组的布局），跨列拖动会失效 → 改为枚举 `document.querySelectorAll('.group-column .pane-tabs-list')`，并从 `column.dataset.groupId` 得出目标分组。
+2. 新增 `getGroupRowDropTarget(clientX, clientY)`：枚举 `.group-tab-row`，跳过 `column.hidden`，这是「把 Shell 升为独立一组」的落点。
+3. `pointerdown` 改为「按标签本身判定是否 Shell」（`isShellTabId(tabButton.dataset.target)` + `tabButton.closest('.group-tab-row')`），因此可从 `.group-tab-row` 起拖；串口分组标签（`.serial-group-tab`）不得从此起拖。
+4. `finishWorkspaceTabDrag()` 落到分组标签行 → `setShellOwnerGroup(SHELL_COLUMN_GROUP_ID)`；落到 pane 行 → `setShellOwnerGroup(state.targetGroupId)`。非 Shell 标签走 `moveTabToGroupPane()`，它在目标分组 ≠ `activeGroupId` 时改用 `getGroupWorkspaceManager(groupId).moveTabToPane(...)`（**不能走别名**，否则会在当前分组布局里找目标 pane 直接 return）。
+
+**实现过程中修掉的四个真实缺陷**（全部只有真实拖动 + 真实布局测量才能发现）：
+
+1. **Shell 面板留在隐藏列**。实测 `{"listId":"serial-group-tab-list-g-1","shown":true}` 而 `{"contentId":"pane-1-tabs-content","shown":false,"w":0}`。修法：`placeShellTabs()` 必须**同时**解析 `buttonHost` 与 `contentHost`。
+2. **布局归属不同步**（见上）。
+3. **归入分组后没有激活**。实测 `{"contentId":"pane-1-g-1-tabs-content","active":false,"shown":false,"w":0}`。修法：登记后无条件 `switchPaneTab`。
+4. **无限递归**（见上）。
+
+**`closeSerialGroup()` 的 Shell 抢救块**：若被关的分组正是 Shell 的宿主，必须先把标签与面板搬回默认分组的 `pane-1` 再删列——直接 remove 整个列会把 xterm 节点一起删掉，而 `shellTabs` 仍持有已脱离文档的引用，之后无论怎么切都看不到终端**且不报错**。
+
+**验证**：CDP `verify-shell-drag.js` **24/24 PASS、exit=0**（`verify-shell-drag-fix1.txt`，`userdata-diag24`）。它用 `Input.dispatchMouseEvent` 合成 pointer 事件（mousePressed → 8 步 mouseMoved → mouseReleased），全部 id 由 `require('../../../serial-group-layout-dom')` 契约函数算出。关键断言：`shell-tab-now-in-target-group-pane-row`、`shell-pane-now-in-target-group-content`、`group-tab-row-drag-creates-shell-column`、`shell-column-has-exactly-one-visible-tab-row`、`shell-column-has-no-pane-tab-row`、`unsplit-shell-sits-in-shared-group-row`、`split-does-not-create-shell-column-without-drag`、`close-split-removes-shell-column`、`drag-keeps-active-group`（**拖动不改 `activeGroupId`**，双向各一条）。
+
+**回归中发现并修掉的一处真实缺陷（第 8 项自己引入的）**：`closeSerialGroup()` 里 `document.getElementById(groupWorkspaceContainerId(id))?.remove();` 这行被误删，注释「外层容器要整个拿掉」却还在。后果是关组后列容器永远留在 DOM（只是 `hidden`），`columnCount` 恒为 2、DOM 节点持续堆积。诊断脚本 `diag-columns2.js` 证实残留的是 `serial-group-workspace-g-1` 且 `shellTabs: 0`（**不是**原先推断的残留 shell 列）。已补回。
+
+**一处断言按判据更新**：`verify-shell.js` 的「点 Shell 后默认分组被亮出」改为「点 Shell 后面板所在列可见」。第 8 项之后「不归属任何分组的 Shell」渲染在**激活列**的 `pane-1` 里，用户看的就是激活列；面板跑到被隐藏的默认列里才是缺陷。新断言量 `panel.closest('.group-column')` 的 `offsetParent` + 实际宽高，比旧断言更贴近用户实际看到的东西，**未放宽产品行为**。
+
+**回归基线**：`verify-group-columns` 39/39、`verify-shell` 16/16、`verify-shell-drag` 24/24、`verify-group-split` 19/19、`verify-sidebar-groups` 14/14、`verify-titles` 6/6，六个脚本各用一个全新 `--user-data-dir`，`app-diagNN-err.log` 全部无 `[RENDERER DIAGNOSTIC]`。`npm test` **469/469**。
+
+**仍未验证**：Shell 归入某分组后的长期行为（关组回落、跨多次切分组）只有 DOM 层证据，没有真实双端口端到端验证。
+
 ### 侧栏控件按当前分组分发（已落地）
 
 **这是最容易反复错的一层**：`renderer.js` 里有三类「当前」读法，含义各不相同：

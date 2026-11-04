@@ -151,6 +151,47 @@ function resolveGroupWorkspaceEntries(groupIds) {
   }));
 }
 
+// ---- Shell 独立列（不归属任何串口分组时的落点）----
+//
+// Shell 标签默认不归属任何串口分组（锁定决策）。单分组时它混在 pane 标签行里；
+// 多分组且用户没有把它拖进某个分组时，它是一个**独立的分组列**：该列只有一条标签行
+// （放的正是 Shell 标签），下面直接是 Shell 的内容区 —— 正是用户要求「shell 标签页
+// 如果独立一组，则该组只显示一行标签栏」。
+//
+// 这一列**不属于 `serialGroups`**，因此在结构上用一个不可能与真实分组 id 撞车的伪 id
+// （`__shell__`）参与现有的 id 运算。
+//
+// 关键取舍：这些 id **不另起一套命名**，而是逐字复用 groupWorkspaceContainerId /
+// groupTabRowId / groupTabListId / groupPaneId 对 `__shell__` 的计算结果。
+// 独立列在结构上就是「一个只有单行标签栏的分组列」，复用同一套运算后它才能自动进入
+// 现有的可见性遍历、分屏比例写回与 pane 布局层，不必在二十多处写「这是不是 shell」。
+const SHELL_COLUMN_GROUP_ID = '__shell__';
+
+function shellColumnId() {
+  return groupWorkspaceContainerId(SHELL_COLUMN_GROUP_ID);
+}
+
+function shellTabRowId() {
+  return groupTabRowId(SHELL_COLUMN_GROUP_ID);
+}
+
+function shellTabListId() {
+  return groupTabListId(SHELL_COLUMN_GROUP_ID);
+}
+
+function shellWorkspaceRootId() {
+  return groupWorkspaceRootId(SHELL_COLUMN_GROUP_ID);
+}
+
+// Shell 独立列里的 pane。它没有第二层标签行，所以只有一个 pane 与一个内容区。
+function shellPaneId() {
+  return groupPaneId(SHELL_COLUMN_GROUP_ID, 1);
+}
+
+function shellPaneTabsContentId() {
+  return `${shellPaneId()}-tabs-content`;
+}
+
 module.exports = {
   DEFAULT_GROUP_PANE_COUNT,
   GROUP_WORKSPACE_CONTAINER_ID,
@@ -163,6 +204,13 @@ module.exports = {
   groupWorkspaceEntryId,
   groupTabRowId,
   groupTabListId,
+  SHELL_COLUMN_GROUP_ID,
+  shellColumnId,
+  shellTabRowId,
+  shellTabListId,
+  shellWorkspaceRootId,
+  shellPaneId,
+  shellPaneTabsContentId,
   resolveGroupWorkspaceEntries,
   describeGroupPanes,
   describeGroupWorkspace,

@@ -1119,7 +1119,11 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 - **分组标签行已归位到各分组列的上方**：`#group-workspace` 的直接子元素从「分组工作区」改为「分组列」（`.group-column`），每列首行是该组自己的分组标签行，下面是它自己的工作区。其中静态 `#serial-group-tab-bar` 只存在**一份**，在列之间搬移：未分屏时它属于激活列并列出**全部**分组标签（否则没法切分组），已分屏时它留在默认列、只列默认分组自己那一个，其它列各有一条自己的行。`groupWorkspaceEntryId()` 语义随之变为「始终返回列容器 id」。**CDP `verify-group-columns.js` 39/39、exit=0**（`verify-group-columns-out4.txt`，`userdata-diag11`）。
   - 过程中修掉一处只有真实启动才能发现的缺陷：`renderSerialGroupTabBar()` 引用了未 require 的 `GROUP_TAB_BAR_ID`，`node --check` 与模块加载门禁均看不见（该函数只在 `applyConfig` 的 Promise 回调里被调），只有 `[RENDERER DIAGNOSTIC]` 暴露。
   - 同时修掉 `closeSerialGroup()` 的一处隐患：删列前必须 `reclaimSharedGroupTabRow()` + `reclaimGroupAddButton()`，否则静态行与「添加串口」按钮会跟着列一起被 `remove()`，分组栏永久消失且无任何报错。
-  - **尚未做**：Shell 标签的跨层**拖动**（第 8 项）。当前 Shell 默认归属默认分组列（`shellOwnerGroupId = null` 时回落默认列），尚不能拖到分组层独立成组、也不能拖入其它分组的下层行。
+- **Shell 标签的跨层拖动已落地**（第 8 项）。`shellOwnerGroupId` 为**三态**：`null` = 不归属任何分组，停在**上层共享行**（与分组标签同级，面板在**激活列**）；`'__shell__'` = **独立成组**，自占一列且该列只有一行标签栏；`<groupId>` = 归入该组，标签进那组的**下层** pane 标签行、面板进那组 `pane-1`。拖到某列 `.group-tab-row` → 独立成组；拖到某列 `.pane-tabs-list` → 归入该组；不拖不会凭空多出一列（二态方案「不归属即独立成组」已因与用户原话不符而被推翻）。Shell 列的全部 id 都复用 `groupWorkspaceContainerId` / `groupTabRowId` / `groupTabListId` / `groupPaneId` 对伪 id `'__shell__'` 的计算，不另起命名。**CDP `verify-shell-drag.js` 24/24、exit=0**（`verify-shell-drag-fix1.txt`，`userdata-diag24`），用 `Input.dispatchMouseEvent` 合成真实拖动手势。
+  - 修掉四个只有真实拖动才能发现的缺陷：面板留在隐藏列（按钮与面板必须同属一列）、布局归属不同步（面板被拽回或被 prune）、归入分组后未激活（`addTabToPane({activate:false})` 后必须显式 `switchPaneTab`）、无限递归（`isSyncingShellLayer` 重入闸）。
+  - 回归中又修掉一处第 8 项自己引入的缺陷：`closeSerialGroup()` 里的 `document.getElementById(groupWorkspaceContainerId(id))?.remove()` 被误删，导致关组后列容器永远留在 DOM（只是 `hidden`）。诊断证实残留的是 `serial-group-workspace-g-1` 而非 shell 列。
+  - 一处断言按判据更新：`verify-shell.js` 的「点 Shell 后默认分组被亮出」→「点 Shell 后面板所在列可见」（面板现在渲染在激活列，这是设计使然，不是回归）。
+  - **仍未验证**：Shell 归入某分组后的长期行为（关组回落、多次切分组）只有 DOM 层证据，没有真实双端口端到端验证。
 
 
 

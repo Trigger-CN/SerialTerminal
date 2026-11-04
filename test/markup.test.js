@@ -807,7 +807,12 @@ test('workspace tabs support pointer reordering across panes', () => {
 
   assert.match(renderer, /getHorizontalInsertionIndex/);
   assert.match(renderer, /function bindWorkspaceTabDragging\(\)/);
-  assert.match(renderer, /moveTabToPane\(state\.tabId, state\.targetPaneId, \{ insertionIndex: state\.insertionIndex \}\)/);
+  // 跨分组拖动必须分派到**目标分组**的布局管理器。早些时候这里是直接调模块级别名
+  // `moveTabToPane`，那会让跨列拖动的标签落到当前分组的第一个 pane 里，表现为
+  // 「拖到别的列里没反应」。第 8 项把它改成经 moveTabToGroupPane 分派。
+  assert.match(renderer, /function moveTabToGroupPane\(tabId, targetPaneId, targetGroupId, options = \{\}\)/);
+  assert.match(renderer, /getGroupWorkspaceManager\(groupId\)\.moveTabToPane\(tabId, targetPaneId, options\)/);
+  assert.match(renderer, /moveTabToPane\(tabId, targetPaneId, options\)/);
   assert.match(renderer, /target\.list\.scrollLeft [+-]=/);
   assert.match(renderer, /switchPaneTab\(getPaneIdForTabId\('tab-main'\), 'tab-main'\)/);
   assert.match(renderer, /tabId: tabState\?\.id \|\| \(terminalType === 'main' \? 'tab-main' : ''\)/);

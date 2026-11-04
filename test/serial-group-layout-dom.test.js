@@ -17,6 +17,13 @@ const {
   groupWorkspaceEntryId,
   groupTabRowId,
   groupTabListId,
+  SHELL_COLUMN_GROUP_ID,
+  shellColumnId,
+  shellTabRowId,
+  shellTabListId,
+  shellWorkspaceRootId,
+  shellPaneId,
+  shellPaneTabsContentId,
   resolveGroupWorkspaceEntries,
   describeGroupPanes,
   describeGroupWorkspace,
@@ -198,4 +205,34 @@ test('every group workspace id is unique across a realistic group set', () => {
     all.push(workspace.containerId, workspace.rootId, workspace.splitterId, ...workspace.paneIds);
   });
   assert.deepEqual(new Set(all).size, all.length);
+});
+
+test('the shell column ids reuse the group naming rules without colliding', () => {
+  // Shell 独立列不是串口分组，但它必须能和真实分组共用同一套可见性遍历、
+  // 分屏比例与 pane 布局运算 —— 否则就会在二十多处出现「这是不是 shell」的分支。
+  // 前提是它算出来的 id 属于同一形态且与任何真实分组都不碰撞。
+  const groups = ['default', 'g-1', 'g-2', 'g-3'];
+
+  assert.equal(SHELL_COLUMN_GROUP_ID, '__shell__');
+  assert.equal(shellColumnId(), groupWorkspaceContainerId(SHELL_COLUMN_GROUP_ID));
+  assert.equal(shellTabRowId(), groupTabRowId(SHELL_COLUMN_GROUP_ID));
+  assert.equal(shellTabListId(), groupTabListId(SHELL_COLUMN_GROUP_ID));
+  assert.equal(shellPaneId(), groupPaneId(SHELL_COLUMN_GROUP_ID, 1));
+  assert.equal(shellPaneTabsContentId(), `${shellPaneId()}-tabs-content`);
+
+  const shellIds = [
+    shellColumnId(), shellTabRowId(), shellTabListId(),
+    shellWorkspaceRootId(), shellPaneId(), shellPaneTabsContentId()
+  ];
+  // 六个自身 id 必须互不相同：重复意味着列首行与 pane 行抢同一个节点。
+  assert.deepEqual(new Set(shellIds).size, shellIds.length);
+
+  // 也不能与任何真实分组的对应 id 碰撞。
+  groups.forEach(groupId => {
+    assert.notEqual(shellColumnId(), groupWorkspaceContainerId(groupId));
+    assert.notEqual(shellTabRowId(), groupTabRowId(groupId));
+    assert.notEqual(shellTabListId(), groupTabListId(groupId));
+    assert.notEqual(shellWorkspaceRootId(), groupWorkspaceRootId(groupId));
+    assert.notEqual(shellPaneId(), groupPaneId(groupId, 1));
+  });
 });
