@@ -1675,6 +1675,38 @@ html.custom-titlebar .window-titlebar {
     flex-shrink: 0;
 }
 
+/* 当前控制的串口分组。
+   多分组后左栏的 9 个控件只作用于「当前分组」，用户必须先能一眼确认是哪一个，
+   否则就会出现「以为在改 A 串口，实际改到了 B」。因此放在侧栏最顶部、
+   用强对比色和加粗字体，而不是与其他标签同级的说明文字。 */
+.sidebar-active-group {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    border-left: 3px solid var(--accent-color);
+    min-width: 0;
+}
+.sidebar-active-group-label {
+    flex: 0 0 auto;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+.sidebar-active-group-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .sidebar-tabs {
     display: flex;
     background: var(--bg-primary);

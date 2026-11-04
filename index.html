@@ -44,6 +44,12 @@
         </div>
         <!-- Persistent Header -->
         <div class="sidebar-header">
+            <!-- 当前控制的串口分组：多分组时用户最需要先确认的就是「我现在在改哪个串口」。
+                 下图是唯一一直可见的位置，而且位于端口选择之上——先看分组、再看端口。 -->
+            <div class="sidebar-active-group" id="sidebar-active-group">
+                <span class="sidebar-active-group-label" data-i18n="main.controllingGroup">CONTROLLING</span>
+                <span class="sidebar-active-group-name" id="sidebar-active-group-name">Serial 1</span>
+            </div>
             <div style="display: flex; gap: 4px;">
                 <select id='port-select' title='Select Serial Port' data-i18n-title='main.selectSerialPort' style='flex: 1; width: 0;'>
                     <option value='' data-i18n='main.selectPort'>Select Port</option>
@@ -320,7 +326,9 @@
                 <div class="main-tabs-content pane-tabs-content" id="pane-2-tabs-content"></div>
             </div>
         </div>
-            <div class="group-workspace-splitter" id="group-workspace-splitter" hidden></div>
+            <!-- 分组级分屏的分界条。必须紧跟在第一个分组之后：放在容器末尾会落到最右边，
+                 用户拖到的位置与它实际调整的边界对不上。 -->
+            <div class="group-workspace-splitter" id="group-workspace-splitter" data-group-splitter="group" hidden></div>
         </div>
         <div class="main-input-panel" id="main-input-panel">
             <div class="main-input-row">

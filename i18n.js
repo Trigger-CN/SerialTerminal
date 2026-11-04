@@ -596,6 +596,14 @@ Object.assign(translations.fr.main, { addSerialPort: 'Ajouter un port série' })
 Object.assign(translations.ru.main, { addSerialPort: 'Добавить последовательный порт' });
 Object.assign(translations.de.main, { addSerialPort: 'Seriellen Port hinzufügen' });
 
+// 侧栏顶部「当前控制的分组」标识。同样必须六种语言齐备。
+Object.assign(translations.en.main, { controllingGroup: 'CONTROLLING' });
+Object.assign(translations['zh-CN'].main, { controllingGroup: '当前控制' });
+Object.assign(translations['zh-TW'].main, { controllingGroup: '目前控制' });
+Object.assign(translations.fr.main, { controllingGroup: 'CONTRÔLE' });
+Object.assign(translations.ru.main, { controllingGroup: 'УПРАВЛЕНИЕ' });
+Object.assign(translations.de.main, { controllingGroup: 'AKTIV' });
+
 Object.assign(translations.en.prefs, {
   shortcuts: 'Shortcuts', shortcutsSettings: 'Shortcut Settings', shortcutsHelp: 'Click a shortcut field and press a key combination. Backspace clears a shortcut.', resetShortcutDefaults: 'Reset Shortcut Defaults', shortcutDisabled: 'Disabled',
   shortcutSendMainInput: 'Send bottom input', shortcutToggleSendHistory: 'Open send history', shortcutHistoryPrevious: 'Previous send history', shortcutHistoryNext: 'Next send history', shortcutFocusSearch: 'Focus search', shortcutClearActiveTerminal: 'Clear active terminal', shortcutRefreshPorts: 'Refresh serial ports', shortcutToggleSerialConnection: 'Connect / disconnect serial'

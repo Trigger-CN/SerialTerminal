@@ -1198,20 +1198,35 @@ function getTerminalBufferLineContextByEvent(term, element, event) {
     };
 }
 
+// 注意：term 可以是 getter 或返回 term 的函数。
+//
+// 非默认分组的终端实例是**惰性创建**的（由 createSerialRuntime 在切标签时建），
+// 绑监听这一刻它可能还不存在。用惰性取值就能在每次右键时拿到当时的实例；
+// 直接传实例会绑到默认分组的 term 上，表现为「在新分组终端里右键，
+// 清屏却清掉了默认分组的屏幕」。
+// 注意：term 可以传实例，也可以传返回实例的函数。
+//
+// 非默认分组的终端实例是**惰性创建**的（由 createSerialRuntime 在切标签时建），
+// 绑监听这一刻它可能还不存在。传函数就能在每次右键时拿到当时的实例；
+// 直接传实例会绑到默认分组的 term 上，表现为「在新分组终端里右键，
+// 清屏却清掉了默认分组的屏幕」。
 function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
     if (!element) return;
+    const resolveTerm = () => (typeof term === 'function' ? term() : term);
     element.addEventListener('contextmenu', (event) => {
         event.preventDefault();
+        const currentTerm = resolveTerm();
+        if (!currentTerm) return;
         const tabState = typeof getTabState === 'function' ? getTabState() : null;
         if (tabState && terminalType === 'filter') {
-            tabState.contextLine = getTerminalBufferLineContextByEvent(term, element, event);
+            tabState.contextLine = getTerminalBufferLineContextByEvent(currentTerm, element, event);
         }
         requestTerminalContextMenu({
             terminalType,
             paneId: resolvePaneId(tabState?.paneId, tabState?.id, 'tab-main'),
             tabId: tabState?.id || (terminalType === 'main' ? 'tab-main' : ''),
-            hasSelection: term.hasSelection(),
-            selectedText: term.hasSelection() ? term.getSelection() : '',
+            hasSelection: currentTerm.hasSelection(),
+            selectedText: currentTerm.hasSelection() ? currentTerm.getSelection() : '',
             isConnected,
             splitEnabled: isSplitEnabled(),
             filterText: tabState?.filterText || '',
@@ -2290,6 +2305,83 @@ function bindWorkspaceSplitter() {
     });
 }
 
+// 分组级分屏的分界条拖动。
+//
+// 与组内 pane 分屏是两套坐标：这里的比例相对**外层**容器（#group-workspace）计算，
+// 而且只能调整相邻两条分组工作区的宽度，不涉及 pane。
+//
+// 只调整分界条左侧那一条的比例，右侧各条按原有相对权重瓜分剩余空间——
+// 这样任意条数的分屏都成立，不需要单独记录“右邻是谁”。
+function bindGroupWorkspaceSplitter() {
+    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    if (!outer) return;
+
+    let rafId = null;
+    let pendingRatio = null;
+    let dragging = false;
+
+    const flush = () => {
+        rafId = null;
+        if (pendingRatio === null) return;
+        const participants = groupWorkspaceSplit.groupIds;
+        if (participants.length < 2) return;
+        const leftId = participants[0];
+        const restIds = participants.slice(1);
+        const minShare = 0.05 * participants.length;
+        const clamped = Math.min(1 - minShare, Math.max(minShare, pendingRatio));
+
+        // 必须先算旧权重，再覆写 sizes —— 倒过来会把右侧全变成 0。
+        const previous = participants.map(id => Number(groupWorkspaceSplit.sizes[id]) || 0);
+        const restTotal = previous.slice(1).reduce((sum, value) => sum + value, 0);
+
+        const next = { [leftId]: clamped };
+        const remaining = 1 - clamped;
+        restIds.forEach((id, index) => {
+            const weight = restTotal > 0
+                ? previous[index + 1] / restTotal
+                : 1 / restIds.length;
+            next[id] = remaining * weight;
+        });
+        groupWorkspaceSplit.sizes = next;
+        applyGroupWorkspaceSplitLayout();
+        fitWorkspaceTerminals();
+        pendingRatio = null;
+    };
+
+    const handlePointerMove = (event) => {
+        if (!dragging) return;
+        const rect = outer.getBoundingClientRect();
+        const isVertical = groupWorkspaceSplit.orientation === 'vertical';
+        const total = isVertical ? rect.height : rect.width;
+        if (total <= 0) return;
+        const offset = isVertical ? (event.clientY - rect.top) : (event.clientX - rect.left);
+        pendingRatio = offset / total;
+        if (rafId === null) rafId = requestAnimationFrame(flush);
+    };
+
+    const handlePointerUp = () => {
+        if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            flush();
+        }
+        dragging = false;
+        outer.classList.remove('resizing');
+        document.removeEventListener('pointermove', handlePointerMove);
+        document.removeEventListener('pointerup', handlePointerUp);
+        fitWorkspaceTerminals();
+    };
+
+    document.addEventListener('pointerdown', (event) => {
+        if (!event.target.closest?.('[data-group-splitter="group"]')) return;
+        if (!groupWorkspaceSplit.enabled || groupWorkspaceSplit.groupIds.length < 2) return;
+        event.preventDefault();
+        dragging = true;
+        outer.classList.add('resizing');
+        document.addEventListener('pointermove', handlePointerMove);
+        document.addEventListener('pointerup', handlePointerUp);
+    });
+}
+
 function bindWorkspacePaneTransitionFit() {
     if (!workspaceRootEl) return;
 
@@ -2437,6 +2529,117 @@ function restorePerGroupTabsFromConfig(config) {
     }
 }
 
+// ---- 分组级分屏状态 ------------------------------------------------------
+//
+// 「分组级分屏」是用户主动开启的可选能力（见需求：串口分组标签可以左右上下分屏）。
+// 它的状态必须与「有几个分组」分开：分组数 >=2 只意味着**可以**分屏，不意味着已经分屏。
+//
+// 默认未分屏：只显示激活分组一套工作区，这正是「下层为当前选择的串口分组」的语义。
+//
+// 形状：
+//   enabled  是否处于分组级分屏
+//   groupIds 参与并排显示的分组（有序，决定左右/上下顺序）
+//   orientation 'horizontal'（左右）| 'vertical'（上下）
+//   sizes    groupId -> 比例（相对本外层容器，未列出的平均分配）
+const groupWorkspaceSplit = {
+    enabled: false,
+    groupIds: [],
+    orientation: 'horizontal',
+    sizes: {}
+};
+
+// 复位分屏状态。分组数回落到 1、或最后一个可关闭的分组被关掉时必须调。
+function resetGroupWorkspaceSplit() {
+    groupWorkspaceSplit.enabled = false;
+    groupWorkspaceSplit.groupIds = [];
+    groupWorkspaceSplit.orientation = 'horizontal';
+    groupWorkspaceSplit.sizes = {};
+}
+
+// 参与分组级分屏的候选分组（按 serialGroups 的顺序）。
+// 分屏至少要两个分组才有意义，因此不足两个时返回空。
+function getGroupSplitCandidates() {
+    if (serialGroups.length < 2) return [];
+    return serialGroups.map(group => group.id);
+}
+
+// 把当前分屏状态里已经不存在的分组清掉（关闭分组后必调）。
+// 剩余不足两个时自动退出分屏，否则会留下一条没有分屏意义的拖动条。
+function pruneGroupWorkspaceSplit() {
+    if (!groupWorkspaceSplit.enabled) return false;
+    const alive = groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id));
+    const changed = alive.length !== groupWorkspaceSplit.groupIds.length;
+    groupWorkspaceSplit.groupIds = alive;
+    if (alive.length < 2) {
+        resetGroupWorkspaceSplit();
+        return true;
+    }
+    return changed;
+}
+
+// 把一个分组加入/移出分组级分屏。
+//
+// 开启分屏时必须保证至少两个分组参与，否则用户完全看不到任何变化；
+// 因此第二次参与的默认候选是「激活分组 + 相邻分组」。
+function setGroupWorkspaceSplit(enabled, options = {}) {
+    if (!enabled) {
+        resetGroupWorkspaceSplit();
+        syncGroupWorkspaceVisibility();
+        return;
+    }
+    const candidates = getGroupSplitCandidates();
+    if (candidates.length < 2) return;
+    const requested = Array.isArray(options.groupIds) ? options.groupIds.filter(Boolean) : [];
+    let participants = requested.filter(id => candidates.includes(id));
+    if (participants.length < 2) {
+        // 默认：激活分组 + 它在 serialGroups 里的下一个（到末尾则取上一个）。
+        const index = candidates.indexOf(activeGroupId);
+        const neighbour = candidates[index + 1] || candidates[index - 1] || candidates[0];
+        participants = [activeGroupId, neighbour].filter((id, i, arr) => id && arr.indexOf(id) === i);
+    }
+    groupWorkspaceSplit.enabled = true;
+    groupWorkspaceSplit.groupIds = participants;
+    if (options.orientation === 'vertical' || options.orientation === 'horizontal') {
+        groupWorkspaceSplit.orientation = options.orientation;
+    }
+    syncGroupWorkspaceVisibility();
+    applyGroupWorkspaceSplitLayout();
+}
+
+// 把分屏状态写到外层容器的 DOM 上：方向类名与各条的 flex-basis。
+//
+// 未分屏时清掉所有比例，让 CSS 的 flex:1 把唯一一条撞满——否则上一次性分屏的比例
+// 会残留，表现为「退出分屏后当前分组只占半宽」。
+function applyGroupWorkspaceSplitLayout() {
+    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    if (!outer) return;
+
+    const isSplit = groupWorkspaceSplit.enabled && groupWorkspaceSplit.groupIds.length > 1;
+    outer.classList.toggle('group-split-vertical', isSplit && groupWorkspaceSplit.orientation === 'vertical');
+    outer.classList.toggle('group-split-horizontal', isSplit && groupWorkspaceSplit.orientation !== 'vertical');
+
+    // 先清掉所有条的比例，再给参与分屏的那些回写。
+    Array.from(outer.children).forEach(child => {
+        if (!child.id || child.id === GROUP_WORKSPACE_SPLITTER_ID) return;
+        child.style.removeProperty('flex-basis');
+        child.style.removeProperty('flex');
+    });
+
+    if (!isSplit) return;
+
+    const participants = groupWorkspaceSplit.groupIds;
+    const share = 1 / participants.length;
+    participants.forEach(groupId => {
+        const el = document.getElementById(groupWorkspaceEntryId(groupId));
+        if (!el) return;
+        const ratio = Number(groupWorkspaceSplit.sizes[groupId]);
+        const value = Number.isFinite(ratio) && ratio > 0 ? ratio : share;
+        el.style.flexBasis = `${(value * 100).toFixed(4)}%`;
+        el.style.flexGrow = '0';
+        el.style.flexShrink = '0';
+    });
+}
+
 // 为一个非默认分组建外层工作区容器 `#serial-group-workspace-<g>`，内含自己的
 // `#workspace-root-<g>`、`#workspace-splitter-<g>` 与 `#pane-1-<g>` 等。
 //
@@ -2546,27 +2749,82 @@ function createGroupPaneElement(groupId, paneId) {
     return paneEl;
 }
 
-// 同步外层容器的可见性：只有分组数 >= 2 时才启用分组级分屏。
+// 同步外层容器的可见性。
 //
-// 单分组时外层只显示默认分组这一条，并且 `#group-workspace-splitter` 隐藏——
-// 否则用户会看到一个没有意义的拖动条。
+// 两种形态，由 groupWorkspaceSplit 决定：
+//
+// - **未分屏（默认）**：只显示当前激活分组那一条工作区，其余分组 hidden。
+//   需求原句是「下层为**当前选择的**串口分组旗下的所有标签页」——下层只有一套。
+//   早期版本只按「这个分组存在」就显示，于是每个分组的下层标签栏都铺在屏幕上，
+//   实测三个分组时同时出现三套标签栏（各 387px），用户看到的就是「标签逻辑混乱」。
+//
+// - **已分屏**：并排显示参与分屏的那几个分组；未参与分屏的仍需隐藏。
+//   分组级分屏是用户主动开启的可选能力（需求：串口分组标签可以左右上下分屏），
+//   不是「加了第二个分组就自动并排」。
+//
+// 外层分界条只在「已分屏且可见分组数 >= 2」时才有意义，否则隐藏。
 function syncGroupWorkspaceVisibility() {
     const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
     const outerSplitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
     if (!outer) return;
-    const isMultiGroup = serialGroups.length > 1;
-    const entries = new Set(serialGroups.map(group => groupWorkspaceEntryId(group.id)));
+
+    const entryIds = new Set(serialGroups.map(group => groupWorkspaceEntryId(group.id)));
+    const visibleIds = resolveVisibleGroupWorkspaceEntryIds();
+
     // 非本配置里的分组容器（例如刚被关掉的那个）必须一并隐藏，
     // 否则它仍占着 flex-basis，表现为「关了一个分组但剩下那个只有半宽」。
     Array.from(outer.children).forEach(child => {
         if (!child.id || child.id === GROUP_WORKSPACE_SPLITTER_ID) return;
-        if (child.id === 'workspace-root') {
-            child.hidden = false;
+        if (!entryIds.has(child.id)) {
+            child.hidden = true;
             return;
         }
-        child.hidden = !entries.has(child.id);
+        child.hidden = !visibleIds.has(child.id);
     });
-    if (outerSplitter) outerSplitter.hidden = !isMultiGroup;
+
+    if (outerSplitter) {
+        outerSplitter.hidden = !(groupWorkspaceSplit.enabled && visibleIds.size > 1);
+        if (!outerSplitter.hidden) {
+            // 分界条必须紧跟在**第一个可见分组之后**。
+            // 新建分组时 ensureSerialGroupWorkspaceDom 是 insertBefore(splitter) 插到它前面，
+            // 分组一多分界条就会被挤到容器末尾——表现为「拖动条跑到最右边」，
+            // 而它实际调整的是最左边那条边界，位置与行为对不上。
+            placeGroupWorkspaceSplitter();
+        }
+    }
+}
+
+// 把外层分界条移到「第一个可见分组之后」。
+//
+// 不靠插入顺序保证：分组是动态增删的，任何一次 insertBefore/appendChild 都可能让
+// 分界条跑到末尾。每次同步可见性时重算一次是最不容易出错的写法（元素已在正确
+// 位置时就 insertBefore 到自身之后是 no-op，不会引起样式重算）。
+function placeGroupWorkspaceSplitter() {
+    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    const splitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
+    if (!outer || !splitter) return;
+    const firstVisible = Array.from(outer.children).find(child =>
+        child !== splitter && child.id && child.id !== GROUP_WORKSPACE_SPLITTER_ID && !child.hidden
+    );
+    if (!firstVisible) return;
+    if (splitter.previousElementSibling === firstVisible) return;
+    outer.insertBefore(splitter, firstVisible.nextSibling);
+}
+
+// 当前应当显示哪些分组工作区（返回 entryId 集合）。
+//
+// 未分屏时只有激活分组一条；已分屏时是参与分屏的集合（保证一定包含激活分组，
+// 否则会出现「切到一个没参与分屏的分组，屏幕上却什么都不显示」）。
+function resolveVisibleGroupWorkspaceEntryIds() {
+    if (!groupWorkspaceSplit.enabled) {
+        return new Set([groupWorkspaceEntryId(activeGroupId)]);
+    }
+    const visible = new Set(groupWorkspaceSplit.groupIds
+        .filter(id => serialGroups.some(group => group.id === id))
+        .map(id => groupWorkspaceEntryId(id)));
+    // 激活分组必须始终可见：用户切过去的那个分组不能被分屏集合漏掉。
+    visible.add(groupWorkspaceEntryId(activeGroupId));
+    return visible;
 }
 
 // 从配置里同步分组列表。只在首次加载与外部 config-updated 时调用。
@@ -2651,6 +2909,22 @@ function ensureSerialGroupMainTabDom(groupId, title) {
     wrapper.id = containerId;
     tabPane.appendChild(wrapper);
     tabsContent.appendChild(tabPane);
+
+    // 右键菜单必须**逐分组**绑定。
+    //
+    // bindTerminalContextMenu 只在模块加载期对默认分组的 #serial-container 绑了一次；
+    // 新分组的终端容器是后建的，不补这一步就会出现「默认分组能右键、新分组右键没反应」。
+    //
+    // term 用函数惰性取：此刻本分组的 xterm 实例还没创建（它由 createSerialRuntime
+    // 在切换标签时建），直接传 getSerialTerm(id) 会拿到默认分组的 term，
+    // 于是右键菜单里的选区/清屏全部作用于错的终端。
+    bindTerminalContextMenu({
+        terminalType: 'main',
+        term: () => getSerialTerm(id),
+        element: wrapper,
+        getTabState: () => ({ id: tabId, paneId })
+    });
+
 
     // 3. 把这一个主标签登记进**本分组的**布局，否则 switchPaneTab 会因 tabIds
     //    不含它而直接返回。
@@ -2781,15 +3055,36 @@ function applyActiveSerialGroup({ fit = true } = {}) {
     if (document.getElementById(targetTabId)) {
         switchPaneTab(paneId, targetTabId, { persist: false });
     }
-    // 外层可见性：只有分组数 >= 2 时才把各分组并排显示，否則其余分组要保持隐藏，
-    // 不然关掉分组后旧容器还在 flex 里占位。
+    // 外层可见性：未分屏时只显示激活分组那一条（下层只有一套标签行）；
+    // 已分屏时并排显示参与分屏的分组。关掉分组后旧容器必须一并隐藏，
+    // 否则它仍占着 flex-basis，表现为「关了一个分组但剩下那个只有半宽」。
     syncGroupWorkspaceVisibility();
     // 侧栏设置必须跟着切换：否则用户看到的是上一个分组的端口与参数，
     // 却以为改的是当前分组的。连接按钮同理，它代表的是当前这一个分组。
     applyGroupSerialOptionsToSidebar(activeGroupId);
+    updateSidebarActiveGroupLabel();
     refreshConnectButtonState();
     updateFilterModeStatuses();
     if (fit) fitWorkspaceTerminals();
+}
+
+// 更新侧栏顶部「当前控制的分组」标识。
+//
+// 多分组后左栏全部控件都只作用于 activeGroupId，而端口下拉框在多个分组都选了同一个
+// 端口时长得一模一样。这个标识是用户区分「我正在改哪个串口」的唯一恒定依据，
+// 因此除了分组名还要带上连接状态，避免误以为在改一个已连接的分组。
+function updateSidebarActiveGroupLabel() {
+    const nameEl = document.getElementById('sidebar-active-group-name');
+    if (!nameEl) return;
+    const group = getSerialGroupById(activeGroupId);
+    const title = group?.title || tr('main.mainTerminal');
+    nameEl.textContent = title;
+    nameEl.title = title;
+    const container = document.getElementById('sidebar-active-group');
+    if (container) {
+        container.dataset.groupId = activeGroupId;
+        container.dataset.connected = group?.status === 'connected' ? 'true' : 'false';
+    }
 }
 
 // 切换到一个 Shell 标签。
@@ -5352,6 +5647,7 @@ function applyMainInputConfig(config) {
 
 bindMainInputEvents();
 bindWorkspaceSplitter();
+bindGroupWorkspaceSplitter();
 bindWorkspacePaneTransitionFit();
 bindShellSidebarEvents();
 bindSidebarToolbarEvents();
