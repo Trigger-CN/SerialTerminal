@@ -164,8 +164,12 @@ test('expanded sidebar clears serial logs and includes Shell only when configure
   assert.match(html, /id="clear-all-logs-btn"[^>]*data-i18n-title="main\.clearAllLogs"[^>]*data-i18n-aria-label="main\.clearAllLogs"/);
   assert.match(styles, /\.sidebar-clear-actions\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 34px;/s);
   const clearAllLogTabs = renderer.match(/function clearAllLogTabs\(\) \{[\s\S]*?\n\}/)?.[0] || '';
-  assert.match(clearAllLogTabs, /clearTerminalByTabId\('tab-main'\)/);
-  assert.match(clearAllLogTabs, /filterTabs\.forEach\(tab => clearTerminalByTabId\(tab\.id\)\)/);
+  // 清理范围必须按分组展开：每个分组都有自己的主标签与过滤页。
+  // 原先断言写死的 'tab-main' 与模块级 filterTabs 只能覆盖一个分组，
+  // 而按钮名字承诺的是「所有 Log 标签页」——这是实现修正，不是放宽断言。
+  assert.match(clearAllLogTabs, /serialGroups\.forEach\(group => \{/);
+  assert.match(clearAllLogTabs, /clearTerminalByTabId\(mainTabId\(group\.id\)\)/);
+  assert.match(clearAllLogTabs, /filterTabsStore\.getList\(group\.id\)\.forEach\(tab => clearTerminalByTabId\(tab\.id\)\)/);
   assert.match(clearAllLogTabs, /currentConfig\?\.clearAllLogsIncludesShell === true/);
   assert.match(clearAllLogTabs, /shellTabs\.forEach\(tab => clearTerminalByTabId\(tab\.id\)\)/);
   assert.match(renderer, /clearAllLogsBtn\?\.addEventListener\('click', clearAllLogTabs\)/);

@@ -1692,8 +1692,20 @@ dataParser = defaultSerialRuntime.dataParser;
 // xterm 重复 open 同一容器会重建 DOM 并丢掉已写入内容，且不报错。
 const mainTabButton = document.querySelector('.main-tab[data-target="tab-main"]');
 if (mainTabButton) {
+    // 必须按标签**所属分组**切换，不能用模块级别名：
+    // 静态 tab-main 属于默认分组，而切到 g-1 后别名指向 g-1 的布局，
+    // switchPaneTab 会在 g-1 里找 tab-main 而直接返回，表现为「点主标签没反应」。
+    //
+    // 也不能给 switchPaneTab 传 groupId：它只转交给模块级别名。
+    // 这里先把别名切到默认分组，切完再恢复。
     mainTabButton.addEventListener('click', () => {
-        switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
+        const savedGroupId = activeGroupId;
+        setActiveGroupWorkspace(REGISTRY_DEFAULT_GROUP_ID);
+        try {
+            switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main');
+        } finally {
+            setActiveGroupWorkspace(savedGroupId);
+        }
     });
 }
 
@@ -2074,12 +2086,27 @@ function getActivePane() {
     return workspaceManager.getActivePane();
 }
 
+// 以下两个是「模块级别名」的读法：读的是 `workspaceManager` 指向的那个分组。
+// 创建标签时用它们是对的——新标签就落在当前正在操作的分组里。
+// 但侧栏按钮必须用下面按 groupId 显式取的两个：侧栏控件作用于激活分组，
+// 而别名只在 `applyActiveSerialGroup()` 里被同步过，其它时序下可能已经指向别处。
 function getActiveTabId(fallbackTabId = 'tab-main') {
     return workspaceManager.getActiveTabId(fallbackTabId);
 }
 
 function getActiveTabInfo(fallbackTabId = 'tab-main') {
     return workspaceManager.getActiveTabInfo(fallbackTabId);
+}
+
+// 取指定分组自己的激活标签。侧栏的「清空当前终端」「保存当前标签」
+// 「搜索目标」必须走这个：用别名会让侧栏操作固定作用于别名指向的分组，
+// 而用户在界面上看到的是激活分组——两者不一致时按钮就「点错了串口」。
+function getGroupActiveTabId(groupId = REGISTRY_DEFAULT_GROUP_ID, fallbackTabId = 'tab-main') {
+    return getGroupWorkspaceManager(groupId).getActiveTabId(fallbackTabId);
+}
+
+function getGroupActiveTabInfo(groupId = REGISTRY_DEFAULT_GROUP_ID, fallbackTabId = 'tab-main') {
+    return getGroupWorkspaceManager(groupId).getActiveTabInfo(fallbackTabId);
 }
 
 function resolvePaneId(paneId, tabId, fallbackTabId = 'tab-main') {
@@ -2137,6 +2164,54 @@ window.__switchWorkspaceTab = switchPaneTab;
 // 它走的就是 ipcRenderer.on('terminal-context-menu-action') 的回调本身，
 // 所以验证到的是真实代码路径，而不是另写一套仅供测试的分支。
 window.__handleContextMenuAction = handleTerminalContextMenuAction;
+
+// 以下三个也只供 CDP 验证脚本使用。
+//
+// 侧栏按钮的验证难点在于：没有真实串口连接时无法让终端产生内容，而「清空」
+// 按钮的效果只能通过「内容还在不在」来判定。因此提供一个写哨兵/读哨兵的
+// 最小钩子，以及两个直接读侧栏所依赖数据的只读入口——它们与按钮内部调用的
+// 是同一个函数（getActiveSearchTarget / getActiveTerminalExport），不是另写的副本。
+// 注意：必须用 getOrCreate 而不是 getSerialTerm。
+// getSerialRuntime 在分组运行时尚未创建时会**回落到默认分组**，
+// 那样「写 g-1 的哨兵」会实际写进默认分组的终端，验证就变成恒真。
+window.__seedGroupSentinel = () => {
+    try {
+        const seed = (groupId, text) => {
+            const runtime = serialRuntimes.getOrCreate(resolveSerialGroupId(groupId));
+            runtime?.term?.write(`${text}\r\n`);
+            return Boolean(runtime?.term);
+        };
+        const okDefault = seed(REGISTRY_DEFAULT_GROUP_ID, 'SENTINEL_DEFAULT');
+        const okG1 = seed('g-1', 'SENTINEL_G1');
+        return { ok: okDefault && okG1, okDefault, okG1 };
+    } catch (error) {
+        return { ok: false, reason: String(error && error.message || error) };
+    }
+};
+
+window.__readGroupSentinels = () => {
+    const readTerm = groupId => {
+        try {
+            // 读也走 get()，不能走 getSerialTerm 的回落分支。
+            const runtime = serialRuntimes.get(resolveSerialGroupId(groupId));
+            const term = runtime?.term;
+            if (!term) return '';
+            const buffer = term.buffer.active;
+            let text = '';
+            for (let i = 0; i < buffer.length; i += 1) {
+                const line = buffer.getLine(i);
+                if (line) text += line.translateToString(true) + '\n';
+            }
+            return text;
+        } catch {
+            return '';
+        }
+    };
+    return { default: readTerm(REGISTRY_DEFAULT_GROUP_ID), g1: readTerm('g-1') };
+};
+
+window.__getActiveSearchTarget = getActiveSearchTarget;
+window.__getActiveTerminalExport = getActiveTerminalExport;
 
 function ensurePaneTabMembership(paneId, tabId) {
     return workspaceManager.ensurePaneTabMembership(paneId, tabId);
@@ -6649,15 +6724,31 @@ portSelect.addEventListener('change', () => {
     }
 });
 
+// 侧栏「清空当前终端」作用于**激活分组**。
+//
+// 不能用 getActiveTabInfo()：它读模块级别名 workspaceManager，只在
+// applyActiveSerialGroup() 里被同步过，其它时序下可能仍指向上一个分组。
+// 那会让侧栏按钮去清空用户看不到的那个终端。
 function clearActiveTerminal() {
-    const { tabId: activeTabId } = getActiveTabInfo();
+    const { tabId: activeTabId } = getGroupActiveTabInfo(activeGroupId);
     if (!activeTabId) return;
     clearTerminalByTabId(activeTabId);
 }
 
+// 侧栏「清空所有 Log 标签页」的清理范围必须按分组展开。
+//
+// filterTabs 与 shellTabs 都是模块级别名，只指向一个分组。直接遍历它们
+// 会让「清空所有」只清掉别名所在分组的那几页，其它分组的过滤页全部漏掉——
+// 而按钮名字承诺的是「所有」。
+//
+// 主标签同理：每个分组都有自己的主终端（tab-main / tab-main-<g>），
+// 必须逐个分组取 id，不能写死 'tab-main'。
 function clearAllLogTabs() {
-    clearTerminalByTabId('tab-main');
-    filterTabs.forEach(tab => clearTerminalByTabId(tab.id));
+    serialGroups.forEach(group => {
+        clearTerminalByTabId(mainTabId(group.id));
+        filterTabsStore.getList(group.id).forEach(tab => clearTerminalByTabId(tab.id));
+    });
+    // Shell 不归属任何分组，只清一次；是否包含 Shell 由设置项决定。
     if (currentConfig?.clearAllLogsIncludesShell === true) {
         shellTabs.forEach(tab => clearTerminalByTabId(tab.id));
     }
@@ -6672,12 +6763,17 @@ openLogFolderBtn.addEventListener('click', () => {
     setActionStatus('已打开日志文件夹');
 });
 
+// 侧栏「保存当前标签」同理必须按激活分组取终端与标签列表。
+//
+// 这里原本用的是 serialTerm（默认分组的 xterm 别名）与 filterTabs（别名），
+// 切到 g-1 后点保存，存下来的会是默认分组的主终端内容——日志文件名也错。
 function getActiveTerminalExport() {
-    const activeTabId = getActiveTabId();
-    if (activeTabId === 'tab-main') {
-        return { title: getMainTabTitle(), content: getTerminalPlainText(serialTerm) };
+    const groupId = activeGroupId;
+    const activeTabId = getGroupActiveTabId(groupId);
+    if (activeTabId === mainTabId(groupId)) {
+        return { title: getMainTabTitle(groupId), content: getTerminalPlainText(getSerialTerm(groupId)) };
     }
-    const filterTab = filterTabs.find(tab => tab.id === activeTabId);
+    const filterTab = filterTabsStore.getList(groupId).find(tab => tab.id === activeTabId);
     if (filterTab) {
         return { title: getFilterTabLogTitle(filterTab), content: getTerminalPlainText(filterTab.term) };
     }
@@ -6685,7 +6781,7 @@ function getActiveTerminalExport() {
     if (shellTab) {
         return { title: shellTab.title || getShellTabLogTitle(shellTab), content: getTerminalPlainText(shellTab.term) };
     }
-    return { title: getMainTabTitle(), content: getTerminalPlainText(serialTerm) };
+    return { title: getMainTabTitle(groupId), content: getTerminalPlainText(getSerialTerm(groupId)) };
 }
 
 document.getElementById('save-current-tab-btn').addEventListener('click', async () => {
@@ -6883,18 +6979,25 @@ function getTerminalSearchRevision(term) {
     return terminalSearchTrackers.get(term)?.revision || 0;
 }
 
+// 侧栏搜索的目标必须是**激活分组**的激活标签。
+//
+// 原先用 getActiveTabId() + serialTerm / filterTabs 别名：切到 g-1 后
+// 搜索仍然在默认分组的终端里找，用户看到的结果与实际屏幕无关。
+// addon 也从本分组的 runtime 取，不能借用默认分组的 serialSearchAddon。
 function getActiveSearchTarget() {
-    const activeTabId = getActiveTabId();
-    if (activeTabId === 'tab-main') {
+    const groupId = activeGroupId;
+    const activeTabId = getGroupActiveTabId(groupId);
+    if (activeTabId === mainTabId(groupId)) {
+        const runtime = getSerialRuntime(groupId);
         return {
-            id: 'tab-main',
-            label: tr('main.mainTerminal'),
-            term: serialTerm,
-            addon: serialSearchAddon
+            id: mainTabId(groupId),
+            label: getSerialGroupById(groupId)?.title || tr('main.mainTerminal'),
+            term: runtime?.term || null,
+            addon: runtime?.searchAddon || null
         };
     }
 
-    const filterTab = filterTabs.find(tab => tab.id === activeTabId);
+    const filterTab = filterTabsStore.getList(groupId).find(tab => tab.id === activeTabId);
     if (filterTab) {
         return {
             id: filterTab.id,
@@ -6914,11 +7017,12 @@ function getActiveSearchTarget() {
         };
     }
 
+    const runtime = getSerialRuntime(groupId);
     return {
-        id: 'tab-main',
-        label: tr('main.mainTerminal'),
-        term: serialTerm,
-        addon: serialSearchAddon
+        id: mainTabId(groupId),
+        label: getSerialGroupById(groupId)?.title || tr('main.mainTerminal'),
+        term: runtime?.term || null,
+        addon: runtime?.searchAddon || null
     };
 }
 

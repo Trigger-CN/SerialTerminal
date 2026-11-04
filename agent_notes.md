@@ -1356,6 +1356,44 @@ if (!isGroup && ((isChart && !chartTab) || (!isChart && !targetTerm && action !=
 
 **仍未验证**：`bindGroupWorkspaceSplitter()` 的真实鼠标拖动。CDP 的 `Input.dispatchMouseEvent` 可以模拟 pointer 事件，但拖动比例换算依赖真实 `getBoundingClientRect` 与 pointer capture，现有脚本未覆盖——**拖动逻辑目前只有静态审查**。
 
+### 侧栏控件按当前分组分发（已落地）
+
+**这是最容易反复错的一层**：`renderer.js` 里有三类「当前」读法，含义各不相同：
+
+| 读法 | 实际含义 | 适用场景 |
+|---|---|---|
+| `getActiveTabId()` / `getActiveTabInfo()` | 读 `workspaceManager` **别名**指向的分组 | 仅限「创建标签」（新标签应落在正在操作的分组） |
+| `serialTerm` / `serialSearchAddon` | **默认分组**运行时的常量别名 | 仅限默认分组专属逻辑 |
+| `filterTabs` / `chartTabs` | 模块级别名，只指向一个分组 | 仅在 `setActiveGroupTabLists()` 之后可信 |
+
+**别名只在 `applyActiveSerialGroup()` 里被同步过。** 侧栏按钮不保证在那个时序下被点击，所以必须按 `activeGroupId` 显式取。为此新增两个辅助函数（默认参数用常量 `REGISTRY_DEFAULT_GROUP_ID`，模块加载期安全）：
+
+```js
+function getGroupActiveTabId(groupId = REGISTRY_DEFAULT_GROUP_ID, fallbackTabId = 'tab-main') {
+    return getGroupWorkspaceManager(groupId).getActiveTabId(fallbackTabId);
+}
+function getGroupActiveTabInfo(groupId = REGISTRY_DEFAULT_GROUP_ID, fallbackTabId = 'tab-main') {
+    return getGroupWorkspaceManager(groupId).getActiveTabInfo(fallbackTabId);
+}
+```
+
+**已修的四处真实缺陷**（用户原话：`左边栏的一些按钮事件应该也没有按照当前选中的串口分组分发`）：
+
+1. **`clearActiveTerminal()`（「清空当前终端」）** —— 原用 `getActiveTabInfo()` 读别名，可能清掉用户看不到的那个终端。
+2. **`clearAllLogTabs()`（「清空所有 Log 标签页」）** —— 原 `clearTerminalByTabId('tab-main')` + `filterTabs.forEach(...)`：主标签写死 `tab-main` 只清默认分组，`filterTabs` 是别名只覆盖一组。**按钮名字承诺「所有」，实现只清了一组。** 改为按 `serialGroups` 展开。
+3. **`getActiveTerminalExport()`（「保存当前标签」）** —— 原用 `getActiveTabId()` + `serialTerm` + `filterTabs`。切到 g-1 后保存，拿到的是默认分组主终端的内容，日志文件名也错。
+4. **`getActiveSearchTarget()`（侧栏搜索目标）** —— 同上，切到 g-1 后搜索仍在默认分组终端里找。`addon` 也必须从本分组 runtime 取。
+
+**另一处同类缺陷**：静态 `#tab-main-button` 的 click 原写 `switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main')`。切到 g-1 后别名指向 g-1 布局，`switchPaneTab` 在 g-1 里找不到 `tab-main` 就直接 return —— **点默认分组的主标签没反应**。改为先把别名切到默认分组、切完在 `finally` 里恢复（`switchPaneTab` 只转交给别名，不能传 `groupId`）。
+
+**验证脚本的设计（关键）**：判据不是「代码里有没有 `activeGroupId`」，而是**两个分组各写一份可区分的内容，点按钮后被操作的是不是屏幕上那一个**。
+
+- 写哨兵用 `serialRuntimes.getOrCreate()`，**不能用 `getSerialTerm()`** —— 后者在分组运行时未创建时**会回落到默认分组**，那样「写 g-1 哨兵」实际写进默认分组，验证就变成恒真。
+- 读哨兵走 `serialRuntimes.get()`，同样不走回落分支。
+- **双向验证**：g-1 激活时清空 → g-1 哨兵消失、默认哨兵仍在；切回默认再清空 → 方向相反。**只测一个方向无法排除「写死某一组」这种实现。**
+
+**实测（`verify-sidebar-groups.js` 14/14、exit=0，`verify-sidebar-groups-out1.txt`，`userdata-diag7`）**：两分组建立、激活是 g-1、两个哨兵已写入、搜索目标是 `tab-main-g-1` 且有 term/addon、导出内容含 G1 不含 DEFAULT、清空按钮可见且可点、清空只删 G1 哨兵且保留 DEFAULT 哨兵、切回默认后激活正确、搜索目标是 `tab-main`、导出含 DEFAULT 不含 G1、清空删除 DEFAULT 哨兵。
+
 
 **验证脚本自身的一次失效（必记）**：`verify-shell.js` 第一版把「归一化到单分组」断言成 `.serial-group-tab` 数量 === 1，实测为 0。查 `renderSerialGroupTabBar()` 确认：单分组时 `barEl.hidden = true` 且 `listEl.replaceChildren()`，**列表本就是空的**。这是断言写错而非产品缺陷，按判据（改动不让被验证行为更正确）改为断「栏隐藏 + 列表为空」。
 

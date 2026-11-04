@@ -1115,6 +1115,8 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 - **默认分组主标签仍叫「主终端」已修正**：`syncAllGroupMainTabTitles()` 改用分组名并移除 `data-i18n`。CDP `verify-titles.js` 6/6。
 - **分组级分屏的 UI 入口已落地**：入口在分组标签的**右键菜单**（左右分屏 / 上下分屏 / 关闭分组分屏 / 添加串口），不在工具栏——分屏是低频带方向的开关，排成按钮会把标签栏挤满，而用户明确要求分组标签不挤在一起。链路为 `contextmenu` → `requestSerialGroupContextMenu` → `show-terminal-context-menu`（`terminalType: 'group'`）→ 主进程三段条件菜单模板 → `terminal-context-menu-action` → `handleTerminalContextMenuAction` 的四个 case。**CDP `verify-group-split.js` 19/19、exit=0**（`verify-group-split-out2.txt`，`userdata-diag6`）：两分组基线（1 条可见、分界条隐藏）→ 左右分屏（2 条可见、`flex-direction:row`、类名、分界条显示且位置正确、宽度 400/400 约等分）→ 上下分屏（2 条可见、`column`、类名、高度约等分）→ 关闭分屏（1 条可见、分界条隐藏、类名清空、无残留 flex-basis 且占满 799px）。
 - **修掉两处只有真实点击能发现的静默缺陷**：① `setGroupWorkspaceSplit(false)` 原先只 reset 状态对象、不重写 DOM，关闭后 `flex-direction` 仍是 `column`、方向类名仍存在；② CSS 里写的是 `.group-workspace.split-vertical`，而 JS 切的是 `group-split-vertical`——**类名不匹配不会报任何错，只是上下分屏完全不生效**。两者均已修正。
+- **侧栏控件按当前分组分发已修正**：用户怀疑的「左边栏按钮事件没按选中分组分发」属实，共四处：`clearActiveTerminal()`（清空当前终端）、`clearAllLogTabs()`（清空所有 Log 标签页——原写死 `tab-main` 且只用模块级 `filterTabs`，**按钮名字承诺「所有」实际只清了一组**）、`getActiveTerminalExport()`（保存当前标签——切到 g-1 后存下来的是默认分组的内容）、`getActiveSearchTarget()`（搜索目标——切到 g-1 后仍在默认分组终端里找）。另修静态 `#tab-main-button` 的 click：切到 g-1 后它在 g-1 布局里找不到 `tab-main` 直接 return，表现为「点默认分组主标签没反应」。**CDP `verify-sidebar-groups.js` 14/14、exit=0**（`verify-sidebar-groups-out1.txt`，`userdata-diag7`）：两个分组各写一份哨兵，g-1 激活时清空只删 g-1 的、保留默认的；切回默认再清空则方向相反。
+
 
 
 
