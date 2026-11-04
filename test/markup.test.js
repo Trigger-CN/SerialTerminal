@@ -612,10 +612,13 @@ test('chart tabs discover sample fields and consume raw serial bytes independent
   assert.match(main, /ipcMain\.handle\('chart-parser-discover'/);
   assert.match(main, /const chartParserClients = new Map\(\)/);
   assert.match(main, /function closeChartParserClients\(webContentsId\)/);
-  assert.match(renderer, /chartTabs\.forEach\(tab => tab\.stream\?\.write\(buffer, receivedAt\)\)/);
+  // P5：图表页按分组各一份，写入时取**本批字节所属分组**的列表，
+  // 因此不再是模块级别名 chartTabs（那个只指向激活分组）。
+  assert.match(renderer, /chartTabsStore\.getList\(groupId\)\.forEach\(tab => tab\.stream\?\.write\(buffer, receivedAt\)\)/);
   assert.match(renderer, /function persistChartTabs\(\)/);
   assert.match(renderer, /buildChartCsv\(samples, tab\.model\.fields\)/);
-  assert.match(renderer, /chartTabs\.forEach\(clearChartDataSession\)/);
+  // 同样按分组清图表离线数据，不再限定激活分组。
+  assert.match(renderer, /chartTabsStore\.getList\(targetGroupId\)\.forEach\(clearChartDataSession\)/);
   assert.match(renderer, /terminalType: 'chart'/);
   assert.match(renderer, /case 'toggle-chart-paused'/);
   assert.match(renderer, /exportChartSamples\('window', chartTab\)/);

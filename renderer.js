@@ -43,6 +43,7 @@ const { SerialDataParser } = require('./serial-data-parser');
 const { mainTabId, mainTabButtonId, serialContainerId } = require('./serial-group-dom');
 const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { SerialOutputBuckets } = require('./serial-output-buckets');
+const { createGroupTabListStore } = require('./serial-group-tab-lists');
 const { addSerialGroup, removeSerialGroup } = require('./serial-groups-model');
 const { describeGroupTabBar } = require('./serial-group-tab-bar');
 const { ChartView } = require('./chart-view');
@@ -824,10 +825,10 @@ function writeTextLines(groupId, lines) {
         writeTerminalOutput(runtime.term, mainOutput);
         writeMainTabLog(formattedLines.map(line => `${line.logPrefix}${line.highlighted}${line.delimiter}`).join(''), id);
     }
-    // 过滤标签页全应用只有一份，只跟随激活分组；按分组各一份是后续阶段的工作。
-    // 若不加这道判断，g-2 的字节会同时写进 g-1 的过滤页与日志。
-    if (!isActiveSerialGroup(id)) return;
-    filterTabs.forEach(tab => {
+    // P5：过滤页按分组各一份，所以这里取**本批字节所属分组**的过滤页列表，
+    // 而不是模块级别名（那个只指向激活分组）。P3 的 isActiveSerialGroup 临时
+    // 边界已移除：它会让非激活分组在那段时间的过滤数据永久丢失。
+    filterTabsStore.getList(id).forEach(tab => {
         if (tab.showSentOnly === true || tab.dataMode !== 'text') return;
         const formatted = formattedLines.map(({ text, delimiter, prefix, logPrefix, globalMatches }) => {
             if (tab.filterRegex && !tab.filterRegex.test(text)) return null;
@@ -863,8 +864,8 @@ function writeHexLines(groupId, lines) {
     const mainOutput = formattedLines.map(({ text, prefix }) => `${prefix}${text}\r\n`).join('');
     writeTerminalOutput(runtime.term, mainOutput);
     writeMainTabLog(formattedLines.map(({ text, logPrefix }) => `${logPrefix}${text}\r\n`).join(''), id);
-    if (!isActiveSerialGroup(id)) return;
-    filterTabs.forEach(tab => {
+    // 同 writeTextLines：HEX 路径也必须取本分组自己的过滤页。
+    filterTabsStore.getList(id).forEach(tab => {
         if (tab.showSentOnly === true || tab.dataMode !== 'hex') return;
         const matched = formattedLines.map(({ text, prefix, logPrefix, globalMatches }) => {
             if (tab.filterRegex && !tab.filterRegex.test(text)) return null;
@@ -1680,11 +1681,35 @@ bindTerminalContextMenu({
 bindTerminalWheel(serialTerm, serialContainerEl);
 
 // Filter Tabs Management
-let filterTabs = [];
+//
+// `filterTabs` / `chartTabs` 从 P5 起**每个串口分组各一份**。做法与 P4 把四个显示
+// 参数下沉时完全同构：把真实存储交给 store，模块级这两个 `let` 只作为「指向当前分组那个
+// 数组」的别名。切换分组时改指向即可——现有 54 处 `filterTabs.forEach/.find/.push`
+// 一行都不用改。
+//
+// 为什么这两个 `let` 必须保留（而不是全部改成 getGroupTabList(groupId)）：
+// 消费点分布在渲染、日志、导出、右键菜单、图表写入等几十处，逐处改 groupId 的
+// 漏改代价是「标签写进了别的分组」这类不会报错的缺陷。别名方案把风险集中在
+// setActiveGroupTabLists() 这一个函数上。
+const filterTabsStore = createGroupTabListStore({ defaultGroupId: REGISTRY_DEFAULT_GROUP_ID });
+const chartTabsStore = createGroupTabListStore({ defaultGroupId: REGISTRY_DEFAULT_GROUP_ID });
+let filterTabs = filterTabsStore.getList(REGISTRY_DEFAULT_GROUP_ID);
+let chartTabs = chartTabsStore.getList(REGISTRY_DEFAULT_GROUP_ID);
+
+// 把上面两个别名指向指定分组的数组。必须在切分组时调用，且必须**早于**任何
+// 该分组的标签读写——applyActiveSerialGroup() 的第一条语句就是它。
+//
+// 默认参数用常量 REGISTRY_DEFAULT_GROUP_ID 而不是 activeGroupId：本函数会在
+// 模块加载期被 syncSerialGroupsFromConfig 间接调用，那时 activeGroupId 还在 TDZ 里。
+function setActiveGroupTabLists(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    filterTabs = filterTabsStore.getList(id);
+    chartTabs = chartTabsStore.getList(id);
+    return { filterTabs, chartTabs };
+}
 let nextFilterTabId = 1;
 let shellTabs = [];
 let nextShellTabId = 1;
-let chartTabs = [];
 let nextChartTabId = 1;
 let renameTabState = null;
 const renameTabDialog = document.getElementById('rename-tab-dialog');
@@ -2218,6 +2243,45 @@ function normalizeSerialGroupState(groups) {
     return normalized;
 }
 
+// 把配置里每个分组自己的过滤页/图表页恢复进各自的桶。
+//
+// 为什么必须在这里做：applyConfig 上面那段只恢复默认分组（全局 config.filterTabs），
+// 其余分组的标签存在各自的 serialGroups[].filterTabs / .chartTabs 里。而 createFilterTab /
+// createChartTab 末尾是把标签 push 进**模块级别名**（当前激活分组那份数组），所以循环内
+// 必须先 setActiveGroupTabLists 切到该分组，否则所有分组的标签都会挤进同一个桶。
+//
+// 调用点的要求（比函数本身更容易写错）：必须在本函数所在函数体里、ensureSerialGroupMainTabDom
+// 逐个建完容器之后才能调，因为 createFilterTab 需要该分组的 pane 容器真实存在。
+function restorePerGroupTabsFromConfig(config) {
+    const groups = Array.isArray(config?.serialGroups) ? config.serialGroups : [];
+    const savedFlag = isRestoringWorkspaceSession;
+    const savedPaneId = activeGroupId;
+    isRestoringWorkspaceSession = true;
+    try {
+        groups.forEach(group => {
+            const id = resolveSerialGroupId(group && group.id);
+            // 默认分组已被 applyConfig 那段全局 config.filterTabs 逻辑恢复过；
+            // 这里用 count() 兜底，否则会出现两套一模一样的过滤页。
+            const filterConfigs = Array.isArray(group?.filterTabs) ? group.filterTabs : [];
+            const chartConfigs = Array.isArray(group?.chartTabs) ? group.chartTabs : [];
+            if (!filterConfigs.length && !chartConfigs.length) return;
+            if (filterTabsStore.count(id) > 0 && chartTabsStore.count(id) > 0) return;
+            setActiveGroupTabLists(id);
+            // paneId 暂时仍是全局 pane-1：每分组一套 pane 属于 Plan 3 的两级分屏接线，
+            // 现在传 groupPaneId 会让 createFilterTab 拿到尚不存在的容器而抛错。
+            if (filterTabsStore.count(id) === 0) {
+                filterConfigs.forEach(tabConfig => createFilterTab(tabConfig, 'pane-1'));
+            }
+            if (chartTabsStore.count(id) === 0) {
+                chartConfigs.forEach(tabConfig => createChartTab(tabConfig, 'pane-1'));
+            }
+        });
+    } finally {
+        setActiveGroupTabLists(savedPaneId);
+        isRestoringWorkspaceSession = savedFlag;
+    }
+}
+
 // 从配置里同步分组列表。只在首次加载与外部 config-updated 时调用。
 //
 // 关键：注册表必须对每个分组 ensureGroup，否则 serial-output-bytes 会以
@@ -2236,6 +2300,9 @@ function syncSerialGroupsFromConfig(config) {
     next.forEach(group => {
         ensureSerialGroupMainTabDom(group.id, group.title);
     });
+    // 每分组标签恢复必须排在 ensureSerialGroupMainTabDom 之后（容器已建）与
+    // applyActiveSerialGroup 之前（别名即将被切到 activeGroupId）。
+    restorePerGroupTabsFromConfig(config);
     renderSerialGroupTabBar();
     applyActiveSerialGroup({ fit: false });
 }
@@ -2390,6 +2457,11 @@ function refreshConnectButtonState() {
 function applyActiveSerialGroup({ fit = true } = {}) {
     activeGroupId = resolveSerialGroupId(activeGroupId);
     serialGroupRegistry.setActiveGroup(activeGroupId);
+
+    // 必须放在所有标签读写之前：把 `filterTabs` / `chartTabs` 这两个模块级别名
+    // 指向本分组的数组。若晚于 switchPaneTab，切换到目标标签时读到的仍是上一个
+    // 分组的列表，表现为「切了分组但过滤页数量没变」。
+    setActiveGroupTabLists(activeGroupId);
 
     // 标签栏：active 类与 aria-selected 必须同步，否则键盘/读屏看到的选中项
     // 与视觉上的高亮不一致。
@@ -2592,6 +2664,10 @@ function closeSerialGroup(groupId) {
     serialGroupIo.delete(id);
     serialOutputBuckets.clear(id);
     serialGroupContext.removeContext(id);
+    // 该分组的过滤页与图表页条目一起丢掉：removeList 直接删掉整个桶，
+    // 不需要先 clearList（那只会多一次原地清空）。
+    filterTabsStore.removeList(id);
+    chartTabsStore.removeList(id);
     serialGroupRegistry.removeGroup(id);
     document.getElementById(buttonId)?.remove();
     document.getElementById(tabId)?.remove();
@@ -3329,12 +3405,15 @@ function persistFilterTabs({ debounce = false } = {}) {
             wholeWord: tab.wholeWord,
             useRegex: tab.useRegex,
             dataMode: tab.dataMode,
-            dataMode: tab.dataMode,
             showSentOnly: tab.showSentOnly === true,
             paneId: tab.paneId || getTabPaneId(tab.id)
         }));
+        // P5：标签属于**具体分组**。同时写全局字段作兼容镜像——旧版配置里那里
+        // 有值，且未迁移的读取路径仍会看它；新建分组继承的就是默认分组的那一份。
+        const target = serialGroups.find(group => group && group.id === activeGroupId);
+        if (target) target.filterTabs = savedTabs;
         if (currentConfig) currentConfig.filterTabs = savedTabs;
-        ipcRenderer.send('save-config', { filterTabs: savedTabs });
+        ipcRenderer.send('save-config', { filterTabs: savedTabs, serialGroups });
     };
     if (persistFilterTabsTimer !== null) {
         clearTimeout(persistFilterTabsTimer);
@@ -3487,8 +3566,11 @@ async function exportChartSamples(scope, targetTab = chartExportState) {
 function persistChartTabs() {
     if (isApplyingConfig) return;
     const savedTabs = chartTabs.map(serializeChartTab);
+    // 与 persistFilterTabs 同一套双写：分组自己一份，全局字段作兼容镜像。
+    const target = serialGroups.find(group => group && group.id === activeGroupId);
+    if (target) target.chartTabs = savedTabs;
     if (currentConfig) currentConfig.chartTabs = savedTabs;
-    ipcRenderer.send('save-config', { chartTabs: savedTabs });
+    ipcRenderer.send('save-config', { chartTabs: savedTabs, serialGroups });
 }
 
 function getChartParserConfig(tab) {
@@ -5239,6 +5321,7 @@ function applyConfig(config) {
         }
     }
 
+
     if (normalizedWorkspaceLayoutKey !== lastAppliedWorkspaceLayoutKey) {
         restoreWorkspaceLayout(normalizedWorkspaceLayout, { persist: true });
         lastAppliedWorkspaceLayoutKey = JSON.stringify(cloneWorkspaceLayout(workspaceLayout));
@@ -5396,8 +5479,9 @@ ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     if (!bytes.length) return;
     const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const receivedAt = Number.isFinite(payload.receivedAt) ? payload.receivedAt : Date.now();
-    // 图表标签页目前只有一份，只跟随激活分组，否则两个分组的数据会画进同一张图。
-    if (isActiveSerialGroup(groupId)) chartTabs.forEach(tab => tab.stream?.write(buffer, receivedAt));
+    // 图表页同样按分组各一份：取本组自己的图表页，不再限定激活分组。
+    // 未激活分组的图表在后台继续收数据，切回去时曲线才是连续的。
+    chartTabsStore.getList(groupId).forEach(tab => tab.stream?.write(buffer, receivedAt));
     // 复用同一个 Buffer 视图，避免为同一段字节重复包装。
     queueSerialOutput(buffer, groupId);
 });
@@ -5864,7 +5948,8 @@ async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DE
         // serialSessionId 只在默认分组时同步，其它分组的会话号由注册表持有。
         const nextSessionId = serialGroupRegistry.beginSession(targetGroupId, connectResult?.sessionId);
         if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) serialSessionId = nextSessionId;
-        if (isActiveSerialGroup(targetGroupId)) chartTabs.forEach(clearChartDataSession);
+        // 新会话开始，该分组的图表离线数据必须清掉；与是否激活无关。
+        chartTabsStore.getList(targetGroupId).forEach(clearChartDataSession);
 
         ipcRenderer.send('save-config', {
             lastSerialOptions: {
