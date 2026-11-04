@@ -522,6 +522,7 @@ Object.assign(translations.en.main, { renameTab: 'Rename Tab', tabName: 'Tab Nam
 Object.assign(translations.en.main, {
   chart: 'Chart', newChartTab: 'New Chart Tab', chartSettings: 'Chart Settings', chartParserMode: 'Parser',
   chartAutoKeyValue: 'Automatic key-value', chartTemplate: 'Format template', chartRegex: 'Regular expression',
+  addSerialPort: 'Add Serial Port',
   chartLineMarker: 'Line marker', chartSeparator: 'Key/value separator', chartSeparatorAuto: 'Both (= and :)', chartSampleLine: 'Sample log line',
   chartFields: 'Discovered fields', chartFieldHint: 'Select numeric series to draw', chartNoFields: 'No numeric fields found',
   chartSelectField: 'Select at least one series', chartPaused: 'Paused', chartWaiting: 'Waiting for matching serial data',
@@ -546,6 +547,7 @@ Object.assign(translations['zh-CN'].main, {
   chart: '图表', newChartTab: '新建图表标签页', chartSettings: '图表设置', chartParserMode: '解析方式',
   chartAutoKeyValue: '自动键值', chartTemplate: '格式模板', chartRegex: '正则表达式',
   chartLineMarker: '行标记', chartSeparator: '键值分隔符', chartSeparatorAuto: '同时识别 = 和 :', chartSampleLine: '样例日志',
+  addSerialPort: '添加串口',
   chartFields: '发现的字段', chartFieldHint: '勾选需要绘制的数值系列', chartNoFields: '未发现数值字段',
   chartSelectField: '请至少选择一个数据系列', chartPaused: '已暂停', chartWaiting: '等待匹配的串口数据',
   chartSamples: '个样本', chartDropped: '条已丢弃', chartSummaryHistory: '降采样历史', chartParsingSample: '正在解析样例...',
@@ -586,6 +588,13 @@ Object.assign(translations['zh-CN'].main, {
   updateToastMessage: '新版本 {version} 已发布，请前往“设置 > 关于”进行更新。',
   closeUpdateToast: '关闭更新通知'
 });
+
+// addSerialPort 是分组栏与 pane 标签行共用的多串口入口，五种语言必须齐备：
+// test/i18n.test.js 以英文为 schema 要求所有语言覆盖同一套键。
+Object.assign(translations['zh-TW'].main, { addSerialPort: '新增串口' });
+Object.assign(translations.fr.main, { addSerialPort: 'Ajouter un port série' });
+Object.assign(translations.ru.main, { addSerialPort: 'Добавить последовательный порт' });
+Object.assign(translations.de.main, { addSerialPort: 'Seriellen Port hinzufügen' });
 
 Object.assign(translations.en.prefs, {
   shortcuts: 'Shortcuts', shortcutsSettings: 'Shortcut Settings', shortcutsHelp: 'Click a shortcut field and press a key combination. Backspace clears a shortcut.', resetShortcutDefaults: 'Reset Shortcut Defaults', shortcutDisabled: 'Disabled',

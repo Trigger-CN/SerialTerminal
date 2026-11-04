@@ -334,6 +334,8 @@ const workspaceSplitterEl = document.getElementById('workspace-splitter');
 const serialGroupTabBarEl = document.getElementById('serial-group-tab-bar');
 const serialGroupTabListEl = document.getElementById('serial-group-tab-list');
 const addSerialGroupBtn = document.getElementById('add-serial-group-btn');
+// 单层模式下唯一可见的多串口入口。它初始在 pane 标签行，多分组时被搬到分组栏。
+const addSerialGroupInlineBtn = document.getElementById('add-serial-group-inline-btn');
 let suppressMainInputFocus = false;
 const DEFAULT_SHORTCUTS = {
     sendMainInput: 'Ctrl+Enter',
@@ -1775,10 +1777,13 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
     const actions = document.createElement('div');
     actions.className = 'pane-tab-actions';
 
+    // 动态 pane 也要有「添加串口」入口。分组级分屏后每个分组的工作区都能增加 port，
+    // 只在静态 pane-1 提供会让 g-1 的分屏里找不到这个按钮。
     const buttonSpecs = [
         { kind: 'shell', icon: 'terminal', title: tr('main.newShellTab'), create: () => createShellTab({ profileId: getDefaultShellProfileId() }, paneId) },
         { kind: 'filter', icon: 'filter_alt', title: tr('main.newFilterTab'), create: () => createFilterTab({}, paneId) },
-        { kind: 'chart', icon: 'show_chart', title: tr('main.newChartTab'), create: () => createChartTab({}, paneId) }
+        { kind: 'chart', icon: 'show_chart', title: tr('main.newChartTab'), create: () => createChartTab({}, paneId) },
+        { kind: 'group', icon: 'add', title: tr('main.addSerialPort'), create: () => addSerialGroupFromUi() }
     ];
     buttonSpecs.forEach(spec => {
         const button = document.createElement('button');
@@ -1788,6 +1793,10 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
         button.title = spec.title;
         button.appendChild(createMaterialIcon(spec.icon, 'material-icon'));
         button.addEventListener('click', spec.create);
+        if (spec.kind === 'group') {
+            // 与静态按钮同一个类名，syncSerialGroupAddButtonLayer() 靠它就近重排。
+            button.classList.add('add-serial-group-entry');
+        }
         actions.appendChild(button);
     });
 
@@ -2867,6 +2876,25 @@ function renderSerialGroupTabBar() {
 
     // 分组标签重建完后才能搬 Shell：replaceChildren() 已经把上一轮搬上来的节点摘掉了。
     syncShellTabLayer();
+    syncSerialGroupAddButtonLayer();
+}
+
+// 决定「添加串口」按钮在哪一层。
+//
+// 单分组时分组栏是 hidden，若把入口只放在分组栏里，用户首次启动就找不到它，
+// 多串口根本无法从界面开启。因此按钮必须跟着当前可见的那一层走：
+//
+// - 多分组：留在分组栏（它代表「给分组层再加一个串口」）。
+// - 单分组：放到激活分组自己 pane 的标签行操作区。
+//
+// 只在容器不同时才搬，避免重复 appendChild 打乱操作按钮顺序。
+function syncSerialGroupAddButtonLayer() {
+    if (!addSerialGroupInlineBtn) return;
+    const groupActions = document.querySelector('.serial-group-tab-actions');
+    const paneActions = document.getElementById('pane-1-tab-actions');
+    const target = serialGroups.length > 1 ? groupActions : paneActions;
+    if (!target || addSerialGroupInlineBtn.parentElement === target) return;
+    target.appendChild(addSerialGroupInlineBtn);
 }
 
 // Shell 标签应该挂在哪一层：多分组时在分组层，单分组时回到 pane 标签行。
@@ -6349,7 +6377,12 @@ connectBtn.addEventListener('click', toggleSerialConnection);
 // ---- 多串口分组：UI 事件 -------------------------------------------------
 
 // 「添加串口」：新建分组后保持 disconnected，等用户手动点连接。
+// 两个入口共用同一个处理函数：静态那个在分组栏（多分组可见），
+// inline 那个在 pane 标签行（单分组可见），syncSerialGroupAddButtonLayer 负责搬移。
 addSerialGroupBtn?.addEventListener('click', () => {
+    addSerialGroupFromUi();
+});
+addSerialGroupInlineBtn?.addEventListener('click', () => {
     addSerialGroupFromUi();
 });
 

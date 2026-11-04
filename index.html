@@ -290,10 +290,14 @@
                     <div class="main-tabs-list pane-tabs-list" id="pane-1-tabs-list" role="tablist">
                         <button class="main-tab active" id="tab-main-button" type="button" role="tab" aria-controls="tab-main" aria-selected="true" data-target="tab-main" data-pane-id="pane-1" data-i18n="main.mainTerminal">Main Terminal</button>
                     </div>
-                    <div class="pane-tab-actions">
+                    <div class="pane-tab-actions" id="pane-1-tab-actions">
                         <button id="pane-1-new-shell-tab-btn" class="secondary pane-new-tab-btn" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
                         <button id="pane-1-new-filter-tab-btn" class="secondary pane-new-tab-btn" title="New Filter Tab" data-i18n-title="main.newFilterTab"><span class="material-icon-placeholder" data-material-icon="filter_alt"></span></button>
                         <button id="pane-1-new-chart-tab-btn" class="secondary pane-new-tab-btn" title="New Chart Tab" data-i18n-title="main.newChartTab"><span class="material-icon-placeholder" data-material-icon="show_chart"></span></button>
+                        <!-- 多串口入口。默认放在这里（单层标签行），因为分组栏在单分组时是 hidden：
+                             若只在分组栏里提供入口，用户首次启动就没法开启多串口。
+                             多分组时由 syncSerialGroupAddButtonLayer() 搬到分组栏，跟随所在层级。 -->
+                        <button id="add-serial-group-inline-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
                     </div>
                 </div>
                 <div class="main-tabs-content pane-tabs-content" id="pane-1-tabs-content">
