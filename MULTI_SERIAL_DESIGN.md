@@ -648,16 +648,17 @@ function syncShellTabLayer() {
 
 **退出分屏必须清 `flex-basis`**，否则上次比例残留，表现为「退出分屏后当前分组只占半宽」。**方向类名必须与 CSS 完全一致**：JS 切 `group-split-vertical` / `group-split-horizontal`，CSS 曾经写成 `.split-vertical`，类名不匹配**不报任何错**，只是上下分屏完全不生效。
 
-### 6A.3 Shell 归属：两态、逐标签、单一宿主入口
+### 6A.3 Shell 归属：三态（归属 × 是否独立成列）、逐标签、单一宿主入口
 
-归属存在**每个标签自己**身上，只有两态：
+归属存在**每个标签自己**身上，是「归属 × 是否独立成列」两个正交字段：
 
-| `tabState.ownerGroupId` | 含义 | 未分屏 | 已分屏 |
-| --- | --- | --- | --- |
-| `null` | 不归属任何分组（默认） | 激活列的上层行（与分组标签同级） | **自占一列**，该列只有一行标签栏 |
-| `<groupId>` | 归入该分组 | 该组的下层标签行 | 该组的下层标签行 |
+| `ownerGroupId` | `detachedColumn` | 含义 | 未分屏 | 已分屏 |
+| --- | --- | --- | --- | --- |
+| `null` | `false`（默认） | 不归属，与分组标签同级 | 激活列的上层行 | **所在列的列首行**（与分组标签同一行，不新开列） |
+| `null` | `true` | 不归属，用户拖到了分组标签行 | 激活列的上层行 | **自占一列**，该列只有一行标签栏 |
+| `<groupId>` | `false` | 归入该分组 | 该组的下层标签行 | 该组的下层标签行 |
 
-> **没有第三种「独立成组」状态。** 「独立成组」不是一种独立归属，而是 `null` 在**已分屏**下的必然形态。把它建模成独立状态会引出「未分屏却凭空多出一列」这种与用户期望相反的结果。
+> **`detachedColumn` 是新增的逐标签标记，不是一个新的归属值。** 早期把「不归属」一律当成「自占一列」，后果正是用户实测的那张错误布局图：新建一个 Shell 后开分屏，凭空多出一列 SHELL。现在默认与分组标签同级（两行标签相叠，而不是多一列），只有把 Shell 拖到某列的分组标签行上才独立成列——这保留了「自己成为独立一组」的能力，同时不再误解「与所有串口标签按行分屏」。
 
 `resolveShellTabHost(tabState)` 是宿主判定的**唯一入口**，返回 `{ listEl, contentEl, layoutGroupId, layer }`：
 
@@ -665,11 +666,13 @@ function syncShellTabLayer() {
 flowchart TD
   A["resolveShellTabHost(tabState)"] --> B{"serialGroups.length > 1 ?"}
   B -->|否| S1["layer = 'subRow'<br/>挂在 pane-1 的 pane-tabs-list<br/>（退回改造前的混排形态）"]
-  B -->|是| C{"groupWorkspaceSplit.enabled<br/>且 owner === null<br/>且 isShellColumnActive() ?"}
+  B -->|是| C{"owner === null<br/>且 detachedColumn === true<br/>且 isShellColumnActive() ?"}
   C -->|是| S2["layer = 'ownColumn'<br/>挂在 Shell 独立列的列首行<br/>该列无下层标签行"]
   C -->|否| D{"owner 非空且<br/>owner 那一列当前可见 ?"}
   D -->|是| S3["layer = 'subRow'<br/>挂在 owner 组的 pane-1 下层行"]
-  D -->|否| S4["layer = 'topRow'<br/>挂在激活列的上层行<br/>面板叠在同列 pane-1 内容区"]
+  D -->|否| D2{"owner 为 null ?"}
+  D2 -->|是| S4["layer = 'topRow'<br/>挂在可见列（单列时就是那一列）的上层行<br/>面板叠在同列 pane-1 内容区"]
+  D2 -->|否| S5["layer = 'topRow'<br/>宿主落在激活列<br/>（owner 列当前不可见）"]
 ```
 
 「owner 那一列当前可见」的判据：已分屏 → `groupWorkspaceSplit.groupIds.includes(owner)`；未分屏 → `owner === activeGroupId`。这个判据把「Shell 归属在另一个被隐藏的列」自动归到 `topRow`，正是修掉「点 Shell 跳到别的列、在用户看来像分屏」的关键。
@@ -682,13 +685,16 @@ flowchart TD
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | M1 单分组 | 1 | 关 | 无 | 唯一列 | **隐藏**（退回一层） | 可见（混排主/过滤/图表/Shell） | 该列 |
 | M2 多分组未分屏 | ≥2 | 关 | 无 | 仅激活列 | 可见（全部组标签） | 可见 | 该列 |
-| M3 多分组未分屏 | ≥2 | 关 | 有，均未归属 | 仅激活列 | 可见（组标签 + Shell） | **隐藏**（当且仅当该列正显示未归属 Shell） | 该列 |
+| M3 多分组未分屏 | ≥2 | 关 | 有，均未归属 | 仅激活列 | 可见（组标签 + Shell） | **可见**（始终可见，新建 Shell/过滤/图表入口在此） | 该列 |
 | M4 多分组未分屏 | ≥2 | 关 | 有，某 Shell 归入激活组 | 仅激活列 | 可见 | 可见（主/过滤/图表 + 该 Shell） | 该列 |
 | M5 多分组已分屏 | ≥2 | 开 | 无 | 参与组各一列 | 每列一条（只含自己那一个组标签） | 每列可见 | 每列 |
-| M6 多分组已分屏 | ≥2 | 开 | 有不归属的 Shell | 参与组各一列 + **Shell 列** | Shell 列一条（只有 Shell） | Shell 列**无** | 每列 |
+| M6 多分组已分屏 | ≥2 | 开 | 有不归属且被拖到分组标签行的 Shell | 参与组各一列 + **Shell 列** | Shell 列一条（只有 Shell） | Shell 列**无** | 每列 |
 | M7 多分组已分屏 | ≥2 | 开 | Shell 全归入各分组 | 参与组各一列 | 每列一条 | 每列可见 | 每列 |
+| M8 多分组已分屏 | ≥2 | 开 | 有未归属但**未**被拖到分组标签行的 Shell | 参与组各一列（**无额外列**） | 该 Shell 所在的某一列首行（列多时落在激活列） | 每列可见 | 每列 |
 
-**M3 的判据必须按 DOM 量**，不能读布局层的 `activeTabId`：上层栏的 Shell 不在任何 `pane.tabIds` 里，布局层会一直认为主标签是 active（详见 6A.6 的 D2）。现行实现 `isUnownedShellActiveIn(groupId)` 判的是「该 pane 内容区里存在 `ownerGroupId === null` 且带 `.active` 的 Shell 面板」。
+**M3 的下层行必须保持可见。** 早期它在「该列正显示未归属 Shell」时被整条隐藏，结果是新建 Shell 之后按钮与过滤/图表入口一起消失，用户只能关掉 Shell 才找得到它们（实测报告）。现在两层同时显示：上层行是分组标签与未归属 Shell，下层行始终属于本列的串口标签。
+
+**M8 是分享修复前曾经出错的形态**：`isShellColumnActive()` 只看「分屏且有未归属 Shell」，于是凭空多出一列。「存在未归属 Shell」不再是建列的充分条件，`detachedColumn` 才是。
 
 **M2 的「上层行渲染全部组标签」是靠一条静态行借位实现的**：`#serial-group-tab-bar` 不复制多份，未分屏时被搬到激活列首、渲染全部组标签；已分屏时留在默认列、只渲染默认组自己那一个，其它列各有一条自己的行。因此「一列里必有两条 `.group-tab-row`（自己那条 + 借来的）」，断言只能写「**可见**行恰好一条」。
 
@@ -1506,6 +1512,14 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
   - 回归中又修掉一处第 8 项自己引入的缺陷：`closeSerialGroup()` 里的 `document.getElementById(groupWorkspaceContainerId(id))?.remove()` 被误删，导致关组后列容器永远留在 DOM（只是 `hidden`）。诊断证实残留的是 `serial-group-workspace-g-1` 而非 shell 列。
   - 一处断言按判据更新：`verify-shell.js` 的「点 Shell 后默认分组被亮出」→「点 Shell 后面板所在列可见」（面板现在渲染在激活列，这是设计使然，不是回归）。
   - **仍未验证**：Shell 归入某分组后的长期行为（关组回落、多次切分组）只有 DOM 层证据，没有真实双端口端到端验证。
+
+- **Shell 的两处布局缺陷已修复（`10f3bd5`）**。用户实测报告两条：创建 Shell 后上一个串口分组标签点不动、且新建 Shell 按钮看不见；已有未归属 Shell 时让某分组左右分屏，结果变成了「三列串口 + 一列 SHELL」，而正确布局是「分组标签 + Shell 标签同一行」。
+  - **点不动**的根因不是点击分派：`createShellTab` 结尾会把 Shell 切为 pane-1 的激活标签，而 `revealSerialGroupActiveTab()` 把布局层的 `activeTabId` 直接当成「要抬回的串口标签」，于是「点当前分组标签」等于把 Shell 重新点亮。现在它确认目标是串口标签，否则回退到该 pane 上次的串口标签（`lastSerialTabByPane`，由 `switchPaneTab` / `setActivePane` / `activateShellTabInHost` 维护）或主标签。
+  - **按钮看不见**的根因是层级归属：多分组时唯一入口在 pane-1 的 pane 行，而那条行在「正显示未归属 Shell」时被整条隐藏。现在 `index.html` 的静态分组行新增 `#add-shell-tab-btn`（由 `placeShellAddButton` 跟随可见分组标签行搬移、`reclaimShellAddButton` 在关列前抢回、`syncShellAddButtonVisibility` 保证单分组时只剩 pane 行那个），并且 `syncGroupSubRowVisibility` 不再隐掉下层行。默认三列（`PASS` 13 项）：单分组按钮在 pane 行、多分组建 Shell 后按钮在上层行可见、可切到另一个分组也可切回且看到串口终端、分屏不产生额外 Shell 列、未归属 Shell 落在分组列首行。
+  - **多出一列**的根因是判据太宽：`isShellColumnActive()` 只看「分屏 + 有未归属 Shell」。新增逐标签标记 `tabState.detachedColumn`，只有把 Shell 拖到某列分组标签行才置真；`resolveShellTabHost()` 据此分流，默认与分组标签同级。`persistShellTabs` 一并保存该标记，旧配置缺失时按 `false` 读（即「与分组标签同级」）。
+  - **同时修正一处更隐蔽的缺陷**：`resolveShellTabHost()` 尾部原先写 `const visibleColumn = groupWorkspaceSplit.enabled ? activeGroupId : activeGroupId`（两个分支完全相同），已改为 `getSingleVisibleGroupId() || activeGroupId`，使「未分屏时 Shell 跟随唯一的可见列」不再依赖巧合。
+  - 新增 CDP `verify-shell-buttons-split.js` **13/13**（`diag195`/`diag242`）。因语义变更更新四处旧断言并注明原因：`verify-user-paths` 与 `verify-group-columns` / `verify-shell-drag` 的「未归属 Shell 自占一列」，以及两处「上层 Shell 隐藏下层行」。全量回归 `run-all-230.txt`：13 个脚本全部 exit=0（`verify-same-port-guard` 因 `COM6` 被占用按脚本设计 skip，fail=0），合计 15+37+16+19+14+17+14+13 项断言 0 失败。
+  - **仍未验证**：真实双击/双击拖动下的「新建 Shell 后紧接着拖动另一个 Shell」的时序；多个未归属 Shell 在分屏下的具体列选择（现为激活列，没有更优的确定性规则）。
 
 
 

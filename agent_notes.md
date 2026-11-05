@@ -1940,6 +1940,88 @@ SUMMARY total=15 pass=15 fail=0 skip=0
 
 **尚未验证**：per-group 作用域下两个分组**同时收数据**时各自的前缀与发送回显。现有证据只是 `getPrefix()` 的直接调用输出，没有真实双端口字节流。
 
+
+### 13A.12 Shell 标签的两个布局缺陷：点不动分组标签 + 分屏多出一列
+
+**用户实测报告**（逐字）：
+
+> 两个问题：1. 创建shell标签后，上次的串口标签点不动了没法切换，并且选中shell标签后创建shell按钮就不可见了，因为他藏在了其他的串口标签栏中，shell新建按钮应该移入到上层标签栏
+>
+> 2. 当标签布局类似这样时，我让COM2进行左右分屏 …… 会变成下面这样 …… 正确的应该是下面这样
+
+用户同时给了两张 ASCII 布局图：错误形态是「三列串口 + 一列 SHELL」，正确形态是「COM1 / SHELL1 / SHELL2 同一行，COM2 另起一列」。
+
+#### 一、先取证，不猜（三个诊断脚本）
+
+| 脚本 | profile | 确认的事实 |
+| --- | --- | --- |
+| `diag-shell-split.js` | `diag190` | 建一个 Shell 后开左右分屏，`#group-workspace` 下出现 **4 列**：`default`（隐藏）、`g-1`、`g-2`、`__shell__`。壳体形态与用户「会变成下面这样」完全一致 |
+| `diag-shell-stuck.js` | `diag191` | Shell 创建后 `headerHidden=true`、`activePanes=['tab-shell-1']`；点当前激活分组标签后**两者都不变**；`elementFromPoint` 显示点击命中的确实是 `tab-group-default-button`（不是被遮） |
+| `diag-shell-error.js` | `diag193` | 同一操作序列先切到 g-1 再建 Shell，随后点 default 标签可以切过去。差别就在于「点当前分组标签」走的是 `activateSerialGroup()` 的**同组分支**（`revealSerialGroupActiveTab`），而跨组走的是完整重排 |
+
+三次取证各化了几分钟，但把「点不动」从「猜事件没绑上」直接推到「`reveal` 拿到的是 Shell 自己」，省掉了整轮盲目修改。
+
+#### 二、三个根因
+
+1. **点不动**：`createShellTab()` 结尾会 `switchPaneTab(pane-1, tab-shell-1)`，把布局层 pane-1 的 `activeTabId` 变成 Shell；而 `revealSerialGroupActiveTab()` 直接用这个值当「要抬回的串口标签」，于是 `hideStackedShellTabsIn(paneId, tab-shell-1)` 把 Shell 自己重新点亮。切到**另一个**分组能好，是因为那条路径走的是 `applyActiveSerialGroup()` 的完整重排。
+2. **按钮看不见**：多分组时唯一入口是 pane-1 的 pane 行（`#pane-1-new-shell-tab-btn`），而 `syncGroupSubRowVisibility()` 在 `isUnownedShellActiveIn()` 为真时把**整条** pane 行 `hidden`，按钮连同过滤/图表入口一起消失。
+3. **多出一列**：`isShellColumnActive()` 的判据是「分屏 + 有未归属 Shell」，`resolveShellTabHost()` 也把未归属一律映射成 `ownColumn`。两者都把「不归属」当成了「独立成列」。
+
+#### 三、修法
+
+| 缺陷 | 改法 |
+| --- | --- |
+| 点不动 | `revealSerialGroupActiveTab()` 增加「目标必须是串口标签」的断言，否则回退到 `lastSerialTabByPane`（由 `switchPaneTab` / `setActivePane` / `activateShellTabInHost` 维护）或主标签 |
+| 按钮看不见 | `index.html` 静态分组行新增 `#add-shell-tab-btn`；`placeShellAddButton()` 让它跟随**可见**分组标签行（与 `placeGroupAddButton` 同一套锚点）；`reclaimShellAddButton()` 在关列前抢回；`syncShellAddButtonVisibility()` 保证单分组时只剩 pane 行那个。同时 `syncGroupSubRowVisibility()` 不再隐掉下层行 |
+| 多出一列 | 新增逐标签 `tabState.detachedColumn`。只有**把 Shell 拖到分组标签行**才置真；`isShellColumnActive()` / `resolveShellTabHost()` 都按这个标记分流；`persistShellTabs` 一并保存（旧配置缺失按 `false`） |
+
+还修了一处更隐蔽的问题：`resolveShellTabHost()` 尾部原先写 `const visibleColumn = groupWorkspaceSplit.enabled ? activeGroupId : activeGroupId`（两个分支完全相同），改成 `getSingleVisibleGroupId() || activeGroupId`，让「未分屏时 Shell 跟随唯一的可见列」不再依赖巧合。
+
+#### 四、验证
+
+`verify-shell-buttons-split.js` **13/13**（`diag195`、`diag242`）：
+
+- 单分组建——pane 行按钮可见、分组行按钮隐藏；
+- 建三个分组——标签数正确；
+- 建 Shell——新建按钮**可见且在上层行**、Shell 标签在分组行；
+- 点另一个分组——`activeGroupId` 真的变了；
+- 点回默认——`activePanes` 回到 `tab-main`（不再停在 `tab-shell-1`），下层行可见；
+- 左右分屏——`shellColumns === 0`、两列可见、每列一条可见分组行、未归属 Shell 只出现在其中一列的列首行。
+
+全量：`npm test` **492/492**；13 个 CDP 脚本全量回归（`run-all-230.txt`）全部 `exit=0`，`renderer-diag=clean`。`verify-same-port-guard` 这次 `exit=2`——原因是 `COM6` 被其它进程占用，脚本按设计 `SKIP` 并给出 `fail=0 skip=1`，不是回归。
+
+#### 五、四处过期断言（改断言，不改实现）
+
+语义一变，四个脚本的旧断言立刻失败。判定标准仍是那条：**改动是否让被验证的行为本身变得更正确**——这里是用户明确要求改变布局，因此改断言并在注释里写明原因：
+
+| 脚本 | 旧断言 | 新断言 |
+| --- | --- | --- |
+| `verify-user-paths` | `split-unowned-shell-gets-own-column` | `split-unowned-shell-stays-in-group-column-row` |
+| `verify-group-columns` | `unowned-shell-gets-own-column-when-split` | `unowned-shell-stays-in-group-column-row` |
+| `verify-shell-drag` | `split-unowned-shell-gets-own-column` | `split-no-extra-shell-column` + `split-unowned-shell-sits-in-a-column-top-row` |
+| `verify-user-paths` / `verify-shell-switchback` | `shell-in-top-row-hides-sub-tab-row` | `...-keeps-sub-tab-row-visible` |
+
+两个**脚本自身**的 bug 也一并修了（都是断言报错而非产品缺陷）：
+
+1. `verify-group-columns.js` 的旧段落先 `layout()` 再引用一个根本没声明过的 `shellAfter`，被我第一次改动掩盖成 `shellAfter is not defined`。现改为「在已分屏状态下点 `#add-shell-tab-btn` 建 Shell，再断言宿主不在 `__shell__` 列」。
+2. `verify-shell-drag.js` 原先拖到 id 为 `serial-group-tab-bar` 的**静态**行；分屏时那一行可能整行隐藏，改为「找当前真正可见的那条分组标签行」。
+
+#### 六、本轮又一次自伤（必记）
+
+改动 `buildGroupTabButton` 上方的注释时，`File.Edit` 的 replace 区间把 `function buildGroupTabButton(tab) {` 与紧随其后的 `const button = document.createElement('button');` 一并吞掉，只剩 `button.className = ...`。
+
+- `node --check` **通过**（语法合法）；
+- 模块加载门禁 **通过**（函数体不在模块加载期执行）；
+- 只有真实启动后的 `[RENDERER DIAGNOSTIC]` 报 `Uncaught ReferenceError: button is not defined`（`renderer.js:4172`，在 `renderSerialGroupTabBar` 的 `model.tabs.forEach` 里被调）。
+
+这是 **13A.11 坑 1 的第二次复现**。结论不变且要更严：结构性编辑后立刻 `node --check` **并回读被改函数的完整头部三行**；任何会新建按钮/元素的函数，必须真实启动一次并看 `app-diagNN-err.log`。
+
+#### 七、仍未验证
+
+- 「新建 Shell 后紧接着拖动另一个 Shell」的真实鼠标时序（现有证据是 API 级与合成事件）；
+- 多个未归属 Shell 在分屏下的具体列选择——现为激活列，没有更优的确定性规则；
+- 真实双端口字节流下 Shell 与串口终端共存时的 xterm `fit()` 尺寸。
+
 ---
 
 ## 14. AI 接手时建议的工作流程
