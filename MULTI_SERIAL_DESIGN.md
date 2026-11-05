@@ -697,15 +697,14 @@ flowchart TD
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | M1 单分组 | 1 | 关 | 无 | 唯一列 | **隐藏**（退回一层） | 可见（混排主/过滤/图表/Shell） | 该列 |
 | M2 多分组未分屏 | ≥2 | 关 | 无 | 仅激活列 | 可见（全部组标签） | 可见 | 该列 |
-| M3 多分组未分屏 | ≥2 | 关 | 有，均未归属 | 仅激活列 | 可见（组标签 + Shell） | **可见**（始终可见，新建 Shell/过滤/图表入口在此） | 该列 |
+| M3 多分组未分屏 | ≥2 | 关 | 有，均未归属 | 仅激活列 | 可见（组标签 + Shell） | 可见（过滤/图表入口在此；新建 Shell 已由 §6A.8 迁到上层行） | 该列 |
 | M4 多分组未分屏 | ≥2 | 关 | 有，某 Shell 归入激活组 | 仅激活列 | 可见 | 可见（主/过滤/图表 + 该 Shell） | 该列 |
 | M5 多分组已分屏 | ≥2 | 开 | 无 | 参与组各一列 | 每列一条（只含自己那一个组标签） | 每列可见 | 每列 |
 | M6 多分组已分屏 | ≥2 | 开 | 有不归属且被拖到分组标签行的 Shell | 参与组各一列 + **Shell 列** | Shell 列一条（只有 Shell） | Shell 列**无** | 每列 |
 | M7 多分组已分屏 | ≥2 | 开 | Shell 全归入各分组 | 参与组各一列 | 每列一条 | 每列可见 | 每列 |
 | M8 多分组已分屏 | ≥2 | 开 | 有未归属但**未**被拖到分组标签行的 Shell | 参与组各一列（**无额外列**） | 该 Shell 所在的某一列首行（列多时落在激活列） | 每列可见 | 每列 |
 
-**M3 的下层行必须保持可见。** 早期它在「该列正显示未归属 Shell」时被整条隐藏，结果是新建 Shell 之后按钮与过滤/图表入口一起消失，用户只能关掉 Shell 才找得到它们（实测报告）。现在两层同时显示：上层行是分组标签与未归属 Shell，下层行始终属于本列的串口标签。
-
+**M3 的下层行必须保持可见。** 早期它在「该列正显示未归属 Shell」时被整条隐藏，结果是新建 Shell 之后按钮与过滤/图表入口一起消失，用户只能关掉 Shell 才找得到它们（实测报告）。现在两层同时显示：上层行是分组标签与未归属 Shell，下层行始终属于本列的串口标签。下层行里的「新建 Shell」按钮只在单分组时才有意义，多分组时它被 `syncShellAddButtonVisibility()` 整体隐藏（见 §6A.8）。
 **M8 是分享修复前曾经出错的形态**：`isShellColumnActive()` 只看「分屏且有未归属 Shell」，于是凭空多出一列。「存在未归属 Shell」不再是建列的充分条件，`detachedColumn` 才是。
 
 **M2 的「上层行渲染全部组标签」是靠一条静态行借位实现的**：`#serial-group-tab-bar` 不复制多份，未分屏时被搬到激活列首、渲染全部组标签；已分屏时留在默认列、只渲染默认组自己那一个，其它列各有一条自己的行。因此「一列里必有两条 `.group-tab-row`（自己那条 + 借来的）」，断言只能写「**可见**行恰好一条」。
@@ -795,6 +794,53 @@ Shell 叠在上层时下层标签行是被**故意**隐掉的（否则就是「S
 | `isSyncingShellLayer` | 重入闸 | `placeShellTabs → addTabToPane → applyLayoutToDom → onLayoutApplied → syncShellTabLayer` 成环，必须拦 |
 
 **最容易被破坏的一条**：`resolveVisibleGroupWorkspaceEntryIds()` 只能由「分屏集合 + 激活列 + `isShellColumnActive()` 时的 Shell 列」三部分构成。任何「因为某个 Shell 归属在那一列，所以把那一列也点亮」的写法都会在未分屏时造出第二列——而 `applyGroupWorkspaceSplitLayout()` 在 `!isSplit` 时直接 return，两列各占 `flex: 1 1 0`，**肉眼与真正的左右分屏完全一致**，但 `groupWorkspaceSplit.enabled` 仍是 `false`。
+
+### 6A.8 新建 Shell 按钮的层级
+
+「新建 Shell」在两层标签栏里**恰好有一个可见入口**，位置随层数切换：
+
+| 模式 | 一层（`.group-tab-row` 的 `.serial-group-tab-actions`） | 二层（`.pane-tabs-header` 的 `.pane-tab-actions`） |
+| --- | --- | --- |
+| 多分组（`serialGroups.length > 1`） | `#add-shell-tab-btn` **可见**，且是唯一入口 | 全部 `*-new-shell-tab-btn` `hidden = true` |
+| 单分组 | 整条分组标签行 `hidden`（`describeGroupTabBar()` 的 `hidden: !isMultiGroup`） | 保持原样，`#pane-1-new-shell-tab-btn` 是唯一入口 |
+
+**单分组为什么例外**：界面只有一层，分组标签行整体不可见。若也隐掉 pane 行那个按钮，用户就永远开不出第一个 Shell。
+**多分组为什么只留一层**：一层按钮在未分屏时跟着激活列走，分屏时由 `placeShellAddButton()` 搬到激活列的列首行，位置本身就是「当前受控分组」的自然结果；二层每列各一个则会在分屏后变成三四个重复入口（用户实测反馈）。
+**两层不是同时显示两个**：任一时刻恰有一个。
+
+#### 6A.8.1 五个产生点
+
+| # | 位置 | 何时产生 |
+| --- | --- | --- |
+| 1 | `index.html` 静态 `#pane-1-new-shell-tab-btn` | 始终存在（pane-1 行） |
+| 2 | `index.html` 静态 `#pane-2-new-shell-tab-btn` | 始终存在（组内上下分屏才可见） |
+| 3 | `createPaneElement()` 的 `buttonSpecs`（`kind: 'shell'`） | 组内分屏新建 pane 时现造 |
+| 4 | `createGroupPaneElement()` 的 `buttonSpecs`（`kind: 'shell'`） | 新建串口分组的 pane-1 时现造 |
+| 5 | `#add-shell-tab-btn` | 静态、唯一，住在 `.serial-group-tab-actions` |
+
+**第 3、4 处的 `kind: 'shell'` 必须保留在 `buttonSpecs` 数组里。** 单分组组内分屏（`pane-2`）没有分组标签行可挂，那一层就是唯一入口。因此本轮改的是**可见性**（`hidden`），不是 DOM 结构。
+
+#### 6A.8.2 规则实现
+
+```js
+function syncShellAddButtonVisibility() {
+    const isMultiGroup = serialGroups.length > 1;
+    if (addShellTabBtn) addShellTabBtn.hidden = !isMultiGroup;
+    if (!isMultiGroup) return;
+    // 按 id 后缀扫而不是逐个记引用：组内分屏与新建分组都会现造新 pane，
+    // 一次性写死的清单会漏掉后来创建的那个（表现为「新分屏那列突然多出一个按钮」）。
+    document.querySelectorAll('.pane-tab-actions > button').forEach(button => {
+        if (!/-new-shell-tab-btn$/.test(button.id || '')) return;
+        button.hidden = true;
+    });
+}
+```
+
+调用点三处：`renderSerialGroupTabBar()` 末尾、`syncGroupSubRowVisibility()` 末尾、`createPaneElement()` 末尾。**第三处不能漏**：新造的按钮不经过前两处的重绘，否则新分屏那一列会凭空多出一个入口。
+
+`placeShellAddButton()` 负责把一层按钮搬到当前可见的分组标签行里（必须排在「添加串口」左边），`reclaimShellAddButton()` 在关闭列之前把它抢回静态行——否则它随列 `remove()` 一起消失且**没有任何报错**。
+
+**`hidden` 能生效的前提**：`style.css` 里有 `[hidden] { display: none !important; }`。全局 `button { display: inline-flex }` 会压倒 UA 的 `[hidden] { display: none }`，`el.hidden = true` 对按钮完全无效且无报错（既有缺陷，已修）。
 
 ## 7. 设置侧栏跟随（P4，已落地）
 

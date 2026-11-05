@@ -2089,6 +2089,101 @@ SUMMARY total=15 pass=15 fail=0 skip=0
 - 真实鼠标拖动的手感与最小宽度（当前硬限 `MIN_SHARE = 0.1`）——现有证据是合成 `PointerEvent`；
 - 四条以上分屏时每一条分界条的独立拖动；
 - 窗口尺寸变化后旧比例是否仍然合理（比例是相对量，理论上自适应，但未实测）。
+
+### 13A.14 「新建 Shell」按钮永久只在一层标签栏出现
+
+**用户实测要求**（逐字）：
+
+> 二层标签栏可以不再显示 打开shell按钮，永久移入一层标签栏
+
+#### 一、先取证：五个产生点，只有一个受控
+
+「新建 Shell」按钮在两处 HTML 里各有一个静态件，又在两个工厂函数里现造，再加多分组专用那一个，共五个产生点：
+
+| # | 位置 | 说明 |
+| --- | --- | --- |
+| 1 | `index.html` `#pane-1-new-shell-tab-btn` | pane-1 的 pane 行 |
+| 2 | `index.html` `#pane-2-new-shell-tab-btn` | pane-2 的 pane 行（组内上下分屏才显示） |
+| 3 | `createPaneElement()` 的 `buttonSpecs`（`kind: 'shell'`） | 组内分屏新建 pane 时现造 |
+| 4 | `createGroupPaneElement()` 的 `buttonSpecs`（`kind: 'shell'`） | 新建串口分组的 pane-1 时现造 |
+| 5 | `#add-shell-tab-btn` | 多分组专用，住在 `.serial-group-tab-actions`（用户说的「一层」） |
+
+旧的 `syncShellAddButtonVisibility()` 只有一行有效逻辑：
+
+```js
+addShellTabBtn.hidden = serialGroups.length <= 1;
+```
+
+它**只控第 5 个**。第 1–4 个从来不受任何可见性规则管，所以多分组时屏幕上同时存在「一层一个 + 二层每列各一个」。这就是用户看到重复入口的原因。
+
+#### 二、单分组为什么必须保留二层那个
+
+`describeGroupTabBar()` 里整条分组标签行是 `hidden: !isMultiGroup`——单分组时界面上只有 pane 行那一层。若也隐掉它，用户永远开不出第一个 Shell。
+
+所以规则不是「一律只留一层」，而是「**恰好一个可见**，位置随层数切换」。
+
+#### 三、修法
+
+```js
+function syncShellAddButtonVisibility() {
+    const isMultiGroup = serialGroups.length > 1;
+    if (addShellTabBtn) addShellTabBtn.hidden = !isMultiGroup;
+    if (!isMultiGroup) return;
+    // 按 id 后缀扫而不是逐个记引用：组内分屏与新建分组都会现造新 pane，
+    // 一次性写死的清单会漏掉后来创建的那个（表现为「新分屏那列突然多出一个按钮」）。
+    document.querySelectorAll('.pane-tab-actions > button').forEach(button => {
+        if (!/-new-shell-tab-btn$/.test(button.id || '')) return;
+        button.hidden = true;
+    });
+}
+```
+
+三个要点：
+
+1. **用 id 后缀扫，不用固定引用清单**。`createPaneElement()` 与 `createGroupPaneElement()` 会在运行时现造按钮，写死清单必然漏。
+2. **`createPaneElement()` 末尾必须补调**。它造完按钮就直接 `return paneEl`，不经过 `renderSerialGroupTabBar()` / `syncGroupSubRowVisibility()` 那次重绘，漏调就会出现「新分屏那一列凭空多出一个入口」。
+3. **改的是 `hidden`，不是 DOM 结构**。第 3、4 处的 `kind: 'shell'` 项仍在 `buttonSpecs` 数组里，`index.html` 两个静态按钮也没动。
+
+#### 四、一次误判（已撤回）
+
+最初把需求理解为「二层不该有 Shell 入口」，直接删掉了 `createPaneElement()` 与 `createGroupPaneElement()` 的 `buttonSpecs` 里 `{ kind: 'shell', ... }` 项。这在单分组组内分屏（`pane-2`）下会让用户彻底失去新建 Shell 的能力——那一层没有分组标签行可挂。已全部恢复，改为只做可见性控制。
+
+#### 五、验证
+
+`verify-shell-buttons-split.js` 新增 3 条断言后 **16/16**（`diag312`，`renderer-diag=clean`）：
+
+- `multi-group-pane-row-shell-buttons-hidden`——多分组下 `.pane-tab-actions` 里所有 `*-new-shell-tab-btn` 都 `shown === false`；
+- `split-pane-row-shell-buttons-hidden`——分屏后同样全部不可见；
+- `split-group-shell-button-still-visible`——此时 `#add-shell-tab-btn` 仍可见且能拿到 `rowId`（说明它确实挂在某条可见分组标签行里）。
+
+原 13 条里 `single-group-pane-shell-button-shown` 仍 PASS，证明单分组未回归。
+
+全量回归 `run-all-320.txt`：14 个脚本全部 `exit=0` + `renderer-diag=clean`。`npm test` **492/492**（`full66.txt`）。静态门禁：`node --check renderer.js` ok、模块加载门禁 ok、`scan-undefined` checked=95/missing=none、`git diff --check` ok。
+
+#### 六、第四次同类自伤（必记）
+
+恢复 `buttonSpecs` 时，`File.Edit` 的 replace 区间把
+
+```js
+    buttonSpecs.forEach(spec => {
+        const button = document.createElement('button');
+```
+
+两行一起吞掉了，只留下后面的 `button.id = ...`。结果：
+
+- `node --check renderer.js` **通过**（残留函数体仍然语法合法）；
+- `node scripts/check-renderer-module-load.js` **通过**（`createGroupPaneElement` 不在模块加载期执行）；
+- `scan-undefined.js` **通过**（它只查 require 与声明，不做作用域分析）；
+- 只有真实启动的 `app-diag310-err.log` 报 `Uncaught ReferenceError: button is not defined`（`createGroupPaneElement`，`renderer.js:3509`）。
+
+这是 `13A.11`（`previousGuard is not defined`）、`13A.12`（`button is not defined` @ `renderer.js:4172`）、`13A.13`（`clamped is not defined`）之后的**第四次同类复现**。固化结论不变：
+
+- 结构性编辑后立刻 `node --check` **并回读被改函数完整头部三行**；
+- 凡只在校验回调、交互手势或运行时路径里执行的函数，**必须真实启动一次**并检查 `app-diagNN-err.log`；
+- 两层静态门禁对「吞掉函数体内的语句」基本无感。
+
+另一次 `diag311` 的 `exit=2` 是**验证脚本自己**的笔误：插入新断言时 `const shellCols = ...` 被覆盖掉，与产品无关。
+
 ---
 
 ## 14. AI 接手时建议的工作流程

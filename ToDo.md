@@ -246,28 +246,28 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 - [x] `npm test` 当前 **492/492 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-manager.test.js` 11 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项、`test/serial-group-tab-bar.test.js` 15 项、`test/serial-group-layout-dom.test.js` 19 项、`test/serial-group-tab-lists.test.js` 13 项、`test/serial-output-buckets.test.js` 12 项、`test/serial-port-claims.test.js` 13 项、`test/serial-group-display-prefs.test.js` 10 项与 `test/renderer-module-load.test.js` 4 项）。
 - [x] **renderer 模块加载门禁**：`node scripts/check-renderer-module-load.js` 退出码 0；反向对照（故意 TDZ）确实非零退出。**边界**：它的 `document.getElementById` 每次返回新 stub，**无法表达 id 重复或真实 DOM 交互**（本轮已实际踩到）；也**覆盖不到异步回调**（`applyConfig` 里的 `ReferenceError` 只能靠真实启动窗口暴露）。第 9 项又亲眼看到一次：`GROUP_TAB_BAR_ID is not defined` 在 `node --check` 与加载门禁下均全绿，只有真实启动的 `[RENDERER DIAGNOSTIC]` 才暴露。
 - [x] **静态未定义标识符扫描**：`.me/tmp/*/scan-undefined.js` 扫 **95** 个候选标识符，`checked=95 / missing=none`。它是第三层保险，**不做真正的作用域分析**，用途只是「新写的代码里漏了 require 或漏了声明」。
-- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **14 个脚本全绿、退出码均为 0**（合计 260 项断言，0 失败）：
+- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **14 个脚本全绿、退出码均为 0**（合计 263 项断言，0 失败）：
 
 | 脚本 | 项数 / 结果 | profile |
 | --- | --- | --- |
-| `verify-user-paths.js` | **15/15** | `diag290` |
-| `verify-group-columns.js` | **37/37** | `diag291` |
-| `verify-shell.js` | **16/16** | `diag292` |
-| `verify-group-split.js` | **19/19** | `diag293` |
-| `verify-sidebar-groups.js` | **14/14** | `diag294` |
-| `verify-titles.js` | exit=0 | `diag295` |
-| `verify-context-menu-and-highlight.js` | **17/17** | `diag296` |
-| `verify-shell-drag.js` | exit=0 | `diag297` |
-| `verify-shell-switchback.js` | **14/14** | `diag298` |
-| `verify-connect-group.js` | exit=0 | `diag299` |
-| `verify-same-port-guard.js` | 3 通过 + 1 skip | `diag300` |
-| `verify-display-pref-scope.js` | exit=0 | `diag301` |
-| `verify-shell-buttons-split.js` | exit=0 | `diag302` |
-| `verify-split-geometry.js`（新增） | **26/26** | `diag303` |
+| `verify-user-paths.js` | **15/15** | `diag320` |
+| `verify-group-columns.js` | **37/37** | `diag321` |
+| `verify-shell.js` | **16/16** | `diag322` |
+| `verify-group-split.js` | **19/19** | `diag323` |
+| `verify-sidebar-groups.js` | **14/14** | `diag324` |
+| `verify-titles.js` | exit=0 | `diag325` |
+| `verify-context-menu-and-highlight.js` | **17/17** | `diag326` |
+| `verify-shell-drag.js` | exit=0 | `diag327` |
+| `verify-shell-switchback.js` | **14/14** | `diag328` |
+| `verify-connect-group.js` | exit=0 | `diag329` |
+| `verify-same-port-guard.js` | 3 通过 + 1 skip | `diag330` |
+| `verify-display-pref-scope.js` | exit=0 | `diag331` |
+| `verify-shell-buttons-split.js` | **16/16** | `diag332` |
+| `verify-split-geometry.js` | **26/26** | `diag333` |
 
-
-  全部 `app-diagNN-err.log` 无 `[RENDERER DIAGNOSTIC]`（`run-all-290.txt`）。`verify-same-port-guard` 本次因 `COM6` 被其它进程占用，按脚本设计 `SKIP` 并输出 `fail=0 skip=1`（不是回归）。
+  全部 `app-diagNN-err.log` 无 `[RENDERER DIAGNOSTIC]`（`run-all-320.txt`）。`verify-same-port-guard` 本次因 `COM6` 被其它进程占用，按脚本设计 `SKIP` 并输出 `fail=0 skip=1`（不是回归）。
 - [x] **分屏的三个几何与宿主缺陷**：用户实测报告 `两个串口组左右分屏，点击任意一个串口组标签shell就会跟着跳过去；并且分屏的分割线过宽，并且在三分屏下只有一个…分屏后最右侧的分屏会超出窗口右侧边界`。实测（`diag-split-geometry2` @ `diag250`）：容器 `799px`、两列各 `50%`、分界条 `10px` → `widthSum 809`、`maxRight 1010` 对容器 `right 1000`，**溢出恰好 10px**；三列可见时分界条仍只有 1 条；点 `g-1` 后 Shell 的 `columnId` 与面板 `parentId` 全部跨列变化。四处根因与修法：(a) `resolveShellTabHost` 的 `topRow` 分支用 `getSingleVisibleGroupId() || activeGroupId`，而前者在「已分屏且列 > 1」时恒为 `null` —— 改为 `resolveShellTopRowColumn()`，用 `tabState.topRowColumnId` 记忆所在列，只有不可见时才重选；(b) `.group-workspace-splitter` 由 `flex: 0 0 10px` 收窄到 `4px`，`::after` 左右各溢 2px 只扩大命中区；(c) 新增 `syncGroupWorkspaceSplitters()` 按可见列数保证 N-1 条，每条用 `data-splitter-left/right` 声明夹住的两列，`bindGroupWorkspaceSplitter()` 改为在**被夹两列自身宽度之和**内换算比例；(d) `flex-basis` 改为 `calc(<比例>% - <比例×分界条总占位>px)`。**顺带修掉一个既有缺陷**：`gutterTotal` 原统一用 `width` 求和，而 vertical 下分界条是 `width: 100%`，两列各扣 799px → 上下分屏 `height` 全为 0、彻底不可用，改为按 `orientation` 取 `height`/`width`。新增 `verify-split-geometry.js` **26/26**（`diag303`）。
+- [x] **新建 Shell 按钮永久只在一层标签栏出现**：用户实测要求 `二层标签栏可以不再显示 打开shell按钮，永久移入一层标签栏`。全项目共五个产生点（`index.html` 的 `#pane-1-new-shell-tab-btn` / `#pane-2-new-shell-tab-btn`、`createPaneElement()` 与 `createGroupPaneElement()` 的 `buttonSpecs`、多分组专用的 `#add-shell-tab-btn`），而旧的 `syncShellAddButtonVisibility()` 只有 `addShellTabBtn.hidden = serialGroups.length <= 1;` 一行，只控第五个——多分组时屏幕上同时存在「一层一个 + 二层每列各一个」。现在规则改为「**恰好一个可见**，位置随层数切换」：多分组时 `#add-shell-tab-btn` 是唯一入口（未分屏跟随激活列，分屏由 `placeShellAddButton()` 搬到激活列列首行），`document.querySelectorAll('.pane-tab-actions > button')` 里所有 `/-new-shell-tab-btn$/` 全部 `hidden = true`；单分组时分组标签行整体 `hidden`（`describeGroupTabBar()` 的 `hidden: !isMultiGroup`），保留 pane 行那个作为唯一入口——否则用户永远开不出第一个 Shell。按 id 后缀扫而不是写死引用清单（组内分屏与新建分组会现造按钮），并在 `createPaneElement()` 末尾补调（新造按钮不经过重绘，漏调会让新分屏那列凭空多出一个入口）。改的是 `hidden`，不改 DOM 结构：两处 `buttonSpecs` 的 `kind: 'shell'` 项必须保留（单分组组内分屏 `pane-2` 依赖它）。`verify-shell-buttons-split.js` 增至 **16/16**（`diag312`，新增 `multi-group-pane-row-shell-buttons-hidden` / `split-pane-row-shell-buttons-hidden` / `split-group-shell-button-still-visible`），全量回归 `run-all-320.txt` 14 个脚本全部 `exit=0` + `renderer-diag=clean`，`npm test` **492/492**。
 - [x] **Shell 标签的两个布局缺陷（`10f3bd5`）**：用户实测报告 `创建shell标签后，上次的串口标签点不动了没法切换…创建shell按钮就不可见了` 与 `让COM2进行左右分屏…会变成下面这样`（错误图：三列串口 + 一列 SHELL）。三处根因：(a) `createShellTab` 结尾会把 Shell 切为 pane-1 激活标签，而 `revealSerialGroupActiveTab` 直接把它当作「要抬回的串口标签」，于是「点当前分组标签」等于把 Shell 重新点亮——现在增加「目标必须是串口标签」的判断，否则回退到上次的串口标签（新增 `lastSerialTabByPane`，由 `switchPaneTab` / `setActivePane` / `activateShellTabInHost` 维护）；(b) 多分组时唯一的新建 Shell 入口在 pane 行，而这一条在显示上层 Shell 时被整条隐藏——现在 `index.html` 静态分组行新增 `#add-shell-tab-btn`（`placeShellAddButton` 跟随可见行、`reclaimShellAddButton` 关列前抢回、`syncShellAddButtonVisibility` 与 pane 行那个互斥），且下层行改为**常任显示**；(c) `isShellColumnActive` / `resolveShellTabHost` 原先把「未归属」一律映射为独立列——现在新增逐标签 `tabState.detachedColumn`，只有拖到分组标签行才独立成列，新建的未归属 Shell 与分组标签同级留在列首行。新增 `verify-shell-buttons-split.js` **13/13**（`diag242`）。
 - [x] **连接/断开按钮必须作用于当前串口分组（用户实测缺陷）**：`选择串口2组，点击链接串口，串口1组会链接…串口2组的处于断开状态`。根因是整条连接链路写死默认分组：`toggleSerialConnection()` 不传 `groupId`、`disconnectSerial()` 写死 `REGISTRY_DEFAULT_GROUP_ID`、`connectSerialInProgress` 与 `isConnected` 都是全局单值。现在：`toggleSerialConnection()` 以 `activeGroupId` 为对象；`disconnectSerial(groupId)` 按分组断开且只对默认分组清理 `serialSessionId` / `serialWriteChain` / 自动发送 / `chartTabs`；两个布尔锁改成按分组 Set；`waitForSerialDisconnected(groupId)` 与 `serialDisconnectWaiters` 改为按分组等待；`refreshConnectButtonState()` 按激活分组重算并带 busy 禁用态；主终端键盘输入改为 `bindGroupTerminalInput()` 逐分组绑定；`sendSerialRequest()` 的身份门禁改按目标分组。新增 `verify-connect-group.js` **23/23**（`diag129`），在真实渲染进程旁路记录 IPC、不打开真实串口，覆盖双向分组切换、按钮跟随、断开只断自己、连接提示不污染另一分组终端、端口不跨分组继承。
 - [x] **同一物理端口只允许一个串口分组占用**：用户报告 `两个组选择相同的端口居然都能打开`。在本机（最新构建 + `COM6`）**无法复现**：底层探针与真实渲染进程双重取证，第二次打开都被驱动拒绝（`COM6 => first:OK | second:Opening COM6: Access denied`；`diag-same-port-out2.txt` 里 `g-1` 保持 `connected:false`、`both-claim-connected:false`）。所以这不是修复一个被复现的缺陷，而是把原本只由驱动提供的保证提升为应用保证 —— 部分虚拟串口 / USB 复合设备 / 带共享模式的驱动确实允许第二次打开，届时两个分组各持一个句柄、同一份字节流被两边消费、日志写两份，不报错只出错乱数据。新增纯逻辑模块 `serial-port-claims.js`（`claim` / `releaseGroup` / `releasePort`，端口键统一大写），在 `connect-serial` 开头（**在动本分组旧连接之前**）、`port.open` 错误分支、`cleanupSerialConnection()`、`disconnect-serial` 四处接入；错误以 `SERIAL_PORT_IN_USE|<PORTKEY>|<ownerGroupId>|<英文原文>` 回传，渲染层解析后走 `main.serialPortInUse` 给本地化提示。新增 `test/serial-port-claims.test.js` 13 项与 `verify-same-port-guard.js` **15/15**（`diag140`/`diag151`，**用真实串口**）：`default` 打开 `COM6` 后 `g-1` 抢同一端口被拦下、提示是本地化文案而非 `Access denied`、`default` 连接不受影响，**断开 `default` 后 `g-1` 立刻能连上**（证明占用已释放，端口不会被永久锁死）。
