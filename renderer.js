@@ -2026,9 +2026,12 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
     const actions = document.createElement('div');
     actions.className = 'pane-tab-actions';
 
-    // 动态 pane 只提供 Shell/过滤/图表三个新建入口。「添加串口」是全局动作，
+    // 动态 pane 提供 Shell/过滤/图表三个新建入口。「添加串口」是全局动作，
     // 入口只在两处且互斥（单分组用 pane-1 标签行那个，多分组用分组栏那个），
     // 放进每个分屏 pane 会让同一行里出现多个相同按钮。
+    //
+    // 「新建 Shell」要保留：单分组时组内分屏仍然没有分组标签行可挂，这一行就是入口。
+    // 多分组时由 syncShellAddButtonVisibility() 把这些按钮整体隐掉。
     const buttonSpecs = [
         { kind: 'shell', icon: 'terminal', title: tr('main.newShellTab'), create: () => createShellTab({ profileId: getDefaultShellProfileId() }, paneId) },
         { kind: 'filter', icon: 'filter_alt', title: tr('main.newFilterTab'), create: () => createFilterTab({}, paneId) },
@@ -2065,6 +2068,9 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
     } else {
         root.appendChild(paneEl);
     }
+    // 新造的按钮不受任何可见性规则管，必须立即对齐一次：
+    // 否则多分组下新分屏的那一列会凭空多出一个「新建 Shell」。
+    syncShellAddButtonVisibility();
     return paneEl;
 }
 
@@ -3492,6 +3498,8 @@ function createGroupPaneElement(groupId, paneId) {
     const actions = document.createElement('div');
     actions.className = 'pane-tab-actions';
 
+    // 「新建 Shell」在这里也建一份（多分组时由 syncShellAddButtonVisibility 隐掉）。
+    // 与 createPaneElement 保持一致：两处 DOM 结构必须一样，否则布局层按 id 找容器时会差别对待。
     const buttonSpecs = [
         { kind: 'shell', icon: 'terminal', title: tr('main.newShellTab'), create: () => createShellTab({ profileId: getDefaultShellProfileId() }, paneId) },
         { kind: 'filter', icon: 'filter_alt', title: tr('main.newFilterTab'), create: () => createFilterTab({}, paneId) },
@@ -4246,21 +4254,30 @@ function renderSerialGroupTabBar() {
     syncShellAddButtonVisibility();
 }
 
-// 新建 Shell 按钮属于「上层标签栏」那一层，不能只存在 pane 行里。
+// 新建 Shell 按钮**永久只在上层标签栏**：只要有分组标签行，pane 行就不再提供入口。
 //
-// 早期它只在 pane-1 的 pane 行：多分组时那一条行一旦被隐（早期是「正在显示 Shell」
-// 就整条隐），或者屏幕上看的是另一个分组，按钮就彻底消失。
-// 现在按可见性分三层：
+// 早期 pane 行与分组行各有一个：多分组时两层会同时出现两个一模一样的按钮，
+// 用户报告为「二层标签栏不要再显示打开 shell 按钮」。现在：
 //
-//   单分组              pane 行那个静态按钮（pane-1-new-shell-tab-btn）
-//   多分组·未分屏       分组标签行里那个（add-shell-tab-btn，静态行跟着激活列走）
-//   多分组·已分屏       激活列的列首行（placeShellAddButton 跟着搬）
+//   多分组  #add-shell-tab-btn 是唯一入口。它住在分组标签行，未分屏时跟着激活列走，
+//           分屏时由 placeShellAddButton 搬到激活列的列首行；pane 行的全部隐掉。
+//   单分组  两层不存在（describeGroupTabBar 把整条分组标签行置为 hidden），
+//           pane 行仍是原样——不隐，否则用户永远开不出第一个 Shell。
 //
-// 三层必须恰好一层可见。
+// 所以「两层同时存在时 pane 行一个都不给」与「只有一层时那一层给」不会同时成立，
+// 任意时刻屏幕上恰好一个入口。
 function syncShellAddButtonVisibility() {
-    if (!addShellTabBtn) return;
-    addShellTabBtn.hidden = serialGroups.length <= 1;
+    const isMultiGroup = serialGroups.length > 1;
+    if (addShellTabBtn) addShellTabBtn.hidden = !isMultiGroup;
+    if (!isMultiGroup) return;
+    // 按 id 后缀扫而不是逐个记引用：组内分屏与新建分组都会现造新 pane，
+    // 一次性写死的清单会漏掉后来创建的那个（表现为「新分屏那列突然多出一个按钮」）。
+    document.querySelectorAll('.pane-tab-actions > button').forEach(button => {
+        if (!/-new-shell-tab-btn$/.test(button.id || '')) return;
+        button.hidden = true;
+    });
 }
+
 
 // 让静态新建 Shell 按钮落在**当前可见**的分组标签行里（与 placeGroupAddButton 同一套锚点）。
 function placeShellAddButton() {
