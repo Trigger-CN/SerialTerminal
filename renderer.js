@@ -7893,8 +7893,25 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
         // 非默认分组的终端是刚建出来的，键盘输入要在这里补绑。
         bindGroupTerminalInput(targetGroupId);
     } catch (err) {
-        setActionStatus(reconnecting ? `串口重连失败：${err}` : `串口连接失败：${err}`);
-        alert((reconnecting ? 'Failed to reconnect: ' : 'Failed to connect: ') + err);
+        // 主进程用 `SERIAL_PORT_IN_USE|端口|占用分组|英文原文` 回传「两个分组抢同一个端口」。
+        // 这类错误是配置冲突而不是句柄故障，必须给用户一句能直接读懂的话，
+        // 否则他看到的只是 Electron 包装过的 `Error invoking remote method ...`。
+        const raw = String(err?.message || err);
+        const portInUse = raw.match(/SERIAL_PORT_IN_USE\|([^|]*)\|([^|]*)\|(.*)/);
+        if (portInUse) {
+            const [, portName, ownerGroupId] = portInUse;
+            const ownerName = getSerialGroupById(ownerGroupId)?.title || ownerGroupId;
+            const message = trFallback(
+                'main.serialPortInUse',
+                'Port {port} is already open in {group}. Disconnect it there first.',
+                { port: portName, group: ownerName }
+            );
+            setActionStatus(message);
+            alert(message);
+        } else {
+            setActionStatus(reconnecting ? `串口重连失败：${raw}` : `串口连接失败：${raw}`);
+            alert((reconnecting ? 'Failed to reconnect: ' : 'Failed to connect: ') + raw);
+        }
     } finally {
         serialConnectingGroups.delete(targetGroupId);
         setGroupConnectBusy(targetGroupId, false);

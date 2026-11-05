@@ -21,6 +21,7 @@ const {
   needsSerialGroupsMigration
 } = require('./serial-groups-config');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
+const { SerialPortClaimTable, normalizePortKey } = require('./serial-port-claims');
 const { formatLocalDate, getLogDirectory } = require('./log-directory');
 const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
 const {
@@ -2827,6 +2828,9 @@ ipcMain.on('close-shell-tab-session', (event, payload = {}) => {
 // 多串口：每一条串口连接是一个独立会话，按 groupId 隔离。
 // 单串口模式（renderer 不传 groupId）统一使用 DEFAULT_SERIAL_GROUP_ID（已在文件前部声明）。
 const serialSessions = new Map();
+// 同一个物理端口同一时刻只允许一个分组占用。驱动通常会拒绝重复打开，
+// 但那不是应用保证（部分虚拟串口/复合设备允许共享打开），因此在应用层显式拦住。
+const serialPortClaims = new SerialPortClaimTable();
 let serialSessionId = 0;
 const THROUGHPUT_SAMPLE_MS = 1000;
 const THROUGHPUT_HISTORY_LENGTH = 30;
@@ -2991,6 +2995,8 @@ function cleanupSerialConnection(message = null, port = null, groupId = DEFAULT_
   if (session.cleanupComplete) return;
   session.cleanupComplete = true;
   session.sessionId++;
+  // 会话已经不再持有端口，占用必须同步释放；否则该端口在应用内永远不可再连。
+  serialPortClaims.releaseGroup(session.groupId);
   resetThroughputState(session, false);
   sendThroughputUpdate(session);
   flushRawBinaryLogSync(session.groupId);
@@ -3042,6 +3048,17 @@ ipcMain.handle('list-ports', async () => {
 ipcMain.handle('connect-serial', async (event, options = {}) => {
   const { path, baudRate, dataBits, stopBits, parity, encoding, sendEncoding, newlineMode } = options;
   const groupId = normalizeSerialGroupId(options.groupId);
+  // 端口占用必须**在**动本分组旧连接之前判：否则把 g-1 从 COM6 换到已被 g-2
+  // 占用的 COM7 时，会先把 g-1 的 COM6 断开，才发现不能连，白白丢了一条好连接。
+  const claim = serialPortClaims.claim(groupId, path);
+  if (!claim.ok) {
+    if (claim.reason === 'port-in-use') {
+      // 用固定 token 回传，让渲染层能翻译成本地化的友好提示；
+      // 同时保留人能看懂的英文句子，方便日志排查。
+      throw new Error(`SERIAL_PORT_IN_USE|${normalizePortKey(path)}|${claim.ownerGroupId}|Port ${normalizePortKey(path)} is already opened by serial group \`${claim.ownerGroupId}\``);
+    }
+    throw new Error('No serial port selected');
+  }
   const session = getOrCreateSerialSession(groupId, path);
   if (session.connectInProgress) {
     throw new Error('A serial connection attempt is already in progress');
@@ -3089,6 +3106,9 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
 
     port.open((err) => {
         if (err) {
+            // 打开失败就必须把占用退回去，否则这个端口会被永久标成「in use」，
+            // 用户在另一个分组里永远连不上它。
+            serialPortClaims.releasePort(groupId, path);
             cleanupSerialConnection(null, port, groupId);
             reject(err.message);
             return;
@@ -3133,7 +3153,10 @@ ipcMain.handle('serial-write', (event, request) => writeSerialPayload(request));
 ipcMain.on('disconnect-serial', (event, payload = {}) => {
   const groupId = normalizeSerialGroupId(payload?.groupId);
   const session = getSerialSession(groupId);
-  if (!session) return;
+  if (!session) {
+    serialPortClaims.releaseGroup(groupId);
+    return;
+  }
   session.sessionId++;
   if (session.port && session.port.isOpen) {
     session.port.close();
