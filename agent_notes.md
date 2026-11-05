@@ -2022,6 +2022,73 @@ SUMMARY total=15 pass=15 fail=0 skip=0
 - 多个未归属 Shell 在分屏下的具体列选择——现为激活列，没有更优的确定性规则；
 - 真实双端口字节流下 Shell 与串口终端共存时的 xterm `fit()` 尺寸。
 
+### 13A.13 分屏的三个几何与宿主缺陷：Shell 跟随 / 分割线过宽 / 三列只有一条 / 最右列越界
+
+**用户实测报告**（逐字）：
+
+> 两个串口组左右分屏，点击任意一个串口组标签shell就会跟着跳过去；并且分屏的分割线过宽，并且在三分屏下只有一个，不能控制所有分屏的宽度；分屏后最右侧的分屏会超出窗口右侧边界
+
+#### 一、先取证：一次几何诊断拿到全部四个数字
+
+`diag-split-geometry2.js` @ `diag250`（exit=0、renderer-diag=clean，`diag-split-geometry2-out1.txt`）完全按用户路径复现：建两个分组 → 建 Shell → 右键左右分屏 → 点另一个分组标签 → 再建第三个分组。关键输出：
+
+| 观测项 | 实测值 |
+| --- | --- |
+| `#group-workspace` | `width 799`（`left 201` / `right 1000`，`clientWidth 799`） |
+| 两列 flex-basis | 各 `50%`，`flexGrow=0` / `flexShrink=0` |
+| 分界条实宽 | `10px`（`computedFlex: 0 0 10px`） |
+| 两列合计 | `799 + 10 = 809`，`scrollWidth 809`，`maxRight 1010` |
+| **溢出右边界** | **恰好 10px** |
+| 三列可见时的分界条数 | **1**（只有 default↔g-1 之间） |
+| 点 g-1 后 Shell 的 `columnId` | `serial-group-workspace-default` → `serial-group-workspace-g-1` |
+| 点 g-1 后 Shell 面板 `parentId` | `pane-1-tabs-content` → `pane-1-g-1-tabs-content` |
+
+四条缺陷各自对应一个数字，不需要猜。
+
+#### 二、四个根因
+
+1. **Shell 跟随**：`resolveShellTabHost()` 的 `topRow` 分支写的是 `getSingleVisibleGroupId() || activeGroupId`，而 `getSingleVisibleGroupId()` 在「已分屏且可见列 > 1」时恒为 `null`。于是每次 `applyActiveSerialGroup()` → `renderSerialGroupTabBar()` → `syncShellTabLayer()` → `placeShellTabs()` 都把未归属 Shell 的按钮与面板 `appendChild` 到新的激活列。
+2. **分割线过宽**：CSS 是 `flex: 0 0 10px`，而可见的只有 `::before` 那 1px 竖线，剩下 9px 是透明间隙；hover 时整条 10px 加 `rgba(0,122,204,0.08)` 底色，看起来就是一条粗蓝条。
+3. **三列只有一条**：静态 DOM 里只有一条 `#group-workspace-splitter`，`placeGroupWorkspaceSplitter()` 只把它插到「第一个可见子元素」后面；`bindGroupWorkspaceSplitter()` 的 `flush()` 还写死了 `const leftId = participants[0]`，即使有多条也只会调第一对列。
+4. **最右列越界**：`flex-basis` 写百分比、`flex-shrink: 0`，百分比合计 100% 而分界条自身还占 10px，于是列宽之和 = 容器宽 + 分界条总宽。
+
+#### 三、修法
+
+| 目标 | 改动 |
+| --- | --- |
+| Shell 不跳列 | 新增 `isVisibleColumnKey()` / `resolveShellTopRowColumn(tabState)`：先看 `tabState.topRowColumnId` 记忆的列是否可见，不可见才回落 `getSingleVisibleGroupId() \|\| activeGroupId` 并写回。拖到分组标签行时也写目标列。 |
+| 分割线收窄 | `.group-workspace-splitter { flex: 0 0 4px }`；新增 `::after` 伪元素左右各溢 2px，只扩大命中区，**不占布局宽度**。 |
+| 多条分割线 | 新增 `syncGroupWorkspaceSplitters()` / `getGroupWorkspaceSplitters()` / `getGroupWorkspaceVisibleColumnKeys()`；`placeGroupWorkspaceSplitter()` 改为「按可见列数保证 N-1 条」；每条用 `data-splitter-left` / `data-splitter-right` 声明夹住的两列。 |
+| 拖动只改相邻两列 | `bindGroupWorkspaceSplitter()` 重写：`pointerdown` 时从 `data-splitter-left/right` 取 `dragLeftId`/`dragRightId`，`pointermove` 在**这两列自身宽度之和**内算比例，`flush()` 只重写这两个 key。 |
+| 不越界 | `flex-basis` 改为 `calc(<比例>% - <比例×分界条总占位>px)`，且只统计未隐藏的分界条。 |
+
+#### 四、两个只有全量回归才能抓到的缺陷
+
+1. **上下分屏被 gutter 计算打死**。`gutterTotal` 起初统一用 `getBoundingClientRect().width` 求和，而 `.group-split-vertical` 下分界条是 `width: 100%`（799px）。两列各扣 799px → 列高算成 0。`verify-group-split` 首轮报：`vertical-split-two-visible` 与 `vertical-split-roughly-half-each` FAIL，三列 `height` 全为 0。改为按 `orientation` 取 `height` / `width` 后回到 **19/19**。
+2. **验证脚本自己的 `requestAnimationFrame` 会被节流**。窗口被遮挡/最小化时 rAF 几乎不触发，`Runtime.evaluate` 里的 `await new Promise(r => requestAnimationFrame(r))` 会挂死到 CDP 超时（`diag257` / `diag273` / `diag281` 三次 `exit=2`）。改 `setTimeout(r, 60)` 后稳定。**这是脚本问题，不是产品问题**——但要记住：任何在无头/被遮挡窗口里等帧的断言都不可靠。
+
+#### 五、本轮三次自伤（必记）
+
+1. `File.Edit` 的 replace 区间再次吞掉相邻的 `}`：`node --check` 两次报 `SyntaxError: Unexpected token '}'`（`renderer.js:3584`、`:3624`）。
+2. **更隐蔽的一次**：按数量裁剪分界条时写成 `splitters.pop().remove()`，而 `getGroupWorkspaceSplitters()` 每次都 `document.getElementById` + 兜底 `unshift`，于是**静态** `#group-workspace-splitter` 被删后又被塞回数组，下次访问 `splitters[index-1].dataset` 直接抛 `Cannot read properties of undefined (reading 'dataset')`。现在静态那条**永不 remove**，多出来的动态条才 `remove()`，静态的只 `hidden = true`。
+3. `flush()` 里 `clamped` 在删行时被误删，`node --check` 与模块加载门禁**全绿**，只有 `app-diag254-err.log` 报 `ReferenceError: clamped is not defined`。这是 `13A.11` / `13A.12` 那两个坑的第三次同类复现。
+
+#### 六、验证
+
+新增 `verify-split-geometry.js` **26/26**（`diag258` / `diag282` / `diag303`）：
+
+- `shell-stays-in-original-column` / `shell-still-in-original-column-after-back` / `shell-column-stable-before-click`；
+- `splitter-width-narrowed`（≤ 6px，实测 4px）、`two-column-one-splitter`、`three-column-two-splitters`、`three-column-splitters-pair-adjacent-columns`；
+- `drag-does-not-touch-first-column` / `drag-changes-seconds-column`（`diag-drag-state-out1.txt` 的逐帧轨迹显示 default 全程 `33.3333%` 不动，g-1 从 `35.48%` 递增到 `48.76%`，g-2 同步递减到 `17.91%`）；
+- `two-column-no-right-overflow`（`overflowRight=0`、`widthSum=799=containerWidth`）、`three-column-no-horizontal-scroll`（`scrollWidth=799=clientWidth`）、`close-split-column-fills-container`。
+
+全量回归 `run-all-290.txt`：14 个脚本全部 `exit=0` + `renderer-diag=clean`（`verify-same-port-guard` 因 `COM6` 被占用按设计 skip，`fail=0`）。`npm test` **492/492**（`full65.txt`）。
+
+#### 七、仍未验证
+
+- 真实鼠标拖动的手感与最小宽度（当前硬限 `MIN_SHARE = 0.1`）——现有证据是合成 `PointerEvent`；
+- 四条以上分屏时每一条分界条的独立拖动；
+- 窗口尺寸变化后旧比例是否仍然合理（比例是相对量，理论上自适应，但未实测）。
 ---
 
 ## 14. AI 接手时建议的工作流程

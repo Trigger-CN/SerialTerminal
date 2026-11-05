@@ -624,7 +624,7 @@ function syncShellTabLayer() {
   │              │      .pane-tabs-list#pane-1-<g>-tabs-list
   │              └─ .pane-tabs-content#pane-1-<g>-tabs-content → 终端/过滤/图表
   │
-  └─ #group-workspace-splitter        ← 外层分界条，始终紧跟第一个可见列
+  └─ #group-workspace-splitter        ← 外层分界条；N 列时共 N-1 条，夹在相邻两列之间
 ```
 
 四层职责与「绝对不能放错」的理由：
@@ -641,12 +641,20 @@ function syncShellTabLayer() {
 | 要素 | 规则 | 具体值 |
 | --- | --- | --- |
 | 未分屏 | 单列占满 | `.group-column { flex: 1 1 0 }`，无 `flex-basis` |
-| 已分屏 | 参与组按比例 | 每列 `style.flexBasis = <sizes[g]>%`，`flex-grow/shrink = 0` |
+| 已分屏 | 参与组按比例 | 每列 `style.flexBasis = calc(<sizes[g]>% - 比例×分界条总占位px)`，`flex-grow/shrink = 0` |
 | 分屏方向 | 外层 `#group-workspace` 的类名 | `.group-split-horizontal` → `flex-direction: row`；`.group-split-vertical` → `column` |
-| 分界条位置 | `placeGroupWorkspaceSplitter()` | 始终 `insertAfter(第一个可见列)`；放末尾会被挤到最右边 |
+| 分界条数量 | `syncGroupWorkspaceSplitters()` | **N 列 = N-1 条**；每条用 `data-splitter-left` / `data-splitter-right` 声明夹的是哪两列 |
+| 分界条占位 | `.group-workspace-splitter { flex: 0 0 4px }` | 可见线是 `::before` 的 1px；`::after` 横向各溢 2px 只扩大命中区，**不增加布局宽度** |
+| 分界条拖动 | `bindGroupWorkspaceSplitter()` | 在**被夹那两列自身宽度之和**内换算比例，只改这两个 key 在 `sizes` 里的值 |
 | 列高 | 跟随外层 | `.group-column { min-height: 0; display: flex; flex-direction: column }` |
 
 **退出分屏必须清 `flex-basis`**，否则上次比例残留，表现为「退出分屏后当前分组只占半宽」。**方向类名必须与 CSS 完全一致**：JS 切 `group-split-vertical` / `group-split-horizontal`，CSS 曾经写成 `.split-vertical`，类名不匹配**不报任何错**，只是上下分屏完全不生效。
+
+**列宽必须扣掉分界条的实占宽度。** 早期写的是 `flex-basis: <比例>%` 加 `flex-shrink: 0`，百分比合计 100% 而分界条自身还占 10px，于是列宽之和 = 容器宽 + 分界条总宽：实测两列时 `widthSum=809`、`maxRight=1010`（容器 `right=1000`），**最右列直接叠出窗口右边界 10px**。现在的写法是 `calc(<比例>% - <比例×分界条总占位>px)`，让每条分界按列自身的占比分摊。
+
+**取分界条占位必须按分屏方向。** `.group-split-vertical` 下分界条是 `width: 100%`（实测 799px），若统一用 `getBoundingClientRect().width` 求和，两列各扣 799px → 高度算成 0，**上下分屏彻底不可用**（实测三列 `height` 全为 0）。现在的实现按 `orientation` 取 `height` / `width`。
+
+**静态 `#group-workspace-splitter` 永不 remove。** 它是 `index.html` 里就存在的节点，`document.getElementById` 拿不回来；早期那次「按数量裁剪」的写法把它一并删了，`getGroupWorkspaceSplitters()` 的兜底 `unshift` 又把已脱离文档的它塞回数组，下次访问 `splitters[i].dataset` 直接抛 `TypeError`。现在多出来的动态条直接 `remove()`，静态那条只 `hidden = true`。
 
 ### 6A.3 Shell 归属：三态（归属 × 是否独立成列）、逐标签、单一宿主入口
 
@@ -671,11 +679,15 @@ flowchart TD
   C -->|否| D{"owner 非空且<br/>owner 那一列当前可见 ?"}
   D -->|是| S3["layer = 'subRow'<br/>挂在 owner 组的 pane-1 下层行"]
   D -->|否| D2{"owner 为 null ?"}
-  D2 -->|是| S4["layer = 'topRow'<br/>挂在可见列（单列时就是那一列）的上层行<br/>面板叠在同列 pane-1 内容区"]
+  D2 -->|是| S4["layer = 'topRow'<br/>挂在 tabState.topRowColumnId 记住的那一列列首行<br/>记忆列不再可见时才重选并写回记录"]
   D2 -->|否| S5["layer = 'topRow'<br/>宿主落在激活列<br/>（owner 列当前不可见）"]
 ```
 
 「owner 那一列当前可见」的判据：已分屏 → `groupWorkspaceSplit.groupIds.includes(owner)`；未分屏 → `owner === activeGroupId`。这个判据把「Shell 归属在另一个被隐藏的列」自动归到 `topRow`，正是修掉「点 Shell 跳到别的列、在用户看来像分屏」的关键。
+
+**未归属 Shell 的 `topRow` 宿主列必须记住，不能每次重新算。** `resolveShellTopRowColumn(tabState)` 的顺序是：① `tabState.topRowColumnId` 仍可见就继续用它（`isVisibleColumnKey`）；② 否则回落到 `getSingleVisibleGroupId() || activeGroupId` 并把新列写回记录。
+
+早期这里写的是 `getSingleVisibleGroupId() || activeGroupId`，而 `getSingleVisibleGroupId()` 在「已分屏且可见列 > 1」时返回 `null`——于是每次 `applyActiveSerialGroup()` → `renderSerialGroupTabBar()` → `syncShellTabLayer()` → `placeShellTabs()` 都把未归属 Shell 的按钮与面板 `appendChild` 到**新的激活列**。这就是用户实测的「两个串口组左右分屏，点击任意一个串口组标签 shell 就会跟着跳过去」。拖动到分组标签行时也把目标列写入 `topRowColumnId`，保证拖完不会再被激活列拽走。
 
 ### 6A.4 显隐矩阵
 
@@ -1490,7 +1502,9 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 
 **6）分屏场景下的入口互斥未做 CDP 用例。** 两层入口的互斥（§6.2）已由 54 项 CDP 断言覆盖，含「全文档只存在两个入口实例」的全量清点；但**分屏后**（新增 pane 与分裂 pane）的场景没有单独驱动——因为分屏由主进程右键菜单 IPC 触发，CDP 无法直接调起。当前依据是「`createPaneElement` / `createGroupPaneElement` 的 `buttonSpecs` 已不含 group 项」这条代码事实，加上全文档清点的间接保障。
 
-**7）分组级分屏的分界条拖动仍未验证。** 分屏本身的 UI 入口已落地（见下方「已修复」），并已用 CDP 19 项断言覆盖开启/切换方向/关闭三个动作的真实效果；但 `bindGroupWorkspaceSplitter()` 的**真实鼠标拖动**仍未验证——CDP 的 `Input.dispatchMouseEvent` 可以模拟 pointer 事件，但拖动比例换算依赖真实 `getBoundingClientRect` 与 pointer capture，现有脚本未覆盖。因此拖动逻辑目前只有静态审查。
+**7）分组级分屏的分界条拖动只验证了比例换算，真实鼠标手感仍未验证。** `verify-split-geometry.js`（26 项）用合成 `PointerEvent` 驱动了完整序列（pointerdown → 8 次 pointermove → pointerup），并逐帧断言只有被夹的两列宽度变化、第三列不动、无溢出；但那不是真实 `Input.dispatchMouseEvent`，pointer capture、按下位置、快速甩动时的节流表现都没有覆盖。
+
+**仍需补的验证**：真实鼠标拖动下的跟手程度与最小宽度手感（当前硬限 `MIN_SHARE = 0.1`）、三分屏以上每一条分界条的独立拖动、窗口尺寸变化后旧比例是否仍然合理。
 
 
 **已修复的相关项（已不再属于未验证）**：
@@ -1520,6 +1534,16 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
   - **同时修正一处更隐蔽的缺陷**：`resolveShellTabHost()` 尾部原先写 `const visibleColumn = groupWorkspaceSplit.enabled ? activeGroupId : activeGroupId`（两个分支完全相同），已改为 `getSingleVisibleGroupId() || activeGroupId`，使「未分屏时 Shell 跟随唯一的可见列」不再依赖巧合。
   - 新增 CDP `verify-shell-buttons-split.js` **13/13**（`diag195`/`diag242`）。因语义变更更新四处旧断言并注明原因：`verify-user-paths` 与 `verify-group-columns` / `verify-shell-drag` 的「未归属 Shell 自占一列」，以及两处「上层 Shell 隐藏下层行」。全量回归 `run-all-230.txt`：13 个脚本全部 exit=0（`verify-same-port-guard` 因 `COM6` 被占用按脚本设计 skip，fail=0），合计 15+37+16+19+14+17+14+13 项断言 0 失败。
   - **仍未验证**：真实双击/双击拖动下的「新建 Shell 后紧接着拖动另一个 Shell」的时序；多个未归属 Shell 在分屏下的具体列选择（现为激活列，没有更优的确定性规则）。
+
+- **分屏的三个几何与宿主缺陷已修复（本轮）**。用户实测报告三条：两列分屏时点任意分组标签 Shell 跟着跳过去；分割线过宽且三列时只有一条、无法分别控制各列宽度；最右列超出窗口右边界。
+  - **Shell 跟随**：`resolveShellTabHost()` 的 `topRow` 分支用 `getSingleVisibleGroupId() || activeGroupId`，而前者在「已分屏且可见列 > 1」时恒为 `null`。改为 `resolveShellTopRowColumn(tabState)`：先看 `tabState.topRowColumnId` 记忆的那一列是否还可见，不可见才重选并写回。实测点另一个分组标签再点回来，Shell 的按钮列与面板列全程不变。
+  - **分割线过宽**：`.group-workspace-splitter` 由 `flex: 0 0 10px` 改为 `4px`（可见线仍是 1px 的 `::before`，新增 `::after` 左右各溢 2px 只扩大命中区，不占布局宽度）。
+  - **只有一条分割线**：静态 DOM 里只有一条 `#group-workspace-splitter`，且拖动逻辑写死 `participants[0]` 为左列。新增 `syncGroupWorkspaceSplitters()` / `getGroupWorkspaceSplitters()` / `getGroupWorkspaceVisibleColumnKeys()`，按可见列数保证 N-1 条，每条用 `data-splitter-left` / `data-splitter-right` 声明夹住的两列；`bindGroupWorkspaceSplitter()` 重写为在被夹两列自身宽度之和内换算比例。实测三列时 2 条分界条、配对正确，拖第 2 条后 `default 263.66` 不动而 `g-1 263.66→385.67`、`g-2 263.66→141.66`。
+  - **最右列越界**：`flex-basis` 由 `<比例>%` 改为 `calc(<比例>% - <比例×分界条总占位>px)`。实测两列 `widthSum=799=containerWidth`、`overflowRight=0`；三列 `scrollWidth=799=clientWidth`（修前 `widthSum=809`、`maxRight=1010` 对容器 `right=1000`）。
+  - **顺带修掉一个既有缺陷**：`gutterTotal` 原先统一用 `getBoundingClientRect().width` 求和，而 vertical 下分界条是 `width: 100%`，两列各扣 799px → **上下分屏 height 全为 0、彻底不可用**（`verify-group-split` 的 `vertical-split-two-visible` / `vertical-split-roughly-half-each` 首轮 FAIL）。改为按 `orientation` 取 `height` / `width` 后回到 19/19。
+  - 新增 CDP `verify-split-geometry.js` **26/26**（`diag258`/`diag282`/`diag303`），覆盖：Shell 列不随激活分组变化、分界条 4px、N-1 条及配对、拖第 2 条只改相邻两列、两列与三列均不越界、关分屏后分界条清空且单列铺满。全量回归 `run-all-290.txt`：14 个脚本全部 exit=0 + `renderer-diag=clean`（`verify-same-port-guard` 按设计 skip，fail=0）。
+  - **本轮两次自伤（必记）**：① `File.Edit` 的 replace 区间再次吞掉相邻的 `}`，`node --check` 两次报 `Unexpected token '}'`；② 更隐蔽的一次——按数量裁剪分界条时把**静态** `#group-workspace-splitter` 也 `remove()` 了，而 `getGroupWorkspaceSplitters()` 的兜底 `unshift` 又把已脱离文档的它塞回数组，下次访问 `.dataset` 抛 `TypeError`。另有 `flush()` 里 `clamped` 被误删，静态门禁全绿，只有 `app-diag254-err.log` 报 `ReferenceError`。**结论仍然是：交互路径上的函数只能靠真实启动暴露。**
+  - **仍未验证**：真实鼠标拖动的手感与最小宽度（硬限 `MIN_SHARE = 0.1`）、四条以上分屏时每条分界条的独立拖动、窗口尺寸变化后旧比例是否仍合理。
 
 
 
