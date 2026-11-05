@@ -1712,6 +1712,50 @@ function getGroupActiveTabInfo(groupId = REGISTRY_DEFAULT_GROUP_ID, fallbackTabI
 
 **测试 stub 同步的判据**：`test/workspace-manager.test.js` 的三处 pane stub 补了 `querySelectorAll` 与 `classList.remove`，因为实现真的新增了「在 pane 内清激活态」的正当行为；断言期望值（`tabIds` / `activeTabId` / `splitEnabled` / `activePaneId` / `moved` 事件）一字未改。**判断「改断言还是改实现」的唯一标准是：改动是否让被验证的行为本身变得更正确。** 本窗口的反例对照：曾给 `switchPaneTab` 的「同一标签」早退分支加 DOM 重同步，`test 10`（纯切换不该有 DOM 副作用）立即失败——那个断言是对的，改动已回退。
 
+### 13A.9 连接 / 断开按钮必须作用于当前串口分组
+
+**用户实测缺陷**（逐字）：`选择串口2组，点击链接串口，串口1组会链接，并开始接受串口数据并显示，串口1组 的连接断开按钮会处于来连接状态，串口2组的处于断开状态`。
+
+**取证（确凿，不是推断）**。`diag-connect-group.js`（`userdata-diag111`）在让 g-1 保持激活、选中 `COM6` 后点击 `#sidebar-connect-btn`，用 monkey-patch 旁路记录 IPC（`connect-serial` 假成功，不碰真实硬件）：
+
+```text
+activeGroupId at click time : g-1
+connect-serial payload      : {"groupId":"default","path":"COM6",...}
+disconnect-serial payload   : {"groupId":"default"}
+sidebar-btn-after-connect   : {"cls":"sidebar-tool-btn disconnect-action","title":"Disconnect"}
+per-group-connected-after   : {"default":true,"g-1":false}
+```
+
+即界面停在 Serial 2，点连接实际把 Serial 1 连上，按钮也变成了 Serial 1 的已连接态。用户描述 100% 复现。
+
+**根因：整条连接链路写死默认分组**。七处，必须一起改，只改一半会出现「连对了但状态错」或「状态对但终端错」：
+
+| 处 | 旧写法 | 后果 |
+| --- | --- | --- |
+| `toggleSerialConnection()` | `isConnected` 判定 + 不传 `groupId` | 永远操作默认分组 |
+| `connectSerialFromUi()` | 默认参 `REGISTRY_DEFAULT_GROUP_ID`，参数全从侧栏控件读 | 即便传了 groupId，读到的也是激活组的控件值 |
+| `disconnectSerial()` | `invalidateSession(REGISTRY_DEFAULT_GROUP_ID)` + `{groupId: DEFAULT_SERIAL_GROUP_ID}` | 断不开其它组 |
+| `serialConnectInProgress` | 全局布尔 | 一个组在连时吞掉另一个组的点击 |
+| `waitForSerialDisconnected()` | 全局 `serialDisconnectWaiters` 数组 | 任一组断开都会唤醒别的组的重连流程 |
+| `serialTerm.onData` | 只在默认终端绑一次 | 非默认分组终端即便已连接也打不进去 |
+| `sendSerialRequest()` | `if (!isConnected) return` | 非默认分组已连接也被默认分组的态拦下 |
+
+**顺带修的三处同源错配**（不修就会在别的地方重新翻车）：
+
+1. **连接提示跑错终端。** `getSerialTerm(groupId)` 在目标分组尚未创建 runtime 时会静默回落到默认分组，于是「Serial 2 已连接」写进了 Serial 1 的画面。改为 `serialRuntimes.getOrCreate(groupId).term`。
+2. **吞吐面板被后台分组冲刷。** 主进程的 `serial-throughput-update` 本来就带 `groupId`，但渲染层不看，任一组的流量都会刷当前面板。改为按 `groupId === activeGroupId` 过滤。
+3. **保存当前标签可能存错内容。** `getActiveTerminalExport()` 兜底走 `getSerialTerm(groupId)` 也会回落；改为无 runtime 时存空内容——宁可空，不可错。
+
+**新增断言**：`verify-connect-group.js` **23/23**（`diag129`，exit=0，renderer-diag=clean），并入 `run-all.ps1`（九个 → 十个脚本）。覆盖：连接目标 = 激活组 / 另一组仍断开 / 按钮跟激活组 / 断开只断自己 / 连接提示不污染另一组终端 / 端口不跨分组继承。
+
+**写这个脚本时踩到的两个断词问题（值得记住）**：
+
+- 第一版忘了给 Serial 1 自己选端口，导致「切回默认后点连接」无反应。**这不是产品缺陷，而是「端口也按分组隔离」生效的证据**。硬把断言改成「会在」，而是先把「Serial 1 端口为空」作为一条独立断言写进去（`serial1-port-not-inherited-from-serial2`），再为它选端口。
+- 「Serial 1 终端不应有连接横幅」这条一开始放在最后，而中间已经连过 Serial 1——断言自己制造了失败。改为在连 Serial 1 **之前**断言。**断言也有时序，不能只看“变量名对不对”。**
+
+**尚未验证**：两个真实串口同时连接时的并发收发字节流隔离与按钮态刷新（无硬件）。
+
+
 ---
 
 ## 14. AI 接手时建议的工作流程

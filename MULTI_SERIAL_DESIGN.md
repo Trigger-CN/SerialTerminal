@@ -789,10 +789,12 @@ Shell 叠在上层时下层标签行是被**故意**隐掉的（否则就是「S
 | 端口 / 波特率 / 数据位 / 停止位 / 校验 | **按组**（存 `group.portPath` / `group.serialOptions`） |
 | 接收模式 / 接收编码 / 发送编码 / 换行模式 | **按组**（存 `SerialGroupContextStore`） |
 | 字体 / 高亮配色 / 壁纸 / 暗色遮罩 | 全局 |
-| 时间戳 / 行号 / 滚回行数 | 全局 |
-| 发送回显三开关 / 回显背景色 | 全局 |
 | 日志自动保存 / 保存范围 / Shell 日志开关 | 全局（路径按组隔离） |
 | 快捷指令 / 自动发送总开关 | 全局（已定决策） |
+| **连接 / 断开按钮** | **按组**（`toggleSerialConnection()` 以 `activeGroupId` 为对象） |
+
+> **实测订正（本轮）**：表中「时间戳 / 行号」「发送回显三开关」列为全局，是因为它们目前**根本没有按分组存储**。`diag110` 取证显示这 5 个复选项（`show-timestamp` / `show-lineno` / `echo-sent-data` / `echo-sent-data-both` / `echo-sent-data-filter`）切换分组后会停留在上一次改成的值。它们属于侧栏设置项，用户预期是跟随分组；本书把这一条记录为**待办缺口**（见 `ToDo.md`），不是已定决策。串口参数类 9 项经实测已正确跟随分组，不要重复改。
+
 
 ### 7.2 四个显示参数的下沉手法（实际实现）
 
@@ -881,6 +883,51 @@ updateFilterModeStatuses()                         // 过滤页暂停态重算
 | 关闭 g-1 后默认分组编码未被污染 | `{encoding:"utf8"}` |
 
 **尚未验证**：真实双端口字节流隔离（从未做过）；分组切换后 xterm `fit()` 在 `display:none` 容器切回来的尺寸。
+
+### 7.8 连接 / 断开按钮的分组分发（本轮修复）
+
+**用户实测缺陷**：`选择串口 2 组，点击连接，串口 1 组会连接…串口 1 组的按钮处于已连接状态，串口 2 组的处于断开状态`。
+
+根因是整条连接链路写死默认分组：
+
+| 旧写法 | 后果 |
+| --- | --- |
+| `toggleSerialConnection()` 不传 `groupId` | 永远操作 `REGISTRY_DEFAULT_GROUP_ID` |
+| `disconnectSerial()` 写死 `invalidateSession(REGISTRY_DEFAULT_GROUP_ID)` 与 `{ groupId: DEFAULT_SERIAL_GROUP_ID }` | 切到哪个分组都只断默认分组 |
+| `connectSerialInProgress` / `isConnected` 是全局单值 | 一个分组在连时吠掉另一个分组的点击；连接态无法按组区分 |
+| `serialTerm.onData` 只绑默认分组 | 非默认分组终端即便已连接也打不进去 |
+| `sendSerialRequest()` 开头 `if (!isConnected) return` | 非默认分组已连接也被默认分组的连接态拦下 |
+| 连接提示用 `getSerialTerm(targetGroupId)` | 目标组尚无终端时静默回落到默认分组，提示写进错的终端 |
+| 吞吐事件不管 `groupId` | 后台分组的流量把当前分组的速率/曲线冲掉 |
+
+现行实现：
+
+```text
+toggleSerialConnection()
+  → resolveSerialGroupId(activeGroupId)            // 操作对象一分为「当前分组」
+  → isGroupConnecting / isGroupReconnecting        // 锁按分组
+  → disconnectSerial(groupId) | connectSerialFromUi({ groupId })
+
+connectSerialFromUi({ groupId = activeGroupId })
+  → getGroupSerialOptionsForConnect(groupId)       // 目标组是激活组才读侧栏控件
+  → serialRuntimes.getOrCreate(groupId).term       // 不用会回落的 getSerialTerm
+  → bindGroupTerminalInput(groupId)               // 新终端补绑键盘输入
+  → refreshConnectButtonState()                   // 按钮展示激活组的连接态
+```
+
+**不变式（改动时不得破）**
+
+1. `serialSessionId` / `serialWriteChain` / `stopAutoSendRuntime()` / `resetQuickTriggerReceive()` / `chartTabs`（模块级别名）都是**默认分组专属**：断开非默认分组不得碰它们，否则会静默清掉默认分组的会话与自动发送。
+2. `isConnected` 降级为默认分组的**镜像**，只能用于默认分组路径；任何「当前分组」判断必须走 `isGroupConnected(groupId)`。
+3. `serialDisconnectWaiters` 必须是 `Map<groupId, resolvers[]>`：换波特率重连只能等自己那一组断开，等「任何一组断开」会在端口还没关掉时就重连。
+4. `serialConnectInProgress` 那个全局布尔不得恢复：它会让「一边在连、另一边点连接」静默无反应。
+5. 非默认分组的终端是惰性创建的，所以「取终端」一律用 `serialRuntimes.get()` / `getOrCreate()`，**不得**用 `getSerialTerm()` 的回落分支。
+6. 快捷指令整套与 `auto-send-*` / `quick-send-auto-trigger-enable` 仍是**全局共享**，本轮未动。
+
+**已验证**：`verify-connect-group.js` **23/23**（`diag129`，exit=0，renderer-diag=clean），运行在真实渲染进程、旁路记录 `connect-serial` / `disconnect-serial` 的 `groupId`（不打开真实串口）。覆盖：在 Serial 2 点连接只连 Serial 2 / Serial 1 仍显示「连接」/ 切分组后按钮跟随 / 在 Serial 1 点连接只连 Serial 1 / 回 Serial 2 断开只断自己 / 连接提示不污染另一分组终端 / 端口不跨分组继承。
+
+**尚未验证**：两个真实串口同时连接并发收发时的字节流隔离与按钮态刷新（无硬件，从未做过）。
+
 
 ---
 
