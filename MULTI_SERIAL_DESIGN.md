@@ -842,6 +842,26 @@ function syncShellAddButtonVisibility() {
 
 **`hidden` 能生效的前提**：`style.css` 里有 `[hidden] { display: none !important; }`。全局 `button { display: inline-flex }` 会压倒 UA 的 `[hidden] { display: none }`，`el.hidden = true` 对按钮完全无效且无报错（既有缺陷，已修）。
 
+
+### 6A.9 标签切换不允许重播动画、不允许重建节点
+
+切标签时“整个窗口闪一下、标签栏也闪”不是渲染性能问题，而是两个确定的重绘来源：
+
+| 来源 | 现象 | 现在的约束 |
+| --- | --- | --- |
+| `.main-tab` / `.main-tab-pane.active` / `.sidebar-tab-pane` 上的 `animation` | 元素每次从 `display:none` 变成显示、或被搬移时，动画从头重播：面板与标签从左透明+位移到正常 | **不得在这三个选择器上加 `animation`**；@keyframes fadeIn / tabFadeIn 已删 |
+| `applyLayoutToDom()` 无条件 `appendChild` | 即使目标父节点就是当前父节点，DOM 也会先摘再插：触发动画重播与整行重排 | 只在 `parentElement !== 目标容器` 时搬 |
+| `renderSerialGroupTabBar()` 先 `replaceChildren()` 再重建 | 每次切分组换一批新按钮，整条标签栏重排 | 按 `buttonId` 复用，只就地更新 `className` / `aria-selected` / 标题 |
+
+**为什么动画在这三个地方必错**：它们描述的是“入场”，但这三个元素在同一个会话里会反复显示/隐藏（切 pane 标签、切分组、切侧栏 tab）。只要 CSS 动画是“挂在元素上的”，每次重播就与显示同步发生，用户就会看到一片白屏闪一下。入场动画只适合真正只出现一次的东西（对话框、Toast）。
+
+**节点复用的两个连带约束**（漏一个就出缺陷）：
+
+1. **事件不能绑在按钮构造时**。按钮不再重建，用闭包绑定的 `groupId` 会停在旧值。因此分组标签的点击与右键菜单改为**在列表上委托**（`bindGroupTabListEvents`，从 `dataset.groupId` 现读），静态列表在模块加载时挂一次，动态列的列表在 `createGroupTabRowElement()` 里各自挂。
+2. **反向清理必须显式做**。以前 `replaceChildren()` 顺手就把已关分组的按钮带走了；现在只追加不重建，所以末尾要按 `knownGroupIds` 把不在集合里的 `.serial-group-tab` 移除，否则关掉的分组会留下一个点不动的死按钮。
+
+关闭按钮的 `close` 监听仍绑在构造时的子元素上：那个 `span` 每次 `buildGroupTabButton` 都新建，与按钮复用不相关。
+
 ## 7. 设置侧栏跟随（P4，已落地）
 
 ### 7.1 作用域划分

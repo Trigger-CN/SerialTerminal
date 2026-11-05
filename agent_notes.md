@@ -2184,6 +2184,61 @@ function syncShellAddButtonVisibility() {
 
 另一次 `diag311` 的 `exit=2` 是**验证脚本自己**的笔误：插入新断言时 `const shellCols = ...` 被覆盖掉，与产品无关。
 
+### 13A.15 切标签时整个窗口与标签栏闪一下：三处重绘源
+
+**用户实测报告**（逐字）：
+
+> 标签切换的时候整个窗口都会闪一下，标签栏也会闪
+
+#### 一、先取证：不要猜渲染性能
+
+`diag-tab-flash.js` @ `diag340`（exit=0、renderer-diag=clean，`diag-tab-flash-out1.txt`）在页面上装了一个采样器，点击前后逐帧记录 `getComputedStyle` 与 `document.getAnimations()`。三条硬事实：
+
+1. **切完之后激活面板的 opacity 恒为 `0`**，`transform: matrix(1,0,0,1,0,5)`（即 `translateY(5px)`），而且点击后过了 12 帧（约 200 ms，已超过 0.2 s 动画时长）仍然是 0。
+2. **标签按钮的 opacity 也是 `0`**，`document.getAnimations()` 里 `tabFadeIn` 正挂在 `tab-main-button` / `tab-filter-1-button` / `tab-group-*-button` 上。
+3. **分组标签按钮没有被重建**：`groupTabSameNode: true` / `defaultTabSameNode: true`。所以标签栏闪不是“节点重建”，而是**动画在元素被搬移时重播**。
+
+对应到代码，`style.css` 里三处：
+
+| 选择器 | 动画 | 重播时机 |
+| --- | --- | --- |
+| `.main-tab` | `tabFadeIn 0.18s ease` | 切 pane 标签 / 切分组 / 建标签，元素一从 `display:none` 转显示就重播 |
+| `.main-tab-pane.active` | `fadeIn 0.2s ease`（`from { opacity: 0; transform: translateY(5px) }`） | 同上，整个内容区从透明+下移 5px 淡入 |
+| `.sidebar-tab-pane` | `fadeIn 0.2s` | 切侧栏 tab |
+
+而 `appendChild` 是放大器：`applyLayoutToDom()` 每次都无条件把按钮与面板 `appendChild` 到目标容器。**即使目标父节点就是当前父节点，DOM 规范也是先摘再插**，动画每切一次就重放一次。
+
+#### 二、修法
+
+| 目标 | 改动 |
+| --- | --- |
+| 不再重播动画 | 删掉上述三处 `animation` 与 `@keyframes fadeIn` / `@keyframes tabFadeIn`（删前已确认全项目仅剩这两处定义 + 三处引用，无 JS 引用） |
+| 不再无意义摘插 | `applyLayoutToDom()` 只在 `parentElement !== 目标容器` 时 `appendChild` |
+| 不再重建分组标签 | `renderSerialGroupTabBar()` 改为按 `buttonId` 复用（新增 `updateGroupTabButtonState()`，直接复用 `describeGroupTab().className`），末尾按 `knownGroupIds` 反向移除已关分组的按钮 |
+| 复用后事件仍正确 | 新增 `bindGroupTabListEvents(listEl)`，在列表上委托 click / contextmenu，从 `dataset.groupId` 现读 |
+
+**为什么必须改成事件委托**：按钮不再重建后，“构造时用闭包绑 `groupId`”就会永久持有旧值。委托只挂一次，复用与新造走同一条路径。静态列表在模块加载时挂，动态列的列表在 `createGroupTabRowElement()` 里各自挂（用 `dataset.groupTabEvents` 去重）。
+
+**为什举关闭按钮不用改**：它的监听绑在 `buildGroupTabButton()` 里新建的 `.main-tab-close` 子元素上，那个 `span` 每次构造都是新的，与按钮复用无关。
+
+#### 三、验证
+
+新增 `verify-no-tab-flash.js` **18/18**（`diag341`，renderer-diag=clean，`verify-no-tab-flash-out1.txt`）：
+
+- `filter-pane-fully-opaque` / `main-pane-fully-opaque`：切完后 `opacity === '1'`；
+- `filter-pane-not-translated` / `main-pane-not-translated`：`transform === 'none'`；
+- `no-entrance-animation-running-on-filter` / `...-on-main` / `...-on-group-switch`：页面无 `fadeIn` / `tabFadeIn` 动画；
+- `group-tab-nodes-reused` / `pane-nodes-reused`：切分组前后分组标签与面板是**同一个对象**；
+- `switch-back-by-delegation` / `group-tab-context-menu-delegated` / `newly-added-group-tab-clickable`：委托路径可用（含新建第三分组后其标签能点，证明动态列表也挂上了）；
+- `close-button-removes-group`：关闭按钮仍有效。
+
+全量回归 `run-all-350.txt`：15 个脚本全部 `exit=0` + `renderer-diag=clean`。`npm test` **492/492**（`full67.txt`）。
+
+#### 四、仍未验证
+
+- 真实用户鼠标连续快速切换时的观感（现有证据是 CDP 合成点击 + `getComputedStyle`）；
+- 大量标签（数十个）下复用路径的相对顺序是否始终与 `pane.tabIds` 一致（未构造这种数据）。
+
 ---
 
 ## 14. AI 接手时建议的工作流程
