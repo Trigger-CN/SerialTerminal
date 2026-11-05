@@ -4,10 +4,11 @@
 >
 > `MULTI_SERIAL_DESIGN.md` §6A（第 606 行起）描述**当前实现**：两种层数形态、Shell 的三态宿主、`ownerGroupId` / `detachedColumn` / `topRowColumnId` 三个位置字段、`#serial-group-tab-bar` 的单例借位机制。本文描述要替换它的模型。两者是「现状 / 目标」的关系，不是并列规范；按 §11 的 S1–S5 推进期间，以代码实际所处阶段为准。
 >
-> **两处最容易读错的地方，先说清**：
+> **三处最容易读错的地方，先说清**：
 >
 > 1. **`subRow` 不是每列一条，而是每个 pane 一条**。数量 = `paneSplit.enabled ? panes.length : 1`。组内上下分屏时，同一列里同时存在两条 subRow。
 > 2. **`tabPanel` 才是显示面板**。「TabRow 是显示面板」是笔误；TabRow 与 subRow 都只是标签栏，只有 tabPanel 承载内容。
+> 3. **标签的「位置」不是数据**。Tab 上没有任何「我在第几列／第几行」的字段，全部由 `layoutColumns()` 从 `{ tabs, focusedTabId, split }` 推出。这是本文全部设计的支点。
 
 ## 0. 为什么需要重构
 
@@ -33,42 +34,68 @@
 
 A + B + C + D 共 17 处根因在结构层。但这不等于「所有缺陷都是架构造成的」——E 类已在现有结构下稳定修好，并连同 26 项断言固化（`verify-split-geometry` 26/26）。本文的模型同时消除 A、B、C、D 四类。
 
+### 0.1 三条设计判据
+
+本文所有取舍都按这三条衡量，也可用来否决任何后续提案：
+
+| 判据 | 含义 | 反例（现状） |
+|---|---|---|
+| **系统性** | 每个事实只有一处可写；任何观察值都能从这一处推出 | 4 套真源并存，`applyLayoutToDom` 反向询问渲染层 |
+| **可持续** | 新需求只改模型、不动渲染；状态可被断言、可被自愈 | 每加一个特性就往 8 处层数判断里再补一处 |
+| **通用** | 新增一种 Tab（叶或容器）不需要改渲染与派生逻辑 | `shell` 因为「不属于任何组」被写成 10 余个特例函数 |
+
 ## 1. 四个原语
 
 ### 1.1 Tab
 
-一棵树上的节点。容器与叶共用同一套身份字段：
+一棵树上的节点。**容器与叶共用同一套身份字段，区别只在「有没有 panes」。**
 
 | 字段 | 含义 | 谁写 |
 |---|---|---|
 | `id` | 全局唯一。`tabPanel` 的 DOM id 由它派生，保证 1:1 | 创建时一次性确定 |
-| `kind` | `group` / `main` / `filter` / `chart` / `shell` | 同上 |
-| `groupId` | 仅 `kind === 'group'`：指向 `serialGroups` 里的分组 | 同上 |
-| `order` | **仅根级 Tab**：TabRow 的列顺序 | 同栏重排 |
+| `kind` | `group` / `main` / `filter` / `chart` / `shell` …（可扩展） | 同上 |
+| `parentId` | 父容器 id；`null` 表示根级 | **只由 `rebuildIndex()` 写**，见 §2.3 |
+| `order` | **仅根级 Tab**：在 TabRow 中的顺序 | 同栏重排 |
+| `panes` | **仅容器**：`[{ id, tabIds[], activeTabId }]` | pane 增删、标签搬迁 |
+| `groupId` | 仅与串口组绑定的容器：指向 `serialGroups` | 创建时一次性确定 |
 
-**Tab 内不存「我在第几列」「我的按钮在哪个 DOM 里」。** 位置全部由结构与派生量决定。这是「聚合」的判据：归属只在一个地方存在。
+**Tab 内不存「我在第几列」「我的按钮在哪个 DOM 里」。** 位置全部由结构与 `layoutColumns()` 推导。
 
-### 1.2 TabRow
+### 1.2 容器与叶
 
-一级标签栏。**每列一条**。内容是这一列的顶层 Tab。
+**判据是结构的，不是枚举的**：
+
+```js
+function isContainer(tab) {
+  return Array.isArray(tab.panes);
+}
+```
+
+`kind` 只用于「这个 Tab 指向什么内容」（决定 panel 渲染什么），**不用于决定布局行为**。新增一种容器（例如「工作集合」）时，只要它带 `panes`，渲染与派生逻辑零改动；新增一种叶（例如「波形」）时，只要它不带 `panes`，同样零改动。这是「通用」判据的落地方式。
+
+现状把 `kind === 'group'` 当容器判据写了 8 处以上分支，本文全部替换为 `isContainer()`。
+
+### 1.3 TabRow
+
+一级标签栏。**每列一条**。内容由 `layoutColumns()` 的 `tabItems` 给出（扁平模式下会把族展开，见 §3.3）。
 
 它不是显示面板，不承载任何终端或图表。
 
-### 1.3 subRow
+### 1.4 subRow
 
 二级标签栏。**属于某个 pane，不属于某列**。可被收起（`collapsed`），收起后该 pane 的标签栏不渲染，但面板继续显示。
 
-### 1.4 tabPanel
+### 1.5 tabPanel
 
-与 Tab 严格 1:1 的显示区，`panel.id === tab.id`。
+与叶 Tab 严格 1:1 的显示区，`panel.id === tab.id`。容器没有 panel。
 
-容器 Tab（`kind: 'group'`）**没有自己的 panel**——它只组织布局。叶 Tab 才有 panel。
+**Shell 的 panel 就是它的终端容器**，位置是它所在列的内容区（它作为根级 Tab 独占一列）。这与「Shell 绝不进入某个 pane 的 content」不矛盾——后者说的是 pane 内，前者说的是根级列内。§6.1 把这条写成不变式。
 
-### 1.5 组合关系
+### 1.6 组合关系
 
 ```
 列（column）
-├── TabRow            ← 该列的顶层 Tab（扁平模式下会展开，见 §5）
+├── TabRow            ← tabItems（扁平模式下展开整族）
 ├── pane[0]
 │   ├── subRow        ← 该 pane 的标签（可收起）
 │   └── tabPanel      ← 该 pane 的 activeTabId 对应的面板
@@ -78,110 +105,157 @@ A + B + C + D 共 17 处根因在结构层。但这不等于「所有缺陷都�
 └── ...
 ```
 
-四个原语之外没有第五个概念。列不是原语——它是 `split` 的派生结果。
+四个原语之外没有第五个概念。**列不是原语**——它是 `layoutColumns()` 由 `split` 与根族推出的结果。
 
-## 2. 单一真源：一棵 Tab 树
+## 2. 单一真源
 
-### 2.1 结构
+### 2.1 三个字段
 
 ```js
 workspace = {
   tabs: {
     'grp-default': {
       id: 'grp-default', kind: 'group', parentId: null, order: 0,
-      groupId: 'default',
-      collapsed: false,
-      // 第二级分屏：组内 pane
+      groupId: 'default', collapsed: false,
+      // 容器专属：组内 pane 分屏（第二级）
       paneSplit: { enabled: false, orientation: 'horizontal', sizes: {} },
       panes: [
         { id: 'def-p1', tabIds: ['main-default', 'filter-1'], activeTabId: 'main-default' }
       ]
     },
     'main-default': { id: 'main-default', kind: 'main', parentId: 'grp-default' },
-    'filter-1':     { id: 'filter-1', kind: 'filter' },
-    'chart-1':      { id: 'chart-1', kind: 'chart' },
+    'filter-1':     { id: 'filter-1', kind: 'filter', parentId: 'grp-default' },
     'shell-1':      { id: 'shell-1', kind: 'shell', parentId: null, order: 1 }
   },
 
-  // 非分屏时，哪一列可见
-  activeTopTabId: 'grp-default',
+  // 唯一焦点：最近一次被用户显式激活的 Tab（叶或根级）
+  focusedTabId: 'main-default',
 
   // 第一级分屏：列
   split: { enabled: false, orientation: 'horizontal', sizes: { 'grp-default': 1 } }
 };
 ```
 
+**整个模型只有三个顶层字段。** 没有 `activeTopTabId`、没有 `activePaneId`、没有「shell 在哪一层」。
+
+> **为什么没有 `activeTopTabId`**：非分屏时「哪一列可见」≡「焦点所在列」，是派生值。它与 `focusedTabId` 同时存在就会出现「焦点在 A 组、可见列是 B 组」这种不可能状态，而历史缺陷 `revealSerialGroupActiveTab` 正是为修复这种不同步而写的。删掉它，这类 bug 在结构上不成立。
+
 ### 2.2 字段权威表
 
 | 字段 | 唯一负责的事实 | 写入点 |
 |---|---|---|
-| `tabs[id].parentId` | 这个 Tab 属于哪个容器（`null` = 根） | 新建 / 重新归属；**由索引重建统一写入**，见 §2.3 |
+| `tabs[id].id` / `kind` / `groupId` | 身份与内容类型 | 创建时一次性确定 |
+| `tabs[id].parentId` | 属于哪个容器（`null` = 根） | **只由 `rebuildIndex()` 写** |
 | `tabs[id].order` | 根级 Tab 之间的顺序 | 同栏重排 |
-| `tabs[group].panes[].tabIds` | 组内子 Tab 的**归属与顺序** | 新建标签、关标签、跨 pane 移动 |
-| `tabs[group].panes[].activeTabId` | 该 pane 当前显示哪个叶 | `activateTab()`（规则 1） |
-| `tabs[group].paneSplit` | 组内是否分屏、方向、比例 | 组内分屏按钮、组内分界条拖动 |
-| `tabs[group].collapsed` | 该容器所有 subRow 是否收起 | 收起按钮 |
-| `workspace.activeTopTabId` | 非分屏时显示哪一列 | `activateTab()`（两条规则都写） |
-| `workspace.split` | 列分屏开关、方向、各列比例 | 分屏按钮、列分界条拖动 |
+| `tabs[group].panes[].tabIds` | 组内子 Tab 的**归属与顺序** | 新建 / 关闭 / 同 pane 重排 |
+| `tabs[group].panes[].activeTabId` | 该 pane 显示哪个叶 | `activateTab()` |
+| `tabs[group].paneSplit` | 组内是否分屏、方向、比例 | 组内分屏按钮、pane 分界条 |
+| `tabs[group].collapsed` | 该容器 subRow 是否收起 | 收起按钮 |
+| `workspace.focusedTabId` | 当前焦点在哪个 Tab | `activateTab()` |
+| `workspace.split` | 列分屏开关、方向、各列比例 | 分屏按钮、列分界条 |
 
-**没有**任何字段表示「这个 Tab 在第几列」「按钮挂在哪个 DOM」。这两件事都是派生量（§3）。
+**没有任何字段表示**「这个 Tab 在第几列」「按钮挂在哪个 DOM」「当前是单层还是双层」。三者都是派生量。
 
-### 2.3 `parentId` 是派生缓存，不是独立真源
+### 2.3 `parentId` 是派生缓存
 
-叶 Tab 的父级完全由 `panes[].tabIds` 决定。若两处都能写，就会不同步。因此：
+叶 Tab 的父级完全由 `panes[].tabIds` 决定。若两处都能写就会不同步，因此：
 
 - 任何改变归属的操作**只写 `panes`**；
-- 写完后调用 `rebuildIndex()`，由它重算每个 Tab 的 `parentId`；
+- 写完后调用 `rebuildIndex()` 重算所有非根 Tab 的 `parentId`；
 - 其余代码只读 `parentId`，从不直接写。
 
-`rebuildIndex()` 的语义是纯函数式的：遍历所有容器的 `panes`，建立 `tabId → groupId` 映射，再写回 `tabs[id].parentId`。O(n)。
+```js
+function rebuildIndex(ws) {
+  for (const t of Object.values(ws.tabs)) {
+    if (!isContainer(t)) t.parentId = null;    // 先清空，再按 panes 重建
+  }
+  for (const t of Object.values(ws.tabs)) {
+    if (!isContainer(t)) continue;
+    for (const pane of t.panes) {
+      for (const id of pane.tabIds) {
+        const child = ws.tabs[id];
+        if (child) child.parentId = t.id;
+      }
+    }
+  }
+}
+```
 
-### 2.4 为什么是「平铺字典 + parentId」而不是嵌套 children
+### 2.4 为什么是「平铺字典 + parentId」
 
-三种写法都能表达同一棵树，选平铺的理由：
-
-1. **查找 O(1)**。`tabs[id]` 直接命中。嵌套要递归遍历，而标签查找在主路径上（每次点击、每次串口数据回调都要找 tab）。
+1. **查找 O(1)**。`tabs[id]` 直接命中；标签查找在主路径上（点击、串口数据回调、快捷键）。嵌套要递归遍历。
 2. **持久化就是 `Object.values(tabs)`**，不需要递归序列化。
-3. **移动节点的代价是改一个字段**。嵌套写法要把节点从父的 `children[]` 摘出再插入，两步操作，存在「摘了一半」的中间态。
-4. **`order` 显式存在**，排序不依赖数组下标——数组下标在删除元素时会整体前移，是另一类 bug 源。
+3. **移动节点的代价是改一个字段**，不存在「摘了一半」的中间态。
+4. **根级顺序有 `order` 显式承载**，不依赖遍历顺序。
 
-代价：求子序列需要过滤全表（O(n)），n 是几十量级，可接受。
+**有意的不对称**：`order` 只给根级，pane 内顺序用 `tabIds` 下标。理由是两者的稳定性来源不同——根级顺序需要跨 pane、跨分屏保持稳定，而 pane 内顺序总是随 pane 整体移动，下标不会在无关操作中被扰动。这是设计选择，不是遗漏。
+
+代价：求子序列需要遍历全表（O(n)），n 是几十量级，可接受。
 
 ### 2.5 旧结构如何落进来
 
 | 旧结构 | 新位置 |
 |---|---|
-| `groupWorkspaceLayouts` 的 `splitEnabled` / `orientation` / `paneSizes` | 容器 Tab 的 `paneSplit` |
-| 同上的 `panes[{id, tabIds[], activeTabId}]` | 容器 Tab 的 `panes`（结构一致，直接搬） |
-| 同上的 `activePaneId` | **删除**：焦点 pane 是渲染层状态，不进模型 |
-| `filterTabsStore` / `chartTabsStore`（每组一份） | `tabs` 中 `kind === 'filter' / 'chart'` 且 `parentId === <组 id>` 的节点 |
-| `shellTabs`（全局一份） | `tabs` 中 `kind === 'shell'`、`parentId === null` 的节点 |
-| `tabState.ownerGroupId` | **删除**：Shell 不再有归属维度 |
-| `tabState.detachedColumn` | **删除**：Shell 本就是根 Tab |
-| `tabState.topRowColumnId` | **删除**：列由 `split` 决定，不再记忆 |
-| `SHELL_COLUMN_GROUP_ID` / `shellColumnId()` | **删除**：不再有虚拟的 shell 列 |
-| `children[]` 根模型 | 未采用：被 `tabs` 平铺表取代 |
+| `groupWorkspaceLayouts` 的 `splitEnabled` / `orientation` / `paneSizes` | 容器的 `paneSplit` |
+| 同上的 `panes[{id, tabIds[], activeTabId}]` | 容器的 `panes`（结构一致，直接搬） |
+| 同上的 `activePaneId` | **升级为 `workspace.focusedTabId`**（见 §2.6） |
+| `filterTabsStore` / `chartTabsStore`（每组一份） | `tabs` 中的节点，`parentId` 指向所属容器 |
+| `shellTabs`（全局一份） | `tabs` 中 `parentId === null` 的节点 |
+| `tabState.ownerGroupId` / `detachedColumn` / `topRowColumnId` | **全部删除**，无对应字段 |
+| `SHELL_COLUMN_GROUP_ID` / `shellColumnId()` | **删除**，不再有虚拟 shell 列 |
+| `activeTopTabId`（若存在） | **删除**，由 `focusedTabId` 派生 |
+
+### 2.6 焦点是模型状态，不是渲染状态
+
+第一版设计曾把「焦点 pane」当作渲染层状态排除在模型之外。这是错的，因为焦点有**行为后果**：
+
+- 新建 main / filter / chart 落到哪个 pane；
+- 哪个终端接收键盘输入；
+- `fit()` 对哪些面板重算尺寸；
+- 多 pane 的 TabRow 里，哪一个是「焦点标签」。
+
+若渲染层自存一份焦点，「新建标签」就必须由渲染层决定落点 → 又一套真源。因此焦点进模型，且**只有一个字段** `focusedTabId`，其余全部派生：
+
+| 派生量 | 定义 |
+|---|---|
+| `focusedTab()` | `tabOf(ws, ws.focusedTabId)` |
+| `focusedRootId` | `rootOf(focusedTab()).id` |
+| `focusedPane()` | `paneOfTab(focusedTab())`，焦点不在 pane 内时为 `null` |
+
+`focusedTabId` 指向**叶**时焦点 pane 自动是其所在 pane；指向**根级 Tab**（例如点了某个 Shell）时，焦点 pane 为 `null`。两种情形都不需要额外字段。
+
 
 ## 3. 派生量
 
-全部只读 `workspace`，不写回任何状态。`tabOf` 是查找辅助，其余七个是派生量。
+### 3.1 基础查找
 
 ```js
 function tabOf(ws, id) {
   return Object.prototype.hasOwnProperty.call(ws.tabs, id) ? ws.tabs[id] : null;
 }
 
-// 根级 Tab，按 order 升序 —— TabRow 的列顺序来源
 function roots(ws) {
   return Object.values(ws.tabs)
     .filter(t => t.parentId === null)
     .sort((a, b) => a.order - b.order);
 }
 
-// 组内子 Tab：先按 pane 顺序，再按 pane 内 tabIds 顺序
-function childrenOfGroup(ws, group) {
+function rootOf(ws, tab) {
+  let cur = tab, guard = 0;
+  while (cur && cur.parentId !== null && guard++ < 32) {
+    cur = tabOf(ws, cur.parentId);
+  }
+  return cur || tab;
+}
+
+// 返回真实 pane 数组，绝不返回伪造对象
+function panesOf(container) {
+  return Array.isArray(container.panes) ? container.panes : [];
+}
+
+function childrenOf(ws, container) {
   const out = [];
-  for (const pane of group.panes || []) {
+  for (const pane of panesOf(container)) {
     for (const id of pane.tabIds) {
       const t = tabOf(ws, id);
       if (t) out.push(t);
@@ -190,68 +264,196 @@ function childrenOfGroup(ws, group) {
   return out;
 }
 
-// 标准化 pane 列表：不分屏也至少有一个 pane
-function panesOf(ws, group) {
-  const panes = group.panes || [];
-  return panes.length ? panes : [{ id: 'p-invalid', tabIds: [], activeTabId: null }];
-}
-
-// 扁平模式：顶层只有一个串口组（或已经一个都没有）
-function isFlat(ws) {
-  return roots(ws).filter(t => t.kind === 'group').length <= 1;
-}
-
-// 可见列
-function columns(ws) {
-  if (!ws.split.enabled) {
-    const active = tabOf(ws, ws.activeTopTabId);
-    return active ? [active] : [];
+// 该叶所在的 pane 及其容器
+function paneOfTab(ws, tab) {
+  if (!tab || !tab.parentId) return null;
+  const container = tabOf(ws, tab.parentId);
+  if (!isContainer(container)) return null;
+  for (const pane of panesOf(container)) {
+    if (pane.tabIds.includes(tab.id)) return { container, pane };
   }
-  return roots(ws);
+  return null;
+}
+```
+
+`panesOf()` 返回空数组而不是 `{ id: 'p-invalid', … }` 这样的占位对象。占位对象会被调用方误当作真实 pane 写进去，写进模型后随下一次渲染丢失，且不报错。
+
+### 3.2 扁平模式与根族
+
+```js
+function isFlat(ws) {
+  return roots(ws).filter(isContainer).length <= 1;
 }
 
-// TabRow 的实际渲染项（扁平模式下容器被展开，见 §5）
-function rowItems(ws, column) {
-  if (isFlat(ws) && column.kind === 'group') return childrenOfGroup(ws, column);
-  return [column];
+// 扁平且存在容器时，容器与其余全部根级 Tab 属于同一「根族」；否则返回 null
+function rootFamilyOf(ws) {
+  if (!isFlat(ws)) return null;
+  const only = roots(ws).find(isContainer);
+  if (!only) return null;
+  return { container: only, members: roots(ws) };
+}
+```
+
+**这个判断只在这一处**，全项目不得再出现 `serialGroups.length > 1` 形式的分支。
+
+根族解决的是一个隐蔽死角。若不引入族，扁平模式下「当前列 = `rootOf(焦点)`」会得到：
+
+| 焦点 | `rootOf` | 若不引入族的结果 |
+|---|---|---|
+| MAIN（容器的子 Tab） | 容器 | 正确：TabRow 显示全部子项 + Shell |
+| **Shell（根级叶）** | **Shell 自己** | **错误：TabRow 只剩 Shell，主／过滤／图表全部消失** |
+
+根因是「扁平模式下容器与其余根级 Tab 实际上共用一个内容区」，单节点上溯表达不了这条关系。
+
+### 3.3 布局列：一次算清「画几列、每列有什么」
+
+```js
+function layoutColumns(ws) {
+  // 分屏：每个根级 Tab 一列，族被拆开
+  if (ws.split.enabled) {
+    return roots(ws).map(t => ({
+      id: t.id,
+      containerId: isContainer(t) ? t.id : null,
+      isFamily: false,
+      tabItems: [t]
+    }));
+  }
+
+  // 不分屏 + 扁平 + 有容器：整族共用一个内容区、共用一条 TabRow
+  const fam = rootFamilyOf(ws);
+  if (fam) {
+    const tabItems = roots(ws).flatMap(t => (isContainer(t) ? childrenOf(ws, t) : [t]));
+    return [{
+      id: fam.members[0].id,
+      containerId: fam.container.id,
+      isFamily: true,
+      tabItems
+    }];
+  }
+
+  // 其余：焦点所在的那一个根级 Tab 独占一列
+  const root = rootOf(ws, tabOf(ws, ws.focusedTabId));
+  return root ? [{
+    id: root.id,
+    containerId: isContainer(root) ? root.id : null,
+    isFamily: false,
+    tabItems: [root]
+  }] : [];
+}
+```
+
+一个函数返回了列的**全部信息**（列 id、对应容器、是否族列、TabRow 项），渲染层不再需要任何组合判断。这就是第一版拆成 `columns()` + `rowItems()` + `flatRowItems()` 三个函数时丢失的东西：拆得太碎，组合逻辑就漏回渲染层了。
+
+| 情形 | 分屏 | 列数 | `isFamily` | TabRow 内容 |
+|---|---|---|---|---|
+| 单组 + Shell | 否 | 1 | 是 | 容器全部子项 + 所有 Shell（按根级 order 混排） |
+| 多组 | 否 | 1 | 否 | 焦点所在根级 Tab |
+| 任意 | 是 | `roots().length` | 否 | 每个根级 Tab 各自一条 |
+
+### 3.4 布局行：每列几条 subRow
+
+```js
+function layoutRowsOf(ws, column) {
+  if (!column.containerId) return [];            // 叶列（例如 Shell）没有 subRow
+  const container = tabOf(ws, column.containerId);
+  const panes = panesOf(container);
+  return container.paneSplit.enabled ? panes : panes.slice(0, 1);
+}
+```
+
+`rows.length` 就是 subRow 条数。**容器只在 `paneSplit.enabled` 且 pane 数 ≥ 2 时才有多条**，其余情况一律 1 条（或 0 条）。
+
+### 3.5 可见面板：显隐的唯一判据
+
+```js
+function visiblePanelIdsOfColumn(ws, column) {
+  const rows = layoutRowsOf(ws, column);
+
+  // 叶列：自己就是唯一面板
+  if (!rows.length) return [column.id];
+
+  // 族列 + 未分 pane：内容区跟着焦点走（可以是容器里的叶，也可以是一个 Shell）
+  if (column.isFamily && rows.length === 1) {
+    const f = tabOf(ws, ws.focusedTabId);
+    if (f && inFamily(ws, f)) return [f.id];
+  }
+
+  return rows.map(p => p.activeTabId).filter(Boolean);
 }
 
-// 可见面板 id 集合 —— 唯一的显隐判据
-function visiblePanelIds(ws) {
+function inFamily(ws, tab) {
+  const fam = rootFamilyOf(ws);
+  if (!fam) return false;
+  return tab.parentId === null
+    ? fam.members.some(t => t.id === tab.id)
+    : tab.parentId === fam.container.id;
+}
+
+function visiblePanels(ws) {
   const out = new Set();
-  for (const col of columns(ws)) {
-    if (col.kind === 'group') {
-      for (const pane of panesOf(ws, col)) {
-        if (pane.activeTabId) out.add(pane.activeTabId);
-      }
-    } else {
-      out.add(col.id);
-    }
+  for (const column of layoutColumns(ws)) {
+    for (const id of visiblePanelIdsOfColumn(ws, column)) out.add(id);
   }
   return out;
 }
 ```
 
-### 3.1 显隐的唯一判据
+**显隐的唯一判据**：
 
 ```js
-panel.hidden = !visiblePanelIds(ws).has(tabId);
+panel.hidden = !visiblePanels(ws).has(tabId);
 ```
 
-这就是全部。没有「谁盖住谁」「哪个更高一层」「是不是叠在宿主分组上」的判断。历史上 `stackShellTabOverHostGroup()` + `hideStackedShellTabsIn()` 那套叠层逻辑存在的唯一理由，是 Shell 被塞进了某个 pane；当 Shell 是根 Tab，它自己就是某一列，不需要遮盖任何人。
+没有「谁盖住谁」「哪个更高一层」「是不是叠在宿主分组上」。历史上 `stackShellTabOverHostGroup()` + `hideStackedShellTabsIn()` 存在的唯一理由，是 Shell 被塞进了某个 pane；当 Shell 是根级 Tab，它自己就是（或属于）一列，不需要遮盖任何人。
 
-### 3.2 派生量的用途对照
+### 3.6 派生量总览
 
-| 派生量 | 用途 | 对应历史上的什么 |
-|---|---|---|
-| `roots()` | TabRow 列顺序、分屏比例键 | `serialGroups` + `shellTabs` 的混合顺序 |
-| `childrenOfGroup()` | subRow 内容、扁平模式 TabRow 内容 | `filterTabs` + `chartTabs` + main 的拼接 |
-| `panesOf()` | 组内 pane 列表 | `groupWorkspaceLayouts.panes` |
-| `isFlat()` | 是否渲染 subRow、TabRow 是否展开 | 8 处 `serialGroups.length > 1` |
-| `columns()` | 渲染几列、分界条数量 | `getVisibleGroupIds()` + `shellColumnId()` |
-| `rowItems()` | TabRow 里实际排哪些按钮 | 「单分组借位」的搬移逻辑 |
-| `visiblePanelIds()` | 面板显隐、`fit()` 时机 | `stackShellTabOverHostGroup` 等整套叠层判断 |
-| `visiblePanelIds()` | 面板显隐、`fit()` 时机 | `stackShellTabOverHostGroup` 等整套叠层判断 |
+| 派生量 | 用途 | 阶层 | 对应历史上的什么 |
+|---|---|---|---|
+| `roots(ws)` | 根级顺序 | 结构 | `serialGroups` + `shellTabs` 的混合顺序 |
+| `childrenOf(ws, c)` | 容器子项（pane 展开后） | 结构 | `filterTabs` + `chartTabs` + main 的拼接 |
+| `panesOf(c)` | 组内 pane 列表 | 结构 | `groupWorkspaceLayouts.panes` |
+| `paneOfTab(ws, t)` | 叶属于哪个 pane | 结构 | 各函数里现场遍历 pane 找 tab |
+| `isFlat(ws)` | 是否扁平（只用于族判定） | 结构 | 8 处 `serialGroups.length > 1` |
+| `rootFamilyOf(ws)` | 扁平时的根族 | 结构 | 「单分组借位」的目标 |
+| `layoutColumns(ws)` | **列数 + 每列全部信息** | 布局 | `getVisibleGroupIds()` + `shellColumnId()` + 借位搬移 |
+| `layoutRowsOf(ws, c)` | 每列几条 subRow | 布局 | `paneSplit.enabled ? panes : 1` |
+| `visiblePanelIdsOfColumn(ws, c)` | 该列显示哪些面板 | 布局 | 整套叠层显隐 |
+| `visiblePanels(ws)` | 全集显隐、`fit()` 时机 | 渲染 | 整套叠层判断 |
+| `buildRenderPlan(ws)` | 渲染层唯一输入（§3.7） | 渲染 | 散落在 renderer 里的多套组合逻辑 |
+
+所有需要跨表查找的函数都显式接收 `ws`，不存在依赖外层作用域的隐式参数——上表的签名就是实现的签名。
+
+「结构」层只回答「谁属于谁」，「布局」层只回答「画在哪」，两层都可以由「结构 + split / paneSplit / focusedTabId」重新算出。**没有任何一格是存储的。**
+
+### 3.7 `buildRenderPlan()`：渲染层的唯一输入
+
+若把上面多个派生量直接交给渲染层，渲染层就得自己组装「列 + TabRow 项 + subRow + 显隐」——组合逻辑又回到了最脆弱的那一层。因此定义**一个**函数产出完整计划：
+
+```js
+function buildRenderPlan(ws) {
+  return layoutColumns(ws).map(column => {
+    const container = column.containerId ? tabOf(ws, column.containerId) : null;
+    return {
+      columnId: column.id,
+      containerId: column.containerId,
+      isFamily: column.isFamily,
+      tabItems: column.tabItems,
+      collapsed: container ? container.collapsed === true : false,
+      rows: layoutRowsOf(ws, column).map(pane => ({
+        paneId: pane.id,
+        tabs: pane.tabIds.map(id => tabOf(ws, id)).filter(Boolean),
+        activeTabId: pane.activeTabId
+      })),
+      panelIds: visiblePanelIdsOfColumn(ws, column)
+    };
+  });
+}
+```
+
+渲染层只做三件事：遍历 plan 建列 → 用 `tabItems` 排按钮 → 用 `rows` 排 subRow，最后用 `panelIds` 决定显隐。**它是纯数据消费者，不含任何布局判断。**
+
+这也是本文的定量验收标准：**渲染层不允许出现 `split`、`paneSplit`、`isFlat`、`roots`、`childrenOf`、`rootFamilyOf`。** 出现即说明组合逻辑漏回了渲染层。
 
 ## 4. 两级分屏
 
@@ -259,30 +461,24 @@ panel.hidden = !visiblePanelIds(ws).has(tabId);
 
 | 级别 | 载体 | 状态 | 控件 |
 |---|---|---|---|
-| 第一级：列 | 整个工作区 | `workspace.split` | 分组标签右键菜单、列分界条 |
-| 第二级：pane | 单个容器 Tab | `tab.paneSplit` + `tab.panes[]` | 组内分屏按钮、组内分界条 |
+| 第一级：列 | 整个工作区 | `workspace.split` | 分屏按钮、列分界条 |
+| 第二级：pane | 单个容器 | `tab.paneSplit` + `tab.panes[]` | 组内分屏按钮、pane 分界条 |
 
 ### 4.1 第一级：列
 
-`split.enabled === true` 时，`columns()` 返回**全部根级 Tab**，每个一列，按 `order` 横向（或纵向）排列。分界条数量 = `columns().length - 1`。
+`split.enabled === true` 时，`layoutColumns()` 返回 `roots()` 里每一项各一列（族被拆开，每个 Shell 也各占一列）。分界条数量 = 列数 - 1。
 
-宽度按 `split.sizes[tabId]` 归一化分配，并扣除分界条占位：`flex-basis: calc(<比例>% - <比例 × 分界条总占位>px)`。这个公式是历史缺陷「最右列越界」的修法（`8f55a0f`），必须保留。
+宽度按 `split.sizes[columnId]` 归一化分配，并扣除分界条占位：`flex-basis: calc(<比例>% - <比例 × 分界条总占位>px)`。这个公式是历史缺陷「最右列越界」的修法（`8f55a0f`），必须保留。
 
-`split.enabled === false` 时，`columns()` 只返回 `activeTopTabId` 对应的那一列，分界条全部隐藏。
+`split.enabled === false` 时只有一列，分界条全部隐藏，内容区由焦点决定。
 
-**关键点**：列归属**不写进 Tab**。分屏时「每个根 Tab 一列」，所以「谁在哪列」是 `roots().indexOf(tab)` 的派生结果。关掉分屏再打开，列顺序不变——因为 `order` 没变。
+**关键点**：列归属不写进 Tab。分屏时「每个根 Tab 一列」，所以「谁在哪列」是 `roots()` 顺序的派生结果。关掉再打开，列顺序不变——因为 `order` 没变。
 
 ### 4.2 第二级：组内 pane
 
-容器的 `panes[]` 是该列内部的分割。`paneSplit.enabled === false` 时只有一个 pane，`panes` 长度仍可为 1（不删除 pane，避免标签失去容器）。
+容器的 `panes[]` 是该列内部的分割。`paneSplit.enabled === false` 时只用第一个 pane，但**不删除其余 pane**——关掉分屏再打开时布局要能恢复。
 
-每个 pane 有自己的：
-
-- `subRow`（该 pane 的标签栏）
-- `tabPanel` 宿主（该 pane 的内容区）
-- `activeTabId`（该 pane 显示哪个叶）
-
-`paneSplit.enabled === true` 时，该列竖向排列：
+`paneSplit.enabled === true` 时该列竖向排列：
 
 ```
 ┌──────────────────────────────────┐
@@ -291,56 +487,58 @@ panel.hidden = !visiblePanelIds(ws).has(tabId);
 │ subRow  [MAIN][FILTER][CHART]    │  ← pane-1
 ├──────────────────────────────────┤
 │ tabPanel（pane-1 的 activeTab）   │
-├══════════════════════════════════┤  ← 组内分界条
+├══════════════════════════════════┤  ← pane 分界条
 │ subRow  [MAIN]                   │  ← pane-2
 ├──────────────────────────────────┤
 │ tabPanel（pane-2 的 activeTab）   │
 └──────────────────────────────────┘
 ```
 
-### 4.3 两级可以同时开启
+### 4.3 四种组合
 
-| 组合 | 结果 |
-|---|---|
-| 列关、pane 关 | 一列、一个 pane（最常见的单组单屏） |
-| 列开、pane 关 | N 列，每列一个 pane |
-| 列关、pane 开 | 一列，该列内部上下 N 个 pane |
-| 列开、pane 开 | N 列 × 每列内部 M 个 pane |
-
-两级互不影响：`columns()` 只看 `workspace.split`，`panesOf()` 只看 `tab.paneSplit`。没有任何一处代码需要同时判断两者。
-
-### 4.4 分界条的两种来源
-
-| 分界条 | 由谁生成 | 拖动的状态 |
+| 组合 | 列数 | 每列 subRow |
 |---|---|---|
-| 列分界条 | `columns()` 的相邻两项 | `workspace.split.sizes` |
-| 组内分界条 | `panesOf()` 的相邻两项 | `tab.paneSplit.sizes` |
+| 列关、pane 关 | 1 | 扁平且无 pane 分屏：0；否则 1 |
+| 列开、pane 关 | `roots().length` | 1 |
+| 列关、pane 开 | 1 | `panes.length` |
+| 列开、pane 开 | `roots().length` | 每列各自 `panes.length` |
 
-两者共用同一套几何计算（`placeSplitter` / `applySizes`），但状态容器不同。**不允许**共用一个 `sizes` 对象——列比例和 pane 比例是两个独立维度。
+两级互不影响：`layoutColumns()` 只看 `workspace.split` 与根族，`layoutRowsOf()` 只看 `tab.paneSplit`。
+
+### 4.4 分界条
+
+| 分界条 | 相邻项来自 | 拖动的状态 |
+|---|---|---|
+| 列分界条 | `layoutColumns()` | `workspace.split.sizes` |
+| pane 分界条 | `layoutRowsOf()` | `tab.paneSplit.sizes` |
+
+两者共用同一套几何计算，但**状态容器必须分开**——列比例与 pane 比例是两个独立维度，共用一个 `sizes` 对象会导致调一边影响另一边。
+
+### 4.5 比例归一化
+
+`split.sizes` 与 `paneSplit.sizes` 都可能与当前列数／pane 数不匹配（增删列、关组、从旧配置迁移）。规则：
+
+1. **只存已出现过的比例，不预填**；
+2. 每次计算前先跑 `normalizeSizes(sizes, ids)`：丢弃 `ids` 中不存在的键 → 缺失键补 `1` → 若总和 ≤ 0 则全部重置为 `1` → 否则等比缩放使总和为 `1`；
+3. 归一化是**纯函数**，返回新对象，不回写 `ws`——回写会让「读」产生副作用，而派生量必须只读。需要持久化时由调用方显式赋值。
 
 ## 5. 扁平模式
 
 ### 5.1 判据
 
-```js
-function isFlat(ws) {
-  return roots(ws).filter(t => t.kind === 'group').length <= 1;
-}
-```
-
-只有一个串口组（或一个都没有）时成立。这个判断**只在这一处**，全项目不允许再出现 `serialGroups.length > 1` 形式的分支。
+见 §3.2：`roots().filter(isContainer).length <= 1`。
 
 ### 5.2 扁平模式的布局
 
 ```
 TabRow:  [MAIN] [FILTER] [CHART] [SHELL1] [SHELL2]
 ──────────────────────────────────────────────────
-内容区：  当前激活 Tab 的 tabPanel
+内容区：  焦点所在 Tab 的 tabPanel
 ```
 
-容器 Tab（`grp-default`）**不渲染为标签**，它的子 Tab 直接进 TabRow。没有 subRow 行。
+容器不渲染为标签，其子 Tab 与其余根级 Tab **按根级 `order` 混排**在唯一一条 TabRow 上；没有 subRow 行。见 §3.3 的 `layoutColumns()` 分支。
 
-多分组模式下：
+多分组模式：
 
 ```
 TabRow:  [COM1] [COM2] [SHELL1]
@@ -350,116 +548,124 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 内容区：  COM1 的 pane-1 的 activeTab
 ```
 
-### 5.3 扁平模式与现状「单分组隐藏分组行」的区别
+### 5.3 与现状「单分组隐藏分组行」的区别
 
-界面相似，机制不同。这一点必须写清，否则接手者会以为是同一件事：
+界面相似，机制不同。不写清会让接手者以为是同一件事：
 
-| | 现状（单分组） | 新模型（`isFlat`） |
+| | 现状（单分组） | 新模型（`isFamily`） |
 |---|---|---|
 | 层数 | 两层中的一层 `hidden` | **只有一层**，第二层不存在 |
-| 分组标签 | `#serial-group-tab-bar` 整行 `hidden`，标签靠 `#serial-group-tab-bar` 与 pane 行「借位」搬移 | 分组 Tab **不渲染**，其子 Tab 由 `rowItems()` 直接返回 |
-| Shell 位置 | 与 MAIN/FILTER 混排在 pane 行 | 与 MAIN/FILTER 同住 TabRow（都是根级/展开后的项） |
-| 切换回多分组 | 逐处 `removeAttribute('hidden')`，容易漏 | 无状态切换，只是 `rowItems()` 的返回变了 |
+| 分组标签 | `#serial-group-tab-bar` 整行 `hidden`，标签靠借位搬移 | 容器**不渲染**，子 Tab 由 `layoutColumns()` 直接与根级 Tab 混排 |
+| Shell 位置 | 与 MAIN/FILTER 混排在 pane 行 | 与 MAIN/FILTER 同住 TabRow |
+| 切回多分组 | 逐处 `removeAttribute('hidden')`，容易漏 | 无状态切换，只是 `layoutColumns()` 走了另一分支 |
 
-### 5.4 `parentId` 在扁平模式下保持不变（关键取舍）
+### 5.4 `parentId` 保持不变（关键取舍）
 
-**问题**：扁平模式把组内子 Tab 放进了 TabRow。那么这些 Tab 的 `parentId` 应该改成 `null` 吗？
+**结论：扁平模式不改写 `parentId`，仍指向容器。**
 
-**结论：不改。保留 `parentId` 指向容器，由渲染层投影。**
+1. **切换成本**。「一个分组」与「两个分组」是用户随时切换的状态。按 `parentId` 改写意味着每次增删分组都要批量改写 N 个 Tab，中途失败会留下半扁平状态；保留则切换零成本。
+2. **语义正确**。`parentId` 表达「属于哪个容器」，是数据事实，与「当前显示几层」无关。把显示状态写进数据模型，正是本文要消除的真源混用。
+3. **可变性最小**。删除容器时只需删除其子树；若 `parentId` 已被改成 `null`，这些节点会变成孤儿根标签，无法与「原本独立的 Shell」区分。
 
-三条理由：
+### 5.5 扁平模式 + 组内 pane 分屏（开放项）
 
-1. **切换成本**。「只有一个分组」和「有两个分组」是用户随时切换的状态。若按 `parentId` 改写，每次增删分组都要批量改写 N 个 Tab 的归属，任何中途失败都会留下半扁平状态。保留 `parentId` 则切换是零成本的——`rowItems()` 的返回值自动变化。
-2. **语义正确**。`parentId` 表达的是「这个 Tab 属于哪个串口组」，这是**数据归属事实**，与「当前是否显示二级栏」无关。把显示状态写进数据模型，正是本文要消除的那类问题（真源混用）。
-3. **可变性最小**。删除一个分组时，只需删除它的子 Tab；若 `parentId` 已被改成 `null`，这些子 Tab 会变成孤儿根标签，无法区分「原本独立的 Shell」和「某组的遗留 main」。
+**这是本文唯一没有定论的设计点，需要你裁决。**
 
-因此：
+两条要求同时成立时产生冲突：
 
-```js
-// 渲染层：扁平模式下把容器的子项投影到 TabRow
-function rowItems(ws, column) {
-  if (isFlat(ws) && column.kind === 'group') return childrenOfGroup(ws, column);
-  return [column];
-}
-```
+- 「subRow 在只有一个串口组时不可见」→ 扁平模式没有 subRow；
+- 「组内 pane 分屏保留」→ pane 分屏的表现形式是「每个 pane 一条 subRow + 独立内容区」。
 
-`rowItems()` 是**唯一的投影点**。模型层完全不知道扁平模式的存在。
+于是当**只有一个串口组、又开启了组内分屏**时，pane-2 的标签没有地方显示，用户无法切换它。
 
-### 5.5 扁平模式下的组内 pane 分屏
+| 方案 | 做法 | 代价 |
+|---|---|---|
+| **A. 例外** | 扁平模式默认无 subRow；一旦开启 pane 分屏，临时恢复 N 条 subRow | 回到「两种层数形态」，但仅由用户显式开启分屏触发，可控 |
+| **B. 常显** | pane 分屏开启期间始终显示 subRow | 规则最统一；但单组 + 分屏时会出现用户要求「不可见」的那一行 |
+| **C. 禁止** | 扁平模式下不允许组内 pane 分屏（分屏按钮置灰） | 最简单、无歧义；但功能受限 |
 
-组内 pane 分屏是保留的能力，它不因扁平模式而失效：
-
-- 只有一个 pane 时（默认）：TabRow 顺序 = `panes[0].tabIds` 顺序，内容区就是该 pane 的 activeTab。完全符合「main、filter、shell 都在 TabRow」。
-- 多个 pane 时：TabRow 顺序 = 各 pane 依次拼接，内容区按 pane 竖向分屏，每个 pane 显示自己的 `activeTabId`。
-
-第二种情况下 TabRow 里会同时出现两个处于「激活」状态的标签（分属不同 pane）。这是正确语义，不是缺陷；视觉上需要区分「焦点标签」与「其它 pane 的激活标签」（例如前者实底、后者下划线）。**具体视觉规则留待 S3 实现时确定**——本项标记为开放项，不在本文冻结。
+**本文暂按方案 A 描述**（它是唯一同时满足两条原始要求、且不删除能力的解），并在 §6 的 I9 中给出对应不变式。若选 B 或 C，只需改 §3.4 的 `layoutRowsOf()` 与 §6 的 I9，其余章节不受影响——这正是把行/列分离后的好处。
 
 ## 6. 不变式
 
-以下八条必须始终成立。它们可以（且应该）写成断言。
+以下十条必须始终成立，可（且应该）写成断言。
 
 | # | 不变式 | 违反后的症状 |
 |---|---|---|
-| **I1** | 任何 `kind === 'shell'` 的 Tab，其 `parentId === null` | Shell 会出现在 subRow 里，这正是历史缺陷的起点 |
+| **I1** | 任何 `kind === 'shell'` 的 Tab，其 `parentId === null` | Shell 出现在 subRow 里，这是历史缺陷的起点 |
 | **I2** | 任何 `panes[].tabIds` 中不含 `kind === 'shell'` 的 id | 同上 |
-| **I3** | 每个 Tab 的 `panel.id === tab.id`，且全局唯一 | 面板串台、`fit()` 量错高度 |
-| **I4** | 每个 Tab 恰好属于一个 pane（根级 Tab 除外） | 同一标签出现在两条 subRow |
-| **I5** | 每个 `kind === 'group'` 的 Tab 至少有一个 pane，且至少有一个叶 | 空白列、无法新建标签 |
+| **I3** | 每个**叶** Tab 有且只有一个 panel，`panel.id === tab.id` 且全局唯一；**容器没有 panel** | 面板串台、`fit()` 量错高度 |
+| **I4** | 每个**非根级** Tab 恰好出现在一个 `panes[].tabIds` 中；每个根级 Tab 不出现在任何 `panes` 中 | 同一标签出现在两条 subRow |
+| **I5** | 每个容器至少有一个 pane；每个 pane 的 `tabIds` 非空 | 空白列、无法新建标签 |
 | **I6** | `panes[].activeTabId` 必须是该 pane 的 `tabIds` 成员 | 面板显示已被移走的标签 |
-| **I7** | `workspace.activeTopTabId` 必须是根级 Tab 的 id | 非分屏时无列可见 |
-| **I8** | 面板可见性只由 `visiblePanelIds()` 决定 | 出现「两处同时判断显隐」→ 又一套真源 |
+| **I7** | `workspace.focusedTabId` 必须存在且指向 `tabs` 中的真实节点 | 无列可见、新建标签无落点 |
+| **I8** | 面板可见性只由 `visiblePanels()` 决定 | 出现「两处同时判断显隐」→ 又一套真源 |
+| **I9** | 若 `isFlat(ws)` 且某容器 `paneSplit.enabled`，则该容器必须渲染 subRow（方案 A） | 扁平 + 分屏时 pane-2 的标签无处可点 |
+| **I10** | 任何容器只有在其 subRow 数量 ≥ 2 时才允许 `collapsed === true` | 收起后无行可点、无法恢复 |
 
-其中 I1 / I2 是结构性硬约束：**Shell 永远不可能进入 pane**。这两条一旦成立，历史上「Shell 跑进 pane 容器」造成的全部缺陷（标签消失、点不动、fit 算错、叠层遮盖）都不能再出现。
+其中 I1 / I2 是结构性硬约束：**Shell 永远不可能进入 pane**。历史上「Shell 跑进 pane 容器」造成的全部缺陷（标签消失、点不动、`fit` 算错、叠层遮盖）由此不可能再发生。
+
+> I3 / I4 与第一版不同：第一版写「每个 Tab 的 panel.id === tab.id」，与「容器没有 panel」冲突；写「每个 Tab 恰好属于一个 pane」，漏掉了根级 Shell。
 
 ### 6.1 三条与 Shell 相关的推论
 
-由 I1 + I2 可以直接推出：
+由 I1 + I2 推出：
 
-1. Shell 的按钮 `parentElement` 只能是 TabRow 的列表，**绝不能是 subRow 的列表**。
-2. Shell 的终端容器挂在工作区级，**绝不在某个 pane 的 `tabs-content` 里**。
-3. 分屏时 Shell 自然成为独立一列（因为它是根 Tab，`columns()` 会包含它），不需要 `detachedColumn` 这类字段来「模拟独立成列」。
+1. Shell 的按钮 `parentElement` 只能是某条 TabRow 的列表，**绝不能是 subRow 的列表**。
+2. Shell 的**终端容器**只能挂在它自己那列的 panel 位置，**绝不在任何 pane 的 content 里**。
+3. 分屏时 Shell 自然独立成一列（它是根级 Tab），不需要 `detachedColumn` 之类的字段来「模拟独立成列」。
 
-这三条替代了现有的 `resolveShellTabHost()` 三分支判定、`setShellDetachedColumn()`、`isShellColumnActive()` 等约 10 个函数。
+这三条替代了 `resolveShellTabHost()` 三分支、`setShellDetachedColumn()`、`isShellColumnActive()` 等约 10 个函数。
+
+### 6.2 状态自愈
+
+不变式不能只在迁移时检查一次。运行期有四类污染来源：手改配置、写入过程中崩溃、旧版本回退后重新保存、程序缺陷。
+
+规则：**`loadWorkspace()` 与 `saveWorkspace()` 两端都跑 `validateAndRepair(ws)`**，修复策略按「信息损失从小到大」，**每次修复都记日志**：
+
+| 违规 | 修复 |
+|---|---|
+| I5 pane 为空 | 给该 pane 补一个 main 叶；若容器无 pane，补 pane 后再补 main |
+| I6 activeTabId 失效 | 取该 pane 的第一个叶 |
+| I7 focusedTabId 失效 | 取第一个容器的 `panes[0].activeTabId`；仍无则取第一个叶 |
+| I1 / I2 Shell 混入 pane | 把该 Shell 提到根级（`order` 取最大值 +1） |
+| I3 面板重复 | 保留第一次出现的，其余重新生成 id |
+| I10 行数不足却 `collapsed` | 强制 `collapsed = false` |
+| 无法修复 | **回落默认工作区**，原始配置另存为 `<config>.corrupt.json`，绝不静默丢弃 |
 
 ## 7. 渲染规则
 
-### 7.1 唯一入口
+### 7.1 唯一入口与唯一输入
 
-```js
-renderWorkspace(ws)
+```
+renderWorkspace(ws)          // 唯一入口
+  → buildRenderPlan(ws)      // 唯一输入（§3.7）
 ```
 
-所有交互（点击、拖拽、新建、关闭、分屏、收起）都只做两件事：
+所有交互都只做两件事：改 `workspace`，然后调 `renderWorkspace()`。
 
-1. 修改 `workspace` 树；
-2. 调用 `renderWorkspace()`。
+**不允许任何其它地方直接改标签的类名、`hidden` 或 DOM 位置。** 现有的 `placeShellTabs()` / `stackShellTabOverHostGroup()` / `applyLayoutToDom()` 三套「各自搬一段 DOM」的实现正是混乱来源。
 
-**不允许任何其它地方直接改标签的类名、`hidden` 或 DOM 位置。** 这是本文最重要的一条纪律——现有的 `placeShellTabs()` / `stackShellTabOverHostGroup()` / `applyLayoutToDom()` 三套「各自搬一段 DOM」的实现正是混乱的来源。
-
-### 7.2 渲染的四步
+### 7.2 渲染四步
 
 ```
 renderWorkspace(ws)
-  ├── 1. reconcileColumns()   按 columns() 保证列容器数量与顺序
-  ├── 2. reconcileRows()      每列：一条 TabRow；多分组时 N 条 subRow（N = panesOf 长度），扁平模式 0 条
-  ├── 3. reconcileButtons()   按 rowItems() / childrenOfGroup() 复用或创建按钮
-  └── 4. applyVisibility()    panel.hidden = !visiblePanelIds().has(id)
-  └── 4. applyVisibility()    panel.hidden = !visiblePanelIds().has(id)
+  ├── 0. plan = buildRenderPlan(ws)     ← 只读这一个，不自己算
+  ├── 1. reconcileColumns(plan)         按 plan 的列数与顺序
+  ├── 2. reconcileRows(plan)            每列：一条 TabRow + plan 里 rows 的条数
+  ├── 3. reconcileButtons(plan)         按每列 tabItems 复用或创建按钮
+  └── 4. applyVisibility(plan)          对每个叶：hidden = 不在该列 panelIds 里
 ```
 
-每步都以「**比对现状、只改差异**」为原则，而不是「先清空再重建」。
+每步都「比对现状、只改差异」，不是「先清空再重建」。
 
 ### 7.3 三条渲染约束
 
-**C1：节点复用，不重建。**
+**C1：节点复用，不重建。** 按钮与面板按 id 建一次，之后只更新属性与位置。切标签、切分组、分屏都不得产生新节点。
 
-按钮与面板按 id 建一次，之后只更新属性与位置。切标签、切分组、分屏都不得产生新节点。
+原因（实测）：`renderSerialGroupTabBar()` 原先每次 `replaceChildren()` 重建按钮，导致整条标签栏重排、hover / 焦点态与入场动画一起重播。已修为按 id 复用 + 就地更新（`0bf62ea`），本模型必须沿用。
 
-理由（实测）：`renderSerialGroupTabBar()` 原先每次 `replaceChildren()` 重建按钮，导致整条标签栏重排、hover / 焦点态与入场动画一起重播。已修为按 `tab.buttonId` 复用 + `updateGroupTabButtonState()` 就地更新（`0bf62ea`），本模型必须沿用。
-
-**C2：父节点没变就不 `appendChild`。**
-
-`appendChild` 对「已经在该父节点下的子节点」也是先摘再插，`<canvas>`、`<iframe>`、CSS 动画都会在那一刻重放，并且触发整行重排。`applyLayoutToDom()` 已加的判定：
+**C2：父节点没变就不 `appendChild`。** `appendChild` 对已在该父节点下的子节点也是先摘再插，`<canvas>`、`<iframe>`、CSS 动画都会重放，并触发整行重排。
 
 ```js
 if (tabButton.parentElement !== effectiveTabsList) {
@@ -467,140 +673,143 @@ if (tabButton.parentElement !== effectiveTabsList) {
 }
 ```
 
-**C3：没有入场动画。**
-
-`.main-tab`、`.main-tab-pane.active`、`.sidebar-tab-pane` 上的 `animation` 与 `@keyframes fadeIn` / `tabFadeIn` 已全部删除（`0bf62ea`），不得再加回。这些元素在切换时反复显隐，任何入场动画都会变成「每切一次闪一次」。
+**C3：没有入场动画。** `.main-tab`、`.main-tab-pane.active`、`.sidebar-tab-pane` 上的 `animation` 与 `@keyframes fadeIn` / `tabFadeIn` 已全部删除（`0bf62ea`），不得再加回。这些元素反复显隐，任何入场动画都会变成「每切一次闪一次」。
 
 ### 7.4 事件绑定
 
-按钮不再重建后，事件**不能**在构造时用闭包绑定 `tabId` —— 闭包会永久持有旧值，重新归属或重命名后点击会落到旧语义上。
+按钮不再重建后，事件**不能**在构造时用闭包绑定 `tabId`——闭包会永久持有旧值，重新归属或重命名后点击会落到旧语义上。
 
-规则：**在列表容器上委托**，从 `dataset.tabId` 现读。
+规则：**在列表容器上委托**，从 `dataset.tabId` 现读。`bindTabListEvents(listEl)` 同时服务 TabRow 与 subRow，用 `dataset.tabListEvents` 去重。
 
-现有 `bindGroupTabListEvents(listEl)` 已是这个形态，S2 将其泛化为 `bindTabListEvents(listEl)`（一套处理 TabRow 与 subRow）。用 `dataset.tabListEvents` 去重，保证同一个列表只挂一次。
+### 7.5 渲染触发边界
 
-### 7.5 `fit()` 的时机
+**「任何状态变化都调 `renderWorkspace()`」不等于「任何事件都调」。** 以下高频路径**不得**触发渲染：
 
-xterm 的 `fit()` 依赖容器有真实尺寸。规则：
+| 路径 | 频率 | 允许的更新方式 |
+|---|---|---|
+| 串口收到数据 | 每报文 | 只写 xterm / 缓冲区 |
+| 快捷指令列表刷新 | 用户操作 | 只更新对应列表 DOM |
+| 状态栏、计数、时间戳 | 秒级 | 只改文本节点 |
+| `fit()` | 尺寸变化 | 只调 `fit()`，不改标签结构 |
+
+`renderWorkspace()` 只服务于**标签结构变化**：新建、关闭、切换焦点、分屏、收起、重排。把它做成「任何数据变化都重跑」，会把 46 个同步函数的开销搬到串口热路径上。
+
+### 7.6 `fit()` 时机
 
 | 时机 | 动作 |
 |---|---|
 | `applyVisibility()` 之后 | 对本帧新变为可见的面板调用 `fit()` |
 | 分屏比例变化后 | 对受影响列的全部可见面板调用 `fit()` |
-| **面板处于 `display:none` 时** | **不调用** —— 容器尺寸为 0，`fit()` 会把终端算成极小尺寸 |
+| 面板处于 `display:none` | **不调用**——容器尺寸为 0，会算出极小尺寸 |
 
-历史上「面板同时 `.active` 导致 `fit()` 算错高度」的缺陷，根因是显隐没有单一判据。I8 成立后，任何时刻只有一个面板处于可见集合中（每 pane 一个），`fit()` 不再可能对隐藏面板执行。
+I8 成立后每个 pane 只有一个可见面板，`fit()` 不可能对隐藏面板执行。
 
 ## 8. 交互语义
 
-### 8.1 激活：一个入口，两条规则
+### 8.1 激活：一个入口
 
-现有的四条切换路径（`switchPaneTab` / `switchShellTab` / `activateShellTabInHost` / `revealSerialGroupActiveTab`）合并为一个入口 `activateTab(tabId)`，内含两条规则：
+现有的四条切换路径（`switchPaneTab` / `switchShellTab` / `activateShellTabInHost` / `revealSerialGroupActiveTab`）合并为一个：
 
 ```js
-function activateTab(tabId) {
+function activateTab(ws, tabId) {
   const tab = tabOf(ws, tabId);
   if (!tab) return;
 
-  if (tab.kind === 'group') {
-    // 规则 2：容器被点击 → 它成为可见列；并保证每个 pane 都有激活项
-    ws.activeTopTabId = tab.id;
-    for (const pane of panesOf(ws, tab)) {
-      if (!pane.activeTabId) {
-        const first = pane.tabIds.map(id => tabOf(ws, id)).find(Boolean);
-        if (first) pane.activeTabId = first.id;
-      }
+  ws.focusedTabId = tab.id;                    // 唯一的写入
+
+  const hit = paneOfTab(ws, tab);
+  if (hit) {
+    hit.pane.activeTabId = tab.id;             // 叶：让所在 pane 显示它
+  } else if (isContainer(tab)) {
+    for (const pane of panesOf(tab)) {         // 容器：补全缺失的 activeTabId
+      if (!pane.activeTabId && pane.tabIds.length) pane.activeTabId = pane.tabIds[0];
     }
-  } else {
-    // 规则 1：叶被点击 → 自己显示，并沿父链把所在容器也指向它
-    const parent = tab.parentId ? tabOf(ws, tab.parentId) : null;
-    if (parent && parent.kind === 'group') {
-      for (const pane of panesOf(ws, parent)) {
-        if (pane.tabIds.includes(tabId)) { pane.activeTabId = tabId; break; }
-      }
-    }
-    ws.activeTopTabId = parent ? parent.id : tab.id;
   }
 
   renderWorkspace(ws);
 }
 ```
 
-两条规则的分工：容器被点击只改「哪一列可见」，叶被点击只改「pane 显示谁」。没有第三种情况。
-
-**为什么 `revealSerialGroupActiveTab` 可以删**：它的存在理由是「Shell 盖住了串口，点串口标签时要先把它挖出来」。当 Shell 是独立列、与串口组互不遮挡时（I1 + I2），不存在需要「揭露」的场景。
+**关键点：不再有「哪一列可见」这个写入。** 它由 `focusedTabId` 在 `layoutColumns()` 里派生。历史上 `revealSerialGroupActiveTab()` 要单独「揭露」被遮住的串口，正是因为「可见列」和「激活项」是两套状态；合并成一个焦点后，这个函数没有存在理由。
 
 ### 8.2 拖拽：只做同栏重排
 
 **唯一允许的拖拽动作**：在同一行内改变顺序。
 
 ```js
-// scope：{ kind: 'row' } 表示 TabRow，{ kind: 'pane', groupId, paneId } 表示某条 subRow
-function reorderInRow(scope, tabId, targetIndex)
+// scope: { kind: 'roots' } | { kind: 'pane', containerId, paneId }
+function reorderInRow(ws, scope, tabId, targetIndex) {
+  if (scope.kind === 'roots') {
+    const list = roots(ws).filter(t => t.id !== tabId);
+    const at = Math.max(0, Math.min(targetIndex, list.length));
+    list.splice(at, 0, tabOf(ws, tabId));
+    list.forEach((t, i) => { t.order = i; });
+  } else {
+    const container = tabOf(ws, scope.containerId);
+    const pane = panesOf(container).find(p => p.id === scope.paneId);
+    if (!pane) return;
+    const from = pane.tabIds.indexOf(tabId);
+    if (from < 0) return;                      // 不允许跨 pane 拖动
+    pane.tabIds.splice(from, 1);
+    const at = Math.max(0, Math.min(targetIndex, pane.tabIds.length));
+    pane.tabIds.splice(at, 0, tabId);
+  }
+}
 ```
 
-| 行 | 改什么 |
-|---|---|
-| TabRow | 根级 Tab 的 `order`（重新赋 0..n-1） |
-| subRow | 所属 pane 的 `tabIds` 数组顺序 |
-
-**跨行拖动一律不做**。这是删除「Shell 可拖到二级栏」需求的直接结果：
+**跨行拖动一律不做**：
 
 - Shell 不可能进入 subRow（I1 / I2）；
-- 组内叶标签不可能升到根级（否则它的 `parentId` 无处安放）；
-- 因此「拖到别的行」这个动作**没有任何合法落点**。
+- 组内叶不可能升到根级（否则 `parentId` 无处安放，且违反 I4）；
+- 因此「拖到别的行」没有任何合法落点。
 
-于是拖拽代码只剩一个入口，不再需要 `targetColumnId` / `targetGroupId` / `isShell` 三分支。现有的 `finishWorkspaceTabDrag()` 里约 50 行分支（含 2640–2648 的 `setShellOwnerGroup` 调用）可整体删除。
+拖拽代码只剩一个入口，不再需要 `targetColumnId` / `targetGroupId` / `isShell` 三分支。现有 `finishWorkspaceTabDrag()` 里约 50 行分支（含 2640–2648 的 `setShellOwnerGroup` 调用）可整体删除。
 
 ### 8.3 收起
 
-`collapsed` 只对容器 Tab 有效。收起按钮只在「有第二行可收」时出现：
+`collapsed` 只对容器有效，且只在「有第二行可收」时有意义（I10）：
 
-| 情形 | subRow 行数 | 收起按钮 |
-|---|---|---|
-| 扁平模式（`isFlat`） | 0（容器被展开进 TabRow） | 不渲染 |
-| 单 pane（`paneSplit.enabled === false`） | 1 | 不渲染 |
-| 多 pane（`paneSplit.enabled === true`） | `panes.length` ≥ 2 | 渲染 |
+| 情形 | subRow 行数 | 收起按钮 | 允许 `collapsed` |
+|---|---|---|---|
+| 扁平且未开 pane 分屏 | 0 | 不渲染 | 否 |
+| 扁平且开了 pane 分屏（方案 A） | `panes.length` ≥ 2 | 渲染 | 是 |
+| 非扁平、单 pane | 1 | 不渲染 | 否 |
+| 非扁平、多 pane | `panes.length` ≥ 2 | 渲染 | 是 |
 
-收起后：该容器的所有 subRow 不渲染，但 `activeTabId` 照常工作，面板继续显示。
-
-按钮的判定只看这一列渲染出的 subRow 数量，与「第几层」「是不是单分组」都无关——历史上 `syncGroupSubRowVisibility()` 里「单分组时清 hidden」的分支因此消失。
+**收起按钮必须挂在 TabRow 的列首，不能挂在 subRow 里。** 挂在 subRow 里会导致：收起后 subRow 不渲染 → 按钮随之消失 → 用户永远无法展开。这是可恢复性要求，不是审美选择。
 
 ### 8.4 新建 / 关闭标签
 
-| 动作 | 唯一写入 |
-|---|---|
-| 新建 main / filter / chart | 往目标容器的 `panes[?].tabIds` 追加，置 `activeTabId` |
-| 新建 shell | 往 `tabs` 加一个 `parentId: null` 的节点，`order = roots().length` |
-| 新建分组 | 加一个 `parentId: null` 的容器 Tab，自带 `panes: [{ id, tabIds: [main], activeTabId: main }]` |
-| 关闭叶标签 | 从 `panes[].tabIds` 删除；若删的是 `activeTabId`，激活同 pane 的相邻项 |
-| 关闭分组 | 删除容器与其全部子 Tab；若它独占一列，`split.sizes` 里对应键一并删除 |
+| 动作 | 唯一写入 | 落点规则 |
+|---|---|---|
+| 新建 main / filter / chart | 目标 pane 的 `tabIds` 追加，置 `activeTabId` | 优先焦点所在 pane；焦点不在任何 pane 时取焦点所在容器的第一个 pane |
+| 新建 shell | `tabs` 新增 `parentId: null` 节点，`order = roots().length` | 总是根级，与焦点无关 |
+| 新建容器 | 新增容器，自带 `panes: [{ id, tabIds: [mainId], activeTabId: mainId }]` | 总是根级 |
+| 关闭叶 | 从 `panes[].tabIds` 删除 | 若删的是 `activeTabId`，取同 pane 相邻项；pane 空了按 I5 补 main |
+| 关闭容器 | 删除容器与其全部子树，清 `split.sizes` / `paneSplit.sizes` 对应键 | 若焦点在其子树内，转给相邻根级 Tab |
 
-关闭后必须调用 `rebuildIndex()`（§2.3），保证 `parentId` 与 `panes` 一致。
+焦点 pane 由 `paneOfTab(focusedTab)` 直接得到，不需要 `panes[?]` 这种占位符。
 
-### 8.5 新建 Shell 按钮的层级
+### 8.5 全局动作的宿主（重要修正）
 
-规则简化为一条：
+「新建分组」「新建 Shell」的产物都是**根级 Tab**，属于整个工作区，不属于任何一列。分屏后每列各有一条 TabRow，因此不能放进某一列（范畴错误），也不能每列各放一个（会产生多个按钮，正是已修过的「两个添加串口按钮」缺陷）。
 
-```js
-addShellButton.hidden = !isFlat(ws);
-```
+规则：
 
-扁平模式下容器被展开，TabRow 就是唯一一层，按钮在那里；多分组模式下 Shell 是根级 Tab，也在 TabRow。**两种情况下按钮都在同一处**，因此规则就是「非扁平时才显示」。
+| 位置 | 内容 | 数量 |
+|---|---|---|
+| **工作区级动作条**（独立一行，位于列容器上方） | 新建分组、新建 Shell | 各 **1 个**，全局唯一 |
+| 每列的 TabRow | 该列标签 + 该列局部动作（关闭分屏等） | 每列 1 条 |
 
-扁平模式下容器被展开，TabRow 就是唯一一层，按钮在那里；多分组模式下也在 TabRow，因为 Shell 永远是根级 Tab。**两种情况下按钮都在同一处**，不再需要「恰好一个可见」的扫描。
-
-现有的五个产生点（`#pane-1-new-shell-tab-btn`、`#pane-2-new-shell-tab-btn`、`createPaneElement()` 的 `buttonSpecs`、`createGroupPaneElement()` 的 `buttonSpecs`、`#add-shell-tab-btn`）中，前四个随 pane 行一起消失（pane 行不再承载 Shell 入口），只保留 TabRow 里的那一个。
+这条修正同时解释了现状为什么出问题：现在把「新建 Shell」塞在分组标签行里，分屏后每列都有自己的分组标签行，于是要么重复出现，要么被 `syncShellAddButtonVisibility()` 按层数硬压。提到列之外的固定位置后，可见性规则退化为「永远可见，且只有一份」。
 
 ### 8.6 右键菜单
 
-分组标签的右键菜单项（重命名、关闭、新建 Shell、分屏）挂在 `kind === 'group'` 的按钮上。判据 `tabOf(ws, id).kind === 'group'`，不需要判断它当前在哪一层。
+容器的右键菜单项（重命名、关闭、新建 Shell、分屏）挂在 `isContainer(tab)` 为真的按钮上。判据是结构而非 `kind`，新增容器类型自动获得同一套菜单。
 
 ## 9. 持久化与迁移
 
-### 9.1 持久化的形状
-
-就是这一棵树，不含任何渲染状态：
+### 9.1 持久化形状
 
 ```jsonc
 {
@@ -611,49 +820,55 @@ addShellButton.hidden = !isFlat(ws);
       "panes": [ { "id": "def-p1", "tabIds": ["main-default", "filter-1"], "activeTabId": "main-default" } ] },
     { "id": "shell-1", "kind": "shell", "parentId": null, "order": 1 }
   ],
-  "activeTopTabId": "grp-default",
+  "focusedTabId": "main-default",
   "split": { "enabled": false, "orientation": "horizontal", "sizes": {} }
 }
 ```
 
-`tabs` 存为**平铺数组**（`Object.values`），读取时建索引。持久化格式与内存结构同形，不另设 DTO。
+`tabs` 存平铺数组（`Object.values`），读取时建索引。持久化格式与内存同形，不另设 DTO。
 
 ### 9.2 不持久化的东西
 
-以下全部是渲染期状态，写进配置只会制造第二真源：
-
-- 焦点 pane（原 `activePaneId`）
 - 按钮 DOM 引用、`buttonId`
-- 列表滚动位置、hover / 焦点
-- 分界条元素本身（每次渲染按需创建/复用，不进配置）
+- 列表滚动位置、hover / 焦点环
+- 分界条元素本身
+- 任何 `hidden` / 类名 / `flex-basis`
+
+注意：`focusedTabId` **要持久化**（决定启动后显示哪一列），而第一版曾把「焦点 pane」列为不持久化——两者是不同概念，见 §2.6。
 
 ### 9.3 迁移
 
-`SERIAL_GROUPS_CONFIG_VERSION` 递增一版。`migrateSerialGroupsConfig()` 增加一个分支：
+`SERIAL_GROUPS_CONFIG_VERSION` 递增一版，`migrateSerialGroupsConfig()` 增加分支：
 
 | 旧字段 | 处理 |
 |---|---|
-| `group.workspaceLayout.panes[]` | 搬到容器 Tab 的 `panes[]`（结构一致，直接引用） |
-| `group.workspaceLayout.splitEnabled` / `orientation` / `paneSizes` | 搬到容器 Tab 的 `paneSplit` |
-| `group.workspaceLayout.activePaneId` | **丢弃** |
-| `shellTab.ownerGroupId` | **丢弃**（归属维度消失） |
-| `shellTab.detachedColumn` | **丢弃**（Shell 天生是根 Tab） |
-| `shellTab.topRowColumnId` | **丢弃**（列由 `split` 决定） |
-| `shellTabs[]` / `filterTabs[]` / `chartTabs[]` | 转为 `tabs` 中的节点，`parentId` 分别为 `null` / 所属组 |
+| `group.workspaceLayout.panes[]` | 搬到容器的 `panes[]` |
+| `group.workspaceLayout.splitEnabled` / `orientation` / `paneSizes` | 搬到容器的 `paneSplit` |
+| `group.workspaceLayout.activePaneId` | 若其 pane 有 `activeTabId`，用它初始化 `focusedTabId`；否则丢弃 |
+| `shellTab.ownerGroupId` / `detachedColumn` / `topRowColumnId` | **全部丢弃** |
+| `shellTabs[]` / `filterTabs[]` / `chartTabs[]` | 转为 `tabs` 节点，`parentId` 分别为 `null` / 所属容器 |
 | `workspaceLayout.split`（组级） | 搬到 `workspace.split` |
 
-迁移后必须做一次 `rebuildIndex()` + 断言 I1–I8。**任何一条不变式不成立就拒绝保存并回落默认布局**，不允许把半合法状态写进配置文件。
+迁移流程：
 
-`normalizeSerialGroup()` 是 `{...defaults, ...source}` 形态，新键会自动保留；但主进程每次存盘都会 `normalizeConfig → migrateSerialGroupsConfig` **重建整个分组对象**，因此新的 `panes` / `paneSplit` 字段必须在 `normalizeSerialGroup()` 里显式保留，否则会在一次保存后静默丢失。
+1. 构造 `ws`；
+2. `rebuildIndex(ws)`；
+3. `validateAndRepair(ws)`（§6.2，**修复优先于报错**）；
+4. 若产生过修复，把原始配置另存为 `<config>.pre-migrate.json`；
+5. 只有判定「无法修复」时才回落默认工作区。
+
+第一版写「任何一条不变式不成立就拒绝保存」，过于严格：迁移阶段的畸形配置多来自旧版本本身，一律拒绝会让老用户直接丢布局。
+
+`normalizeSerialGroup()` 是 `{...defaults, ...source}` 形态，新键会自动保留；但主进程每次存盘都会 `normalizeConfig → migrateSerialGroupsConfig` **重建整个分组对象**，因此 `panes` / `paneSplit` 必须在 `normalizeSerialGroup()` 里显式保留，否则会在一次保存后静默丢失。
 
 ### 9.4 兼容性
 
-- 旧配置文件（无 `tabs` 键）→ 走迁移分支，用户无感。
-- 新配置被旧版本读取 → 旧版本不认识 `tabs`，会按「没有任何标签」处理。**不做向下兼容**：旧版本已经是待替换的形态，回退旧版本本身就意味着放弃新布局。
+- 旧配置（无 `tabs` 键）→ 走迁移分支，用户无感。
+- 新配置被旧版本读取 → 旧版本不认识 `tabs`，按「没有任何标签」处理。**不做向下兼容**：旧版本本身就是待替换形态，回退意味着放弃新布局。
 
 ## 10. 与现有 `renderer.js` 的映射
 
-行号基于 HEAD `9845c82`。若后续提交改变了行号，以函数名为准。
+行号基于 HEAD `9845c82`。后续提交改变行号时以函数名为准。
 
 ### 10.1 删除清单
 
@@ -662,40 +877,40 @@ addShellButton.hidden = !isFlat(ws);
 | 2332 | `getShellTabOwner(tabState)` | 删除 |
 | 2338 | `setShellTabOwner(tabId, owner)` | 删除 |
 | 2352 | `setShellDetachedColumn(tabId, detached)` | 删除 |
-| 2608–2657 | `finishWorkspaceTabDrag(state)` 的 `targetColumnId` / `isShell` 分支 | 改为 `reorderInRow()`，只保留同栏重排 |
-| 4203 | `renderSerialGroupTabBar()`（已改为复用节点） | 由 `renderWorkspace()` 取代 |
-| 4290 | `syncShellAddButtonVisibility()` | 改为一行 `addShellButton.hidden = !isFlat(ws)` |
-| 4418 | `syncSerialGroupAddButtonLayer()` | 随层数统一后删除（按钮只有一个位置） |
+| 2608–2657 | `finishWorkspaceTabDrag(state)` 的 `targetColumnId` / `isShell` 分支 | 改为 `reorderInRow()` |
+| 4203 | `renderSerialGroupTabBar()` | 由 `renderWorkspace()` 取代 |
+| 4290 | `syncShellAddButtonVisibility()` | 删除：新建 Shell 移入工作区级动作条（§8.5） |
+| 4418 | `syncSerialGroupAddButtonLayer()` | 删除：不再有「哪一层放按钮」的判断 |
 | 4442 | `syncShellTabLayer()`（含 `isSyncingShellLayer` 重入闸） | 删除：递归环 `placeShellTabs → addTabToPane → applyLayoutToDom` 不再存在 |
 | 4518–4600 | `resolveShellTabHost(tabState)` 三分支 | 删除：Shell 宿主恒为 TabRow |
 | 4664 | `syncShellLayoutOwnership()`（整函数） | 删除：不再需要「从 A 组摘、登记进 B 组」 |
 | 4706 | `isUnownedShellActiveIn(groupId)` | 删除（现为零引用死代码） |
-| 4727 | `syncGroupSubRowVisibility()` | 由 `renderWorkspace()` 的第 2 步取代 |
+| 4727 | `syncGroupSubRowVisibility()` | 由 `renderWorkspace()` 第 2 步取代 |
 | 4774 | `resolveWorkspaceTabButtonHost(tabId, paneId)` | 删除：布局层不再反向量子询问渲染层 |
 | 4825 | `stackShellTabOverHostGroup()` / `hideStackedShellTabsIn()` | 删除：Shell 不再叠在任何 pane 上 |
-| 4881 | `revealSerialGroupActiveTab(groupId)` | 删除：没有「被盖住的串口」需要揭露 |
+| 4881 | `revealSerialGroupActiveTab(groupId)` | 删除：可见列由 `focusedTabId` 派生 |
 | 4872 | `lastSerialTabByPane`（Map） | 删除 |
 | 5123 | `persistShellTabs()` 写 `ownerGroupId` / `detachedColumn` | 改为写 `workspace.tabs` |
-| 5136 | `createShellTab()` 里的 `ownerGroupId`（5233）/ `detachedColumn`（5237）初始化 | 删除这两个字段 |
+| 5136 | `createShellTab()` 里的 `ownerGroupId`（5233）/ `detachedColumn`（5237） | 删除这两个字段 |
 
 ### 10.2 保留并改造
 
 | 位置（HEAD） | 现有实现 | 改造 |
 |---|---|---|
-| 1964–1967 | `filterTabsStore` / `chartTabsStore` + `filterTabs` / `chartTabs` 别名 | 迁入 `workspace.tabs`，store 删除 |
-| 1981 | `let shellTabs = [];`（全局一份） | 迁入 `workspace.tabs` |
+| 1964–1967 | `filterTabsStore` / `chartTabsStore` + 别名 | 迁入 `workspace.tabs`，store 删除 |
+| 1981 | `let shellTabs = [];` | 迁入 `workspace.tabs` |
 | 4385 | `bindGroupTabListEvents(listEl)` | 泛化为 `bindTabListEvents(listEl)`，同时服务 TabRow 与 subRow |
-| 4318–4410 | `buildGroupTabButton` / `updateGroupTabButtonState` | 泛化为 `buildTabButton` / `updateTabButtonState`，按 `kind` 决定图标与菜单 |
+| 4318–4410 | `buildGroupTabButton` / `updateGroupTabButtonState` | 泛化为 `buildTabButton` / `updateTabButtonState`，按 `isContainer()` 而非 `kind` 分支 |
 | 3395 | `createGroupTabRowElement()` 内的 `bindGroupTabListEvents(list)` | 保留形态，改调 `bindTabListEvents` |
-| `workspace-manager.js:357–375` | `applyLayoutToDom()` 的 `parentElement !==` 判定 | 保留该判定（这是 C2 的实现，非临时补丁），但注入点 `resolveTabButtonHost` 删除 |
+| `workspace-manager.js:357–375` | `applyLayoutToDom()` 的 `parentElement !==` 判定 | 保留（C2 的实现，不是临时补丁），但删除注入点 `resolveTabButtonHost` |
 
 ### 10.3 不可误改
 
-`renderer.js:8503-8504` 的 `ownerGroupId` 是**串口端口占用**字段（对应 `main.js:3058` 的 `SERIAL_PORT_IN_USE` 协议），与 Shell 归属**完全无关**。全局删除 `ownerGroupId` 时必须排除此处，否则端口占用保护会失效。
+`renderer.js:8503-8504` 的 `ownerGroupId` 是**串口端口占用**字段（对应 `main.js:3058` 的 `SERIAL_PORT_IN_USE` 协议），与 Shell 归属**完全无关**。全局删除 `ownerGroupId` 时必须排除此处，否则端口占用保护失效。
 
-同名的字段分属两个语义，这本身就是重命名该做的理由：迁移时建议把端口占用的那个改名为 `portOwnerGroupId` 以示区分。
+同名不同义本身就是重命名的理由：建议把端口占用的那个改名为 `portOwnerGroupId`。
 
-### 10.4 具体要删多少
+### 10.4 删除量
 
 | 维度 | 引用数（实测） |
 |---|---|
@@ -717,48 +932,110 @@ addShellButton.hidden = !isFlat(ws);
 | `lastSerialTabByPane` | 3 |
 | `isUnownedShellActiveIn` | 1（零引用） |
 
-整体估计净减 **600–800 行**，Shell 相关顶层函数从 46 个降到约 25 个。这是「复用性强」的量化依据：删掉一个维度后，所有为跨越该维度而写的胶水代码全部失去存在理由。
+整体估计净减 **600–800 行**，Shell 相关顶层函数从 46 个降到约 25 个。这是「复用性强」的量化依据。
 
 ## 11. 分阶段实施
 
-正向替换，不做大爆炸。每个阶段独立可验证、独立可提交。
+正向替换，不做大爆炸。每阶段独立可验证、独立可提交。
 
 | 阶段 | 内容 | 验证 |
 |---|---|---|
-| **S1** | 新建 `tab-model.js`：`tabs` 树的读写、`rebuildIndex()`、§3 的派生量、不变式断言。**不接渲染。** 配套 `test/tab-model.test.js` | `npm test` |
-| **S2** | `renderWorkspace()` 上线：列容器 + TabRow + subRow 的 reconcile，按钮复用。删除 `#serial-group-tab-bar` 单例借位机制 | `verify-group-columns` / `verify-group-split` |
-| **S3** | subRow 按 pane 一条；组内 pane 分屏；删除 Shell 叠层机制（`stackShellTabOverHostGroup` / `hideStackedShellTabsIn`） | `verify-shell` / `verify-shell-buttons-split` |
-| **S4** | 删除 `ownerGroupId` / `detachedColumn` / `topRowColumnId` 及其全部依赖函数；`finishWorkspaceTabDrag` 改为只允许同栏重排 | `verify-shell-drag`（断言改写为「只能同栏重排」）/ `verify-shell-switchback` |
-| **S5** | 配置迁移（§9.3）+ 删除旧 `workspaceLayout` 结构 | 启动迁移测试 + 全量 CDP |
+| **S1** | 新建 `tab-model.js`：`{ tabs, focusedTabId, split }` 的读写、`rebuildIndex()`、§3 全部派生量、§6 全部不变式、`validateAndRepair()`。**不接渲染。** 配套 `test/tab-model.test.js` | `npm test`（含性质测试） |
+| **S2** | `renderWorkspace()` 上线：`buildRenderPlan()` + 列/行/按钮/显隐四步；**扁平模式按 §3.3 的族列实现**；删除 `#serial-group-tab-bar` 单例借位 | `verify-group-columns` / `verify-group-split` / **新增 `verify-flat-row`** / **新增 `verify-flat-with-shell`** |
+| **S3** | subRow 按 pane 一条；组内 pane 分屏；删除 Shell 叠层机制 | `verify-shell` / `verify-shell-buttons-split` |
+| **S4** | 删除 `ownerGroupId` / `detachedColumn` / `topRowColumnId` 及其依赖；`finishWorkspaceTabDrag` 改为同栏重排；全局动作移入工作区级动作条 | `verify-shell-drag`（断言改为「只能同栏重排」）/ `verify-shell-switchback` |
+| **S5** | 配置迁移（§9.3）+ 删除旧 `workspaceLayout` | 启动迁移测试 + 全量 CDP |
 
-**每阶段的核心纪律**：所有交互只改 `workspace` 树，然后调 `renderWorkspace()`；不允许任何地方直接改 DOM 的类名或位置。S2 之后若仍发现「某处直接 `appendChild` 标签按钮」，说明该处漏改。
+**核心纪律**：所有交互只改 `workspace`，然后调 `renderWorkspace()`；不允许任何地方直接改 DOM。S2 之后若仍发现「某处直接 `appendChild` 标签按钮」，说明该处漏改。
 
-**S1 必须先做**：`tab-model.js` 是纯逻辑，可在 Node 里直接断言，零 GUI 依赖。模型层的 bug 在 S1 就应全部暴露，不要留到 S2 之后靠 CDP 排查。
+**S1 必须先做，且必须带性质测试。** 模型是纯逻辑，可在 Node 里直接断言，零 GUI 依赖。模型层的 bug 若留到 S2 之后靠 CDP 排查，成本会高一个量级。
 
-## 12. 已知边界
+### 11.1 S1 的测试策略
+
+手工用例追不上状态空间。S1 必须包含**性质测试**：用固定种子的伪随机操作序列跑几千步，每步断言 I1–I10。
+
+```js
+test('random operation sequences preserve all invariants', () => {
+  for (let seed = 1; seed <= 200; seed++) {
+    const ws = createDefaultWorkspace();
+    const rand = makeRandom(seed);
+    for (let step = 0; step < 200; step++) {
+      applyRandomOperation(ws, rand);        // 只调模型 API，不碰 DOM
+      assertInvariants(ws, `seed=${seed} step=${step}`);
+    }
+  }
+});
+```
+
+理由：本项目的标签缺陷多来自「某种操作序列下的状态不一致」，而不是单个函数的输入输出错误。性质测试是能在 S1 阶段覆盖这种不一致的唯一手段。
+
+必须同时有一条**反向对照**：故意构造违反 I1 的 `ws`，确认 `assertInvariants()` 会报错——否则无法排除「断言恒真」。
+
+**另有两条必须覆盖的回归用例**（它们正是第一版设计的致命缺陷）：
+
+1. 扁平 + 有 Shell + 焦点在 Shell → TabRow 必须仍包含容器全部子 Tab；
+2. 扁平 + 有 Shell + 焦点在 MAIN → 内容区必须显示 MAIN，而不是被 Shell 抢走。
+
+### 11.2 每阶段的回滚点
+
+每阶段独立提交且保持应用可运行。若 S2 引入族列后出现难以定位的布局问题，回滚 S2 即可回到「旧渲染 + 新模型未接线」，不影响当前发布行为。
+
+## 12. 扩展点
+
+「通用」不能自证，只能用「新增东西要改几处」量化。目标：**零改动**。
+
+| 新增内容 | 需要改的地方 |
+|---|---|
+| 一种新叶（如「波形」） | ① `kind` 字符串；② panel 内容渲染函数。布局、父级、显隐、菜单全部复用 |
+| 一种新容器（如「工作集合」） | ① `kind` 字符串；② 它的 panel 若需内容则补。布局、子 Tab 管理、收起、分屏全部复用 |
+| 一种新的行内动作 | 只在 `reconcileButtons()` 里加一个按钮 |
+| 一种新的全局动作 | 只加进工作区级动作条（§8.5），不涉及任何层数判断 |
+
+反面清单（**不允许**出现）：
+
+- `if (kind === 'shell')` —— Shell 的差异由 I1 / I2 在模型层保证，不靠渲染层特判；
+- `if (serialGroups.length > 1)` —— 唯一判据是 `isFlat(ws)`；
+- `if (paneSplit.enabled)` 出现在渲染层 —— 行数由 `layoutRowsOf()` 一次算出；
+- 渲染层出现 `roots` / `childrenOf` / `rootFamilyOf` —— 说明 `buildRenderPlan()` 的产出不够。
+
+## 13. 已知边界
 
 **本文的模型尚未实现，零代码、零 GUI 验证。** 以下事项在实施时必须重新取证：
 
 | # | 未验证项 | 说明 |
 |---|---|---|
-| 1 | 两级分屏同时开启的实际观感 | §4.3 的四种组合中，「列开 + pane 开」只有设计推演，没有实现 |
-| 2 | 扁平模式 + 多 pane 的标签焦点视觉 | §5.5 末尾的开放项：TabRow 里同时有两个「激活」标签时需要区分焦点标签，具体视觉规则未定 |
+| 1 | 两级分屏同时开启的实际观感 | §4.3 的四种组合中，「列开 + pane 开」只有设计推演 |
+| 2 | 扁平 + 多 pane 的标签焦点视觉 | 依赖 §5.5 的裁决；方案 A 下会出现 N 条 subRow |
 | 3 | 真实鼠标拖动分界条的手感与最小宽度 | 现有证据仅为合成 `PointerEvent`；硬限 `MIN_SHARE = 0.1` |
 | 4 | 四条以上分屏时每一条分界条的独立拖动 | 只有三条的实测 |
 | 5 | 窗口尺寸变化后旧比例是否仍然合理 | 未验证 |
-| 6 | 两级分屏下 xterm `fit()` 从 `display:none` 切回后的尺寸 | 未肉眼确认 |
-| 7 | `flatMode` 下 `parentId` 的保留策略 | §5.4 是**推荐方案**，尚未经用户确认 |
-| 8 | 迁移后旧配置的实际恢复效果 | 需要真实旧版配置样本 |
+| 6 | 两级分屏下 xterm `fit()` 从 `display:none` 切回的尺寸 | 未肉眼确认 |
+| 7 | 迁移后旧配置的实际恢复效果 | 需要真实旧版配置样本 |
+| 8 | 工作区级动作条在窄窗口下的换行表现 | 新增 UI 元素，未设计 |
 
-同时如实说明既有的验证缺口（与本模型无关，但同样未解决）：
+既有验证缺口（与本模型无关，但同样未解决）：
 
 - 任何多串口特性都没有做过真实的**双端口字节流端到端**验证。
 - per-group 作用域下两组同时收数据时各自的日志前缀 / 回显，只有 `getPrefix()` 直接调用的证据。
 - 标签切换闪烁的修复（`0bf62ea`）只有 CDP 合成点击 + `getComputedStyle` 证据，未做真实用户手测。
 
+## 14. 需求覆盖核对
+
+| 需求 | 落点 | 是否完整 |
+|---|---|---|
+| 四个原语：Tab / TabRow / subRow / tabPanel | §1 | ✅ |
+| Tab 可放在 TabRow 或 subRow 中 | §3.3 `layoutColumns()` 的 `tabItems` / `rows` | ✅ 且明确「同一 Tab 永不两处同时出现」（I4） |
+| subRow 可以被收起 | §8.3（含「按钮必须挂在 TabRow」的可恢复性约束） | ✅ |
+| tabPanel 对应一个 Tab | §1.5 + I3 | ✅ |
+| 串口组、main、filter、chart、shell 都是 Tab | §1.1 / §1.2 | ✅ 用 `isContainer()` 而非 `kind` 区分容器与叶 |
+| 组内 pane 分屏保留 | §4.2 + §5.5 | ⚠️ 与「单组时 subRow 不可见」组合时需裁决，见 §5.5 |
+| 分屏分为 TabRow 级与 subRow 级 | §3.3–§3.4 + §4 | ✅ 二维分离，互不引用 |
+| 只有一个串口组时 subRow 不可见，main/filter/chart/shell 都在 TabRow | §3.3 族列 + §5.2 | ✅（附两条针对性回归用例，§11.1） |
+| 新建架构设计文档 | 本文件 | ✅ |
+
 ## 附：一句话总结
 
-**一棵 Tab 树 + 一组派生量 + 一个渲染入口。** 标签的「位置」不再是数据，而是结构的投影；`flatMode` 不再是两种实现，而是同一个投影函数的不同返回。
+**三个字段 + 一组派生量 + 一个渲染计划。** 标签的「位置」不再是数据，而是结构的投影；「扁平」不是另一种实现，而是同一条 TabRow 上的一次族展开。
 
 ---
 
