@@ -34,6 +34,26 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+// 分组级的五项显示偏好（时间戳/行号/发送回显/双格式/过滤页回显）。
+//
+// 只有「设置里把作用域改成每组独立、且用户在该组动过开关」时才会存在这个字段。
+// 缺失必须保持缺失：补一份默认值会让「组内没存过」与「组内显式设成默认值」不可区分，
+// 而前者应当继续继承全局值。
+const DISPLAY_PREF_FIELDS = ['showTimestamp', 'showLineNumbers', 'echoSentData', 'echoSentDataBothFormats', 'echoSentDataInFilterTabs'];
+
+function normalizeGroupUiPrefs(source) {
+  if (!isPlainObject(source)) return null;
+  const prefs = {};
+  let recognized = false;
+  for (const field of DISPLAY_PREF_FIELDS) {
+    if (typeof source[field] === 'boolean') {
+      prefs[field] = source[field];
+      recognized = true;
+    }
+  }
+  return recognized ? prefs : null;
+}
+
 // 校验一份串口参数。缺失项一律回落到 fallback，而不是留 undefined——
 // 渲染层会直接把这些值塞进 <select>.value，undefined 会让控件看起来「没选中」。
 function normalizeGroupSerialOptions(source, fallback = {}) {
@@ -87,6 +107,10 @@ function normalizeSerialGroup(group, index, fallbackOptions) {
   const id = typeof source.id === 'string' && source.id.trim()
     ? source.id.trim()
     : `g-${String(index + 1).padStart(8, '0')}`;
+  // 只有确实含可识别字段时才带上这个键，否则整体省略——
+  // 省略与「全是默认值」在读取侧的语义不同（前者继承全局，后者是明确的组内值）。
+  const uiPrefs = normalizeGroupUiPrefs(source.uiPrefs);
+
 
   return {
     id,
@@ -98,6 +122,7 @@ function normalizeSerialGroup(group, index, fallbackOptions) {
     // sessionId 是运行时标识，重启后一律为 null；写进配置只为保持 schema 形状。
     sessionId: null,
     serialOptions: normalizeGroupSerialOptions(source.serialOptions, fallbackOptions),
+    ...(uiPrefs ? { uiPrefs } : {}),
     filterTabs: Array.isArray(source.filterTabs) ? source.filterTabs : [],
     chartTabs: Array.isArray(source.chartTabs) ? source.chartTabs : [],
     workspaceLayout: isPlainObject(source.workspaceLayout) ? source.workspaceLayout : null

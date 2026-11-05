@@ -62,6 +62,7 @@ const elements = {
   historyBufferSize: document.getElementById('historyBufferSize'),
   mouseWheelScrollLines: document.getElementById('mouseWheelScrollLines'),
   scrollToBottomOnSend: document.getElementById('scrollToBottomOnSend'),
+  displayPrefsPerGroup: document.getElementById('displayPrefsPerGroup'),
   mainInputHistoryLimit: document.getElementById('mainInputHistoryLimit'),
   searchHistoryLimit: document.getElementById('searchHistoryLimit'),
   hexBytesPerLine: document.getElementById('hexBytesPerLine'),
@@ -498,6 +499,8 @@ async function init() {
   elements.historyBufferSize.value = String(normalizeIntegerSetting(config.historyBufferSize, 'historyBufferSize'));
   elements.mouseWheelScrollLines.value = String(normalizeIntegerSetting(config.mouseWheelScrollLines, 'mouseWheelScrollLines'));
   elements.scrollToBottomOnSend.checked = config.scrollToBottomOnSend !== false;
+  // 默认关闭：保持改造前「所有分组共享一份显示偏好」的行为。
+  elements.displayPrefsPerGroup.checked = config.displayPrefScope === 'per-group';
   elements.mainInputHistoryLimit.value = String(normalizeMainInputHistoryLimit(config.mainInputSettings?.historyLimit));
   elements.searchHistoryLimit.value = String(normalizeSearchHistoryLimit(config.searchSettings?.historyLimit));
 
@@ -856,6 +859,9 @@ elements.saveBtn.onclick = async () => {
     },
     hexDisplaySettings,
     scrollToBottomOnSend: elements.scrollToBottomOnSend.checked,
+    // 只存作用域本身；五项的具体值仍存在顶层（全局那一份）与 serialGroups[].uiPrefs（每组那一份），
+    // 这两处由主窗口维护，设置页不做汇总，否则会把另一个窗口的实时值覆写成打开设置时的旧值。
+    ...(elements.displayPrefsPerGroup.checked ? { displayPrefScope: 'per-group' } : { displayPrefScope: 'global' }),
     clearAllLogsIncludesShell: elements.clearAllLogsIncludesShell.checked,
     logEnabled: elements.logEnabled.checked,
     echoSentData: elements.echoSentData.checked,

@@ -16,6 +16,9 @@ function cloneGroup(group) {
   return {
     ...group,
     serialOptions: isPlainObject(group.serialOptions) ? { ...group.serialOptions } : {},
+    // uiPrefs 也要深拷：`...group` 只是把引用搬过去，
+    // 之后修改一个分组的显示开关会连带改到列表快照里的同名对象。
+    ...(isPlainObject(group.uiPrefs) ? { uiPrefs: { ...group.uiPrefs } } : {}),
     filterTabs: Array.isArray(group.filterTabs) ? group.filterTabs.slice() : [],
     chartTabs: Array.isArray(group.chartTabs) ? group.chartTabs.slice() : [],
     workspaceLayout: isPlainObject(group.workspaceLayout) ? { ...group.workspaceLayout } : null

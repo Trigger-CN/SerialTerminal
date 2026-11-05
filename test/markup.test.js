@@ -222,9 +222,18 @@ test('sent data echo is configurable and available from both settings surfaces',
   assert.match(preferences, /echoSentDataInFilterTabs: elements\.echoSentDataInFilterTabs\.checked/);
 
   // 左侧栏开关变化时立即生效并持久化。
-  assert.match(renderer, /echoSentDataCb\?\.addEventListener\('change'[\s\S]*?ipcRenderer\.send\('update-display-settings', \{ echoSentData \}\)/);
-  assert.match(renderer, /echoSentDataBothCb\?\.addEventListener\('change'[\s\S]*?\{ echoSentDataBothFormats \}/);
-  assert.match(renderer, /echoSentDataFilterCb\?\.addEventListener\('change'[\s\S]*?\{ echoSentDataInFilterTabs \}/);
+  //
+  // 这五项的前缀/回显现在要先看"作用域"：全局共享时写顶层键（与改造前完全一致），
+  // 每组独立时写 serialGroups[i].uiPrefs。三个 change 处理器因此改为走统一的
+  // applyDisplayPrefChange(field, value)，由它根据作用域选择持久化目标。
+  // 断言也因此改为验证"立即生效 + 持久化"这件事本身，而不是旧的某一行字面量：
+  // 直写字面量会把持久化分支写死成只有全局一种。
+  assert.match(renderer, /function applyDisplayPrefChange\(field, value\) \{[\s\S]*?setGroupDisplayPrefs\(groupId, \{ \[field\]: value \}\)[\s\S]*?ipcRenderer\.send\('update-display-settings', \{ \[field\]: next\[field\] \}\)/);
+  assert.match(renderer, /echoSentDataCb\?\.addEventListener\('change'[\s\S]*?applyDisplayPrefChange\('echoSentData', e\.target\.checked\)/);
+  assert.match(renderer, /echoSentDataBothCb\?\.addEventListener\('change'[\s\S]*?applyDisplayPrefChange\('echoSentDataBothFormats', e\.target\.checked\)/);
+  assert.match(renderer, /echoSentDataFilterCb\?\.addEventListener\('change'[\s\S]*?applyDisplayPrefChange\('echoSentDataInFilterTabs', e\.target\.checked\)/);
+  // 每组独立时必须把分组级副本落盘，否则重启即丢。
+  assert.match(renderer, /displayPrefScope === DISPLAY_PREF_SCOPES\.PER_GROUP\) \{[\s\S]*?persistSerialGroups\(\)/);
 });
 
 test('sidebar settings group receive and send items under labelled sections', () => {

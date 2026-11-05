@@ -39,6 +39,14 @@ const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./chart-p
 const { ChartDataModel } = require('./chart-data-model');
 const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
 const { SerialGroupContextStore } = require('./serial-group-context');
+const {
+    DISPLAY_PREF_SCOPES,
+    normalizeDisplayPrefScope,
+    normalizeDisplayPrefs,
+    readGroupDisplayPrefs,
+    resolveDisplayPrefs,
+    displayPrefsEqual
+} = require('./serial-group-display-prefs');
 const { SerialDataParser } = require('./serial-data-parser');
 const { mainTabId, mainTabButtonId, serialContainerId } = require('./serial-group-dom');
 const {
@@ -129,6 +137,16 @@ const serialInputBoundGroups = new Set();
 // let currentMode = 'terminal'; // Removed temporarily
 
 // Display Settings
+
+// 时间戳/行号/发送回显这五项的作用域（全局共享或每组一份）由设置页的开关决定。
+// `globalDisplayPrefs` 始终是**全局那一份**：scope=global 时它是唯一真源；
+// scope=per-group 时它是新分组以及尚未保存过偏好的分组的继承来源。
+let displayPrefScope = DISPLAY_PREF_SCOPES.GLOBAL;
+const globalDisplayPrefs = normalizeDisplayPrefs({});
+
+// 下面五个 `let` 是**默认分组**的缓存，只为不改动既有读取点的写法而保留。
+// 任何分组都要走 getGroupDisplayPrefs()，不得直接读它们——
+// 否则 scope=per-group 时切到 g-1 仍会拿到默认分组的显示偏好。
 let showTimestamp = false;
 let showLineNumbers = false;
 // P2：行号计数器与收发显示参数已下沉到分组上下文（serial-group-context.js）。
@@ -169,6 +187,122 @@ function setGroupDisplay(groupId, patch = {}) {
 let logIncludeTimestamp = false;
 let logIncludeLineNumbers = false;
 let lastCharWasCR = false;
+
+// 取某个分组**应当实际使用**的五项显示偏好。
+//
+// 默认分组同时回写模块级缓存，让仍未改写的读取点保持与分组一致；
+// 非默认分组直接读分组自己的 uiPrefs（group 作用域）或全局那一份（global 作用域）。
+// 默认参数用常量而非 activeGroupId：这个函数在分组函数定义之前就可能被调用。
+//
+// 这个函数在**逐行渲染**的热路径上（getPrefix / renderSentRecord），每行都要调，
+// 所以结果必须缓存：否则每行都要 Array.find 分组 + 新建对象。
+// 缓存有效性模型：
+//   global 作用域 —— 只要不写全局值，所有分组的结果就是同一份，永不失效；
+//   per-group 作用域 —— 按 groupId 各存一份，写入或作用域变化时整体作废。
+// 分组对象被 syncSerialGroupsFromConfig 重建后旧缓存仍指向旧对象，
+// 但它们的**字段值相等**，所以读取结果仍然正确；真正的风险只在写入后不失效，
+// 而所有写入都走 setGroupDisplayPrefs / applyDisplayPrefScope。
+let displayPrefsCache = new Map();
+function invalidateDisplayPrefsCache() {
+    displayPrefsCache = new Map();
+}
+
+function getGroupDisplayPrefs(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    const cached = displayPrefsCache.get(id);
+    if (cached) return cached;
+    const group = getSerialGroupById(id);
+    const prefs = resolveDisplayPrefs({
+        scope: displayPrefScope,
+        globalPrefs: globalDisplayPrefs,
+        group
+    });
+    displayPrefsCache.set(id, prefs);
+    if (id === REGISTRY_DEFAULT_GROUP_ID) {
+        showTimestamp = prefs.showTimestamp;
+        showLineNumbers = prefs.showLineNumbers;
+        echoSentData = prefs.echoSentData;
+        echoSentDataBothFormats = prefs.echoSentDataBothFormats;
+        echoSentDataInFilterTabs = prefs.echoSentDataInFilterTabs;
+    }
+    return prefs;
+}
+
+// 写入某一分组的显示偏好。
+//
+// global 作用域下写的是全局那一份（所有分组立即同步）；per-group 下只写该分组自己的 uiPrefs。
+// 返回值是写入后该分组**实际生效**的偏好，供调用方刷新侧栏与终端主题。
+function setGroupDisplayPrefs(groupId, patch = {}) {
+    const id = resolveSerialGroupId(groupId);
+    const next = normalizeDisplayPrefs({ ...getGroupDisplayPrefs(id), ...patch });
+    if (displayPrefScope === DISPLAY_PREF_SCOPES.PER_GROUP) {
+        const group = getSerialGroupById(id);
+        if (group) group.uiPrefs = next;
+    } else {
+        Object.assign(globalDisplayPrefs, next);
+    }
+    // 必须先失效再读：上面那次 getGroupDisplayPrefs 读的是旧值（作为合并基底），
+    // 不失效的话后面这次会命中旧缓存，调用方拿到的就是写入前的偏好。
+    invalidateDisplayPrefsCache();
+    return getGroupDisplayPrefs(id);
+}
+
+// per-group → global：删掉分组残留值，此后一律读全局那一份。
+function clearGroupDisplayPrefs() {
+    serialGroups.forEach(group => {
+        if (group && Object.prototype.hasOwnProperty.call(group, 'uiPrefs')) delete group.uiPrefs;
+    });
+}
+
+// 作用域变化时的收尾。
+//
+// global → per-group：把所有分组先用**当前全局值**种一份，
+// 这样用户切过去的第一屏与他之前看到的完全一致，不会突然回到出厂默认；
+// 在此之前各组残留的旧 uiPrefs 也会被覆盖掉，不会「一开开关就飘出几天前的值」。
+//
+// per-group → global：删掉分组残留值（clearGroupDisplayPrefs），此后一律读全局那一份。
+function applyDisplayPrefScope(scope) {
+    const next = normalizeDisplayPrefScope(scope);
+    const previous = displayPrefScope;
+    displayPrefScope = next;
+    if (next === DISPLAY_PREF_SCOPES.PER_GROUP) {
+        if (previous !== DISPLAY_PREF_SCOPES.PER_GROUP) {
+            serialGroups.forEach(group => {
+                if (group) group.uiPrefs = { ...globalDisplayPrefs };
+            });
+        }
+    } else {
+        clearGroupDisplayPrefs();
+    }
+    invalidateDisplayPrefsCache();
+    // 种入的 uiPrefs 必须落盘：否则重启后分组级副本丢失，
+    // 用户会发现「刚改过的每组独立设置又回到全局值」。
+    // 由配置文件里的 displayPrefScope 触发的应用不写盘（见 flushPendingDisplayPrefScope）。
+    if (!isApplyingConfig && !suppressDisplayPrefPersist) {
+        persistSerialGroups();
+        ipcRenderer.send('update-display-settings', { displayPrefScope: next });
+    }
+    return next;
+}
+
+// 从配置恢复时暂存的作用域。applyConfig 里只记不动，等分组列表同步完成后再真正应用——
+// 否则「global → per-group」会把当前全局值种进一份马上被重建丢弃的旧分组列表。
+let pendingDisplayPrefScope = null;
+// 从磁盘恢复时只应用不落盘：否则每次启动都会多写一次配置，
+// 而这份配置刚刚从磁盘读出来，没有值得写回去的变化。
+let suppressDisplayPrefPersist = false;
+
+function flushPendingDisplayPrefScope() {
+    if (pendingDisplayPrefScope === null) return;
+    const next = pendingDisplayPrefScope;
+    pendingDisplayPrefScope = null;
+    suppressDisplayPrefPersist = true;
+    try {
+        applyDisplayPrefScope(next);
+    } finally {
+        suppressDisplayPrefPersist = false;
+    }
+}
 
 // Color settings
 let timestampColor = '#808080';
@@ -370,38 +504,53 @@ function setActionStatus(message) {
 
 setActionStatus(trFallback('main.ready', 'Ready'));
 
+// 把五项显示偏好的实际值写回侧栏控件。
+//
+// 直接写 checked 不会触发 change 事件，因此不会反过来再调一次 applyDisplayPrefChange。
+function syncDisplayPrefCheckboxes(prefs) {
+    if (showTimestampCb) showTimestampCb.checked = prefs.showTimestamp;
+    if (showLinenoCb) showLinenoCb.checked = prefs.showLineNumbers;
+    if (echoSentDataCb) echoSentDataCb.checked = prefs.echoSentData;
+    if (echoSentDataBothCb) echoSentDataBothCb.checked = prefs.echoSentDataBothFormats;
+    if (echoSentDataFilterCb) echoSentDataFilterCb.checked = prefs.echoSentDataInFilterTabs;
+}
+
+// 五项显示偏好（时间戳/行号/发送回显/双格式/过滤页回显）的统一写入入口。
+//
+// 持久化目标取决于作用域：
+//   global    —— 沿用改造前的顶层键，经 update-display-settings 写入，行为与旧版一致；
+//   per-group —— 写进 serialGroups[i].uiPrefs，并立即整份持久化分组列表。
+// 两个分支都会先更新内存中的真源，所以切换分组时侧栏能立刻读到新值。
+function applyDisplayPrefChange(field, value) {
+    const groupId = resolveSerialGroupId(activeGroupId);
+    const next = setGroupDisplayPrefs(groupId, { [field]: value });
+    syncDisplayPrefCheckboxes(next);
+    if (displayPrefScope === DISPLAY_PREF_SCOPES.PER_GROUP) {
+        persistSerialGroups();
+    } else {
+        ipcRenderer.send('update-display-settings', { [field]: next[field] });
+    }
+}
+
 showTimestampCb.addEventListener('change', (e) => {
-    showTimestamp = e.target.checked;
-    ipcRenderer.send('update-display-settings', { showTimestamp });
+    applyDisplayPrefChange('showTimestamp', e.target.checked);
 });
 
 showLinenoCb.addEventListener('change', (e) => {
-    showLineNumbers = e.target.checked;
-    ipcRenderer.send('update-display-settings', { showLineNumbers });
-    if (!showLineNumbers) {
-        // Optional: Reset counter when disabled? 
-        // Or keep it running? Usually keep it running or reset is fine.
-        // Let's not reset, just hide.
-    } else {
-        // If enabling, maybe we want to start counting or continue?
-        // If we are mid-stream, it picks up.
-    }
+    applyDisplayPrefChange('showLineNumbers', e.target.checked);
 });
 
 // 发送回显开关：与显示时间/行号同级，属于显示层偏好，切换后立即生效并持久化。
 echoSentDataCb?.addEventListener('change', (e) => {
-    echoSentData = e.target.checked;
-    ipcRenderer.send('update-display-settings', { echoSentData });
+    applyDisplayPrefChange('echoSentData', e.target.checked);
 });
 
 echoSentDataBothCb?.addEventListener('change', (e) => {
-    echoSentDataBothFormats = e.target.checked;
-    ipcRenderer.send('update-display-settings', { echoSentDataBothFormats });
+    applyDisplayPrefChange('echoSentDataBothFormats', e.target.checked);
 });
 
 echoSentDataFilterCb?.addEventListener('change', (e) => {
-    echoSentDataInFilterTabs = e.target.checked;
-    ipcRenderer.send('update-display-settings', { echoSentDataInFilterTabs });
+    applyDisplayPrefChange('echoSentDataInFilterTabs', e.target.checked);
 });
 
 let currentBatchTimestamp = null;
@@ -415,13 +564,16 @@ function getPrefix(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     let s = '';
     const reset = '\x1b[0m';
     const state = groupState(groupId);
+    // 前缀属于本分组：per-group 作用域下各组可能各开各的，
+    // 用模块级变量会让 g-1 的数据按默认分组的偏好加前缀。
+    const prefs = getGroupDisplayPrefs(groupId);
     
-    if (showTimestamp) {
+    if (prefs.showTimestamp) {
         const time = currentBatchTimestamp || formatTimestamp();
         const color = hexToAnsi(timestampColor);
         s += `${color}[${time}]${reset} `;
     }
-    if (showLineNumbers) {
+    if (prefs.showLineNumbers) {
         const lineNo = String(state.serialLineCounter).padStart(4, '0');
         const color = hexToAnsi(lineNoColor);
         s += `${color}[${lineNo}]${reset} `;
@@ -921,19 +1073,22 @@ const hexFormatter = getHexFormatter(REGISTRY_DEFAULT_GROUP_ID);
 
 // 发送回显使用独立的背景色整行标记，不经过 SerialDataParser，也不占用接收行号。
 function renderSentRecord(record, groupId = REGISTRY_DEFAULT_GROUP_ID) {
-    if (!echoSentData) return;
     const id = resolveSerialGroupId(groupId);
+    // 三个回显开关都属于**这条记录所属的分组**：per-group 作用域下，
+    // g-1 关了回显不能连带把默认分组也静默；反过来默认分组关着也不该吞掉 g-1 的记录。
+    const prefs = getGroupDisplayPrefs(id);
+    if (!prefs.echoSentData) return;
     const runtime = serialRuntimes.get(id);
     if (!runtime) return;
     const formatted = formatSentRecord(record, {
         label: trFallback('main.txLabel', 'TX'),
-        both: echoSentDataBothFormats
+        both: prefs.echoSentDataBothFormats
     });
     const bg = hexToAnsiBackground(echoSentDataHighlightColor);
     const body = formatted.line;
     writeTerminalOutput(runtime.term, `${bg}${body}\x1b[0m\r\n`);
     writeMainTabLog(`${body}\r\n`, id);
-    if (!echoSentDataInFilterTabs) return;
+    if (!prefs.echoSentDataInFilterTabs) return;
     if (!isActiveSerialGroup(id)) return;
     filterTabs.forEach(tab => {
         if (tab.showSentOnly === true) {
@@ -2779,11 +2934,18 @@ function normalizeSerialGroupState(groups) {
         const id = typeof group.id === 'string' && group.id.trim() ? group.id.trim() : '';
         if (!id || seen.has(id)) return;
         seen.add(id);
+        // uiPrefs 是**可选**字段：只有 per-group 作用域下用户动过某个分组的显示开关才会有。
+        // 缺省时不补 ——— 补齐会让「组内没存过」与「组内显式存成默认值」变成同一件事，
+        // 而前者应当继续继承全局值。
+        const uiPrefs = group.uiPrefs && typeof group.uiPrefs === 'object' && !Array.isArray(group.uiPrefs)
+            ? normalizeDisplayPrefs(group.uiPrefs)
+            : null;
         normalized.push({
             ...group,
             id,
             title: typeof group.title === 'string' && group.title.trim() ? group.title.trim() : `Serial ${index + 1}`,
-            status: typeof group.status === 'string' ? group.status : 'disconnected'
+            status: typeof group.status === 'string' ? group.status : 'disconnected',
+            ...(uiPrefs ? { uiPrefs } : {})
         });
     });
     if (!normalized.length) normalized.push(createDefaultSerialGroupState());
@@ -3459,27 +3621,57 @@ function applyGroupSerialOptionsToSidebar(groupId) {
     if (!group) return;
     const options = group.serialOptions || {};
     const display = getGroupDisplay(groupId);
+    // 端口列表是异步刷新的。三种情形必须区分：
+    //   列表还没建好（只有占位项）—— 保留当前值，否则启动时会清掉刚恢复的选择；
+    //   目标端口在列表里 —— 选中它；
+    //   列表已就绪但目标端口不在 —— 显式清空。
+    // 第三种是用户报的那个缺陷：设备被拔掉后上一组的端口会留在屏幕上，
+    // 让用户以为当前分组选的是那个端口。宁可空，不可错。
+    const isPortListReady = () => {
+        const el = document.getElementById('port-select');
+        if (!el) return false;
+        return Array.from(el.options).some(option => Boolean(option.value));
+    };
 
+    // 回显写入控件时不能反过来触发 saveSerialModeConfig：
+    // 否则每切一次分组都会把「屏幕上刚回显的值」再当成用户改动写盘一次。
     const previousGuard = isApplyingSessionGroups;
     isApplyingSessionGroups = true;
+
     try {
-        // 端口：只在选项里真的存在时选中，否则保留当前值（刷新端口前可能还没有该选项）。
+        // 端口：目标在列表里就选中；列表已就绪但不包含目标时必须清空；
+        // 列表尚未建好时保留当前值，避免启动阶段把刚恢复的选择误清。
         const portEl = document.getElementById('port-select');
         if (portEl) {
             const wanted = typeof group.portPath === 'string' ? group.portPath : '';
-            const hasOption = wanted
-                ? Array.from(portEl.options).some(option => option.value === wanted)
-                : true;
-            if (hasOption) portEl.value = wanted;
+            const hasOption = Boolean(wanted)
+                && Array.from(portEl.options).some(option => option.value === wanted);
+            if (hasOption) {
+                portEl.value = wanted;
+            } else if (!wanted || isPortListReady()) {
+                // wanted 为空：该分组本来就没选端口，不能把上一组的值留在屏幕上。
+                portEl.value = '';
+            }
         }
 
-        // 波特率走自定义波特率机制：它会重建自定义选项并选中目标值。
+        // 波特率走自定义波特率机制：自定义值必须先有对应 option 才能选中。
+        // 与端口不同，波特率**不能**清空——它总有值（回落 115200），
+        // 清空反而会让 <select> 停在第一项，与分组实际参数不一致。
         const baudRate = normalizeBaudRate(options.baudRate) || '115200';
         if (typeof previousBaudRate !== 'undefined') previousBaudRate = baudRate;
         const baudEl = document.getElementById('baud-select');
         if (baudEl) {
             const hasOption = Array.from(baudEl.options).some(option => option.value === baudRate);
-            if (hasOption) baudEl.value = baudRate;
+            if (hasOption) {
+                baudEl.value = baudRate;
+            } else {
+                // 自定义波特率可能还没被渲染进列表：先补建选项再选中，
+                // 否则 baudSelect 会静默保留上一组的波特率。
+                renderCustomBaudRates([
+                    ...normalizeCustomBaudRates(currentConfig?.customBaudRates),
+                    baudRate
+                ], baudRate);
+            }
         }
 
         const dataBitsEl = document.getElementById('data-bits-select');
@@ -3596,6 +3788,9 @@ function applyActiveSerialGroup({ fit = true } = {}) {
     // 侧栏设置必须跟着切换：否则用户看到的是上一个分组的端口与参数，
     // 却以为改的是当前分组的。连接按钮同理，它代表的是当前这一个分组。
     applyGroupSerialOptionsToSidebar(activeGroupId);
+    // 五个显示开关同样属于当前分组（per-group 作用域下各组各一份）。
+    // 回显只写 checked，不改变量：变量由 getGroupDisplayPrefs 在前缀/回显读取时同步。
+    syncDisplayPrefCheckboxes(getGroupDisplayPrefs(activeGroupId));
     updateSidebarActiveGroupLabel();
     refreshConnectButtonState();
     updateFilterModeStatuses();
@@ -6777,7 +6972,10 @@ function getSerialOptionsFromUi() {
     // 而不是从默认分组的模块级缓存读——否则切到 g-1 改编码会写回默认分组。
     const display = getGroupDisplay(activeGroupId);
     return {
-        path: document.getElementById('port-select')?.value || currentConfig?.lastSerialOptions?.path || '',
+        // 不能兑底到 `currentConfig.lastSerialOptions.path`：那是**默认分组**的端口。
+        // 新分组尚未选端口时用它兑底，会把默认分组的端口写进新分组，
+        // 于是切一下分组就把「端口按分组隔离」静默破掉了。宁可空，不可错。
+        path: document.getElementById('port-select')?.value || '',
         baudRate: typeof getBaudRate === 'function' ? getBaudRate() : (currentConfig?.lastSerialOptions?.baudRate || '9600'),
         dataBits: document.getElementById('data-bits-select')?.value || '8',
         stopBits: document.getElementById('stop-bits-select')?.value || '1',
@@ -6890,21 +7088,26 @@ function applyConfig(config) {
     lineNoColor = config.lineNoColor || '#67986f';
     mouseWheelScrollLines = config.mouseWheelScrollLines || 3;
     scrollToBottomOnSend = config.scrollToBottomOnSend !== false;
-    echoSentData = config.echoSentData !== false;
-    echoSentDataBothFormats = config.echoSentDataBothFormats === true;
-    echoSentDataInFilterTabs = config.echoSentDataInFilterTabs !== false;
+    // 作用域本身留到分组列表同步之后再应用（见 syncSerialGroupsFromConfig 之后）：
+    // 从 global 切到 per-group 时需要向**重建后**的分组列表种入当前全局值，
+    // 在这里提前改会把值写进一份马上被丢弃的旧列表。
+    // 先把它记在 `pendingDisplayPrefScope`，由同步流程消费。
+    pendingDisplayPrefScope = normalizeDisplayPrefScope(config.displayPrefScope);
+    // 顶层键是**全局那一份**（与改造前的持久化位置完全一致，旧配置不需要迁移）。
+    // 这里保留各字段原有的默认回退语义：echoSentData 缺省为 true，其余缺省为 false。
+    Object.assign(globalDisplayPrefs, normalizeDisplayPrefs({
+        showTimestamp: config.showTimestamp === true,
+        showLineNumbers: config.showLineNumbers === true,
+        echoSentData: config.echoSentData !== false,
+        echoSentDataBothFormats: config.echoSentDataBothFormats === true,
+        echoSentDataInFilterTabs: config.echoSentDataInFilterTabs !== false
+    }));
     echoSentDataHighlightColor = config.echoSentDataHighlightColor || '#1e3a5f';
-    if (echoSentDataCb) echoSentDataCb.checked = echoSentData;
-    if (echoSentDataBothCb) echoSentDataBothCb.checked = echoSentDataBothFormats;
-    if (echoSentDataFilterCb) echoSentDataFilterCb.checked = echoSentDataInFilterTabs;
+    // 全局值与作用域刚被改写，缓存必须作废，否则本轮后续读取仍拿旧偏好。
+    invalidateDisplayPrefsCache();
     
-    // Update Checkboxes
-    showTimestamp = config.showTimestamp || false;
-    showLineNumbers = config.showLineNumbers || false;
     logIncludeTimestamp = config.logIncludeTimestamp === true;
     logIncludeLineNumbers = config.logIncludeLineNumbers === true;
-    if (showTimestampCb) showTimestampCb.checked = showTimestamp;
-    if (showLinenoCb) showLinenoCb.checked = showLineNumbers;
 
     const options = {
         fontSize: config.fontSize,
@@ -7104,6 +7307,15 @@ function applyConfig(config) {
     // 已经在 DOM 里。首次加载时这里会把 serialGroups 从配置里同步进来；
     // 之后 config-updated（含我们自己的 persistSerialGroups 回声）会重同步一次。
     if (!isApplyingSessionGroups) syncSerialGroupsFromConfig(config);
+
+    // 作用域必须等分组列表同步完再落地：global → per-group 时要往这份新列表里种值。
+    flushPendingDisplayPrefScope();
+
+    // 侧栏的五个显示开关必须跟**当前激活分组**。
+    // 必须晚于 syncSerialGroupsFromConfig 与 flushPendingDisplayPrefScope：
+    // per-group 作用域下值存在分组对象上。
+    syncDisplayPrefCheckboxes(getGroupDisplayPrefs(activeGroupId));
+
 
     serialFitAddon.fit();
 
@@ -7677,8 +7889,13 @@ updateThroughputPanel({
 });
 
 async function refreshPorts() {
+    // 首选值必须取自**激活分组**。
+    // 以前兑底到 `currentConfig.lastSerialOptions.path`（默认分组的端口），
+    // 于是设备被拔掉后刷一次列表，默认分组的端口又会被重新选中，
+    // 用户看到的就是「拔了卡但端口还在」。
+    const group = getSerialGroupById(activeGroupId);
     const selectedPath = portSelect.value;
-    const preferredPath = selectedPath || currentConfig?.lastSerialOptions?.path || '';
+    const preferredPath = selectedPath || (typeof group?.portPath === 'string' ? group.portPath : '');
     const ports = await ipcRenderer.invoke('list-ports');
     portSelect.innerHTML = '<option value="">Select Port</option>';
     let hasPreferredPath = false;
@@ -7692,9 +7909,9 @@ async function refreshPorts() {
         }
         portSelect.appendChild(opt);
     });
-    if (preferredPath && !hasPreferredPath) {
-        portSelect.value = '';
-    }
+    // 重建列表后 <select> 默认停在第一项（占位），这里显式对齐：
+    // 目标不存在就停占位，绝不能留在上一个分组的端口上。
+    portSelect.value = hasPreferredPath ? preferredPath : '';
     setActionStatus(`已刷新串口列表，共 ${ports.length} 个端口`);
 }
 
