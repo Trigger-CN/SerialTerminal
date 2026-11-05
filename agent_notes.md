@@ -1756,6 +1756,96 @@ per-group-connected-after   : {"default":true,"g-1":false}
 **尚未验证**：两个真实串口同时连接时的并发收发字节流隔离与按钮态刷新（无硬件）。
 
 
+### 13A.10 同一物理端口只允许一个串口分组占用
+
+**用户实测报告**（逐字）：`两个组选择相同的端口居然都能打开`。
+
+#### 一、先要如实说清的一点：本机无法复现「都能打开」
+
+两层取证都指向同一个结果 —— 第二次打开被**驱动**拒绝：
+
+```text
+portprobe/probe.js
+  ports=["COM6","COM17","COM1","COM18","COM11"]
+  COM6 => first:OK | second:Opening COM6: Access denied
+
+diag-same-port-out2.txt  (profile diag131, exit=0, renderer-diag=clean)
+  target port                : COM6
+  after default connect      : {"default":{"connected":true,"portPath":"COM6"}}
+  after g1 connect same port : {"default":{...true,"COM6"},"g-1":{"connected":false,"portPath":"COM6"}}
+  both-claim-connected       : false
+  alerts                     : ["Failed to connect: Error: Error invoking remote method 'connect-serial': Opening COM6: Access denied"]
+```
+
+所以这一轮**不是修复一个被复现的缺陷**。用户看到的现象很可能来自允许共享打开的虚拟串口 / USB 复合设备驱动。
+
+#### 二、代码层的真实缺口
+
+`serialSessions` 按 `groupId` 建会话，`getOrCreateSerialSession(groupId, portPath)` 只按 `groupId` 取/建，`connect-serial` **从不检查该端口是否已被别的分组打开**。唯一防线是驱动本身。而驱动行为不可控：一旦允许共享打开，两个分组会各持一个句柄、同一份字节流被两边消费、日志写两遍，**不会招异常**，只会让数据错乱。
+
+#### 三、修法：应用层端口占用表
+
+新模块 `serial-port-claims.js`（纯逻辑，不碰 `SerialPort` / DOM / IPC）：
+
+| 成员 | 语义 |
+| --- | --- |
+| `normalizePortPath` | 字符串才 trim，其余一律 `''` |
+| `normalizePortKey` | trim + 转大写（Windows 端口名大小写不敏感，避免 `com6` 与 `COM6` 被当成两个端口） |
+| `claim(groupId, portPath)` | `{ ok, reason, portKey, ownerGroupId }`，`reason ∈ {empty-port, port-in-use, claimed}` |
+| `releaseGroup(groupId)` | 释放该分组的占用，返回被释放的端口键或 `null` |
+| `releasePort(groupId, portPath)` | **只有键与所有者同时匹配**才释放 |
+| `ownerOf` / `isClaimedByOther` / `size` / `clear` | 查询与清空 |
+
+两个非常容易写错、写错后很难发现的点：
+
+1. **`port-in-use` 的判断必须在 `releaseGroup` 之前返回**。否则「把 g-1 从 COM6 换到已被 g-2 占用的 COM7」会先把 COM6 释放掉，才发现换不成，白白丢掉一条好连接。
+2. **同一分组重复 `claim` 同一端口是合法的**（重连场景），而换端口时要先释放自己的旧占用 —— 因此一个分组最多只持有一个端口。
+
+四个接入点（**漏一处就会永久锁死端口**）：
+
+| 位置 | 动作 | 漏掉的后果 |
+| --- | --- | --- |
+| `connect-serial` handler 开头 | `claim` 在**动本分组旧连接之前** | 换端口失败会先断掉原有连接 |
+| `port.open` 的 `err` 分支 | `releasePort(groupId, path)` | 打开失败后该端口在应用内永远「被占用」 |
+| `cleanupSerialConnection()` | `releaseGroup(session.groupId)` | 断开的端口不可再被其它分组使用 |
+| `disconnect-serial` 找不到会话时 | `releaseGroup(groupId)` | 同上，且渲染层早已认为它断开了 |
+
+错误协议：主进程抛 `SERIAL_PORT_IN_USE|<PORTKEY>|<ownerGroupId>|<英文原文>`；渲染层 `connectSerialFromUi()` 的 `catch` 用 `/SERIAL_PORT_IN_USE\|([^|]*)\|([^|]*)\|(.*)/` 解析，用 `getSerialGroupById(ownerGroupId)?.title` 取可读分组名，再 `trFallback('main.serialPortInUse', …)`。
+
+不做自定义 token 直接展示异常是不行的：Electron 包装后用户看到的就是本轮取证里那向 `Error invoking remote method 'connect-serial': Opening COM6: Access denied`。
+
+#### 四、验证
+
+`verify-same-port-guard.js` **15/15**（`diag140`、`diag151` 重跑也 15/15），**用真实串口**：
+
+```text
+[verify-same-port-guard @ diag140] exit=0
+  renderer-diag=clean
+PASS real-ports-available  {"ports":["COM6","COM17","COM1","COM18","COM11"]}
+PASS default-connects-to-real-port  {"default":true}
+PASS second-group-picks-the-same-port  {"ok":true,"shown":"COM6"}
+PASS second-group-blocked  {"default":true,"g-1":false}
+PASS default-keeps-its-connection  {"default":true,"g-1":false}
+PASS alert-is-localized-port-in-use  {"alerts":["Port COM6 is already open in Serial 1. Disconnect it there first."]}
+PASS alert-is-not-the-raw-driver-error
+PASS default-disconnected
+PASS second-group-connects-after-release  {"default":false,"g-1":true}
+PASS cleanup-second-group-disconnected
+SUMMARY total=15 pass=15 fail=0 skip=0
+```
+
+**最有价值的一条对比**：`diag131`（改动前）同样的操作得到 `Opening COM6: Access denied`，说明当时是驱动挡住的；改动后得到的是应用层本地化文案，说明拦截已上移到应用层。
+
+而 `second-group-connects-after-release` 是整个改动的核心证据：release 路径只要漏一处（端口进没释放），这条就必失败。
+
+#### 五、本阶段踩到的两个工具坑
+
+1. **Electron 的 `window.alert` 是模态框，会阻塞渲染进程**，导致后续 `Runtime.evaluate` 永不返回。`diag-same-port.js` 第一版把 `alert` 包了一层但仍调了真实 `alert`，结果 `exit=2 / cdp timeout`。必须换成纯记录：`window.alert = (msg) => { window.__alerts.push(String(msg)); };`
+2. **i18n 新增键必须补齐六种语言**。这一轮 `main.serialPortInUse` 先是只写了 `en`（而且那次 `File.Edit` 被 `unread_range` 拒掉后**根本没生效**），靠一个探针脚本才确认它一行都不存在。五种非英文语言的 `main` 是**整行压缩对象**（单行 1600~3100 字符），正确做法是「唯一锚点 + 匹配计数断言」的字符串替换，而不是整行重建。
+
+**尚未验证**：用户环境里那类允许共享打开的驱动（本机没有这类设备，无法重现「两个分组都打开」）。
+
+
 ---
 
 ## 14. AI 接手时建议的工作流程

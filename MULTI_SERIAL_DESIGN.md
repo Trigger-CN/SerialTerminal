@@ -929,6 +929,77 @@ connectSerialFromUi({ groupId = activeGroupId })
 **尚未验证**：两个真实串口同时连接并发收发时的字节流隔离与按钮态刷新（无硬件，从未做过）。
 
 
+### 7.9 同一物理端口只允许一个串口分组占用
+
+**用户报告**：`两个组选择相同的端口居然都能打开`。
+
+**先要如实说明的一点**：在本机（最新构建 + `COM6`）**无法复现**「两个分组都打开」。用底层探针与真实渲染进程双重取证，第二次打开都被驱动拒绝：
+
+```text
+portprobe/probe.js        : COM6 => first:OK | second:Opening COM6: Access denied
+diag-same-port-out2.txt   : after g1 connect same port -> {"default":{connected:true},"g-1":{connected:false}}
+                            both-claim-connected: false
+```
+
+所以这一轮**不是修一个被复现的缺陷**，而是把一条原本只由驱动提供的保证提升为应用保证。原因是驱动行为不可控：部分虚拟串口驱动、USB 复合设备、或带共享模式的驱动确实允许第二次打开，此时两个分组各拿一个句柄、谁也不报错，同一份字节流被两边同时消费、日志写两份——这类问题不抛异常，只让数据显示错乱，事后极难定位。
+
+#### 7.9.1 旧实现的缺口
+
+`serialSessions` 按 `groupId` 建会话，`getOrCreateSerialSession(groupId, portPath)` 只按 `groupId` 取/建，`connect-serial` **从不检查该端口是否已被别的分组打开**。唯一的防线是驱动本身。
+
+#### 7.9.2 `serial-port-claims.js` 的语义
+
+纯逻辑模块，不碰 `SerialPort`、DOM 或 IPC，因此可以在 Node 里直接断言。
+
+| 成员 | 语义 |
+| --- | --- |
+| `normalizePortPath(value)` | 字符串才 trim，其它一律 `''` |
+| `normalizePortKey(value)` | trim + **转大写**。Windows 端口名大小写不敏感，避免 `com6` 与 `COM6` 被当成两个端口 |
+| `claim(groupId, portPath)` | 返回 `{ ok, reason, portKey, ownerGroupId }`，`reason ∈ {empty-port, port-in-use, claimed}` |
+| `releaseGroup(groupId)` | 释放该分组的占用，返回被释放的端口键或 `null` |
+| `releasePort(groupId, portPath)` | **只有键与所有者同时匹配**才释放 |
+| `ownerOf` / `isClaimedByOther` / `size` / `clear` | 查询与清空 |
+
+两条容易写错但必须保住的语义：
+
+1. **同一分组重复 `claim` 同一端口是允许的**（重连场景）；换成别的端口时先释放它自己的旧占用，因此一个分组最多只持有一个端口。
+2. **被拒绝时不能先释放自己原有的占用**。`claim` 里 `port-in-use` 的判断必须在 `releaseGroup` **之前**返回，否则「把 g-1 从 COM6 换到已被 g-2 占用的 COM7」会先把 COM6 释放掉才发现换不成，白白丢掉一条好连接。
+
+#### 7.9.3 四个接入点（漏一处就会永久锁死端口）
+
+| 位置 | 动作 | 漏掉的后果 |
+| --- | --- | --- |
+| `connect-serial` 开头 | `claim` **在动本分组旧连接之前**执行 | 换端口失败会先断掉原有连接 |
+| `port.open` 的错误分支 | `releasePort(groupId, path)` | 打开失败后该端口在应用内永远「被占用」 |
+| `cleanupSerialConnection()` | `releaseGroup(session.groupId)` | 断开的端口不可再被其它分组使用 |
+| `disconnect-serial` 找不到会话时 | `releaseGroup(groupId)` | 同上，且渲染层早已认为它断开了 |
+
+#### 7.9.4 错误协议
+
+主进程抛 `SERIAL_PORT_IN_USE|<PORTKEY>|<ownerGroupId>|<英文原文>`；渲染层用 `/SERIAL_PORT_IN_USE\|([^|]*)\|([^|]*)\|(.*)/` 解析，再用 `getSerialGroupById(ownerGroupId)?.title` 取可读分组名，最后走 `trFallback('main.serialPortInUse', …)`。
+
+之所以要自定义 token 而不是直接展示异常：Electron 会把 IPC 异常包装成 `Error invoking remote method 'connect-serial': …`，用户看到的是一句毫无意义的英文堆栈（第四轮取证时用户看到的就是 `Opening COM6: Access denied`）。
+
+**被否决的做法**：依赖 `Access denied` 兜底（驱动行为不一致）；用一个全局布尔锁（会阻止本来合法的「不同端口并发连接」）。
+
+#### 7.9.5 已验证
+
+`verify-same-port-guard.js` **15/15**（`diag140`，exit=0，renderer-diag=clean），**用真实串口**：
+
+| # | 操作 | 断言 |
+| --- | --- | --- |
+| 1 | `default` 选 `COM6` 并连接 | `isGroupConnected('default') === true`（真实打开） |
+| 2 | 新建 `g-1`（自动激活），选**同一** `COM6` 并连接 | `g-1` 仍 `false`；`default` 仍 `true` |
+| 3 | 检查提示文案 | 命中本地化 `serialPortInUse`，**不含** `Access denied` / `invoking remote method` |
+| 4 | 断开 `default` → 回 `g-1` 再连 | `g-1` 变为 `true` —— 证明占用已被释放，端口没有被永久锁死 |
+
+第 4 条是整个改动的核心证据：release 路径只要漏一处，这条就会失败。
+
+**与改动前的对比**：`diag131`（改动前）同样的操作得到的提示是 `Failed to connect: Error: … Opening COM6: Access denied`，说明当时是**驱动**挡住的；改动后得到的是应用层本地化文案，说明拦截已上移到应用层。
+
+**尚未验证**：用户环境里那类允许共享打开的驱动（本机没有这类设备，无法重现「两个分组都打开」）。
+
+
 ---
 
 ## 8. 两级分屏

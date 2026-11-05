@@ -243,10 +243,10 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **469/469 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-manager.test.js` 11 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项、`test/serial-group-tab-bar.test.js` 15 项、`test/serial-group-layout-dom.test.js` 19 项、`test/serial-group-tab-lists.test.js` 13 项、`test/serial-output-buckets.test.js` 12 项与 `test/renderer-module-load.test.js` 4 项）。
+- [x] `npm test` 当前 **482/482 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-manager.test.js` 11 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项、`test/serial-group-tab-bar.test.js` 15 项、`test/serial-group-layout-dom.test.js` 19 项、`test/serial-group-tab-lists.test.js` 13 项、`test/serial-output-buckets.test.js` 12 项、`test/serial-port-claims.test.js` 13 项与 `test/renderer-module-load.test.js` 4 项）。
 - [x] **renderer 模块加载门禁**：`node scripts/check-renderer-module-load.js` 退出码 0；反向对照（故意 TDZ）确实非零退出。**边界**：它的 `document.getElementById` 每次返回新 stub，**无法表达 id 重复或真实 DOM 交互**（本轮已实际踩到）；也**覆盖不到异步回调**（`applyConfig` 里的 `ReferenceError` 只能靠真实启动窗口暴露）。第 9 项又亲眼看到一次：`GROUP_TAB_BAR_ID is not defined` 在 `node --check` 与加载门禁下均全绿，只有真实启动的 `[RENDERER DIAGNOSTIC]` 才暴露。
 - [x] **静态未定义标识符扫描**：`.me/tmp/*/scan-undefined.js` 扫 **95** 个候选标识符，`checked=95 / missing=none`。它是第三层保险，**不做真正的作用域分析**，用途只是「新写的代码里漏了 require 或漏了声明」。
-- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **10 个脚本全绿、退出码均为 0**：
+- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **11 个脚本全绿、退出码均为 0**（合计 197 项断言，0 失败）：
 
 | 脚本 | 项数 / 结果 | profile |
 | --- | --- | --- |
@@ -260,9 +260,13 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 | `verify-shell-drag.js` | exit=0 | `diag127` |
 | `verify-shell-switchback.js` | **14/14** | `diag128` |
 | `verify-connect-group.js`（新增） | **23/23** | `diag129` |
+| `verify-same-port-guard.js`（新增） | **15/15** | `diag151` |
+
 
   全部 `app-diagNN-err.log` 无 `[RENDERER DIAGNOSTIC]`（`run-all-120.txt`）。
 - [x] **连接/断开按钮必须作用于当前串口分组（用户实测缺陷）**：`选择串口2组，点击链接串口，串口1组会链接…串口2组的处于断开状态`。根因是整条连接链路写死默认分组：`toggleSerialConnection()` 不传 `groupId`、`disconnectSerial()` 写死 `REGISTRY_DEFAULT_GROUP_ID`、`connectSerialInProgress` 与 `isConnected` 都是全局单值。现在：`toggleSerialConnection()` 以 `activeGroupId` 为对象；`disconnectSerial(groupId)` 按分组断开且只对默认分组清理 `serialSessionId` / `serialWriteChain` / 自动发送 / `chartTabs`；两个布尔锁改成按分组 Set；`waitForSerialDisconnected(groupId)` 与 `serialDisconnectWaiters` 改为按分组等待；`refreshConnectButtonState()` 按激活分组重算并带 busy 禁用态；主终端键盘输入改为 `bindGroupTerminalInput()` 逐分组绑定；`sendSerialRequest()` 的身份门禁改按目标分组。新增 `verify-connect-group.js` **23/23**（`diag129`），在真实渲染进程旁路记录 IPC、不打开真实串口，覆盖双向分组切换、按钮跟随、断开只断自己、连接提示不污染另一分组终端、端口不跨分组继承。
+- [x] **同一物理端口只允许一个串口分组占用**：用户报告 `两个组选择相同的端口居然都能打开`。在本机（最新构建 + `COM6`）**无法复现**：底层探针与真实渲染进程双重取证，第二次打开都被驱动拒绝（`COM6 => first:OK | second:Opening COM6: Access denied`；`diag-same-port-out2.txt` 里 `g-1` 保持 `connected:false`、`both-claim-connected:false`）。所以这不是修复一个被复现的缺陷，而是把原本只由驱动提供的保证提升为应用保证 —— 部分虚拟串口 / USB 复合设备 / 带共享模式的驱动确实允许第二次打开，届时两个分组各持一个句柄、同一份字节流被两边消费、日志写两份，不报错只出错乱数据。新增纯逻辑模块 `serial-port-claims.js`（`claim` / `releaseGroup` / `releasePort`，端口键统一大写），在 `connect-serial` 开头（**在动本分组旧连接之前**）、`port.open` 错误分支、`cleanupSerialConnection()`、`disconnect-serial` 四处接入；错误以 `SERIAL_PORT_IN_USE|<PORTKEY>|<ownerGroupId>|<英文原文>` 回传，渲染层解析后走 `main.serialPortInUse` 给本地化提示。新增 `test/serial-port-claims.test.js` 13 项与 `verify-same-port-guard.js` **15/15**（`diag140`/`diag151`，**用真实串口**）：`default` 打开 `COM6` 后 `g-1` 抢同一端口被拦下、提示是本地化文案而非 `Access denied`、`default` 连接不受影响，**断开 `default` 后 `g-1` 立刻能连上**（证明占用已释放，端口不会被永久锁死）。
+
 
 - [ ] **显示类复选项仍未按分组隔离**：`diag110` 取证显示 `show-timestamp` / `show-lineno` / `echo-sent-data` / `echo-sent-data-both` / `echo-sent-data-filter` 切换分组后仍停留在上一次改成的值（它们只写模块级全局变量并经 `update-display-settings` 持久化，从未按分组存储、也未在 `applyGroupSerialOptionsToSidebar()` 里回写）。`search-regex` / `search-case` / `search-word` 同属侧栏显示偏好，尚未取证是否需要按分组。串口参数类 9 项经实测已正确跟随分组，不要重复改。
 
