@@ -482,6 +482,9 @@ const serialGroupTabListEl = document.getElementById('serial-group-tab-list');
 const addSerialGroupBtn = document.getElementById('add-serial-group-btn');
 // 单层模式下唯一可见的多串口入口。它初始在 pane 标签行，多分组时被搬到分组栏。
 const addSerialGroupInlineBtn = document.getElementById('add-serial-group-inline-btn');
+// 多分组时的新建 Shell 入口。Shell 属于「上层标签栏」那一层，所以它常任在分组标签行里；
+// 单分组时由 pane 行那个静态按钮（pane-1-new-shell-tab-btn）当代入口。
+const addShellTabBtn = document.getElementById('add-shell-tab-btn');
 let suppressMainInputFocus = false;
 const DEFAULT_SHORTCUTS = {
     sendMainInput: 'Ctrl+Enter',
@@ -2313,11 +2316,13 @@ function getPaneIdForTabId(tabId) {
 //
 //   null        不归属任何串口分组 —— 属于「上层标签栏」那一层。
 //               未分屏时它在激活列的上层共享行里（与分组标签同级）；
-//               已分屏时它**自占一列**，该列只有一行标签栏（用户 ASCII 图最右的 SHELL1）。
-//   <分组 id>   归属该分组 —— 出现在那组的**下层**标签行里（图中 COM2 下方的 SHELL2）。
+//               已分屏时同样在**那一列的列首行**里（与分组标签同级、不新开列），
+//               除非用户把它拖到了分组标签行上（tabState.detachedColumn）。
+//   <分组 id>   归属该分组 —— 出现在那组的**下层**标签行里（图中 COM2 下方的 SHELL1）。
 //
-// 为什么不需要第三种：「独立成组」并不是一个独立的归属，而是「不归属」在分屏状态下的
-// 必然形态。把它也当成一种状态，会出现「未分屏却要凭空占一列」这种与用户期望相反的情况。
+// 为什么不需要第三种归属值：「独立成组」不是另一个归属，而是「不归属」的一个显示变体，
+// 用 tabState.detachedColumn 这个逐标签标记表达就够了。把它当成第三种归属值，
+// 会出现「未分屏却要凭空占一列」这种与用户期望相反的情况。
 function getShellTabOwner(tabState) {
     const owner = tabState?.ownerGroupId;
     if (owner && serialGroups.some(group => group.id === owner)) return owner;
@@ -2328,21 +2333,53 @@ function setShellTabOwner(tabId, owner) {
     const tabState = getShellTabState(tabId);
     if (!tabState) return false;
     tabState.ownerGroupId = owner && serialGroups.some(group => group.id === owner) ? owner : null;
+    // 归属一变，「独立成列」这个附加标记就没意义了：归进分组的 Shell 住下层行。
+    if (tabState.ownerGroupId) tabState.detachedColumn = false;
     return true;
 }
 
-// 是否存在「不归属任何分组」的 Shell 标签。分屏时它们各自占一列。
+// 把一个未归属的 Shell 在「上层共享行」与「自占一列」之间切换。
+//
+// 这是用户拖动的落点决定的，不是「不归属」的必然结果：用户对「拖到分组标签栏」
+// 同时提出了两种期望（与所有串口标签按行分屏 / 自己成为独立一列）。早期只实现了后者，
+// 于是在期望前者的布局图里凭空多出了一列 Shell。
+function setShellDetachedColumn(tabId, detached) {
+    const tabState = getShellTabState(tabId);
+    if (!tabState) return false;
+    if (getShellTabOwner(tabState) !== null) return false;
+    const next = detached === true;
+    if (tabState.detachedColumn === next) return false;
+    tabState.detachedColumn = next;
+    return true;
+}
+
+// 是否存在「不归属任何分组」的 Shell 标签。
 function hasUnownedShellTabs() {
     return shellTabs.some(tab => getShellTabOwner(tab) === null);
 }
 
-// Shell 独立列是否应当存在：只有分屏时「不归属」才等于「占一列」。
+// 是否存在被用户**显式拖到分组标签行**的未归属 Shell。
+//
+// 「不归属」现在有两种形态，靠 tabState.detachedColumn 区分：
+//
+//   false（默认）  停在上层标签栏：分屏时与分组标签同级，宿主是**激活列的列首行**，
+//                  不新开列。用户原话：`拖动到分组标签栏，意味着和所有串口标签页分屏显示`
+//                  —— 分层不靠多开一列，靠每列内部的两行标签。
+//   true           用户明确要求它独立成列（同一句话里「自己成为独立一组」）。
+//
+// 早期把两种形态合并成「只要不归属就占一列」，于是「新建一个 Shell 再开分屏」
+// 会凭空多出一列 Shell，用户实测报为「会变成三个串口列 + 一个 Shell 列」。
+function hasDetachedShellColumn() {
+    return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.detachedColumn === true);
+}
+
+// Shell 独立列是否应当存在：只有分屏、且用户把某个未归属 Shell 划到了分组标签行才建。
 // 未分屏时它停在上层共享行，不建列 —— 否则屏幕上会莫名多出一列空标签栏。
 function isShellColumnActive() {
     return groupWorkspaceSplit.enabled
         && serialGroups.length > 1
         && shellTabs.length > 0
-        && hasUnownedShellTabs();
+        && hasDetachedShellColumn();
 }
 
 // 独立列里当前激活的 Shell 标签。独立列不在任何分组的布局里，因此激活态无法由
@@ -2353,11 +2390,24 @@ let detachedShellActiveTabId = null;
 // onLayoutApplied 又会回调 syncShellTabLayer，不拦住会无限循环。
 let isSyncingShellLayer = false;
 
+// 记录某 pane 上一次真正在显示的**串口**标签，供 revealSerialGroupActiveTab 回退用。
+function rememberSerialTabForPane(paneId, tabId) {
+    if (!paneId || !tabId || isShellTabId(tabId)) return;
+    lastSerialTabByPane.set(paneId, tabId);
+}
+
+// 从布局层的状态变化里更新那张表：只在激活标签确实是串口标签时记。
+function syncRememberedSerialTab(paneId) {
+    const activeTabId = getPaneById(paneId)?.activeTabId;
+    rememberSerialTabForPane(paneId, activeTabId);
+}
+
 function ensurePaneActiveTab(paneId) {
     return workspaceManager.ensurePaneActiveTab(paneId);
 }
 
 function setActivePane(paneId, options = {}) {
+    syncRememberedSerialTab(paneId);
     return workspaceManager.setActivePane(paneId, options);
 }
 
@@ -2365,6 +2415,7 @@ function switchPaneTab(paneId, tabId, options = {}) {
     // 这一列可能正叠着上层栏的 Shell（面板叠在主标签上）。切串口标签前必须把它遮回去。
     hideStackedShellTabsIn(paneId, tabId);
     const switched = workspaceManager.switchPaneTab(paneId, tabId, options);
+    syncRememberedSerialTab(paneId);
     // 上/下两层的显隐取决于「这一列现在显示的是不是上层 Shell」，
     // 所以任何一次标签切换后都要重算。漏了它就会停在「Shell 已经切回主标签、
     // 但下层标签行还隐着」这种半状态。
@@ -2503,7 +2554,7 @@ function updateWorkspaceTabDrag(state, clientX, clientY) {
     state.targetIsShellColumn = false;
     state.insertionIndex = null;
 
-    // 先看分组标签行：它是把 Shell 升为独立一组的落点，优先级高于 pane 行。
+    // 先看分组标签行：它是把 Shell 升为「独立一组」的落点，优先级高于 pane 行。
     // 只对 Shell 标签开放：串口分组标签自己不能拖到别的列（分屏由右键菜单决定）。
     const rowTarget = state.isShell && getGroupRowDropTarget(clientX, clientY);
     if (rowTarget) {
@@ -2554,12 +2605,21 @@ function finishWorkspaceTabDrag(state) {
     state.tabButton.classList.remove('workspace-tab-dragging');
     if (!state.dragging) return;
 
-    // 落到分组标签行：Shell 回到「上层标签栏」那一层（不归属任何分组）。
-    // 已分屏时该层自占一列；未分屏时它就融在激活列的共享行里。
+    // 落到某列的**分组标签行**：用户明确要求这个 Shell 独立成列（只有一行标签栏）。
+    //
+    // 注意与「新建 Shell 默认落位」区分：新建出来的未归属 Shell 只停在分组标签行里，
+    // 不新开列。只有**拖到分组标签行**这个动作才表示「自己成为独立一组」。
+    //
     // 串口标签不响应——哪些分组并排由右键菜单决定，不是靠拖标签改的。
     if (state.targetColumnId) {
         if (state.isShell) {
             setShellOwnerGroup(state.tabId, null);
+            const tabState = getShellTabState(state.tabId);
+            if (tabState) {
+                tabState.detachedColumn = true;
+                syncShellWorkspaceLayout();
+                persistShellTabs();
+            }
             state.tabButton.dataset.suppressClickUntil = String(performance.now() + 300);
         }
         return;
@@ -3321,6 +3381,20 @@ function reclaimGroupAddButton() {
     actions.appendChild(addSerialGroupBtn);
 }
 
+// 把新建 Shell 按钮从即将删除的列里抢回到静态行。与 reclaimGroupAddButton 同一理由。
+function reclaimShellAddButton() {
+    if (!addShellTabBtn) return;
+    const home = document.getElementById(GROUP_TAB_BAR_ID);
+    if (!home || home.contains(addShellTabBtn)) return;
+    let actions = home.querySelector('.serial-group-tab-actions');
+    if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'serial-group-tab-actions';
+        home.appendChild(actions);
+    }
+    actions.insertBefore(addShellTabBtn, actions.firstChild);
+}
+
 // 「添加串口」按钮只能出现在**当前真正可见**的那一条分组标签行里。
 //
 // 早期这里用 getGroupTabRow(activeGroupId)，把按钮放进了分组**自己**那条行。
@@ -4041,12 +4115,46 @@ function renderSerialGroupTabBar() {
         getGroupTabList(tab.groupId)?.appendChild(buildGroupTabButton(tab));
     });
 
-    // 第四步：「添加串口」按钮只留静态那一个，挪到当前激活列的标签行里。
+    // 第四步：「添加串口」与「新建 Shell」两个静态按钮只留这一份，挪到当前激活列的标签行里。
     placeGroupAddButton();
+    placeShellAddButton();
 
-    // 分组标签重建完后才能搬 Shell：replaceChildren() 已经把上一轮搬上来的节点摘掉了。
     syncShellTabLayer();
     syncSerialGroupAddButtonLayer();
+    syncShellAddButtonVisibility();
+}
+
+// 新建 Shell 按钮属于「上层标签栏」那一层，不能只存在 pane 行里。
+//
+// 早期它只在 pane-1 的 pane 行：多分组时那一条行一旦被隐（早期是「正在显示 Shell」
+// 就整条隐），或者屏幕上看的是另一个分组，按钮就彻底消失。
+// 现在按可见性分三层：
+//
+//   单分组              pane 行那个静态按钮（pane-1-new-shell-tab-btn）
+//   多分组·未分屏       分组标签行里那个（add-shell-tab-btn，静态行跟着激活列走）
+//   多分组·已分屏       激活列的列首行（placeShellAddButton 跟着搬）
+//
+// 三层必须恰好一层可见。
+function syncShellAddButtonVisibility() {
+    if (!addShellTabBtn) return;
+    addShellTabBtn.hidden = serialGroups.length <= 1;
+}
+
+// 让静态新建 Shell 按钮落在**当前可见**的分组标签行里（与 placeGroupAddButton 同一套锚点）。
+function placeShellAddButton() {
+    if (!addShellTabBtn) return;
+    const hostRow = getVisibleGroupRow(activeGroupId);
+    if (!hostRow) return;
+    let actions = hostRow.querySelector('.serial-group-tab-actions');
+    if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'serial-group-tab-actions';
+        hostRow.appendChild(actions);
+    }
+    // 同一个 actions 里必须排在「添加串口」左边，否则不同列的首行顺序会不一致。
+    if (addShellTabBtn.parentElement !== actions || addShellTabBtn.nextElementSibling !== addSerialGroupBtn) {
+        actions.insertBefore(addShellTabBtn, addSerialGroupBtn || actions.firstChild);
+    }
 }
 
 // 把一个分组标签的模型描述变成真实按钮。
@@ -4161,10 +4269,34 @@ function syncShellTabLayer() {
 // 拿到的是隐藏行 —— 用户实测报告为「选到第二个分组发现没有新建串口按钮」。
 function getVisibleGroupRow(columnGroupId) {
     if (groupWorkspaceSplit.enabled) {
+        // 不用 getVisibleGroupRow：加载期调用时 serialGroups 还没从配置同步进来，
+        // 那时它只能回退到静态行；而这里要的是「已存在且未隐藏」。
         const row = getGroupTabRow(columnGroupId);
         if (row && !row.hidden) return row;
     }
     return document.getElementById(GROUP_TAB_BAR_ID);
+}
+
+// 某一列的容器当前是否真的占着屏幕。Shell 的按钮/面板只能搬进可见列。
+function isGroupColumnVisible(groupId) {
+    if (groupId === SHELL_COLUMN_GROUP_ID) {
+        const column = document.getElementById(shellColumnId());
+        return Boolean(column) && !column.hidden;
+    }
+    const column = document.getElementById(groupWorkspaceEntryId(groupId));
+    return Boolean(column) && !column.hidden;
+}
+
+// 当前**可见**集合里恰好只有一个分组时返回它，否则 null。
+//
+// 未归属的 Shell 要「与所有串口标签按行分屏」：屏幕上只有一列时就用那一列的列首行，
+// 这与用户给的布局图一致（COM1 / SHELL1 / SHELL2 同一行）。分屏出多列后没有唯一的
+// 「那一列」，只能落在激活列——同一个标签不可能同时挂到多条行上。
+function getSingleVisibleGroupId() {
+    const visible = groupWorkspaceSplit.enabled
+        ? groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id))
+        : [activeGroupId];
+    return visible.length === 1 ? visible[0] : null;
 }
 
 // 一个 Shell 标签到底该出现在哪一行 / 哪个内容区。
@@ -4199,13 +4331,26 @@ function resolveShellTabHost(tabState) {
         }
     }
 
-    // 归属某分组 **且那一列当前可见**：落在该组的下层 pane 标签行。
+    // 用户明确要求自占一列（把它拖到了分组标签行）：该列只有一行标签栏。
+    // 必须逐标签判断：没被拖过的未归属 Shell 不能因为「存在一个要独立的」就跟着搬进去。
+    if (groupWorkspaceSplit.enabled && owner === null
+        && tabState.detachedColumn === true && isShellColumnActive()) {
+        const column = ensureShellColumnDom();
+        if (column) {
+            return {
+                listEl: document.getElementById(shellTabListId()),
+                contentEl: document.getElementById(shellPaneTabsContentId()),
+                layoutGroupId: SHELL_COLUMN_GROUP_ID,
+                layer: 'ownColumn'
+            };
+        }
+    }
+
+    // 归属某分组：落在该组的下层 pane 标签行。
     // 用户原话：「拖动到某个组的下层标签栏，意味着在所在的组中显示」。
-    const ownerVisible = owner !== null
-        && (groupWorkspaceSplit.enabled
-            ? groupWorkspaceSplit.groupIds.includes(owner)
-            : owner === activeGroupId);
-    if (ownerVisible) {
+    // 这里不再要求「那一列当前可见」：宿主只描述归属，具体搬不搬 DOM 由 placeShellTabs
+    // 按列可见性决定；先回落到激活列再搬回去，会把这个标签在隐藏列里题成两半。
+    if (owner !== null) {
         const paneId = groupPaneId(owner, 1);
         return {
             listEl: getPaneTabsList(paneId),
@@ -4215,15 +4360,15 @@ function resolveShellTabHost(tabState) {
         };
     }
 
-    // 其余全部归「上层标签栏」：未分屏时是激活列的共享行，分屏时是激活列的列首行。
-    // 面板必须放在**同一个可见列**里，否则标签亮着而 xterm 在隐藏列（实测踩过）。
-    const visibleColumn = groupWorkspaceSplit.enabled ? activeGroupId : activeGroupId;
-    const paneId = groupPaneId(visibleColumn, 1);
+    // 其余归「上层标签栏」：宿主是某一列的**列首行**（与分组标签同级，不新开列）。
+    // 面板必须放在同一个可见列里，否则标签亮着而 xterm 在隐藏列（实测踩过）。
+    const columnGroupId = getSingleVisibleGroupId() || activeGroupId;
+    const paneId = groupPaneId(columnGroupId, 1);
     return {
-        listEl: getVisibleGroupRow(visibleColumn)?.querySelector('.serial-group-tab-list')
+        listEl: getVisibleGroupRow(columnGroupId)?.querySelector('.serial-group-tab-list')
             || document.getElementById(GROUP_TAB_LIST_ID),
         contentEl: getPaneTabsContent(paneId),
-        layoutGroupId: visibleColumn,
+        layoutGroupId: columnGroupId,
         layer: 'topRow'
     };
 }
@@ -4257,6 +4402,9 @@ function placeShellTabs() {
         if (!button || !tabState.element) return;
         const host = resolveShellTabHost(tabState);
         if (!host.listEl || !host.contentEl) return;
+        // 宿主的列当前不可见时不能搬：搬进隐藏列后标签就彻底看不见了。
+        // 等那一列重新可见时 placeShellTabs 还会再跑一遍，那时再就位。
+        if (!isGroupColumnVisible(host.layoutGroupId)) return;
         if (button.parentElement !== host.listEl) host.listEl.appendChild(button);
         // 面板必须一起搬：留在已隐藏的那一列里即使标签高亮了也看不见终端。
         if (tabState.element.parentElement !== host.contentEl) {
@@ -4268,8 +4416,11 @@ function placeShellTabs() {
     syncGroupSubRowVisibility();
 
     // 独立列里必须有一个激活的 Shell，否则整列内容区是空白的。
+    // 只从**明确要求独立**的那几个里选：把普通未归属 Shell 拉进来会让它同时在
+    // 列首行与分组行各出现一次。
     if (document.getElementById(shellColumnId())) {
-        const candidates = shellTabs.filter(tab => getShellTabOwner(tab) === null);
+        const candidates = shellTabs.filter(tab => getShellTabOwner(tab) === null
+            && tab.detachedColumn === true);
         if (!candidates.some(tab => tab.id === detachedShellActiveTabId)) {
             detachedShellActiveTabId = candidates[0]?.id || null;
         }
@@ -4356,10 +4507,6 @@ function resolveDisplayedTabIdInPane(paneId) {
     return getPaneById(paneId)?.activeTabId || null;
 }
 
-// 隐藏/恢复各列的下层标签行。
-//
-// 只有「该列当前显示的是未归属 Shell」时才隐：串口标签（主/过滤/图表）显示时
-// 下层标签行必须回来，否则用户没法在它们之间切换。
 function syncGroupSubRowVisibility() {
     // 单分组时必须把 hidden 清掉：从多分组退回来时上一次的 hidden 会残留，
     // 表现为「关掉其它分组后主终端没有标签栏、也找不到新建 Shell 的按钮」。
@@ -4369,8 +4516,15 @@ function syncGroupSubRowVisibility() {
             const header = document.getElementById(headerId)?.closest('.pane-tabs-header');
             if (header) header.hidden = false;
         });
+        syncShellAddButtonVisibility();
         return;
     }
+    // 多分组：下层标签行**常任显示**。
+    //
+    // 早期在「该列正在显示上层 Shell」时把整条行隐掉。那会把新建 Shell / 过滤 / 图表
+    // 三个入口一起隐掉，用户只能把 Shell 关掉才能找到它们（用户实测报为「选中 shell
+    // 标签后创建 shell 按钮就不可见了」）。现在排布改成了两行分屏（见 MULTI_SERIAL_DESIGN.md
+    // §6A）：上层行放分组标签与未归属 Shell，下层行始终属于本列的串口标签。
     serialGroups.forEach(group => {
         const column = document.getElementById(groupWorkspaceEntryId(group.id));
         if (!column) return;
@@ -4380,8 +4534,9 @@ function syncGroupSubRowVisibility() {
         const header = document.getElementById(headerId)?.closest('.pane-tabs-header')
             || column.querySelector('.pane-tabs-header');
         if (!header) return;
-        header.hidden = isUnownedShellActiveIn(group.id);
+        header.hidden = false;
     });
+    syncShellAddButtonVisibility();
 }
 
 // 供 workspace-manager 判断「这个标签的按钮还在不在」。Shell 被搬到分组层后，
@@ -4415,21 +4570,16 @@ function isShellTabId(tabId) {
     return typeof tabId === 'string' && /^tab-shell-\d+$/.test(tabId);
 }
 
-// 设置**单个** Shell 标签的归属。
-//
-//   null        不归属任何分组 → 上层标签栏（分屏时自占一列）
-//   <分组 id>   归入该分组 → 那组的下层标签栏
-//
-// 必须带 tabId：早期只传 owner 一个参数、归属存全局，拖动一个 Shell 会把全部
-// Shell 一起搬走（用户实测报告）。
 function setShellOwnerGroup(tabId, owner) {
     const tabState = getShellTabState(tabId);
     if (!tabState) return;
     const before = getShellTabOwner(tabState);
+    const wasDetachedColumn = tabState.detachedColumn === true;
     setShellTabOwner(tabId, owner);
     const after = getShellTabOwner(tabState);
-    if (before !== after) persistShellTabs();
-    if (before === after) return;
+    const changed = before !== after || wasDetachedColumn !== (tabState.detachedColumn === true);
+    if (changed) persistShellTabs();
+    if (!changed) return;
     syncShellWorkspaceLayout();
     const title = after ? (getSerialGroupById(after)?.title || after) : null;
     setActionStatus(title
@@ -4497,19 +4647,31 @@ function activateSerialGroup(groupId) {
     applyActiveSerialGroup();
 }
 
+// 每个 pane 上一次真正激活过的**串口**标签（主/过滤/图表）。
+//
+// 为什么需要记：新 Shell 除了叠在列首行，createShellTab 还会把它登记进布局并切为激活，
+// 于是布局层的 activeTabId 也变成了 Shell。只用它去「抬回串口」会把 Shell 自己当成目标，
+// 表现为「点分组标签毫无反应、窗口还是 Shell」。
+const lastSerialTabByPane = new Map();
+
 // 把某列的串口终端「抬到最上面」。
 //
 // 上层栏的 Shell 面板只是叠在同列主标签上面（不进布局），所以必须显式遮挡它，
-// 否则用户点分组标签/主标签之后看到的仍是 Shell，而已串口终端就看不见了。
+// 否则用户点分组标签/主标签之后看到的仍是 Shell，而串口终端就看不见了。
 //
-// 目标取「布局层记录的本 pane 激活标签」而不是写死主标签：用户可能停在过滤页或图表页，
-// 抬回来时应当回到他自己停的那一页。
+// 目标优先取「布局层记录的本 pane 激活标签」（用户可能停在过滤页或图表页），
+// 但**必须是串口标签**：若布局层当前激活的是 Shell，就回退到本 pane 上一次的串口标签。
 function revealSerialGroupActiveTab(groupId) {
     const id = resolveSerialGroupId(groupId);
     const paneId = groupPaneId(id, 1);
-    const panelId = getPaneById(paneId)?.activeTabId
-        || getGroupActiveTabId(id, mainTabId(id));
-    if (!panelId) return false;
+    let panelId = getPaneById(paneId)?.activeTabId || getGroupActiveTabId(id, mainTabId(id));
+    if (!panelId || isShellTabId(panelId)) {
+        const remembered = lastSerialTabByPane.get(paneId);
+        panelId = remembered && !isShellTabId(remembered)
+            ? remembered
+            : mainTabId(id);
+    }
+    if (!panelId || !document.getElementById(panelId)) return false;
     hideStackedShellTabsIn(paneId, panelId);
     syncGroupSubRowVisibility();
     fitWorkspaceTerminals();
@@ -4580,6 +4742,8 @@ function closeSerialGroup(groupId) {
     // （未分屏时它就住在激活列首），跟着容器一起 remove 掉后，分组栏会永久消失且静默。
     reclaimSharedGroupTabRow();
     reclaimGroupAddButton();
+    // 新建 Shell 按钮同理：它可能正住在这个即将删除的列首行里（分屏时每列一个可选宿主）。
+    reclaimShellAddButton();
     // Shell 如果正归在这个即将被删的分组里，必须先把它的标签与面板搬出来。
     // 面板在列内的 pane-1 内容区里，直接 remove 整个列会把 xterm 节点一起删掉，
     // 而 shellTabs 仍持有已脱离文档的引用——之后无论怎么切都看不到终端，也不报错。
@@ -4746,7 +4910,8 @@ function persistShellTabs() {
             title: tab.title || '',
             paneId: tab.paneId || getTabPaneId(tab.id),
             profileId: tab.profileId || '',
-            ownerGroupId: getShellTabOwner(tab)
+            ownerGroupId: getShellTabOwner(tab),
+            detachedColumn: tab.detachedColumn === true
         }))
     });
 }
@@ -4851,6 +5016,8 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         ownerGroupId: typeof initialState.ownerGroupId === 'string' && initialState.ownerGroupId
             ? initialState.ownerGroupId
             : null,
+        // 未归属时的两种形态：默认与分组标签同级（不新开列），只有被拖到分组标签行才独立成列。
+        detachedColumn: initialState.detachedColumn === true,
         closed: false
     };
 
@@ -8186,6 +8353,12 @@ addSerialGroupBtn?.addEventListener('click', () => {
 });
 addSerialGroupInlineBtn?.addEventListener('click', () => {
     addSerialGroupFromUi();
+});
+
+// 「新建 Shell」分两层（见 syncShellAddButtonVisibility）：单分组走 pane 行那个静态按钮，
+// 多分组走分组标签行里这个。两者不会同时可见，但都指向同一个创建路径。
+addShellTabBtn?.addEventListener('click', () => {
+    createShellTab({ profileId: getDefaultShellProfileId() }, getActivePane()?.id || groupPaneId(activeGroupId, 1));
 });
 
 // refreshPorts(); // Moved to config load chain

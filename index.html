@@ -292,6 +292,11 @@
                 <div class="group-tab-row serial-group-tab-bar" id="serial-group-tab-bar" hidden>
                     <div class="main-tabs-list serial-group-tab-list" id="serial-group-tab-list" role="tablist"></div>
                     <div class="serial-group-tab-actions">
+                        <!-- 多分组时的两层入口。新建 Shell 属于「上层标签栏」那一层，
+                             所以它常任在分组标签行里（分屏时由 placeShellAddButton 搬到
+                             激活列的列首行，不新开一列）。单分组时它被隐藏，由 pane 行
+                             那个静态按钮代为入口。 -->
+                        <button id="add-shell-tab-btn" class="secondary pane-new-tab-btn" type="button" title="New Shell Tab" data-i18n-title="main.newShellTab"><span class="material-icon-placeholder" data-material-icon="terminal"></span></button>
                         <button id="add-serial-group-btn" class="secondary pane-new-tab-btn" type="button" title="Add Serial Port" data-i18n-title="main.addSerialPort" aria-label="Add Serial Port" data-i18n-aria-label="main.addSerialPort"><span class="material-icon-placeholder" data-material-icon="add"></span></button>
                     </div>
                 </div>
