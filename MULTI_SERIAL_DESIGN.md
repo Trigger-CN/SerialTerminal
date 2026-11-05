@@ -382,13 +382,13 @@ COM5 / COM7 的 data 回调同样在排队，三个端口的 UI 一起卡
 └──────────────────────────────────────────────────┘
 ```
 
-规则汇总：
+规则汇总（**形态判据以 6A 节为准，本节只描述两层标签栏的由来**）：
 
-- **上层**：`serialGroups`（active 高亮）+ `shellTabs`
-- **下层**：`activeGroup` 的 `tab-main` / `filterTabs` / `chartTabs`
-- Shell 标签永不归属任何分组，始终在分组层
-- 分组从 2 减到 1 → **自动塌回一层**，Shell 标签回到同一层
-- 分组从 1 增到 2 → **自动升为两层**，Shell 标签上移到上层
+- **上层**：`serialGroups`（active 高亮）+ 不归属任何分组的 `shellTabs`
+- **下层**：该分组自己的 `tab-main` / `filterTabs` / `chartTabs`，以及**归属该组**的 Shell
+- Shell 的归属是**逐标签**的（`tabState.ownerGroupId`），不是全局开关；默认不归属
+- 分组从 2 减到 1 → **自动塌回一层**，全部 Shell 回到 pane 行
+- 分组从 1 增到 2 → **自动升为两层**，未归属的 Shell 上移到上层行
 - 切换分组标签不销毁下层 DOM，只切换可见性（保留终端内容与滚动位置）
 
 ### 6.1A 归属判定已落地（纯逻辑层）
@@ -414,7 +414,9 @@ COM5 / COM7 的 data 回调同样在排队，三个端口的 UI 一起卡
 > - `serial-group-tab-bar.js` 负责**分组标签本身的节点描述**（id / 按钮 / 是否可关闭 / 可见性）；
 > - `serial-group-tabs.js` 的 17 项规则是**归属判定的权威表述**，但其 `buildTabBarModel()` 假设「下层是某分组自己的标签列表」，与重构后「每个分组一个主终端标签 `tab-main-<g>`」的架构不符，因此**没有直接调用它**。
 >
-> Shell 标签的两层升降由 `renderer.js` 的 `syncShellTabLayer()` 实际执行（见 6.7），判据就是 `serialGroups.length > 1`，与 `buildTabBarModel()` 的 `isMultiGroup` 完全一致。
+> Shell 标签的两层归属由 `renderer.js` 的 `resolveShellTabHost()` 实际执行（见 **6A.3**），
+> 判据是 `serialGroups.length > 1` **加上**该标签自己的 `ownerGroupId` 与 `groupWorkspaceSplit.enabled`。
+> 「Shell 永不归属任何分组」是改造前的旧规则，**已废除**（用户实测：拖入分组后要能留在那里）。
 
 
 ### 6.1B 分组标签栏的结构描述层（已落地）
@@ -594,7 +596,162 @@ function syncShellTabLayer() {
 
 **已验证（真实点击 29/29）**：单分组在 pane 行且不在分组层；多分组升到分组层并排在分组标签之后；点击后终端切到该标签且仍在分组层；关闭多分组后回落 pane 行；全程 `shellCount` 恒为 1（未被复制）、渲染进程零未捕获错误。
 
+> **上述描述已被 6A 节取代。** `syncShellTabLayer()` 与全局 `shellOwnerGroupId` 已删除，
+> 现行实现是 `placeShellTabs()` + `resolveShellTabHost()` + `stackShellTabOverHostGroup()`。
+> 保留本节是因为它记录的几条**布局层注入约束**（`hasRenderableTab` / `applyLayoutToDom` /
+> `applyActiveTabToPane`）至今仍成立、仍属不得不遵守的不变量。
+
 ---
+
+## 6A. 布局规范与标签逻辑（权威）
+
+本节是用户要求的「仔细罗列布局规范」+「用流程图展示所有情况的标签逻辑」。**判断以实现为准**：`renderer.js` 的 `resolveShellTabHost()` / `resolveVisibleGroupWorkspaceEntryIds()` / `isShellColumnActive()` 三处是唯一真相源，本节是它们的文字化。
+
+### 6A.1 层级规范：从外到内
+
+```text
+#group-workspace                      ← 外层分屏容器（flex）
+  │
+  ├─ .group-column                    ← 【1 列】一个分组一列，或 Shell 独立列
+  │    │   [hidden] = 不参与当前可见集合
+  │    ├─ .group-tab-row              ← 【上层标签行】分组标签（+ 未归属的 Shell）
+  │    │      .serial-group-tab-list
+  │    │      .main-tab[data-target^="tab-shell-"]
+  │    │
+  │    └─ .workspace-root             ← 该列的工作区
+  │         └─ .workspace-pane#pane-1-<g>
+  │              ├─ .pane-tabs-header ← 【下层标签行】主/过滤/图表 + 归属本组的 Shell
+  │              │      .pane-tabs-list#pane-1-<g>-tabs-list
+  │              └─ .pane-tabs-content#pane-1-<g>-tabs-content → 终端/过滤/图表
+  │
+  └─ #group-workspace-splitter        ← 外层分界条，始终紧跟第一个可见列
+```
+
+四层职责与「绝对不能放错」的理由：
+
+| 层 | 放什么 | 放错的后果 |
+| --- | --- | --- |
+| `#group-workspace` | 只放 `.group-column` 与分界条 | 把标签行直接当孩子就是改造前的「顶部共享行」，分组标签永远不可能位于自己分组上方 |
+| `.group-column` | 一条上层行 + 一个 `workspace-root` | 没有上层行 → 该列无法切换分组；多个 `workspace-root` → 内容区高度与 `fit()` 塌掉 |
+| `.group-tab-row` | 分组标签；**未归属**的 Shell | 把归属本组的 Shell 放这里 → 它变成与分组同级，点它会误以为切分组 |
+| `.pane-tabs-header` | 主/过滤/图表；**归属本组**的 Shell | 把未归属 Shell 放这里 → 出现用户报告的「Shell 不是串口组却带着一串串口子标签」 |
+
+### 6A.2 宽度与方向规则
+
+| 要素 | 规则 | 具体值 |
+| --- | --- | --- |
+| 未分屏 | 单列占满 | `.group-column { flex: 1 1 0 }`，无 `flex-basis` |
+| 已分屏 | 参与组按比例 | 每列 `style.flexBasis = <sizes[g]>%`，`flex-grow/shrink = 0` |
+| 分屏方向 | 外层 `#group-workspace` 的类名 | `.group-split-horizontal` → `flex-direction: row`；`.group-split-vertical` → `column` |
+| 分界条位置 | `placeGroupWorkspaceSplitter()` | 始终 `insertAfter(第一个可见列)`；放末尾会被挤到最右边 |
+| 列高 | 跟随外层 | `.group-column { min-height: 0; display: flex; flex-direction: column }` |
+
+**退出分屏必须清 `flex-basis`**，否则上次比例残留，表现为「退出分屏后当前分组只占半宽」。**方向类名必须与 CSS 完全一致**：JS 切 `group-split-vertical` / `group-split-horizontal`，CSS 曾经写成 `.split-vertical`，类名不匹配**不报任何错**，只是上下分屏完全不生效。
+
+### 6A.3 Shell 归属：两态、逐标签、单一宿主入口
+
+归属存在**每个标签自己**身上，只有两态：
+
+| `tabState.ownerGroupId` | 含义 | 未分屏 | 已分屏 |
+| --- | --- | --- | --- |
+| `null` | 不归属任何分组（默认） | 激活列的上层行（与分组标签同级） | **自占一列**，该列只有一行标签栏 |
+| `<groupId>` | 归入该分组 | 该组的下层标签行 | 该组的下层标签行 |
+
+> **没有第三种「独立成组」状态。** 「独立成组」不是一种独立归属，而是 `null` 在**已分屏**下的必然形态。把它建模成独立状态会引出「未分屏却凭空多出一列」这种与用户期望相反的结果。
+
+`resolveShellTabHost(tabState)` 是宿主判定的**唯一入口**，返回 `{ listEl, contentEl, layoutGroupId, layer }`：
+
+```mermaid
+flowchart TD
+  A["resolveShellTabHost(tabState)"] --> B{"serialGroups.length > 1 ?"}
+  B -->|否| S1["layer = 'subRow'<br/>挂在 pane-1 的 pane-tabs-list<br/>（退回改造前的混排形态）"]
+  B -->|是| C{"groupWorkspaceSplit.enabled<br/>且 owner === null<br/>且 isShellColumnActive() ?"}
+  C -->|是| S2["layer = 'ownColumn'<br/>挂在 Shell 独立列的列首行<br/>该列无下层标签行"]
+  C -->|否| D{"owner 非空且<br/>owner 那一列当前可见 ?"}
+  D -->|是| S3["layer = 'subRow'<br/>挂在 owner 组的 pane-1 下层行"]
+  D -->|否| S4["layer = 'topRow'<br/>挂在激活列的上层行<br/>面板叠在同列 pane-1 内容区"]
+```
+
+「owner 那一列当前可见」的判据：已分屏 → `groupWorkspaceSplit.groupIds.includes(owner)`；未分屏 → `owner === activeGroupId`。这个判据把「Shell 归属在另一个被隐藏的列」自动归到 `topRow`，正是修掉「点 Shell 跳到别的列、在用户看来像分屏」的关键。
+
+### 6A.4 显隐矩阵
+
+行 = 模式，列 = 各层是否可见。「上层行」指 `.group-tab-row`，「下层行」指 `.pane-tabs-header`。
+
+| 模式 | 分组数 | 分屏 | Shell 情况 | 可见列 | 上层行 | 下层行 | 内容区 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| M1 单分组 | 1 | 关 | 无 | 唯一列 | **隐藏**（退回一层） | 可见（混排主/过滤/图表/Shell） | 该列 |
+| M2 多分组未分屏 | ≥2 | 关 | 无 | 仅激活列 | 可见（全部组标签） | 可见 | 该列 |
+| M3 多分组未分屏 | ≥2 | 关 | 有，均未归属 | 仅激活列 | 可见（组标签 + Shell） | **隐藏**（当且仅当该列正显示未归属 Shell） | 该列 |
+| M4 多分组未分屏 | ≥2 | 关 | 有，某 Shell 归入激活组 | 仅激活列 | 可见 | 可见（主/过滤/图表 + 该 Shell） | 该列 |
+| M5 多分组已分屏 | ≥2 | 开 | 无 | 参与组各一列 | 每列一条（只含自己那一个组标签） | 每列可见 | 每列 |
+| M6 多分组已分屏 | ≥2 | 开 | 有不归属的 Shell | 参与组各一列 + **Shell 列** | Shell 列一条（只有 Shell） | Shell 列**无** | 每列 |
+| M7 多分组已分屏 | ≥2 | 开 | Shell 全归入各分组 | 参与组各一列 | 每列一条 | 每列可见 | 每列 |
+
+**M3 的判据必须按 DOM 量**，不能读布局层的 `activeTabId`：上层栏的 Shell 不在任何 `pane.tabIds` 里，布局层会一直认为主标签是 active（详见 6A.6 的 D2）。现行实现 `isUnownedShellActiveIn(groupId)` 判的是「该 pane 内容区里存在 `ownerGroupId === null` 且带 `.active` 的 Shell 面板」。
+
+**M2 的「上层行渲染全部组标签」是靠一条静态行借位实现的**：`#serial-group-tab-bar` 不复制多份，未分屏时被搬到激活列首、渲染全部组标签；已分屏时留在默认列、只渲染默认组自己那一个，其它列各有一条自己的行。因此「一列里必有两条 `.group-tab-row`（自己那条 + 借来的）」，断言只能写「**可见**行恰好一条」。
+
+### 6A.5 标签逻辑流程图：分组增删与层数回落
+
+```mermaid
+flowchart TD
+  START(["启动 / 应用配置"]) --> G1{"serialGroups.length"}
+  G1 -->|1| ONE["单层形态<br/>分组标签行隐藏<br/>全部标签在同一条 pane 行"]
+  G1 -->|≥2| TWO["两层形态<br/>每列：上层行 + 下层行"]
+
+  ONE --> ADD["用户点「添加串口」"]
+  ADD --> NEWG["建分组 + ensureSerialGroupWorkspaceDom<br/>+ ensureSerialGroupMainTabDom<br/>status = disconnected"]
+  NEWG --> TWO
+
+  TWO --> CLOSE{"用户关闭某个分组"}
+  CLOSE -->|剩 1 个| RECLAIM["reclaimSharedGroupTabRow()<br/>+ reclaimGroupAddButton()<br/>+ 拿掉列容器（groupWorkspaceContainerId）<br/>+ 逐标签摘归属 ownerGroupId = null"]
+  RECLAIM --> ONE
+  CLOSE -->|仍 ≥2| TWO
+
+  TWO --> SPLIT{"右键菜单"}
+  SPLIT -->|左右/上下分屏| SPON["groupWorkspaceSplit.enabled = true<br/>pruneGroupWorkspaceSplit()<br/>applyGroupWorkspaceSplitLayout()<br/>各列各自一条上层行"]
+  SPLIT -->|关闭分组分屏| SPOFF["resetGroupWorkspaceSplit()<br/>+ applyGroupWorkspaceSplitLayout()（必须！）<br/>+ 拆掉 Shell 独立列"]
+  SPOFF --> TWO
+```
+
+**关闭分组的三步顺序不可逆**：先抢回静态行与「添加串口」按钮（它们可能正被 borrow 在被删的那列里，直接删列会让二者**永久消失且无任何报错**）→ 再逐标签摘归属 → 最后拿掉列容器并 `pruneGroupWorkspaceSplit()`。
+
+### 6A.6 标签逻辑流程图：点击与拖动落点
+
+```mermaid
+flowchart TD
+  CLICK(["用户点击一个标签按钮"]) --> K{"是 Shell 标签？"}
+  K -->|串口标签| P1["分组的 switchPaneTab(paneId, tabId)<br/>（先 hideStackedShellTabsIn 遮掉叠着的 Shell）"]
+  K -->|Shell| H["resolveShellTabHost(tabState)"]
+  H --> L1{"layer"}
+  L1 -->|subRow| A1["该分组布局层 switchPaneTab"]
+  L1 -->|ownColumn| A2["activateShellTabInHost：列内 .active 互斥"]
+  L1 -->|topRow| A3["stackShellTabOverHostGroup：<br/>面板搬进同列 pane 内容区并直接叠 .active"]
+  A3 --> A4["syncGroupSubRowVisibility()<br/>隐藏该列的下层标签行"]
+
+  DRAG(["拖动一个 Shell 标签"]) --> D1{"落点"}
+  D1 -->|某列 .group-tab-row| R1["setShellOwnerGroup(tabId, null)<br/>→ 回到上层标签栏"]
+  D1 -->|某列 .pane-tabs-list| R2["setShellOwnerGroup(tabId, 目标组 id)<br/>→ **只这一个标签**归入该组"]
+  D1 -->|其他地方| R3["不处理"]
+  R1 --> AFTER["syncShellWorkspaceLayout()<br/>place → splitLayout → visibility → fit"]
+  R2 --> AFTER
+  AFTER --> PERSIST["persistShellTabs()（写入 ownerGroupId）"]
+```
+
+**拖动只影响被拖的那一个标签**：归属存在 `tabState.ownerGroupId`。早期把它写成模块级单变量，`placeShellTabs()` 用同一套 `buttonHost/contentHost` 搬运**全部** Shell，于是「拖动一个 Shell，所有 Shell 一起移动」——这是用户实测报告的缺陷 D。
+
+### 6A.7 状态变量与不变式
+
+| 变量 | 含义 | 不变式 |
+| --- | --- | --- |
+| `activeGroupId` | 当前受控的串口分组（侧栏作用于它） | 必然存在于 `serialGroups`；分配失效时回落第一个分组 |
+| `groupWorkspaceSplit` | `{ enabled, groupIds[], orientation, sizes{} }` | `enabled` 只能由右键菜单或旧的持久化恢复打开；**可见列集合不得因点击标签而扩张** |
+| `tabState.ownerGroupId` | 该 Shell 的归属 | `null` 或一个**当前存在**的分组 id；分组被关时逐标签置 `null` |
+| `detachedShellActiveTabId` | 独立列里当前激活的 Shell | 仅在独立列存在时有意义 |
+| `isSyncingShellLayer` | 重入闸 | `placeShellTabs → addTabToPane → applyLayoutToDom → onLayoutApplied → syncShellTabLayer` 成环，必须拦 |
+
+**最容易被破坏的一条**：`resolveVisibleGroupWorkspaceEntryIds()` 只能由「分屏集合 + 激活列 + `isShellColumnActive()` 时的 Shell 列」三部分构成。任何「因为某个 Shell 归属在那一列，所以把那一列也点亮」的写法都会在未分屏时造出第二列——而 `applyGroupWorkspaceSplitLayout()` 在 `!isSplit` 时直接 return，两列各占 `flex: 1 1 0`，**肉眼与真正的左右分屏完全一致**，但 `groupWorkspaceSplit.enabled` 仍是 `false`。
 
 ## 7. 设置侧栏跟随（P4，已落地）
 
