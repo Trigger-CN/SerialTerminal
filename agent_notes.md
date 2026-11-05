@@ -1845,6 +1845,100 @@ SUMMARY total=15 pass=15 fail=0 skip=0
 
 **尚未验证**：用户环境里那类允许共享打开的驱动（本机没有这类设备，无法重现「两个分组都打开」）。
 
+### 13A.11 显示类复选项的作用域开关与端口下拉框拔卡残留
+
+**用户裁决**（逐字）：
+
+> 第一点：show-timestamp / show-lineno / echo-sent-data / echo-sent-data-both / echo-sent-data-filter该按分组各一份，还是保持全局共享应该加入设置开关来设置这个。第二点可以改
+
+我追问的是「该按分组隔离还是全局共享」，用户没有替我选一个值，而是要求**加一个设置开关让用户自己选**。这比任何一个单一取值都更合适：两种习惯都真实存在，而改造前只有一份全局值，强行改成按分组会静默改变所有存量用户的行为。
+
+#### 一、背景：diag110 已经取证这五项会「串」
+
+`diag110` 早就记录过 5 项 LEAK：切换分组后 `show-timestamp` / `show-lineno` / `echo-sent-data` / `echo-sent-data-both` / `echo-sent-data-filter` 都停在上一次改成的值，不像串口参数那 9 项会跟随分组。
+
+代码层的根因很简单：这 5 个复选框的 `change` 处理器只写模块级全局变量并发 `update-display-settings`，**既不按分组存储**（`SerialGroupContextStore` 没有这五个字段），**也不在 `applyGroupSerialOptionsToSidebar()` 里回写**。读取时只用裸全局变量，因此「切到哪个分组都看同一个值」。
+
+有利条件：两个读取点 `getPrefix()` 与 `renderSentRecord()` **本来就接收 `groupId`**，改成按组读取不需要新增管线。
+
+#### 二、设计取舍
+
+| 决策 | 值 | 理由 |
+| --- | --- | --- |
+| 默认作用域 | `global` | 改造前只有一份全局值；默认改成按分组会静默改变所有存量用户的行为 |
+| 全局态的持久化位置 | 配置**顶层**同名键 | 与改造前完全一致，旧配置免迁移 |
+| 每组态的持久化位置 | `serialGroups[i].uiPrefs` | 与 `portPath` / `serialOptions` 同层，随分组生命周期 |
+| 组内未存过 | **继承全局值** | 打开开关那一刻屏幕效果不能跳变，也不能回到出厂默认 |
+| 切回 global | 删除所有分组副本 | 否则日后重开开关又会飘出几天前的旧值 |
+
+#### 三、实现
+
+规则抽成纯逻辑模块 `serial-group-display-prefs.js`（`DISPLAY_PREF_SCOPES` / `DISPLAY_PREF_DEFAULTS` / `normalizeDisplayPrefScope` / `normalizeDisplayPrefs` / `readGroupDisplayPrefs` / `resolveDisplayPrefs` / `displayPrefsEqual`）。读取侧要的答案与侧栏回显侧要的答案必须同源，否则会出现「存到了组里、读还在读全局」这类只在特定操作顺序下才暴露的错位。
+
+`renderer.js` 侧：`displayPrefScope` + `globalDisplayPrefs` 两个真源；`getGroupDisplayPrefs(groupId)` 带**失效式缓存**（它在逐行渲染热路径上，不缓存会让每行多一次 `Array.find` + 对象构造）；`setGroupDisplayPrefs()` 里**必须先失效再读**，否则调用方拿到的是写入前的偏好作为合并基底；`applyDisplayPrefScope()` 负责切换收尾（global → per-group 时给所有分组种入当前全局值，per-group → global 时删除所有分组副本）。
+
+**两处容易漏的持久化**：
+
+1. `serial-groups-config.js` 的 `normalizeSerialGroup()` **必须保留 `uiPrefs`**。主进程每次存盘都会 `normalizeConfig → migrateSerialGroupsConfig` 重建整个分组对象，不保留就会在用户下一次任意保存时静默抹掉分组级设置，而且没有任何报错。
+2. `serial-groups-model.js` 的 `cloneGroup()` 必须**深拷** `uiPrefs`；`...group` 只搬引用，之后改一个分组会连带改到快照里的同名对象。
+
+**`uiPrefs` 必须是可选字段**：「字段缺失（继承全局）」与「字段存在但值恰好都是默认值（明确的组内值）」是两件不同的事。一旦把缺失补成默认值，「继承」语义就永久丢失。
+
+**两个时序陷阱**：`applyConfig()` 里不能直接应用作用域（此时分组列表马上要被 `syncSerialGroupsFromConfig` 重建），先记入 `pendingDisplayPrefScope`，等分组重建完再由 `flushPendingDisplayPrefScope()` 落地；从磁盘恢复时用 `suppressDisplayPrefPersist` 包住应用过程，否则每次启动都多写一次配置。
+
+设置页 `preferences.html` / `preferences.js`：Terminal 页新增「每个串口分组各存一份显示偏好」，默认关闭；保存时**只存作用域，不汇总五项具体值**，否则会用打开设置窗口时的旧值覆写主窗口的实时值。
+
+#### 四、顺带修掉的端口下拉框拔卡残留
+
+| 位置 | 旧行为 | 现在 |
+| --- | --- | --- |
+| `applyGroupSerialOptionsToSidebar()` 的 port | 目标不在 option 列表就保留旧值 | 列表**已就绪**但不含目标 → **显式清空**；列表只有占位项（尚未刷新完）→ 保留，避免启动阶段误清 |
+| 同函数的 baud | 自定义波特率未渲染时静默保留上一组的值 | 先 `renderCustomBaudRates()` 补建选项再选中。波特率**不能清空**——它总有值，清空反而让 `<select>` 停在第一项、与分组实际参数不一致 |
+| `refreshPorts()` | 首选值兜底到 `currentConfig.lastSerialOptions.path`（**默认分组**的端口） | 首选值取自**激活分组**的 `portPath`；重建后显式 `portSelect.value = hasPreferredPath ? preferredPath : ''` |
+| `getSerialOptionsFromUi()` | `path` 兜底到默认分组端口 | 显式 `''`。原写法会让「停在未选端口的新分组 + 发生任何保存」把默认分组端口写进新分组，切一次分组就能静默破掉端口隔离 |
+
+#### 五、验证
+
+`verify-display-pref-scope.js` **24/24**（`diag168`，exit=0，renderer-diag=clean，`verify-display-pref-scope-out8.txt`）：
+
+| 断言组 | 关注的事实 |
+| --- | --- |
+| `global-scope-shares-value` / `global-scope-writes-no-group-copy` | 全局态下改一项两组同时变，且**不产生**分组副本 |
+| `switching-group-keeps-shared-checkbox` | 全局态下切分组，复选框状态不变 |
+| `per-group-seeds-current-global-value` / `-every-group-copy` / `-is-persisted` | 开启时用当前全局值给每组种入，且真的落盘（`save-config` + `update-display-settings`） |
+| `per-group-write-affects-only-its-group` / `-is-stored-on-the-group` | 只影响本组，且写进组对象 |
+| `g1-terminal-prefix-has-timestamp` / `default-terminal-prefix-has-no-timestamp` | **数据路径**证据：`getPrefix()` 的真实 ANSI 输出里只有该组带 `[HH:MM:SS.mmm]` |
+| `sidebar-follows-group-on-switch-back` / `-in` | 来回切分组时侧栏跟随 |
+| `global-scope-clears-group-copies` / `-restores-shared-value` / `-sidebar-shows-shared-value` | 切回全局后副本清空、值回到共享、侧栏同步 |
+| 端口三条 | `existing-port-still-selected` / `missing-port-is-cleared-not-inherited` / `refresh-does-not-restore-other-groups-port` |
+
+第 5 组是关键：前面几组只证明「存对了」，只有 `getPrefix()` 的真实前缀输出能证明**渲染路径也跟上了**。
+
+`test/serial-group-display-prefs.test.js` **10/10**；`npm test` **492/492、fail=0**；12 个 CDP 脚本全量回归（profile diag170–181）全部 `exit=0` + `renderer-diag=clean`，合计 221 项断言 0 失败。
+
+#### 六、一次误判与两条踩坑
+
+**误判：`missing-port-is-cleared-not-inherited` 首轮失败，但产品是对的。** 原因是脚本「切到 g-1」时 g-1 **已经处于激活态**，点击是空切换，侧栏回显根本没重跑。这是「断言全绿 ≠ 用户可用」的镜像版本：**断言失败也不一定是产品缺陷**。先用 `diag-port-clear.js`（`diag167`）取证再动手，是这一轮唯一正确的顺序。
+
+**坑 1 —— `File.Edit` 的 replace 区间会静默删掉语句。** 修 `applyGroupSerialOptionsToSidebar()` 时，一次 `replace` 把注释块与函数体一起覆盖，导致 `clearGroupDisplayPrefs` 只剩声明；补回时又让 `serialGroups.forEach(group => {` 丢了闭包；更隐蔽的一次删掉了 `const previousGuard = isApplyingSessionGroups; isApplyingSessionGroups = true;` 与随后的 `try {`。
+
+`node --check` 与 `scripts/check-renderer-module-load.js` **全部放过**：前者的函数体丢失后残留代码仍然语法合法；后者只在模块加载期执行一次，而 `previousGuard` 在函数体内。只有真实启动的 `[RENDERER DIAGNOSTIC]`（`previousGuard is not defined`，`renderer.js:3692`）才暴露。
+
+固化的做法：结构性编辑后立刻 `node --check` 并**回读该函数全文**；凡只在校验回调、交互手势或运行时路径里执行的函数，**必须真实启动一次**并检查 `app-diagNN-err.log`。`applyGroupSerialOptionsToSidebar()` 的三段关键语句（捕获 `previousGuard`、置为 `true`、`try {`）与末尾 `finally { isApplyingSessionGroups = previousGuard; }` 必须成对存在——它保证回显写入控件时不反过来触发 `saveSerialModeConfig`。
+
+**坑 2 —— `node --check` 检不出模板字符串内部。** CDP 脚本里把对象字面量直接塞进 `ev()` 的模板字符串里当函数调用（模板内容末尾写成 `({ scope: ... })()`），报 `{(intermediate value)...} is not a function`；正确写法是把整体包成 IIFE：`(() => ({ ... }))()`。随后写的批量修补脚本又把它改坏成缺调用括号的形式，报 `Unexpected end of input`——而 `node --check` 对此毫无感知。最后固化成 `check-ev-templates.js`：抽取每个 `ev()` 的模板内容，把 `${...}` 插值换成占位字符串，再用 `new Function(code)` 只解析不执行（`checked=34 bad=0`）。
+
+#### 七、更正：`363abd2` 正文里的一句不成立
+
+该提交正文声称「`preferences.html` 顺带修正：`id="echoSentDataInFilterTabs"` 的 `<small>` 帮助文本在 DOM 里缺失（截断在 `</label>`），已补回」。**这句话不成立，本轮已核实并纠正**：
+
+- `git show HEAD:preferences.html` 里该复选框的 `</label>` 紧接下一行就是空的 `</div>`，**没有任何 `<small>`**；
+- 工作区当前版本的 `preferences.html` 同样没有；
+- `i18n.js` 六种语言均**不存在** `prefs.echoSentDataInFilterTabsHelp` 这个键——若真有补回的动作，`test/i18n.test.js` 的「只引用已定义键」会直接失败。
+
+记录这一点不是为了重修一个缺陷，而是因为它本身是个教训：**提交正文会变成下一轮（包括 AI 自己）的事实来源，写进去的未验证声明会被当成已完成**。正文里每一句「已做」都必须有对应的编辑动作或断言能对得上。
+
+**尚未验证**：per-group 作用域下两个分组**同时收数据**时各自的前缀与发送回显。现有证据只是 `getPrefix()` 的直接调用输出，没有真实双端口字节流。
 
 ---
 

@@ -792,8 +792,10 @@ Shell 叠在上层时下层标签行是被**故意**隐掉的（否则就是「S
 | 日志自动保存 / 保存范围 / Shell 日志开关 | 全局（路径按组隔离） |
 | 快捷指令 / 自动发送总开关 | 全局（已定决策） |
 | **连接 / 断开按钮** | **按组**（`toggleSerialConnection()` 以 `activeGroupId` 为对象） |
+| **时间戳 / 行号 / 发送回显三开关** | **由设置开关决定**（默认全局共享，可切换为每组一份） |
 
-> **实测订正（本轮）**：表中「时间戳 / 行号」「发送回显三开关」列为全局，是因为它们目前**根本没有按分组存储**。`diag110` 取证显示这 5 个复选项（`show-timestamp` / `show-lineno` / `echo-sent-data` / `echo-sent-data-both` / `echo-sent-data-filter`）切换分组后会停留在上一次改成的值。它们属于侧栏设置项，用户预期是跟随分组；本书把这一条记录为**待办缺口**（见 `ToDo.md`），不是已定决策。串口参数类 9 项经实测已正确跟随分组，不要重复改。
+> **已解决（本轮）**：上表最后一行就是本轮之前的待办缺口 —— `diag110` 曾取证这 5 个复选项切换分组后仍停在上一次改成的值。现在它们的作用域由设置项「每个串口分组各存一份显示偏好」（`prefs.displayPrefsPerGroup`，默认关闭）控制：**关闭时仍是一份全局值**（与改造前行为完全一致），**开启时每组各存一份**并随分组切换回显侧栏。实现与验证见 §7.9、§7.10。串口参数类 9 项早已正确跟随分组，不要重复改。
+
 
 
 ### 7.2 四个显示参数的下沉手法（实际实现）
@@ -998,6 +1000,85 @@ diag-same-port-out2.txt   : after g1 connect same port -> {"default":{connected:
 **与改动前的对比**：`diag131`（改动前）同样的操作得到的提示是 `Failed to connect: Error: … Opening COM6: Access denied`，说明当时是**驱动**挡住的；改动后得到的是应用层本地化文案，说明拦截已上移到应用层。
 
 **尚未验证**：用户环境里那类允许共享打开的驱动（本机没有这类设备，无法重现「两个分组都打开」）。
+
+### 7.10 显示类偏好的作用域开关
+
+时间戳、行号、发送回显、文本+HEX 双格式、过滤页回显这五项的作用域**不再是硬编码的**，而是由设置项决定：
+
+| 位置 | 键 | 默认 | 含义 |
+| --- | --- | --- | --- |
+| 设置 > 终端 > 显示偏好作用域 | `displayPrefScope` | `global` | `global` = 所有分组共享一份；`per-group` = 每组各存一份 |
+| 左侧栏 Settings tab | — | — | 不再有作用域控件，只回显当前分组的值 |
+
+#### 7.10.1 存储位置
+
+| 作用域 | 五项值的存储位置 |
+| --- | --- |
+| `global` | 配置顶层的 `showTimestamp` / `showLineNumbers` / `echoSentData` / `echoSentDataBothFormats` / `echoSentDataInFilterTabs`（**位置与改造前完全一致，旧配置无需迁移**） |
+| `per-group` | `serialGroups[i].uiPrefs`；新分组或未存过的分组**继承全局值**，而不是回到出厂默认 |
+
+`uiPrefs` 是**可选字段**。这一点必须保留：“字段缺失”（继承全局）与“字段存在于但值恰好都是默认值”（明确的组内值）是两件不同的事。`serial-groups-config.js` 的 `normalizeSerialGroup` 因此只在存在可识别字段时才带上这个键——漏了它主进程每次存盘都会把分组级设置丢掉（`normalizeConfig → migrateSerialGroupsConfig` 会重建整个分组）。
+
+#### 7.10.2 两侧共用一套规则
+
+新模块 `serial-group-display-prefs.js`（纯逻辑，不碰 DOM / IPC）：
+
+| 成员 | 语义 |
+| --- | --- |
+| `DISPLAY_PREF_SCOPES` | `{ GLOBAL: 'global', PER_GROUP: 'per-group' }` |
+| `DISPLAY_PREF_DEFAULTS` | `showTimestamp:false` / `showLineNumbers:false` / `echoSentData:true` / `echoSentDataBothFormats:false` / `echoSentDataInFilterTabs:true` |
+| `normalizeDisplayPrefScope(v)` | 只认 `per-group`，其余一律 `global` |
+| `normalizeDisplayPrefs(source)` | 只收布尔值，未知键丢弃，缺项回默认 |
+| `readGroupDisplayPrefs(group, globalPrefs)` | 读**组内**那一份（不判断作用域），缺项继承全局 |
+| `resolveDisplayPrefs({ scope, globalPrefs, group })` | 读取侧唯一入口 |
+| `displayPrefsEqual(a, b)` | 只比这五个字段 |
+
+渲染层两个读取点都改成走这套规则：
+
+- `getPrefix(groupId)` —— 行前缀里的时间戳与行号。这个函数在**逐行渲染**的热路径上，所以 `getGroupDisplayPrefs` 带一层失效式缓存（`displayPrefsCache`）：`global` 下所有分组共享同一份结果，`per-group` 下按 groupId 各存一份，写入与作用域变化时整体作废。不缓存会让每行多一次 `Array.find` + 对象构造。
+- `renderSentRecord(record, groupId)` —— 三个回显开关。改成按**这条记录所属分组**判断后，`g-1` 关了回显不会连带静默默认分组，反之亦然。
+
+#### 7.10.3 切换作用域时的语义
+
+| 方向 | 行为 | 理由 |
+| --- | --- | --- |
+| `global → per-group` | 给所有分组种入**当前全局值** | 用户开启的那一刻屏幕效果不能变；也顺便覆盖掉各组可能残留的旧 `uiPrefs` |
+| `per-group → global` | 删掉所有分组的 `uiPrefs` | 此后一律读全局那一份；不清理会让日后重开开关又飘出几天前的值 |
+
+两个陷阱：
+
+1. **`applyConfig` 里不能直接应用作用域**。配置里的 `displayPrefScope` 先记入 `pendingDisplayPrefScope`，等 `syncSerialGroupsFromConfig` 重建完分组后再由 `flushPendingDisplayPrefScope()` 落地——否则“种值”会写进一份马上被丢弃的旧列表。
+2. **从磁盘恢复时不写盘**。`flushPendingDisplayPrefScope` 以 `suppressDisplayPrefPersist` 包住应用过程；不这样每次启动都会多写一次配置。用户主动切换作用域时才 `persistSerialGroups()` + `update-display-settings`。
+
+#### 7.10.4 已验证
+
+`verify-display-pref-scope.js` **24/24**（`diag168`，exit=0，renderer-diag=clean）：
+
+| # | 断言组 | 关注的事实 |
+| --- | --- | --- |
+| 1 | `global-scope-shares-value` / `global-scope-writes-no-group-copy` | 全局作用域下改一项，两组同时变，且**不产生**分组副本 |
+| 2 | `switching-group-keeps-shared-checkbox` | 全局作用域下切分组，勾选状态不变 |
+| 3 | `per-group-seeds-current-global-value` / `per-group-seeds-every-group-copy` / `per-group-scope-is-persisted` | 开启每组时用当前全局值种入，且真的落盘 |
+| 4 | `per-group-write-affects-only-its-group` / `per-group-write-is-stored-on-the-group` | 只影响本组，且写进组对象 |
+| 5 | `g1-terminal-prefix-has-timestamp` / `default-terminal-prefix-has-no-timestamp` | **数据路径**证据：`getPrefix()` 的真实 ANSI 输出里只有该组带 `[HH:MM:SS.mmm]` |
+| 6 | `sidebar-follows-group-on-switch-back` / `-in` | 来回切分组时侧栏跟随 |
+| 7 | `global-scope-clears-group-copies` / `-restores-shared-value` / `-sidebar-shows-shared-value` | 切回全局后副本清空、值回到共享、侧栏同步 |
+| 8 | `missing-port-is-cleared-not-inherited` / `existing-port-still-selected` / `refresh-does-not-restore-other-groups-port` | 端口不可用时下拉框为空，且刷新列表不会把别组端口顶回来 |
+
+第 5 组值得单独说明：前面几组可能只是“存对了但读错了”，只有真实前缀输出能证明渲染路径也跟上了。
+
+#### 7.10.5 同批修正的端口下拉框缺陷
+
+旧实现的两个问题共用同一个根因——**回显时允许“保留旧值”**：
+
+| 位置 | 旧行为 | 现在 |
+| --- | --- | --- |
+| `applyGroupSerialOptionsToSidebar` 的 port | 目标端口不在 option 列表里时保留旧值，于是切分组后屏幕上还是上一组的端口 | 列表**已就绪**但不含目标则显式清空；列表只有占位项（尚未刷新完）时保留，避免启动阶段误清 |
+| `applyGroupSerialOptionsToSidebar` 的 baud | 同上，自定义波特率未渲染时静默保留上一组的值 | 先 `renderCustomBaudRates()` 补建选项再选中。波特率**不能清空**——它总有值 |
+| `refreshPorts` | 首选值兑底到 `currentConfig.lastSerialOptions.path`（**默认分组**的端口），拔卡后刷一次列表又把默认组的端口选回来 | 首选值取自**激活分组**的 `portPath`；重建后显式 `value = hasPreferredPath ? preferredPath : ''` |
+| `applyConfig` 之外的 `normalizeSerialGroupState` | 连 `uiPrefs` 一起丢弃 | 透传（只在存在时带上） |
+
+另外修正了一处同源但更隐蔽的缺陷：`getSerialOptionsFromUi()` 的 `path` 原先兑底到 `currentConfig.lastSerialOptions.path`。那是**默认分组的端口**，于是“停在未选端口的新分组上发生任何保存”都会把默认分组的端口写进新分组——切一次分组就能静默破掉端口隔离。现在改为显式 `''`：宁可空，不可错。
 
 
 ---

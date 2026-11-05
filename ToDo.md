@@ -243,10 +243,10 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 
 - [x] 所有项目 JavaScript 文件通过 `node --check`。
 - [x] `git diff --check` 通过。
-- [x] `npm test` 当前 **482/482 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-manager.test.js` 11 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项、`test/serial-group-tab-bar.test.js` 15 项、`test/serial-group-layout-dom.test.js` 19 项、`test/serial-group-tab-lists.test.js` 13 项、`test/serial-output-buckets.test.js` 12 项、`test/serial-port-claims.test.js` 13 项与 `test/renderer-module-load.test.js` 4 项）。
+- [x] `npm test` 当前 **492/492 通过、0 失败**（含 `test/workspace-layout-shape.test.js` 16 项、`test/workspace-manager.test.js` 11 项、`test/workspace-pane-n.test.js` 8 项、`test/pane-layout-dom.test.js` 9 项、`test/serial-groups-config.test.js` 14 项、`test/serial-group-tabs.test.js` 17 项、`test/serial-groups-model.test.js` 17 项、`test/serial-group-runtime.test.js` 19 项、`test/serial-group-dom.test.js` 8 项、`test/serial-group-workspace.test.js` 15 项、`test/serial-group-tab-bar.test.js` 15 项、`test/serial-group-layout-dom.test.js` 19 项、`test/serial-group-tab-lists.test.js` 13 项、`test/serial-output-buckets.test.js` 12 项、`test/serial-port-claims.test.js` 13 项、`test/serial-group-display-prefs.test.js` 10 项与 `test/renderer-module-load.test.js` 4 项）。
 - [x] **renderer 模块加载门禁**：`node scripts/check-renderer-module-load.js` 退出码 0；反向对照（故意 TDZ）确实非零退出。**边界**：它的 `document.getElementById` 每次返回新 stub，**无法表达 id 重复或真实 DOM 交互**（本轮已实际踩到）；也**覆盖不到异步回调**（`applyConfig` 里的 `ReferenceError` 只能靠真实启动窗口暴露）。第 9 项又亲眼看到一次：`GROUP_TAB_BAR_ID is not defined` 在 `node --check` 与加载门禁下均全绿，只有真实启动的 `[RENDERER DIAGNOSTIC]` 才暴露。
 - [x] **静态未定义标识符扫描**：`.me/tmp/*/scan-undefined.js` 扫 **95** 个候选标识符，`checked=95 / missing=none`。它是第三层保险，**不做真正的作用域分析**，用途只是「新写的代码里漏了 require 或漏了声明」。
-- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **11 个脚本全绿、退出码均为 0**（合计 197 项断言，0 失败）：
+- [x] **CDP 真实点击验证**：带 `--remote-debugging-port=9222` 与独立 `--user-data-dir` 启动实例，用手写的最小 CDP 客户端（仅 Node 内置模块，未引入依赖）真实点击并断言 DOM。现为 **12 个脚本全绿、退出码均为 0**（合计 221 项断言，0 失败）：
 
 | 脚本 | 项数 / 结果 | profile |
 | --- | --- | --- |
@@ -261,6 +261,7 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 | `verify-shell-switchback.js` | **14/14** | `diag128` |
 | `verify-connect-group.js`（新增） | **23/23** | `diag129` |
 | `verify-same-port-guard.js`（新增） | **15/15** | `diag151` |
+| `verify-display-pref-scope.js`（新增） | **24/24** | `diag181` |
 
 
   全部 `app-diagNN-err.log` 无 `[RENDERER DIAGNOSTIC]`（`run-all-120.txt`）。
@@ -268,11 +269,11 @@ P1–P5 的功能已全部落地。上表剩余的 `[ ]` 项都是**验证缺口
 - [x] **同一物理端口只允许一个串口分组占用**：用户报告 `两个组选择相同的端口居然都能打开`。在本机（最新构建 + `COM6`）**无法复现**：底层探针与真实渲染进程双重取证，第二次打开都被驱动拒绝（`COM6 => first:OK | second:Opening COM6: Access denied`；`diag-same-port-out2.txt` 里 `g-1` 保持 `connected:false`、`both-claim-connected:false`）。所以这不是修复一个被复现的缺陷，而是把原本只由驱动提供的保证提升为应用保证 —— 部分虚拟串口 / USB 复合设备 / 带共享模式的驱动确实允许第二次打开，届时两个分组各持一个句柄、同一份字节流被两边消费、日志写两份，不报错只出错乱数据。新增纯逻辑模块 `serial-port-claims.js`（`claim` / `releaseGroup` / `releasePort`，端口键统一大写），在 `connect-serial` 开头（**在动本分组旧连接之前**）、`port.open` 错误分支、`cleanupSerialConnection()`、`disconnect-serial` 四处接入；错误以 `SERIAL_PORT_IN_USE|<PORTKEY>|<ownerGroupId>|<英文原文>` 回传，渲染层解析后走 `main.serialPortInUse` 给本地化提示。新增 `test/serial-port-claims.test.js` 13 项与 `verify-same-port-guard.js` **15/15**（`diag140`/`diag151`，**用真实串口**）：`default` 打开 `COM6` 后 `g-1` 抢同一端口被拦下、提示是本地化文案而非 `Access denied`、`default` 连接不受影响，**断开 `default` 后 `g-1` 立刻能连上**（证明占用已释放，端口不会被永久锁死）。
 
 
-- [ ] **显示类复选项仍未按分组隔离**：`diag110` 取证显示 `show-timestamp` / `show-lineno` / `echo-sent-data` / `echo-sent-data-both` / `echo-sent-data-filter` 切换分组后仍停留在上一次改成的值（它们只写模块级全局变量并经 `update-display-settings` 持久化，从未按分组存储、也未在 `applyGroupSerialOptionsToSidebar()` 里回写）。`search-regex` / `search-case` / `search-word` 同属侧栏显示偏好，尚未取证是否需要按分组。串口参数类 9 项经实测已正确跟随分组，不要重复改。
+- [x] **显示类复选项的作用域由设置开关控制（`363abd2`）**：`diag110` 取证显示 `show-timestamp` / `show-lineno` / `echo-sent-data` / `echo-sent-data-both` / `echo-sent-data-filter` 切换分组后仍停留在上一次改成的值（原来只写模块级全局变量并经 `update-display-settings` 持久化）。现在设置 > 终端新增「每个串口分组各存一份显示偏好」，**默认关闭**＝全局共享，行为与改造前完全一致（仍写配置顶层同名键，旧配置免迁移）；开启时用当前全局值为每个分组种入一份，此后每组各存一份，切换分组时侧栏五个勾选框跟随切换，`getPrefix()` 与 `renderSentRecord()` 按本分组偏好渲染；切回全局会删除所有分组副本以免日后重开开关飘出旧值。规则抽成纯逻辑模块 `serial-group-display-prefs.js`，两侧共用同一答案；`uiPrefs` 是**可选字段**（缺失＝继承全局，不能补成默认值，否则继承语义永久丢失），`serial-groups-config.js` 必须保留它（主进程每次存盘都会重建分组对象），`serial-groups-model.js` 必须深拷它。新增 `test/serial-group-display-prefs.test.js` **10/10** 与 `verify-display-pref-scope.js` **24/24**（`diag181`），其中只有 `getPrefix()` 的真实 ANSI 输出能证明渲染路径也跟上了（仅该组前缀带 `[HH:MM:SS.mmm]`）。
 
-  - 修这些问题时必须守住已锁定的作用域：快捷指令整套与 `auto-send-enable` / `auto-send-interval` / `quick-send-auto-trigger-enable` 保持**全局共享**，不得顺手改成按分组。
+  - 仍需注意的边界：`search-regex` / `search-case` / `search-word` 同属侧栏显示偏好，尚未取证是否需要按分组。串口参数类 9 项经实测已正确跟随分组，不要重复改。快捷指令整套与 `auto-send-enable` / `auto-send-interval` / `quick-send-auto-trigger-enable` 保持**全局共享**，不得顺手改成按分组。
 
-  - 另一个已知但未取证的代码级缺陷：`applyGroupSerialOptionsToSidebar()` 里 `port-select` / `baud-select` 只在「option 存在」时赋值，否则保留旧值；设备被拔掉（`group.portPath` 不在当前端口列表里）时会把上一组的端口显示给用户。
+- [x] **端口下拉框不再残留上一组的端口（`363abd2`）**：设备被拔掉后 `group.portPath` 不在端口列表里，`applyGroupSerialOptionsToSidebar()` 原来只在 option 存在时赋值，于是把上一组的端口显示给用户。现在列表**已就绪**但不含目标值时**显式清空**（列表只有占位项、尚未刷新完时保留，避免启动阶段误清）；`refreshPorts()` 的首选端口改为取**激活分组**的 `portPath`（原来兜底到默认分组的 `lastSerialOptions.path`，拔卡后刷一次列表就把默认组端口选回来）；`getSerialOptionsFromUi()` 的 `path` 不再兜底到默认分组端口（原来「停在未选端口的新分组 + 发生任何保存」会把默认组端口写进新分组，切一次分组就能静默破掉端口隔离）。波特率不能清空（它总有值），改为先 `renderCustomBaudRates()` 补建自定义选项再选中。
 
 - [x] **从上层 Shell 切回串口终端（用户实测缺陷）**：`打开shell标签，再点击串口标签，窗口显示的还是shell`。根因是缺陷 E 的副作用——Shell 在上层时下层标签行被隐掉，屏幕上唯一能点的「串口标签」只剩分组标签，而 `activateSerialGroup()` 对当前分组直接 `return`。新增 `revealSerialGroupActiveTab()`，并在 `applyActiveSerialGroup()` 末尾统一把串口终端抬回最上面（也改走本分组布局管理器，避免模块级别名因「同一个标签」早退）。新增 `verify-shell-switchback.js` **14/14**（`diag108`），覆盖点当前分组标签 / 另一个分组标签 / 主标签三条真实路径，并断言 Shell 仍可点开、缺陷 E 仍然成立。
 - [x] **两层入口互斥（`a4dac1f` 之后的修复）**：单分组亮 `#add-serial-group-inline-btn`，多分组亮 `#add-serial-group-btn`。根因不是 JS——`style.css` 全局 `button { display: inline-flex }` 覆盖了 `[hidden]`，导致 `el.hidden = true` 对按钮无效；已在 `button` 规则后补 `[hidden] { display: none !important }`，并用 `probe-hidden-regression.js` 逐项复验 14 个依赖 `[hidden]` 的元素（`violations=[]`）。
