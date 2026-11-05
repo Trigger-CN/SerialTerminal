@@ -1954,7 +1954,10 @@ html.custom-titlebar .window-titlebar {
     background: var(--bg-tertiary);
 }
 .group-workspace-splitter {
-    flex: 0 0 10px;
+    /* 只占 4px：可见的只有中间那 1px 竖线，剩下的 3px 是命中缓冲。
+       早期是 10px（比可见线宽 9 倍），实测被当成「一条很粗的蓝条」；
+       而且每条分界都要从列宽里扣掉这么多，列一多就明显吃空间。 */
+    flex: 0 0 4px;
     background: transparent;
     cursor: col-resize;
     position: relative;
@@ -1973,8 +1976,18 @@ html.custom-titlebar .window-titlebar {
     transform: translateX(-50%);
     background: var(--border-color);
 }
+/* 命中区比布局占位更宽：伪元素横向各溢出 2px，鼠标在可见线两侧都能抓住，
+   但布局宽度仍只按 4px 计入（列宽计算以它在 DOM 里的实宽为准）。 */
+.group-workspace-splitter::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -2px;
+    right: -2px;
+}
 .group-workspace.group-split-vertical .group-workspace-splitter {
-    flex-basis: 10px;
+    flex-basis: 4px;
     width: 100%;
     cursor: row-resize;
 }
@@ -1986,6 +1999,12 @@ html.custom-titlebar .window-titlebar {
     width: auto;
     height: 1px;
     transform: translateY(-50%);
+}
+.group-workspace.group-split-vertical .group-workspace-splitter::after {
+    left: 0;
+    right: 0;
+    top: -2px;
+    bottom: -2px;
 }
 .group-workspace-splitter:hover {
     background: rgba(0, 122, 204, 0.08);

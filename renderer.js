@@ -2617,6 +2617,11 @@ function finishWorkspaceTabDrag(state) {
             const tabState = getShellTabState(state.tabId);
             if (tabState) {
                 tabState.detachedColumn = true;
+                // 它也确定了落点：独立列在右边，但直接拖到别的分组标签行时先把目标列
+                // 记下来，后续即使列集合变了也不会又跟着激活分组跑。
+                const dropGroupId = document.getElementById(state.targetColumnId)
+                    ?.dataset.groupId;
+                if (dropGroupId) tabState.topRowColumnId = dropGroupId;
                 syncShellWorkspaceLayout();
                 persistShellTabs();
             }
@@ -2833,45 +2838,57 @@ function bindGroupWorkspaceSplitter() {
     if (!outer) return;
 
     let rafId = null;
+    // 一次拖动只动**一条**分界条，所以除了鼠标位置还要记住是哪一条（它夹的是哪两列）。
     let pendingRatio = null;
+    let dragLeftId = null;
+    let dragRightId = null;
     let dragging = false;
 
     const flush = () => {
         rafId = null;
-        if (pendingRatio === null) return;
+        if (pendingRatio === null || !dragLeftId || !dragRightId) return;
         const participants = groupWorkspaceSplit.groupIds;
-        if (participants.length < 2) return;
-        const leftId = participants[0];
-        const restIds = participants.slice(1);
-        const minShare = 0.05 * participants.length;
+        const leftIndex = participants.indexOf(dragLeftId);
+        if (leftIndex < 0 || participants[leftIndex + 1] !== dragRightId) return;
+
+        // 比例已在 pointermove 里按「夹住的两列总宽」算好，这里只做钳位与回写。
+        const minShare = 0.1;
         const clamped = Math.min(1 - minShare, Math.max(minShare, pendingRatio));
 
-        // 必须先算旧权重，再覆写 sizes —— 倒过来会把右侧全变成 0。
+        // 先算旧比例（两张表必须一致，缺失时按平均分配），再写回。
         const previous = participants.map(id => Number(groupWorkspaceSplit.sizes[id]) || 0);
-        const restTotal = previous.slice(1).reduce((sum, value) => sum + value, 0);
+        const totalWeight = previous.reduce((sum, value) => sum + value, 0);
+        const shares = previous.map(value => (totalWeight > 0 ? value / totalWeight : 1 / participants.length));
+        const pairShare = (shares[leftIndex] + shares[leftIndex + 1]) || (2 / participants.length);
 
-        const next = { [leftId]: clamped };
-        const remaining = 1 - clamped;
-        restIds.forEach((id, index) => {
-            const weight = restTotal > 0
-                ? previous[index + 1] / restTotal
-                : 1 / restIds.length;
-            next[id] = remaining * weight;
+        shares[leftIndex] = pairShare * clamped;
+        shares[leftIndex + 1] = pairShare * (1 - clamped);
+        groupWorkspaceSplit.sizes = {};
+        participants.forEach((id, index) => {
+            groupWorkspaceSplit.sizes[id] = shares[index];
         });
-        groupWorkspaceSplit.sizes = next;
         applyGroupWorkspaceSplitLayout();
         fitWorkspaceTerminals();
         pendingRatio = null;
     };
 
     const handlePointerMove = (event) => {
-        if (!dragging) return;
-        const rect = outer.getBoundingClientRect();
+        if (!dragging || !dragLeftId || !dragRightId) return;
+        const leftEl = getGroupColumnElement(dragLeftId);
+        const rightEl = getGroupColumnElement(dragRightId);
+        if (!leftEl || !rightEl) return;
         const isVertical = groupWorkspaceSplit.orientation === 'vertical';
-        const total = isVertical ? rect.height : rect.width;
-        if (total <= 0) return;
-        const offset = isVertical ? (event.clientY - rect.top) : (event.clientX - rect.left);
-        pendingRatio = offset / total;
+        const leftRect = leftEl.getBoundingClientRect();
+        const rightRect = rightEl.getBoundingClientRect();
+        const pairStart = isVertical ? leftRect.top : leftRect.left;
+        // 分母用两列自身宽度之和，不含中间那条 4px 分界条：
+        // 否则拖到最右时比例永远差一点点，两列合计对不上。
+        const pairWidth = isVertical
+            ? (leftRect.height + rightRect.height)
+            : (leftRect.width + rightRect.width);
+        if (pairWidth <= 0) return;
+        const position = isVertical ? event.clientY : event.clientX;
+        pendingRatio = (position - pairStart) / pairWidth;
         if (rafId === null) rafId = requestAnimationFrame(flush);
     };
 
@@ -2881,6 +2898,8 @@ function bindGroupWorkspaceSplitter() {
             flush();
         }
         dragging = false;
+        dragLeftId = null;
+        dragRightId = null;
         outer.classList.remove('resizing');
         document.removeEventListener('pointermove', handlePointerMove);
         document.removeEventListener('pointerup', handlePointerUp);
@@ -2888,10 +2907,19 @@ function bindGroupWorkspaceSplitter() {
     };
 
     document.addEventListener('pointerdown', (event) => {
-        if (!event.target.closest?.('[data-group-splitter="group"]')) return;
+        const splitter = event.target.closest?.('[data-group-splitter="group"]');
+        if (!splitter) return;
         if (!groupWorkspaceSplit.enabled || groupWorkspaceSplit.groupIds.length < 2) return;
+        // 每条分界条用 data-splitter-left / data-splitter-right 声明它夹的是哪两列。
+        // 早期写死 participants[0] 为左列：只有一条分界条时看不出错，一旦三列就完全不对。
+        const leftId = splitter.dataset.splitterLeft || '';
+        const rightId = splitter.dataset.splitterRight || '';
+        if (!leftId || !rightId) return;
         event.preventDefault();
         dragging = true;
+        dragLeftId = leftId;
+        dragRightId = rightId;
+        pendingRatio = null;
         outer.classList.add('resizing');
         document.addEventListener('pointermove', handlePointerMove);
         document.addEventListener('pointerup', handlePointerUp);
@@ -3166,19 +3194,45 @@ function applyGroupWorkspaceSplitLayout() {
         child.style.removeProperty('flex');
     });
 
-    if (!isSplit) return;
+    if (!isSplit) {
+        // 退出分屏后动态分界条必须清掉：它们残留下来就是一条条 4px 的空隙，
+        // 而且仍会被 flex 当成子项参与宽度分配。
+        syncGroupWorkspaceSplitters([]);
+        return;
+    }
 
     // 参与分屏的列 = 分组列 + （必要时）Shell 独立列。
     // Shell 列的 key 用伪分组 id，这样它和真实分组共用同一套比例表。
     const participants = groupWorkspaceSplit.groupIds.slice();
     if (isShellColumnActive()) participants.push(SHELL_COLUMN_GROUP_ID);
+
+    // 先排好分界条（同时把列的顺序也对齐），下面才知道要从列宽里扣掉多少像素。
+    syncGroupWorkspaceSplitters(participants);
+
     const share = 1 / participants.length;
+    // 只统计真正摆上屏的分界条：未参与分屏的条已被 syncGroupWorkspaceSplitters 删掉，
+    // 残留的隐藏条不能算进来（否则列宽会被多扣一截）。
+    const isVertical = groupWorkspaceSplit.orientation === 'vertical';
+    // 只能取**分屏方向上的**占位：分界条在 vertical 下 `width: 100%`，按 width 求和会把
+    // 每一列算成负高度（实测 height 全部为 0，上下分屏彻底不可用）。
+    const gutterTotal = getGroupWorkspaceSplitters()
+        .filter(splitter => !splitter.hidden)
+        .reduce((sum, splitter) => {
+            const rect = splitter.getBoundingClientRect();
+            return sum + (isVertical ? rect.height : rect.width);
+        }, 0);
+
+    // 每条分界条实占 4px（见 style.css 的 .group-workspace-splitter）。
+    // **必须从列宽里扣掉**：早期写的是 flex-basis: <比例>% 且 flex-shrink: 0，
+    // 列宽之和 = 容器宽 + 分界条总宽，最右列于是直接溢出到窗口外（实测溢出 10px）。
+    // 扣掉的方式用 calc(比例% - 比例×总宽)：每个分界条按列自身的占比分摊，
+    // 这样相邻两列的实际比例与用户拖出来的值一致。
     participants.forEach(groupId => {
         const el = getGroupColumnElement(groupId);
         if (!el) return;
         const ratio = Number(groupWorkspaceSplit.sizes[groupId]);
         const value = Number.isFinite(ratio) && ratio > 0 ? ratio : share;
-        el.style.flexBasis = `${(value * 100).toFixed(4)}%`;
+        el.style.flexBasis = `calc(${(value * 100).toFixed(4)}% - ${(value * gutterTotal).toFixed(2)}px)`;
         el.style.flexGrow = '0';
         el.style.flexShrink = '0';
     });
@@ -3513,30 +3567,98 @@ function syncGroupWorkspaceVisibility() {
     if (outerSplitter) {
         outerSplitter.hidden = !(groupWorkspaceSplit.enabled && visibleIds.size > 1);
         if (!outerSplitter.hidden) {
-            // 分界条必须紧跟在**第一个可见分组之后**。
-            // 新建分组时 ensureSerialGroupWorkspaceDom 是 insertBefore(splitter) 插到它前面，
-            // 分组一多分界条就会被挤到容器末尾——表现为「拖动条跑到最右边」，
-            // 而它实际调整的是最左边那条边界，位置与行为对不上。
+            // 分界条按「实际可见列数 - 1」保证条数（N 列就有 N-1 条）。
+            // 早期只有静态一条，三列时后两列完全不能调宽。用 DOM 里的可见列而不是
+            // visibleIds：后者包含可能尚未建出来的 Shell 列。
             placeGroupWorkspaceSplitter();
+        } else {
+            syncGroupWorkspaceSplitters([]);
         }
     }
 }
 
-// 把外层分界条移到「第一个可见分组之后」。
+// 把外层分界条按「每相邻两列一条」排好，并把列的顺序也对齐到 participants。
 //
-// 不靠插入顺序保证：分组是动态增删的，任何一次 insertBefore/appendChild 都可能让
-// 分界条跑到末尾。每次同步可见性时重算一次是最不容易出错的写法（元素已在正确
-// 位置时就 insertBefore 到自身之后是 no-op，不会引起样式重算）。
-function placeGroupWorkspaceSplitter() {
+// N 列就有 N-1 条：早期只有静态的那一条，三列时只有第一对列之间能拖。
+//
+// 每条用自己的 data-splitter-left / data-splitter-right 声明夹的是哪两列，
+// 拖动时只改这两列的比例——不再假定「左列永远是 participants[0]」。
+function syncGroupWorkspaceSplitters(participants) {
     const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    const splitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
-    if (!outer || !splitter) return;
-    const firstVisible = Array.from(outer.children).find(child =>
-        child !== splitter && child.id && child.id !== GROUP_WORKSPACE_SPLITTER_ID && !child.hidden
-    );
-    if (!firstVisible) return;
-    if (splitter.previousElementSibling === firstVisible) return;
-    outer.insertBefore(splitter, firstVisible.nextSibling);
+    if (!outer) return;
+
+    const columns = (participants || [])
+        .map(groupId => getGroupColumnElement(groupId))
+        .filter(Boolean);
+    const wanted = Math.max(0, columns.length - 1);
+
+    // 静态那条分界条是整个功能的地基（index.html 里就存在，也有测试断言它的 id）。
+    // 它**永远不能被 remove**：一旦删掉，document.getElementById 再也拿不回来，
+    // 后续所有分屏都没有可拖的条，只能重建页面才能恢复。
+    const staticSplitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
+
+    // 页面上的条按 DOM 顺序排好；静态条不在父节点里时（比如刚被搬动）临时补上。
+    const splitters = getGroupWorkspaceSplitters();
+    while (splitters.length < wanted) {
+        const splitter = document.createElement('div');
+        splitter.className = 'group-workspace-splitter';
+        // 后续的条不分配 id：id 只留给静态那条，避免重复 id。
+        splitter.dataset.groupSplitter = 'group';
+        splitters.push(splitter);
+    }
+    // 多出来的动态条直接摘掉；静态那条只隐藏（下次分屏还要用）。
+    splitters.slice(wanted).forEach(splitter => {
+        if (splitter === staticSplitter) splitter.hidden = true;
+        else splitter.remove();
+    });
+    splitters.length = wanted;
+
+    // 先把现有的条全部移到末尾（腾开位置），再逐对插回去。
+    // 直接「就地修复」会在顺序完全不同时错位：比如旧顺序 colA/splitter/colB 要变成
+    // colB/splitter/colA，按单个元素判断就会互相抵消。
+    splitters.forEach(splitter => outer.appendChild(splitter));
+    for (let index = 0; index < columns.length; index++) {
+        const column = columns[index];
+        if (index > 0) {
+            const previousColumn = columns[index - 1];
+            const splitter = splitters[index - 1];
+            splitter.hidden = false;
+            splitter.dataset.splitterLeft = previousColumn.dataset.groupId || '';
+            splitter.dataset.splitterRight = column.dataset.groupId || '';
+            outer.insertBefore(splitter, previousColumn.nextSibling);
+            outer.insertBefore(column, splitter.nextSibling);
+        } else {
+            outer.insertBefore(column, outer.firstChild);
+        }
+    }
+
+    // 还没排上的静态条（比如本屏只有 1 列）也放回容器末尾，保持可查找。
+    if (staticSplitter && staticSplitter.parentElement !== outer) outer.appendChild(staticSplitter);
+}
+
+// 现有的分组级分界条（静态那条 + 后续建的），按 DOM 顺序。
+function getGroupWorkspaceSplitters() {
+    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    const staticSplitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
+    if (!outer) return staticSplitter ? [staticSplitter] : [];
+    const splitters = Array.from(outer.children)
+        .filter(child => child.dataset?.groupSplitter === 'group');
+    if (staticSplitter && !splitters.includes(staticSplitter)) splitters.unshift(staticSplitter);
+    return splitters;
+}
+
+// 旧名保留：可见性同步处仍调它，语义已扩为「按相邻关系排好全部分界条」。
+function placeGroupWorkspaceSplitter() {
+    syncGroupWorkspaceSplitters(getGroupWorkspaceVisibleColumnKeys());
+}
+
+// 当前屏上可见的列 key（按 DOM 里从左到右 / 上到下的实际顺序）。
+function getGroupWorkspaceVisibleColumnKeys() {
+    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    if (!outer) return [];
+    return Array.from(outer.children)
+        .filter(child => child.classList?.contains('group-column') && !child.hidden)
+        .map(child => child.dataset.groupId || '');
 }
 
 // 当前应当显示哪些分组工作区（返回 entryId 集合）。
@@ -4290,13 +4412,34 @@ function isGroupColumnVisible(groupId) {
 // 当前**可见**集合里恰好只有一个分组时返回它，否则 null。
 //
 // 未归属的 Shell 要「与所有串口标签按行分屏」：屏幕上只有一列时就用那一列的列首行，
-// 这与用户给的布局图一致（COM1 / SHELL1 / SHELL2 同一行）。分屏出多列后没有唯一的
-// 「那一列」，只能落在激活列——同一个标签不可能同时挂到多条行上。
+// 这与用户给的布局图一致（COM1 / SHELL1 / SHELL2 同一行）。
 function getSingleVisibleGroupId() {
     const visible = groupWorkspaceSplit.enabled
         ? groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id))
         : [activeGroupId];
     return visible.length === 1 ? visible[0] : null;
+}
+
+// 一列的「列 key」当前是否可见——分组列与 Shell 独立列都要算。
+//
+// 未归属 Shell 的落点判定用它：分屏出多列后没有「唯一那一列」，只能记住上次落在哪一列。
+function isVisibleColumnKey(columnId) {
+    if (!columnId) return false;
+    if (columnId === SHELL_COLUMN_GROUP_ID) return isShellColumnActive();
+    return groupWorkspaceSplit.enabled
+        ? groupWorkspaceSplit.groupIds.includes(columnId)
+        : columnId === activeGroupId;
+}
+// 未归属 Shell 的「上层行」落在哪一列。
+//
+// 判定顺序：先看这标签自己记住的列是否还可见 → 再看是不是只剩唯一可见列 → 最后才用
+// 激活列。首两次都不会因为「用户切了分组」而变，所以 Shell 不会再跟着激活分组跑。
+function resolveShellTopRowColumn(tabState) {
+    const remembered = tabState?.topRowColumnId;
+    if (isVisibleColumnKey(remembered)) return remembered;
+    const next = getSingleVisibleGroupId() || activeGroupId;
+    if (tabState && tabState.topRowColumnId !== next) tabState.topRowColumnId = next;
+    return next;
 }
 
 // 一个 Shell 标签到底该出现在哪一行 / 哪个内容区。
@@ -4362,7 +4505,12 @@ function resolveShellTabHost(tabState) {
 
     // 其余归「上层标签栏」：宿主是某一列的**列首行**（与分组标签同级，不新开列）。
     // 面板必须放在同一个可见列里，否则标签亮着而 xterm 在隐藏列（实测踩过）。
-    const columnGroupId = getSingleVisibleGroupId() || activeGroupId;
+    //
+    // 列一旦定下来就必须**记住**：早期这里用 `getSingleVisibleGroupId() || activeGroupId`，
+    // 分屏出两列后前者恒为 null，于是每点一次别的分组标签，Shell 就整列搬过去一次
+    // （用户实测：「点击任意一个串口组标签 shell 就会跟着跳过去」）。
+    // 现在只有「记住的那一列不再可见」时才重新选一列，并把新列记下来。
+    const columnGroupId = resolveShellTopRowColumn(tabState);
     const paneId = groupPaneId(columnGroupId, 1);
     return {
         listEl: getVisibleGroupRow(columnGroupId)?.querySelector('.serial-group-tab-list')
