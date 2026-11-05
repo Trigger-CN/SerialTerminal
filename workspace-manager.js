@@ -354,16 +354,23 @@ function createWorkspaceManager(options = {}) {
                 const tabButton = document.querySelector(`.main-tab[data-target="${tabId}"]`);
                 const tabPane = document.getElementById(tabId);
                 const previousPaneId = tabButton?.dataset?.paneId || tabPane?.dataset?.paneId || null;
-                // 按钮目标容器可由调用方接管（Shell 标签被搬到分组栏时就是这种情况）。
-                // 未接管时仍然是所属 pane 的 tabsList，单分组行为零变化。
+                // 只在宿主真的变了时才搬节点。
+                //
+                // appendChild 对「已经在该父节点下的子节点」也是先摘再插，动画与 iframe/canvas
+                // 会在那一刻重放；而本函数在每次切标签、切分组、分屏时都会跑一遍。
+                // 目标父节点一致就跳过，既避免重播动画，也不再触发整行重排。
                 const buttonHost = resolveTabButtonHost ? resolveTabButtonHost(tabId, pane.id) : null;
                 const effectiveTabsList = buttonHost || tabsList;
                 if (tabButton && effectiveTabsList) {
-                    effectiveTabsList.appendChild(tabButton);
+                    if (tabButton.parentElement !== effectiveTabsList) {
+                        effectiveTabsList.appendChild(tabButton);
+                    }
                     tabButton.dataset.paneId = pane.id;
                 }
                 if (tabPane && tabsContent) {
-                    tabsContent.appendChild(tabPane);
+                    if (tabPane.parentElement !== tabsContent) {
+                        tabsContent.appendChild(tabPane);
+                    }
                     tabPane.dataset.paneId = pane.id;
                 }
                 if (previousPaneId && previousPaneId !== pane.id) {

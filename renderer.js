@@ -3387,6 +3387,8 @@ function createGroupTabRowElement(groupId) {
     list.id = groupTabListId(id);
     list.setAttribute('role', 'tablist');
     row.appendChild(list);
+    // 动态列的行与静态行一样走事件委托（同一个挂载点存在时才挂）。
+    bindGroupTabListEvents(list);
     return row;
 }
 
@@ -4189,13 +4191,21 @@ function activateShellTabInHost(tabId) {
 // - 已分屏：它留在默认分组列，只渲染默认分组自己那一个；其它参与分屏的列各有一行
 //   （由 ensureSerialGroupWorkspaceDom 建），各自只渲染自己那一个。
 //
-// 分组标签只渲染分组，**Shell 标签不由这里创建**：Shell 是既有节点，升降层靠搬移
-// （见 syncShellTabLayer）而不是重建——重建会丢 xterm 实例与监听。但 replaceChildren()
-// 会把之前搬上来的 Shell 节点一并移除，所以搬移必须在本函数末尾做。
+// 分组标签**不重建，只复用并改状态**：节点 id 只由 groupId 决定，所以「该分组有按钮」就是
+// 「该 id 能查到元素」。新建只在首次出现时发生；之后每次重绘只做两件事：把不在正确行里的
+// 按钮搬过去、把文案与 active/connected 类名就地改掉。
+//
+// 早期是「先 replaceChildren() 再逐个新建」，于是切一次标签就换一批新节点：标签栏整体重排、
+// 过场动画与 hover/焦点态一起重播（用户报为「切一下标签整条标签栏闪一下」）。
+//
+// Shell 标签同样不由这里创建（它的 xterm 实例与监听不允许重建），而是搬到对应行里；
+// 搬移在本函数末尾做。
 function renderSerialGroupTabBar() {
     const barEl = document.getElementById(GROUP_TAB_BAR_ID);
     if (!barEl) return;
     const isSplit = groupWorkspaceSplit.enabled && groupWorkspaceSplit.groupIds.length > 1;
+    // 反向清理用：本轮之后仍存在的分组 id 集合。
+    const knownGroupIds = new Set(serialGroups.map(group => group.id));
 
     // 第一步：静态行归位。未分屏时它属于当前激活列（屏幕上只有这一列），
     // 已分屏时回到默认分组列。搬的是整条行（含 Actions），子节点跟着走。
@@ -4219,30 +4229,37 @@ function renderSerialGroupTabBar() {
 
     barEl.hidden = model.hidden;
 
-    // 第二步：清空所有分组标签列表，并统一每列首行的可见性。
-    // 未分屏时只有静态行可见，其它列的行必须 hidden —— 否则一列里会出现两条标签行，
-    // 而且上一条是空的，看起来就是「标签栏多了一条空白」。
+    // 第二步：把每个分组标签按钮放到它该在的那条行里。
+    //
+    // 这里**不重建节点**。早先是 replaceChildren() + buildGroupTabButton()，每调一次就换一批
+    // 新按钮：整条标签栏重排、hover/焦点态与正在跑的过场动画一起重播，用户看到的就是
+    // 「切一下标签整条标签栏闪一下」。
+    //
+    // 现在按分组 id 复用已有按钮（元素 id 只由 groupId 决定，所以「有没有」就是「存不存在」），
+    // 只在缺失时新建，再就地更新文案与状态类名。未分屏时全部集中在静态行，
+    // 已分屏时每个分组只在自己列的那条行里出现。
     serialGroups.forEach(group => {
         if (group.id !== REGISTRY_DEFAULT_GROUP_ID) {
             const row = getGroupTabRow(group.id);
             if (row) row.hidden = !isSplit;
         }
-        getGroupTabList(group.id)?.replaceChildren();
     });
-    // 静态行自己的列表再清一次：上一行的循环可能被「激活列恰好不是默认列」绕过。
-    document.getElementById(GROUP_TAB_LIST_ID)?.replaceChildren();
-
-    // 第三步：渲染分组标签。
-    // model.tabs 的每一项已经是 describeGroupTab() 的完整结果，绝不能再喂回它：
-    // describeGroupTab 用 source.id 取 groupId，而这里只有 groupId，会全部回落 'default'。
     model.tabs.forEach(tab => {
-        if (!isSplit) {
-            // 未分屏：全部标签集中在静态行里（用户靠它切分组）。
-            document.getElementById(GROUP_TAB_LIST_ID)?.appendChild(buildGroupTabButton(tab));
+        const hostList = isSplit
+            ? getGroupTabList(tab.groupId)
+            : document.getElementById(GROUP_TAB_LIST_ID);
+        if (!hostList) return;
+        const existing = document.getElementById(tab.buttonId);
+        if (existing) {
+            if (existing.parentElement !== hostList) hostList.appendChild(existing);
+            updateGroupTabButtonState(existing, tab);
             return;
         }
-        // 已分屏：每个分组只在自己列的那条行里出现。
-        getGroupTabList(tab.groupId)?.appendChild(buildGroupTabButton(tab));
+        hostList.appendChild(buildGroupTabButton(tab));
+    });
+    // 反向：已不存在的分组（刚被关掉的那个）的标签按钮必须移除，否则它留在行里但点不动。
+    document.querySelectorAll('.serial-group-tab').forEach(button => {
+        if (!knownGroupIds.has(button.dataset.groupId)) button.remove();
     });
 
     // 第四步：「添加串口」与「新建 Shell」两个静态按钮只留这一份，挪到当前激活列的标签行里。
@@ -4253,6 +4270,10 @@ function renderSerialGroupTabBar() {
     syncSerialGroupAddButtonLayer();
     syncShellAddButtonVisibility();
 }
+
+// 静态分组行的标签列表只在模块加载时存在一份，委托在这里挂一次即可；
+// 动态列的列表在 ensureSerialGroupWorkspaceDom 里建好后各自挂。
+bindGroupTabListEvents(document.getElementById(GROUP_TAB_LIST_ID));
 
 // 新建 Shell 按钮**永久只在上层标签栏**：只要有分组标签行，pane 行就不再提供入口。
 //
@@ -4314,23 +4335,13 @@ function buildGroupTabButton(tab) {
     titleEl.textContent = tab.title;
     button.appendChild(titleEl);
 
-    // 点击切分组。分屏时点自己那一列的标签不应该改变激活分组以外的任何东西，
-    // 所以这里仍然是同一个 activateSerialGroup —— 侧栏必须跟着走。
-    button.addEventListener('click', event => {
-        if (event.target.closest('.main-tab-close')) return;
-        activateSerialGroup(tab.groupId);
-    });
-
-    // 分组级分屏的唯一入口就在这里。
+    // 点击与右键菜单不在这里绑：统一走**事件委托**（见 bindGroupTabListEvents）。
     //
-    // 不用工具栏按钮：分屏是低频且带方向的开关（左右 / 上下 / 关闭三选一），
-    // 排成按钮会占用标签栏而把它挤满——用户在布局图里明确要求分组标签不挤在一起。
-    // 右键菜单与旁边过滤页/图表页的做法一致。
-    button.addEventListener('contextmenu', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        requestSerialGroupContextMenu(tab.groupId);
-    });
+    // 构造时用闭包绑 groupId 的写法在「按钮复用」后就不成立了：闭包里是旧的 tab 对象，
+    // 重命名或重新归属之后点击会落到旧语义上。
+    // 委托只挂一次、从 dataset 现读 groupId，复用与新造走同一条路径。
+
+
 
     const closeEl = document.createElement('span');
     closeEl.className = 'main-tab-close';
@@ -4349,6 +4360,47 @@ function buildGroupTabButton(tab) {
     }
     button.appendChild(closeEl);
     return button;
+}
+
+// 就地更新一个**已存在**的分组标签按钮的文案与状态类名。
+//
+// 与 buildGroupTabButton 的分工：那个只在首次出现时造一次结构，这个负责之后每次重绘只改变化
+// 的那几个值。两者必须用同一套类名拼法，否则复用后状态会停在旧值上，
+// 所以 updateGroupTabButtonState 直接复用模型里的 className 字符串。
+function updateGroupTabButtonState(button, tab) {
+    button.className = tab.className;
+    button.setAttribute('aria-selected', String(tab.active));
+    const titleEl = button.querySelector('.main-tab-title');
+    if (titleEl && titleEl.textContent !== tab.title) titleEl.textContent = tab.title;
+    const closeEl = button.querySelector('.main-tab-close');
+    if (closeEl) closeEl.classList.toggle('disabled', !tab.closable);
+}
+
+
+// 分组标签列表上的事件委托。**只挂一次**（模块加载时对静态列表挂，动态列的列表由
+// ensureSerialGroupWorkspaceDom 建好后单独挂），所以挂载前会打标记去重。
+//
+// 为什么必须委托而不是逐按钮绑：renderSerialGroupTabBar 现在复用按钮而不重建，
+// 若仍然在构造时用闭包绑 groupId，复用后的按钮会一直持有旧的 groupId。
+function bindGroupTabListEvents(listEl) {
+    if (!listEl || listEl.dataset.groupTabEvents === '1') return;
+    listEl.dataset.groupTabEvents = '1';
+    listEl.addEventListener('click', event => {
+        if (event.target.closest('.main-tab-close')) return;
+        const button = event.target.closest('.serial-group-tab');
+        const groupId = button?.dataset.groupId;
+        if (groupId) activateSerialGroup(groupId);
+    });
+    // 分组级分屏的唯一入口。不用工具栏按钮：分屏是低频且带方向的开关（左右 / 上下 /
+    // 关闭三选一），排成按钮会占满标签栏——用户在布局图里明确要求分组标签不挤在一起。
+    listEl.addEventListener('contextmenu', event => {
+        const button = event.target.closest('.serial-group-tab');
+        const groupId = button?.dataset.groupId;
+        if (!groupId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        requestSerialGroupContextMenu(groupId);
+    });
 }
 
 // 决定「添加串口」按钮显示在哪一层。
