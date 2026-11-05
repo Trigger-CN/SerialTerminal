@@ -120,9 +120,12 @@ let serialSessionId = 0;
 // P2：分组上下文。首版只注册 default 一个分组，但字节分发的判定已经走注册表，
 // 后续添加分组时不需要再改这条链路。
 const serialGroupRegistry = new SerialGroupRegistry({ defaultGroupId: REGISTRY_DEFAULT_GROUP_ID });
-let serialConnectInProgress = false;
-let serialReconnectInProgress = false;
-let serialDisconnectWaiters = [];
+// 这两把锁必须按分组：一个分组在连/重连时，另一个分组的点击不能被静默丢弃。
+// 实现放在 isGroupConnecting / isGroupReconnecting 旁（依赖 resolveSerialGroupId）。
+let serialDisconnectWaiters = new Map();
+// 已绑定键盘输入的分组集合（键是 groupId）。以前只有一个 onData，只服务默认分组。
+// 必须声明在这里：模块加载期就会调用 bindGroupTerminalInput 绑默认分组。
+const serialInputBoundGroups = new Set();
 // let currentMode = 'terminal'; // Removed temporarily
 
 // Display Settings
@@ -1423,8 +1426,8 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (text) {
                 if (isShell && shellTab) {
                     shellTab.term.paste(text);
-                } else if (isConnected) {
-                    await sendSerialRequest({ mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
+                } else if (isGroupConnected(activeGroupId)) {
+                    await sendSerialRequest({ groupId: activeGroupId, mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
                 }
             }
             break;
@@ -1433,8 +1436,8 @@ async function handleTerminalContextMenuAction(payload = {}) {
             const text = targetTerm?.getSelection();
             if (text && isShell && shellTab) {
                 ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
-            } else if (text && isConnected) {
-                await sendSerialRequest({ mode: 'text', content: text, source: 'selection' }, SEND_LIMITS.paste);
+            } else if (text && isGroupConnected(activeGroupId)) {
+                await sendSerialRequest({ groupId: activeGroupId, mode: 'text', content: text, source: 'selection' }, SEND_LIMITS.paste);
             }
             break;
         }
@@ -3506,7 +3509,9 @@ function applyGroupSerialOptionsToSidebar(groupId) {
 // 连接按钮与状态提示跟随激活分组：多分组时按钮代表的是当前这一组，
 // 不能总是显示默认分组的连接状态。
 function refreshConnectButtonState() {
-    const connected = isGroupConnected(activeGroupId);
+    const groupId = resolveSerialGroupId(activeGroupId);
+    const connected = isGroupConnected(groupId);
+    const busy = isGroupConnecting(groupId) || isGroupReconnecting(groupId);
     const label = document.getElementById('connect-btn-label');
     if (label) {
         const translationKey = connected ? 'main.disconnect' : 'main.connect';
@@ -3516,13 +3521,26 @@ function refreshConnectButtonState() {
     const button = document.getElementById('connect-btn');
     button?.classList.toggle('connect-action', !connected);
     button?.classList.toggle('disconnect-action', connected);
+    if (button) button.disabled = busy;
     const sidebarButton = document.getElementById('sidebar-connect-btn');
     sidebarButton?.classList.toggle('connect-action', !connected);
     sidebarButton?.classList.toggle('disconnect-action', connected);
     if (sidebarButton) {
+        sidebarButton.disabled = busy;
         sidebarButton.title = tr(connected ? 'main.disconnect' : 'main.connect');
         sidebarButton.setAttribute('aria-label', sidebarButton.title);
     }
+}
+
+// 连接过程中只禁用**本组**的按钮：另一个分组应该可以同时发起连接。
+function setGroupConnectBusy(groupId, busy) {
+    const id = resolveSerialGroupId(groupId);
+    if (id !== resolveSerialGroupId(activeGroupId)) return;
+    const disabled = busy === true;
+    const button = document.getElementById('connect-btn');
+    if (button) button.disabled = disabled;
+    const sidebarButton = document.getElementById('sidebar-connect-btn');
+    if (sidebarButton) sidebarButton.disabled = disabled;
 }
 
 // 切换激活分组：注册表、可见标签页、标签栏高亮一起改。
@@ -5961,7 +5979,7 @@ function formatValidation(result, mode, appendCrLf = false) {
 async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent = false } = {}) {
     // 写入必须带上它所属的分组：主进程按 groupId 找会话，缺了就是往默认分组写。
     const targetGroupId = resolveSerialGroupId(request?.groupId);
-    if (!isConnected) {
+    if (!isGroupConnected(targetGroupId)) {
         const result = { ok: false, code: 'SERIAL_NOT_OPEN', message: trFallback('main.serialNotOpen', 'Serial port is not connected') };
         if (!silent) setActionStatus(result.message);
         return result;
@@ -5990,7 +6008,7 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
             newlineMode: request.newlineMode || targetDisplay.newlineMode, sessionId: requestSessionId
         };
         const pendingWrite = serialWriteChain.then(() => {
-            if (!isConnected || requestSessionId !== getGroupSessionId(targetGroupId)) {
+            if (!isGroupConnected(targetGroupId) || requestSessionId !== getGroupSessionId(targetGroupId)) {
                 return { ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' };
             }
             return ipcRenderer.invoke('serial-write', writeRequest);
@@ -7201,20 +7219,33 @@ ipcRenderer.on('shell-tab-exit', (event, payload = {}) => {
 });
 
 // Serial Logic
-// 主终端的键盘输入属于默认分组：其它分组目前没有自己的 onData 监听，
-// 因此这里按默认分组取发送编码与换行模式，与改造前一致。
-serialTerm.onData((data) => {
-    if (!isConnected) {
-        return;
-    }
-    const display = getGroupDisplay(REGISTRY_DEFAULT_GROUP_ID);
-    sendSerialRequest({
-        mode: 'text', content: data, encoding: display.sendEncoding, source: 'terminal',
-        terminalEnter: data === '\r', newlineMode: display.newlineMode
-    }, SEND_LIMITS.terminal).then(result => {
-        if (result.ok) serialTerm.write(data === '\r' ? '\r\n' : data);
+// 主终端的键盘输入属于**它自己所属的分组**：每个分组的主终端各绑一次。
+//
+// 以前只给默认分组的 serialTerm 绑了 onData，于是切到 Serial 2 后往它的终端里打字
+// 要么没反应，要么用默认分组的编码发出去。
+function bindGroupTerminalInput(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    if (serialInputBoundGroups.has(id)) return false;
+    const runtime = serialRuntimes.get(id);
+    if (!runtime) return false;
+    serialInputBoundGroups.add(id);
+    runtime.term.onData((data) => {
+        // 只看**本分组**的连接态：用全局 isConnected 会让 Serial 2 已连接却打不进去。
+        if (!isGroupConnected(id)) return;
+        const display = getGroupDisplay(id);
+        sendSerialRequest({
+            groupId: id,
+            mode: 'text', content: data, encoding: display.sendEncoding, source: 'terminal',
+            terminalEnter: data === '\r', newlineMode: display.newlineMode
+        }, SEND_LIMITS.terminal).then(result => {
+            if (result.ok) runtime.term.write(data === '\r' ? '\r\n' : data);
+        });
     });
-});
+    return true;
+}
+
+// 默认分组的终端在模块加载期就已就位，直接绑上。其它分组在创建终端时再绑。
+bindGroupTerminalInput(REGISTRY_DEFAULT_GROUP_ID);
 ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     // P2：入站字节的归属判定统一走分组注册表。旧写法只比一个裸的 serialSessionId，
     // 没有分组概念，多串口下无法区分「这是哪个分组的字节」。
@@ -7349,7 +7380,11 @@ function updateThroughputPanel({ connected, rxHistory, txHistory, rxBytesPerSeco
     renderThroughputChart(throughputTxChart, txHistory || []);
 }
 
-ipcRenderer.on('serial-throughput-update', (event, payload) => {
+ipcRenderer.on('serial-throughput-update', (event, payload = {}) => {
+    // 吞吐面板只有一个，显示的是**激活分组**的数据。以前它不管 groupId，
+    // 于是后台分组的流量会把当前分组的速率/曲线冲掉。
+    const groupId = resolveSerialGroupId(payload.groupId);
+    if (groupId !== resolveSerialGroupId(activeGroupId)) return;
     updateThroughputPanel(payload);
 });
 
@@ -7376,23 +7411,50 @@ function updateSerialConnectionState(connected) {
     setActionStatus(connected ? tr('main.connected') : tr('main.disconnected'));
 }
 
-function disconnectSerial() {
+// 断开**指定分组**的串口。
+//
+// 默认参数必须用 REGISTRY_DEFAULT_GROUP_ID 而不是 activeGroupId：模块顶层有立即求值表达式，
+// 用 activeGroupId 会触发 TDZ。真正「当前分组」的调用点在 toggleSerialConnection 里显式传入。
+function disconnectSerial(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const targetGroupId = resolveSerialGroupId(groupId);
+    const isDefaultGroup = targetGroupId === REGISTRY_DEFAULT_GROUP_ID;
     // 递增会话号作废迟到的数据，同时让分组注册表同步失效（否则注册表仍认为旧会话有效）。
-    serialSessionId = serialGroupRegistry.invalidateSession(REGISTRY_DEFAULT_GROUP_ID);
-    serialWriteChain = Promise.resolve();
-    stopAutoSendRuntime();
-    resetQuickTriggerReceive();
-    chartTabs.forEach(tab => {
-        tab.stream?.flush();
-        tab.stream?.reset();
-    });
-    updateSerialConnectionState(false);
-    ipcRenderer.send('disconnect-serial', { groupId: DEFAULT_SERIAL_GROUP_ID });
+    const nextSessionId = serialGroupRegistry.invalidateSession(targetGroupId);
+    if (isDefaultGroup) {
+        // serialSessionId / serialWriteChain / 自动发送 / 快捷触发 / chartTabs 都是默认分组的
+        // 全局孪生体：断一个非默认分组不能顺手把它们清掉。
+        serialSessionId = nextSessionId;
+        serialWriteChain = Promise.resolve();
+        stopAutoSendRuntime();
+        resetQuickTriggerReceive();
+        chartTabs.forEach(tab => {
+            tab.stream?.flush();
+            tab.stream?.reset();
+        });
+        updateSerialConnectionState(false);
+    } else {
+        // 非默认分组的图表数据按它自己那一份清；flush 要在读显示模式之前做。
+        if (getGroupDisplay(targetGroupId).receiveDisplayMode === 'hex') getHexFormatter(targetGroupId).flush();
+        else flushTextReceive(targetGroupId);
+        chartTabsStore.getList(targetGroupId).forEach(tab => {
+            tab.stream?.flush();
+            tab.stream?.reset();
+        });
+    }
+    refreshConnectButtonState();
+    ipcRenderer.send('disconnect-serial', { groupId: targetGroupId });
 }
 
-function waitForSerialDisconnected() {
+// 按分组等待断开事件：换波特率重连时只能等自己那一组，不能等「任何一个分组断开」。
+function waitForSerialDisconnected(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const targetGroupId = resolveSerialGroupId(groupId);
     return new Promise(resolve => {
-        serialDisconnectWaiters.push(resolve);
+        let waiters = serialDisconnectWaiters.get(targetGroupId);
+        if (!waiters) {
+            waiters = [];
+            serialDisconnectWaiters.set(targetGroupId, waiters);
+        }
+        waiters.push(resolve);
     });
 }
 
@@ -7405,7 +7467,7 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
     if (getGroupDisplay(groupId).receiveDisplayMode === 'hex') getHexFormatter(groupId).flush();
     else flushTextReceive(groupId);
     if (isDefaultGroup) {
-        // 全局连接状态、自动发送与重连等待者只属于默认分组：
+        // 全局连接状态、自动发送与 chartTabs 别名只属于默认分组：
         // 关掉 g-2 不应该让默认分组的界面显示成「已断开」。
         serialSessionId = getGroupSessionId(groupId);
         serialWriteChain = Promise.resolve();
@@ -7416,7 +7478,15 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
             tab.stream?.reset();
         });
         updateSerialConnectionState(false);
+    } else {
+        // 非默认分组断开：清掉它自己那一份图表数据，不能碰 chartTabs 别名。
+        chartTabsStore.getList(groupId).forEach(tab => {
+            tab.stream?.flush();
+            tab.stream?.reset();
+        });
     }
+    // 侧栏连接按钮显示的是激活分组，任何一组断开都要重算。
+    refreshConnectButtonState();
     const runtime = serialRuntimes.get(groupId);
     if (message && runtime) {
         const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
@@ -7430,16 +7500,13 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
         }
         if (isDefaultGroup) setActionStatus(message);
     }
-    if (!isDefaultGroup) return;
-    ipcRenderer.send('flush-tab-logs');
-    const waiters = serialDisconnectWaiters;
-    serialDisconnectWaiters = [];
-    waiters.forEach(resolve => resolve());
-});
-
-ipcRenderer.on('log-saved', (event, payload = {}) => {
-    const filePath = payload.path || '';
-    setActionStatus(filePath ? `日志已保存：${filePath}` : '日志已保存');
+    if (isDefaultGroup) ipcRenderer.send('flush-tab-logs');
+    // 唤醒等待**这一组**断开的重连流程；其它组的等待者必须留着。
+    const waiters = serialDisconnectWaiters.get(groupId);
+    if (waiters) {
+        serialDisconnectWaiters.delete(groupId);
+        waiters.forEach(resolve => resolve());
+    }
 });
 
 ipcRenderer.on('all-tabs-log-saved', (event, payload = {}) => {
@@ -7557,21 +7624,46 @@ baudCustomInput.addEventListener('keydown', event => {
 
 function applySerialParameterChange({ reconnect = false } = {}) {
     saveSerialModeConfig();
-    if (reconnect && isConnected && !serialConnectInProgress && !serialReconnectInProgress) {
-        reconnectSerialFromUi();
+    // 参数属于激活分组：是否重连必须看**这一组**的连接态，不能用全局 isConnected。
+    const groupId = resolveSerialGroupId(activeGroupId);
+    if (reconnect && isGroupConnected(groupId) && !isGroupConnecting(groupId) && !isGroupReconnecting(groupId)) {
+        reconnectSerialFromUi({ groupId });
     }
 }
 
 function getBaudRate() {
-    return normalizeBaudRate(baudSelect.value) || previousBaudRate || '115200';
+    // 激活分组自己的波特率。刷新端口列表时若换成默认分组的缓存值，会把用户刚选的
+    // 波特率改回去，接着连上的就不是他选的那个速率。
+    const group = getSerialGroupById(activeGroupId);
+    return normalizeBaudRate(baudSelect.value)
+        || normalizeBaudRate(group?.serialOptions?.baudRate)
+        || previousBaudRate
+        || '115200';
 }
 
 const refreshBtn = document.getElementById('refresh-btn');
 
+// 默认分组的连接态镜像。多串口下每个分组各有自己的连接态（真相源是 serialGroupRegistry），
+// 这个变量只服务默认分组的历史读法；任何「当前分组」的判断都必须走 isGroupConnected()。
 let isConnected = false;
 
-// 多串口 P1：渲染层暂仍只操作一个串口分组。P2 引入真正的分组上下文后，
-// 这里会改为当前激活分组的 id；主进程已按 groupId 隔离，未传时回退到该默认值。
+// 正在连接中的分组集合。
+//
+// 以前这是一个全局布尔 serialConnectInProgress：一个分组在连的时候，另一个分组的连接点击
+// 会被静默丢弃，用户看到的是「点了没反应」。按分组的连接是并行的，锁也必须按分组。
+const serialConnectingGroups = new Set();
+
+function isGroupConnecting(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    return serialConnectingGroups.has(resolveSerialGroupId(groupId));
+}
+
+// 重连中的分组集合，同样必须按分组。
+const serialReconnectingGroups = new Set();
+
+function isGroupReconnecting(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    return serialReconnectingGroups.has(resolveSerialGroupId(groupId));
+}
+
 const DEFAULT_SERIAL_GROUP_ID = 'default';
 
 ensureThroughputSvg(throughputRxChart, 'rx');
@@ -7609,8 +7701,11 @@ async function refreshPorts() {
 refreshBtn.addEventListener('click', refreshPorts);
 
 portSelect.addEventListener('change', () => {
-    if (isConnected && !serialConnectInProgress) {
-        disconnectSerial();
+    // 侧栏端口选择器编辑的是**激活分组**：切分组前若该组正连着，换端口必须断它自己的连接，
+    // 不能用全局 isConnected（那是默认分组的状态）。
+    const groupId = resolveSerialGroupId(activeGroupId);
+    if (isGroupConnected(groupId) && !isGroupConnecting(groupId)) {
+        disconnectSerial(groupId);
         setActionStatus(trFallback('main.serialDisconnected', 'Serial port disconnected'));
     }
 });
@@ -7659,23 +7754,34 @@ openLogFolderBtn.addEventListener('click', () => {
 
 // 侧栏「保存当前标签」同理必须按激活分组取终端与标签列表。
 //
-// 这里原本用的是 serialTerm（默认分组的 xterm 别名）与 filterTabs（别名），
 // 切到 g-1 后点保存，存下来的会是默认分组的主终端内容——日志文件名也错。
 function getActiveTerminalExport() {
     const groupId = activeGroupId;
     const activeTabId = getGroupActiveTabId(groupId);
+    let content;
+    let title;
     if (activeTabId === mainTabId(groupId)) {
-        return { title: getMainTabTitle(groupId), content: getTerminalPlainText(getSerialTerm(groupId)) };
+        title = getMainTabTitle(groupId);
+        content = getTerminalPlainText(getSerialTerm(groupId));
+    } else {
+        const filterTab = filterTabsStore.getList(groupId).find(tab => tab.id === activeTabId);
+        const shellTab = filterTab ? null : getShellTabState(activeTabId);
+        if (filterTab) {
+            title = getFilterTabLogTitle(filterTab);
+            content = getTerminalPlainText(filterTab.term);
+        } else if (shellTab) {
+            title = shellTab.title || getShellTabLogTitle(shellTab);
+            content = getTerminalPlainText(shellTab.term);
+        }
     }
-    const filterTab = filterTabsStore.getList(groupId).find(tab => tab.id === activeTabId);
-    if (filterTab) {
-        return { title: getFilterTabLogTitle(filterTab), content: getTerminalPlainText(filterTab.term) };
+    // 非默认分组可能还没有自己的终端（惰性创建）。此时 getSerialTerm 会静默回落到默认
+    // 分组的终端，存下来的就是另一个分组的内容——宁可存空，也不能存错。
+    if (content === undefined) {
+        const runtime = serialRuntimes.get(groupId);
+        title = title || getMainTabTitle(groupId);
+        content = runtime ? getTerminalPlainText(runtime.term) : '';
     }
-    const shellTab = getShellTabState(activeTabId);
-    if (shellTab) {
-        return { title: shellTab.title || getShellTabLogTitle(shellTab), content: getTerminalPlainText(shellTab.term) };
-    }
-    return { title: getMainTabTitle(groupId), content: getTerminalPlainText(getSerialTerm(groupId)) };
+    return { title, content };
 }
 
 document.getElementById('save-current-tab-btn').addEventListener('click', async () => {
@@ -7691,35 +7797,62 @@ document.getElementById('save-current-tab-btn').addEventListener('click', async 
     }
 });
 
-async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DEFAULT_GROUP_ID } = {}) {
-    if (serialConnectInProgress) return;
+// 读取**指定分组**的连接参数。
+//
+// 侧栏控件是激活分组的实时编辑器：只有目标分组就是激活分组时，才把控件值回写到该分组；
+// 否则从该分组自己的 serialOptions 读，避免用另一个分组的端口去连它。
+function getGroupSerialOptionsForConnect(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    if (id === activeGroupId) persistActiveGroupSerialOptions();
+    const group = getSerialGroupById(id);
+    const options = group?.serialOptions || {};
+    return {
+        path: group?.portPath || '',
+        baudRate: normalizeBaudRate(options.baudRate) || '9600',
+        dataBits: String(options.dataBits || '8'),
+        stopBits: String(options.stopBits || '1'),
+        parity: options.parity || 'none'
+    };
+}
+
+async function connectSerialFromUi({ reconnecting = false, groupId = activeGroupId } = {}) {
     const targetGroupId = resolveSerialGroupId(groupId);
-    const path = portSelect.value;
-    const baudRate = getBaudRate();
-    const dataBits = document.getElementById('data-bits-select').value;
-    const stopBits = document.getElementById('stop-bits-select').value;
-    const parity = document.getElementById('parity-select').value;
-    // 侧栏的换行选择属于**这个分组**，必须先写回它的上下文再读，否则下发 IPC 的
-    // 会是默认分组的值。
-    setGroupDisplay(targetGroupId, { newlineMode: document.getElementById('newline-mode-select').value });
+    if (isGroupConnecting(targetGroupId)) return;
+
+    const settings = getGroupSerialOptionsForConnect(targetGroupId);
+    const path = settings.path;
+    if (!path) {
+        setActionStatus(trFallback('main.selectPort', 'Select Port'));
+        return;
+    }
+
+    // 侧栏的换行选择属于**这个分组**。只有目标分组就是激活分组时，控件才代表它；
+    // 否则写入会把另一个分组的换行模式改成当前屏幕上显示的那个。
+    const newlineEl = document.getElementById('newline-mode-select');
+    if (targetGroupId === activeGroupId && newlineEl) {
+        setGroupDisplay(targetGroupId, { newlineMode: newlineEl.value });
+    }
     const targetDisplay = getGroupDisplay(targetGroupId);
 
-    if (!path) return;
-    serialConnectInProgress = true;
-    serialWriteChain = Promise.resolve();
+    serialConnectingGroups.add(targetGroupId);
+    setGroupConnectBusy(targetGroupId, true);
+    // 新会话开始，该分组的 HEX 偏移与文本解码状态都要重置。
     getHexFormatter(targetGroupId).reset({ resetOffset: true });
     resetTextReceive(targetGroupId);
-    resetQuickTriggerReceive();
-    connectBtn.disabled = true;
-    if (reconnecting) setActionStatus(`正在应用新的波特率 ${baudRate}...`);
+    if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) {
+        // 只作废默认分组的写入链；其它分组的旧写入由会话号比对拦下。
+        serialWriteChain = Promise.resolve();
+        resetQuickTriggerReceive();
+    }
+    if (reconnecting) setActionStatus(`正在应用新的波特率 ${settings.baudRate}...`);
     try {
         const connectResult = await ipcRenderer.invoke('connect-serial', {
             groupId: targetGroupId,
             path,
-            baudRate,
-            dataBits,
-            stopBits,
-            parity,
+            baudRate: settings.baudRate,
+            dataBits: settings.dataBits,
+            stopBits: settings.stopBits,
+            parity: settings.parity,
             sendEncoding: targetDisplay.sendEncoding,
             newlineMode: targetDisplay.newlineMode
         });
@@ -7733,10 +7866,10 @@ async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DE
         ipcRenderer.send('save-config', {
             lastSerialOptions: {
                 path,
-                baudRate,
-                dataBits,
-                stopBits,
-                parity,
+                baudRate: settings.baudRate,
+                dataBits: settings.dataBits,
+                stopBits: settings.stopBits,
+                parity: settings.parity,
                 receiveDisplayMode: targetDisplay.receiveDisplayMode,
                 receiveEncoding: targetDisplay.receiveEncoding,
                 sendEncoding: targetDisplay.sendEncoding,
@@ -7744,53 +7877,66 @@ async function connectSerialFromUi({ reconnecting = false, groupId = REGISTRY_DE
             }
         });
 
-        // 全局连接状态只跟随默认分组：它驱动的是左侧栏那一个连接按钮。
+        // isConnected 只是默认分组的镜像；每组的真相在注册表里。
         if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) {
             updateSerialConnectionState(true);
             updateAutoSendState();
         }
+        // 侧栏按钮显示的是**激活分组**的连接态，无论刚连的是哪一组都要重算。
+        refreshConnectButtonState();
 
         serialGroupContext.resetLineCounters(targetGroupId);
 
-        getSerialTerm(targetGroupId).write(`\r\n\x1b[32m--- Connected to ${path} at ${baudRate} baud (${dataBits}N${stopBits}) ---\x1b[0m\r\n`);
+        // 必须 getOrCreate：getSerialTerm 在该分组还没有终端时会静默回落到默认分组的终端，
+        // 于是「Serial 2 已连接」的提示会写进 Serial 1 的画面。
+        serialRuntimes.getOrCreate(targetGroupId).term.write(`\r\n\x1b[32m--- Connected to ${path} at ${settings.baudRate} baud (${settings.dataBits}N${settings.stopBits}) ---\x1b[0m\r\n`);
+        // 非默认分组的终端是刚建出来的，键盘输入要在这里补绑。
+        bindGroupTerminalInput(targetGroupId);
     } catch (err) {
         setActionStatus(reconnecting ? `串口重连失败：${err}` : `串口连接失败：${err}`);
         alert((reconnecting ? 'Failed to reconnect: ' : 'Failed to connect: ') + err);
     } finally {
-        serialConnectInProgress = false;
-        connectBtn.disabled = false;
+        serialConnectingGroups.delete(targetGroupId);
+        setGroupConnectBusy(targetGroupId, false);
+        refreshConnectButtonState();
     }
 }
 
-async function reconnectSerialFromUi() {
-    if (serialReconnectInProgress || serialConnectInProgress) return;
-    if (!isConnected) {
-        await connectSerialFromUi({ reconnecting: true });
+async function reconnectSerialFromUi({ groupId = activeGroupId } = {}) {
+    const targetGroupId = resolveSerialGroupId(groupId);
+    if (isGroupReconnecting(targetGroupId) || isGroupConnecting(targetGroupId)) return;
+    if (!isGroupConnected(targetGroupId)) {
+        await connectSerialFromUi({ reconnecting: true, groupId: targetGroupId });
         return;
     }
 
-    const baudRate = getBaudRate();
-    serialReconnectInProgress = true;
-    connectBtn.disabled = true;
+    const baudRate = getGroupSerialOptionsForConnect(targetGroupId).baudRate;
+    serialReconnectingGroups.add(targetGroupId);
+    setGroupConnectBusy(targetGroupId, true);
     setActionStatus(`正在应用新的波特率 ${baudRate}...`);
     try {
-        const disconnected = waitForSerialDisconnected();
-        disconnectSerial();
+        // 必须等**这一组**的断开事件，否则换波特率会在端口还没关掉时就重连。
+        const disconnected = waitForSerialDisconnected(targetGroupId);
+        disconnectSerial(targetGroupId);
         await disconnected;
-        await connectSerialFromUi({ reconnecting: true });
+        await connectSerialFromUi({ reconnecting: true, groupId: targetGroupId });
     } finally {
-        serialReconnectInProgress = false;
-        if (!serialConnectInProgress) connectBtn.disabled = false;
+        serialReconnectingGroups.delete(targetGroupId);
+        if (!isGroupConnecting(targetGroupId)) setGroupConnectBusy(targetGroupId, false);
+        refreshConnectButtonState();
     }
 }
 
 async function toggleSerialConnection() {
-    if (serialConnectInProgress) return;
+    // 侧栏连接按钮永远作用于**当前激活的分组**：
+    // 以前这里不带 groupId，于是切到 Serial 2 点连接，连上的是 Serial 1。
+    const groupId = resolveSerialGroupId(activeGroupId);
+    if (isGroupConnecting(groupId) || isGroupReconnecting(groupId)) return;
     hideQuickSendDisconnectedToast();
-    if (isConnected) {
-        disconnectSerial();
+    if (isGroupConnected(groupId)) {
+        await disconnectSerial(groupId);
     } else {
-        await connectSerialFromUi();
+        await connectSerialFromUi({ groupId });
     }
 }
 
