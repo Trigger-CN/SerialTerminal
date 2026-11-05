@@ -940,7 +940,7 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 
 | 阶段 | 内容 | 验证 |
 |---|---|---|
-| **S1** | 新建 `tab-model.js`：`{ tabs, focusedTabId, split }` 的读写、`rebuildIndex()`、§3 全部派生量、§6 全部不变式、`validateAndRepair()`。**不接渲染。** 配套 `test/tab-model.test.js` | `npm test`（含性质测试） |
+| **S1** ✅ **已完成** | `tab-model.js`：`{ tabs, focusedTabId, split }` 的读写、`rebuildIndex()`、§3 全部派生量、§6 全部不变式、`validateAndRepair()`。未接渲染。配套 `test/tab-model.test.js`（34 条）与独立验收器 `test/tab-model-acceptance.js` | `npm test` 526/526 |
 | **S2** | `renderWorkspace()` 上线：`buildRenderPlan()` + 列/行/按钮/显隐四步；**扁平模式按 §3.3 的族列实现**；删除 `#serial-group-tab-bar` 单例借位 | `verify-group-columns` / `verify-group-split` / **新增 `verify-flat-row`** / **新增 `verify-flat-with-shell`** |
 | **S3** | subRow 按 pane 一条；组内 pane 分屏；删除 Shell 叠层机制 | `verify-shell` / `verify-shell-buttons-split` |
 | **S4** | 删除 `ownerGroupId` / `detachedColumn` / `topRowColumnId` 及其依赖；`finishWorkspaceTabDrag` 改为同栏重排；全局动作移入工作区级动作条 | `verify-shell-drag`（断言改为「只能同栏重排」）/ `verify-shell-switchback` |
@@ -975,6 +975,20 @@ test('random operation sequences preserve all invariants', () => {
 
 1. 扁平 + 有 Shell + 焦点在 Shell → TabRow 必须仍包含容器全部子 Tab；
 2. 扁平 + 有 Shell + 焦点在 MAIN → 内容区必须显示 MAIN，而不是被 Shell 抢走。
+
+### 11.3 S1 的实现情况（已完成）
+
+交付两个文件，不涉及任何现有代码：
+
+| 文件 | 内容 |
+|---|---|
+| `tab-model.js` | 纯逻辑模型。导出查找、派生、布局、写入、自愈与 `validateAndRepair()`，不 require 任何 Electron 或 DOM 模块 |
+| `test/tab-model-acceptance.js` | **独立验收器**：不 require 模型的任何内部函数，按数据结构自己重算 I1–I10；并校验每条不变式在 `TAB_ARCHITECTURE.md` 里都有对应条目 |
+| `test/tab-model.test.js` | 34 条用例：结构、扁平与族、两级分屏、激活、同栏重排、收起、关闭、归一化、自愈，以及固定种子的随机性质测试 |
+
+两条**反向对照**已落地：I1–I10 每条都造了一个违规样本，确认验收器会点名报错（11 条用例）。没有这组用例的话，「全绿」无法排除「断言没在检查」。
+
+实现阶段验证出的一条文档修正（已回写 §3.5）：族列在**未开 pane 分屏**时，内容区跟着焦点走，可能是容器内的叶，也可能是一个 shell；而**开了 pane 分屏**后，每个 pane 各显示自己的 activeTabId——此时不得再套用焦点，否则会返回一个不在任何 pane 里的面板 id。同时 `layoutRowsOf()` 在族列上的行数为 0（未开分屏）/ pane 数（开了分屏），不复用非族列的 1 条。
 
 ### 11.2 每阶段的回滚点
 
