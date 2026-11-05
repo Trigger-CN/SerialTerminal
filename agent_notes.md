@@ -1571,6 +1571,75 @@ function isShellColumnActive() {
 3. 本轮 `verify-user-paths.js` 自身的三处：单分组时分组标签行整体隐藏（`.serial-group-tab` 数量本来就是 0，不能断言 `=== 1`）；拖动前必须先点回该列主标签（否则目标下层行是隐的、`rect` 全 0，`dst` 退化成 `(0,0)` 使整段拖动空转）；`document.querySelector('.group-column .pane-tabs-list .main-tab')` 会先命中**已隐藏的默认列**，必须按 `#pane-1-g-1-tabs-list` 精确定位。
 
 
+### 从上层 Shell 切回串口终端（用户实测缺陷：点串口标签仍是 Shell）
+
+**用户原话**：`打开shell标签，再点击串口标签，窗口显示的还是shell，无法显示串口了`。
+
+这是上一次提交（`2eb89d3`）修「缺陷 E」时自己挖的坑：为了让「Shell 在上层时不带串口子标签」，
+`.pane-tabs-header` 被整体隐掉了。于是屏幕上**根本没有可点的串口子标签**，用户唯一能点的「串口标签」
+就是分组标签本身——而这条路径恰好没人测过。
+
+#### 取证
+
+两份诊断脚本：
+
+| 脚本 | profile | 结论 |
+| --- | --- | --- |
+| `diag-shell-switchback.js` | `diag70` | 单分组点 `tab-main` → `tab-main`（797×546）；多分组点 `tab-main-g-1` → `tab-main-g-1`（797×509）。**主标签链路本身是好的** |
+| `diag-group-tab-click.js` | `diag71` | 命中：`subRowShown:false` 但 `subRowTabs:["tab-main-g-1"]`；屏幕上可点的非 Shell 标签只有 `{target:null, rowId:"serial-group-tab-bar"}` 两个分组标签；点当前分组标签后 `visibleActivePanels` 仍是 `[{id:"tab-shell-1", isShell:true}]` |
+
+#### 三条成因
+
+1. `activateSerialGroup(id)` 在 `id === activeGroupId` 时**直接 return** —— 用户点当前分组标签等于什么也没发生。
+2. `applyActiveSerialGroup()` 走模块级别名 `switchPaneTab(paneId, mainTabId)`；布局层认为主标签已 active，走「同一个标签」早退分支不做 DOM 改动；而叠着的 Shell **不在 `pane.tabIds` 里**，布局层永远不知道它的存在，也不会遮它。
+3. `placeShellTabs()` 的「让上一次显示的 Shell 继续显示」分支会把**跨分组被搬过来**的 Shell 再次点亮（这是为拖动/关闭分屏服务的），于是切到哪个分组都还是 Shell。
+
+#### 修法
+
+| 位置 | 改动 |
+| --- | --- |
+| `activateSerialGroup()` | 当前分组时改为调 `revealSerialGroupActiveTab(id)` |
+| 新增 `revealSerialGroupActiveTab(groupId)` | 取该 pane 布局层记录的激活标签（不写死主标签），`hideStackedShellTabsIn` + `syncGroupSubRowVisibility` + `fitWorkspaceTerminals` |
+| `applyActiveSerialGroup()` | 主标签切换改用**本分组布局管理器**；末尾统一调 `revealSerialGroupActiveTab(activeGroupId)`，把「切分组 = 看这个分组的串口」固定在一个地方 |
+| 静态 `#tab-main-button` click | 补一次 `hideStackedShellTabsIn`（该监听注册于模块加载期，早于函数定义） |
+| `placeShellTabs()` | 恢复分支保留「上一次显示的 Shell 继续显示」，但**切分组的覆盖由 `applyActiveSerialGroup` 末尾的 reveal 负责** |
+
+#### 回归断言（`verify-shell-switchback.js`，14 项）
+
+判据一律是「屏幕上实际占面积的 active 面板」（`getBoundingClientRect().width/height > 0`），不是 DOM 属性。
+
+| 断言 | 覆盖的用户路径 |
+| --- | --- |
+| `single-group-click-main-shows-serial` | 单分组点主标签 |
+| `P1-click-current-group-tab-shows-serial` | **点当前分组的分组标签**（用户最可能的操作） |
+| `P2-click-other-group-tab-shows-serial` | 点另一个分组的分组标签 |
+| `P4-switch-back-still-shows-serial` | 再切回来仍然要是串口 |
+| `P5-shell-still-clickable` | 修复不能把 Shell 弄坏 |
+| `P6-shell-in-top-row-still-hides-sub-row` | 缺陷 E 仍然成立 |
+| `P7-click-main-tab-shows-serial` | 下层行恢复后主标签可点且能切回串口 |
+
+**中间态一次失败（已修）**：首版只做前三条修法，`verify-shell-switchback` **12/14**——P2 与 P4 仍显示 Shell，
+根因是 `placeShellTabs` 跨分组带 Shell。曾尝试用「宿主这一轮没变」作恢复条件，结果 `verify-shell-drag`
+退到 2 项失败（拖动与关分屏都是布局变化，此时应该继续显示），说明那个判据方向错了；最终改为由
+`applyActiveSerialGroup` 末尾统一 reveal。
+
+#### 验证基线（本轮）
+
+| 脚本 | 结果 | profile |
+| --- | --- | --- |
+| `verify-shell-switchback.js`（新增） | **14/14** | `diag108` |
+| `verify-user-paths.js` | 15/15 | `diag100` |
+| `verify-group-columns.js` | 39/39 | `diag101` |
+| `verify-shell.js` | 16/16 | `diag102` |
+| `verify-group-split.js` | 19/19 | `diag103` |
+| `verify-sidebar-groups.js` | 14/14 | `diag104` |
+| `verify-titles.js` | exit=0 | `diag105` |
+| `verify-context-menu-and-highlight.js` | 17/17 | `diag106` |
+| `verify-shell-drag.js` | exit=0 | `diag107` |
+| `npm test` | **469/469** | — |
+| `scan-undefined.js` | `checked=95` / `missing=none` | — |
+
+
 ### 新分组右键菜单与分组标签高亮（第 4 / 6 项，已闭环）
 
 这两项长期只有「代码已提交」而没有行为证据，现已用 `verify-context-menu-and-highlight.js` **17/17 PASS、exit=0** 闭合（`verify-ctx-highlight-fix4.txt`，`userdata-diag31`）。

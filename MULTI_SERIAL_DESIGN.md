@@ -722,7 +722,10 @@ flowchart TD
 ```mermaid
 flowchart TD
   CLICK(["用户点击一个标签按钮"]) --> K{"是 Shell 标签？"}
-  K -->|串口标签| P1["分组的 switchPaneTab(paneId, tabId)<br/>（先 hideStackedShellTabsIn 遮掉叠着的 Shell）"]
+  K -->|分组标签| G1{"是当前激活分组？"}
+  G1 -->|是| G2["revealSerialGroupActiveTab(gid)<br/>直接遮挡叠着的 Shell"]
+  G1 -->|否| G3["applyActiveSerialGroup()<br/>末尾统一 revealSerialGroupActiveTab"]
+  K -->|主/过滤/图表标签| P1["hideStackedShellTabsIn(paneId, tabId)<br/>再走分组的 switchPaneTab"]
   K -->|Shell| H["resolveShellTabHost(tabState)"]
   H --> L1{"layer"}
   L1 -->|subRow| A1["该分组布局层 switchPaneTab"]
@@ -740,6 +743,28 @@ flowchart TD
 ```
 
 **拖动只影响被拖的那一个标签**：归属存在 `tabState.ownerGroupId`。早期把它写成模块级单变量，`placeShellTabs()` 用同一套 `buttonHost/contentHost` 搬运**全部** Shell，于是「拖动一个 Shell，所有 Shell 一起移动」——这是用户实测报告的缺陷 D。
+
+**为什么「分组标签」必须单独成一条路径（用户实测缺陷，必读）**：
+
+Shell 叠在上层时下层标签行是被**故意**隐掉的（否则就是「Shell 不是串口组却带着一串串口子标签」）。
+结果是屏幕上**根本没有任何可点的串口子标签**，用户只能点分组标签。而原来的 `activateSerialGroup()`
+在「点的是当前分组」时直接 `return`，于是点了毫无反应——用户看到的就是「切不回串口了」。
+
+即使点的是**另一个**分组，也还有两处会把它挡回去：
+
+1. `applyActiveSerialGroup()` 原先走模块级别名 `switchPaneTab(pane, mainTabId)`。布局层认为主标签
+   已经是 active，走「同一个标签」早退分支，不会做任何 DOM 改动；而叠着的 Shell 不在`pane.tabIds`
+   里，布局层永远不知道它的存在，自然也不会遮它。
+2. `placeShellTabs()` 会把未归属的 Shell 搬进新的激活列并点亮它（这是为了让 Shell 在切换列后仍
+   然可见），切换分组时同样会执行，于是切到哪个分组都是 Shell。
+
+所以现在的约束是：
+
+- **任何「看串口」的动作（点分组标签、点主/过滤/图表标签）最后都必须显式 `hideStackedShellTabsIn()`**；
+- `applyActiveSerialGroup()` 末尾统一调 `revealSerialGroupActiveTab(activeGroupId)`，把“切分组 = 看这个
+  分组的串口”这条语义固定在**一个地方**，而不是散在各个点击处理里。
+- `revealSerialGroupActiveTab()` 抬回来的是**该 pane 布局层记录的激活标签**，不是写死主标签：
+  用户可能停在过滤页或图表页，抬回来应当回到他自己停的那一页。
 
 ### 6A.7 状态变量与不变式
 

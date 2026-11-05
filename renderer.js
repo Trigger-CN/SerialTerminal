@@ -1715,6 +1715,9 @@ if (mainTabButton) {
         } finally {
             setActiveGroupWorkspace(savedGroupId);
         }
+        // 上层栏的 Shell 不在任何 pane.tabIds 里，布局层的 switchPaneTab 会因
+        // 「同一个标签」早退，于是 Shell 面板继续盖着——必须显式遮回去。
+        hideStackedShellTabsIn(groupPaneId(REGISTRY_DEFAULT_GROUP_ID, 1), 'tab-main');
     });
 }
 
@@ -3545,18 +3548,33 @@ function applyActiveSerialGroup({ fit = true } = {}) {
     });
 
     // 标签页：每个分组的主标签都在**自己分组的** pane-1 里，只让激活的那个 .active。
+    //
+    // 这里必须**走本分组的布局管理器**而不是模块级别名：别名刚被 setActiveGroupWorkspace
+    // 切成本分组，但上层栏的 Shell 不在任何 pane.tabIds 里，别名那条 `switchPaneTab`
+    // 会因「同一个标签」早退，于是 Shell 面板继续盖着，用户看到的是「切了分组还是 Shell」。
     const paneId = groupPaneId(activeGroupId, 1);
     const targetTabId = mainTabId(activeGroupId);
     if (document.getElementById(targetTabId)) {
-        switchPaneTab(paneId, targetTabId, { persist: false });
+        const groupManager = getGroupWorkspaceManager(activeGroupId);
+        groupManager.switchPaneTab(groupManager.getPaneIdForTabId(targetTabId) || paneId, targetTabId, {
+            persist: false
+        });
+        // 无论布局层是否真的换了激活标签，都把上层栏的 Shell 遮回去——
+        // 它不在布局里，布局层永远不知道它的存在。
+        hideStackedShellTabsIn(paneId, targetTabId);
     }
-    // 外层可见性：未分屏时只显示激活分组那一列（下层只有一套标签行）；
+    // 外侧可见性：未分屏时只显示激活分组那一列（下层只有一套标签行）；
     // 已分屏时并排显示参与分屏的分组。关掉分组后旧容器必须一并隐藏，
     // 否则它仍占着 flex-basis，表现为「关了一个分组但剩下那个只有半宽」。
     syncGroupWorkspaceVisibility();
     // 分组标签行必须跟着激活分组走：未分屏时它属于激活列，必须画在**那一列**的首行。
     // 漏这一步就会变成「切了分组，但分组标签还留在上一列里」。
     renderSerialGroupTabBar();
+    // 几何都算完（壳列/比例已定）再把串口终端抬到最上面：
+    // placeShellTabs 会把未归属的 Shell 搬到新的激活列并把它点亮，
+    // 位置上没有一层会主动遮掉它。切换分组的语义是「看这个分组的串口」，
+    // 所以这里必须最后遮挡一次（用户实测：切分组后窗口仍是 Shell）。
+    revealSerialGroupActiveTab(activeGroupId);
     // 侧栏设置必须跟着切换：否则用户看到的是上一个分组的端口与参数，
     // 却以为改的是当前分组的。连接按钮同理，它代表的是当前这一个分组。
     applyGroupSerialOptionsToSidebar(activeGroupId);
@@ -4010,6 +4028,9 @@ function placeShellTabs() {
 
     // 先把「上一步真正显示在屏幕上的 Shell」记下来：面板被搬到另一列后原位置会变空，
     // 归属改了、分屏关了时若不主动重新点亮，用户会看到标签亮着但终端区一片空白。
+    //
+    // 「切到另一分组后不能显示 Shell」不靠这里判断：那个场景由 applyActiveSerialGroup
+    // 末尾的 revealSerialGroupActiveTab 负责（切换分组的语义就是「看这个分组的串口」）。
     const previouslyShown = shellTabs.filter(tab => tab.element?.classList.contains('active'));
 
     if (shellTabs.length === 0) {
@@ -4047,7 +4068,7 @@ function placeShellTabs() {
     // 只认新宿主里确实已经就位的那一个，不猜。
     for (const tab of previouslyShown) {
         const host = resolveShellTabHost(tab);
-        if (tab.element.parentElement === host.contentEl) {
+        if (host.contentEl && tab.element.parentElement === host.contentEl) {
             activateShellTabInHost(tab.id);
             return;
         }
@@ -4253,9 +4274,33 @@ function stackShellTabOverHostGroup(layoutGroupId, tabId) {
 
 function activateSerialGroup(groupId) {
     const id = resolveSerialGroupId(groupId);
-    if (id === activeGroupId) return;
+    if (id === activeGroupId) {
+        // 点的是当前分组时不能直接 return：这一列可能正被上层栏的 Shell 盖着，
+        // 用户想表达的是「给我看这个分组的串口终端」。直接 return 就是点了毫无反应。
+        revealSerialGroupActiveTab(id);
+        return;
+    }
     activeGroupId = id;
     applyActiveSerialGroup();
+}
+
+// 把某列的串口终端「抬到最上面」。
+//
+// 上层栏的 Shell 面板只是叠在同列主标签上面（不进布局），所以必须显式遮挡它，
+// 否则用户点分组标签/主标签之后看到的仍是 Shell，而已串口终端就看不见了。
+//
+// 目标取「布局层记录的本 pane 激活标签」而不是写死主标签：用户可能停在过滤页或图表页，
+// 抬回来时应当回到他自己停的那一页。
+function revealSerialGroupActiveTab(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    const paneId = groupPaneId(id, 1);
+    const panelId = getPaneById(paneId)?.activeTabId
+        || getGroupActiveTabId(id, mainTabId(id));
+    if (!panelId) return false;
+    hideStackedShellTabsIn(paneId, panelId);
+    syncGroupSubRowVisibility();
+    fitWorkspaceTerminals();
+    return true;
 }
 
 // 「添加串口」：新建分组后**保持 disconnected**，等用户手动点连接（产品决定）。
