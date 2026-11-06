@@ -321,6 +321,30 @@ function createWorkspaceManager(options = {}) {
         });
     }
 
+    // 把本 pane 标签按钮的 DOM 顺序对齐到 pane.tabIds。
+    //
+    // 只在两个节点都在同一个列表里时调整相对次序，因此：
+    //   - 被搬到外层行的 Shell（宿主不是本列表）不会被拉回来；
+    //   - 父节点没变的节点不会被无意义地搬动（C2，避免动画/重排重放）。
+    // 列表对象不具备真实 DOM 能力时（单测替身常只提供 appendChild）直接跳过，
+    // 不假装排序成功，也不因为能力缺失而报错。
+    function syncTabOrderInPane(pane, tabsList) {
+        if (!tabsList || typeof tabsList.insertBefore !== 'function') return;
+        const ordered = pane.tabIds
+            .map(tabId => (findTabButton
+                ? findTabButton(tabId, pane.id)
+                : (typeof tabsList.querySelector === 'function'
+                    ? tabsList.querySelector(`.main-tab[data-target="${tabId}"]`)
+                    : null)))
+            .filter(button => button && button.parentElement === tabsList);
+        ordered.forEach((button, index) => {
+            const next = ordered[index + 1] || null;
+            if (next && button.nextElementSibling !== next) {
+                tabsList.insertBefore(button, next);
+            }
+        });
+    }
+
     function applyLayoutToDom() {
         // 先把布局里有、DOM 里没有的 pane 建出来，后续 appendChild 才不会拿到 null。
         ensurePaneElements();
@@ -377,6 +401,16 @@ function createWorkspaceManager(options = {}) {
                     onTabMoved?.({ tabId, sourcePaneId: previousPaneId, targetPaneId: pane.id });
                 }
             });
+            // 行内顺序的唯一真源是布局的 tabIds，DOM 顺序必须跟着它。
+            //
+            // 上面那个循环只在「宿主变了」时 appendChild，不做排序。于是同栏拖动会
+            // 把 tabIds 改成新顺序而按钮原地不动：实测（probe-tab-order, diag530）
+            // 拖动后 layout=[chart,main,filter] 而 DOM 仍是 [main,filter,chart]，
+            // 用户看到的是「拖了没反应，标签弹回原位」。
+            //
+            // 只调整这些按钮之间的相对次序；被搬到外层行的 Shell（宿主不是本列表）
+            // 不在其中，父节点没变的节点也不会被搬动（C2）。
+            syncTabOrderInPane(pane, tabsList);
             prunePaneTabIds(pane.id);
             ensurePaneActiveTab(pane.id);
             const paneEl = getPaneDom(pane.id);
