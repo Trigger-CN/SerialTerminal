@@ -2346,25 +2346,7 @@ function setShellTabOwner(tabId, owner) {
     return true;
 }
 
-// 把一个未归属的 Shell 在「上层共享行」与「自占一列」之间切换。
-//
-// 这是用户拖动的落点决定的，不是「不归属」的必然结果：用户对「拖到分组标签栏」
-// 同时提出了两种期望（与所有串口标签按行分屏 / 自己成为独立一列）。早期只实现了后者，
-// 于是在期望前者的布局图里凭空多出了一列 Shell。
-function setShellDetachedColumn(tabId, detached) {
-    const tabState = getShellTabState(tabId);
-    if (!tabState) return false;
-    if (getShellTabOwner(tabState) !== null) return false;
-    const next = detached === true;
-    if (tabState.detachedColumn === next) return false;
-    tabState.detachedColumn = next;
-    return true;
-}
 
-// 是否存在「不归属任何分组」的 Shell 标签。
-function hasUnownedShellTabs() {
-    return shellTabs.some(tab => getShellTabOwner(tab) === null);
-}
 
 // 是否存在被用户**显式拖到分组标签行**的未归属 Shell。
 //
@@ -4109,24 +4091,6 @@ function switchShellTab(tabId) {
     return switched;
 }
 
-// 把 Shell 标签从所有分组布局里摘出来（切到独立列之前必须做）。
-//
-// 为什么要摘：分组布局的 `hasRenderableTab()` 要求「按钮在 pane 内、面板也在 pane 内」。
-// 搬到独立列后两者都不在，布局层会把它当成不可渲染而 prune —— 表现就是 Shell 标签
-// 在切换/重排之后凭空消失。
-function detachShellTabFromGroupLayout(tabId) {
-    const tabState = getShellTabState(tabId);
-    if (!tabState) return;
-    serialGroups.forEach(group => {
-        const layout = getGroupWorkspaceLayout(group.id);
-        if (!layout.panes.some(pane => pane.tabIds.includes(tabId))) return;
-        // 记下面板原本所属的 pane，回到归属态时才能放回去。
-        tabState.paneId = getGroupWorkspaceManager(group.id).getPaneIdForTabId(tabId);
-        getGroupWorkspaceManager(group.id).removeTab(tabId, {
-            fallbackTabId: mainTabId(group.id), persist: false
-        });
-    });
-}
 
 // 把某个 pane 里叠着的 Shell 面板遮回去（用户点回主标签 / 串口标签时）。
 //
@@ -4838,21 +4802,6 @@ function syncShellLayoutOwnership() {
     });
 }
 
-// 某一列当前是否正在显示「上层标签栏那一层」的 Shell。
-//
-// 用户原话：「shell 处于上层标签栏时他的下层标签栏没有隐藏，还在显示串口的子标签，
-// 但是他并不是串口组」。所以这种时候要把该列的下层标签行整个隐掉。
-//
-// 判据只看 DOM：上层栏的 Shell 不在 pane.tabIds 里，布局层的 activeTabId 会一直停在
-// 主标签上（详情见 stackShellTabOverHostGroup 的注释），拿它判断恒为 false。
-function isUnownedShellActiveIn(groupId) {
-    const paneId = groupPaneId(groupId, 1);
-    const contentEl = getPaneTabsContent(paneId);
-    if (!contentEl) return false;
-    return shellTabs.some(tab => tab.element.parentElement === contentEl
-        && tab.element.classList.contains('active')
-        && getShellTabOwner(tab) === null);
-}
 
 // 返回该列内容区当前**真正盖在最上面**的那个面板 id。
 //
