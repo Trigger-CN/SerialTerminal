@@ -1083,6 +1083,105 @@ test('random operation sequences preserve all invariants', () => {
 - 新脚本 `verify-flat-pane-split`（11 项）：行数 = pane 数、标签不跨行重复、每行只装自己 pane 的标签、两内容区都激活、布局中 pane-2 确实拥有被移动的 tab、plan 一级行为空、plan 行数与真实 pane 数一致、plan 行互斥。
 
 **已验证**：`node scripts/run-tests.js` 538/538；`verify-flat-pane-split` 11/11；`verify-tab-plan-shadow` 26/26；全量 CDP 15 个脚本全绿且 PASS 计数与基线逐条一致。
+**已验证**：`node scripts/run-tests.js` 538/538；`verify-flat-pane-split` 11/11；`verify-tab-plan-shadow` 26/26；全量 CDP 15 个脚本全绿且 PASS 计数与基线逐条一致。
+
+### 11.5 S4 的实现情况（已完成）
+
+S4 原计划包含四件事：删三态字段、删叠层机制、拖拽改同栏重排、全局动作移入工作区级动作条。
+实测后实际完成的是后两件加一项不变量固化，**前两件被证明不能独立做**。
+
+#### 11.5.1 为什么三态字段与叠层机制推迟到 S5
+
+先做静态引用统计（排除注释行）再读实际代码，结论是三个字段不是「冗余记录」，而是**现行渲染路径的输入**：
+
+| 符号 | 引用数 |
+|---|---|
+| `getShellTabOwner` | 11 |
+| `detachedShellActiveTabId` | 10 |
+| `resolveShellTabHost` | 8 |
+| `isSyncingShellLayer` | 7 |
+| `isShellColumnActive` | 6 |
+| `placeShellTabs` | 6 |
+| `hideStackedShellTabsIn` | 5 |
+| `syncShellWorkspaceLayout` | 5 |
+
+`resolveShellTabHost(tabState)` 用 `getShellTabOwner()` 与 `tabState.detachedColumn` 做三分支，`placeShellTabs()` 按宿主搬 DOM，
+`syncShellLayoutOwnership()` 按宿主把 Shell 登记进 / 摘出各分组布局。删掉这三个字段，等于把 Shell 的渲染决策从
+「三态宿主」换成「读 `buildRenderPlan`」——**这就是渲染翻转本身**，而翻转排在 S5。
+
+因此 S4 只删真正零引用的四个函数（`setShellDetachedColumn` / `hasUnownedShellTabs` /
+`isUnownedShellActiveIn` / `detachShellTabFromGroupLayout`，提交 `3ba9733`），其余与 S5 同批。
+
+#### 11.5.2 拖拽改同栏重排：发现并修掉一个真实缺陷
+
+改拖拽前先实测「同一栏内拖动」是否已经正常，结果抓到一个两套真源的问题：
+
+```
+BEFORE      layout=[main,filter,chart]  dom=[main,filter,chart]
+AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
+```
+
+根因：`applyLayoutToDom()` 只在「按钮宿主变了」时 `appendChild`，**从不按 `pane.tabIds` 排序**。
+于是布局顺序与 DOM 顺序长期不一致，用户拖完看到标签弹回原位。
+
+修法：新增 `syncTabOrderInPane(pane, tabsList)`，在 `applyLayoutToDom()` 的每个 pane 循环末尾按 `tabIds` 做相对插入排序。
+三条限制保证不破坏 C2：
+
+- 只在本列表内部比较相邻节点，被搬到外层行的 Shell（宿主不是本列表）不参与；
+- 父节点未变的节点不搬动；
+- 列表对象缺少 `insertBefore` 时安全跳过（早期单测替身只提供 `appendChild`）。
+
+**修复前后对照**（同一探针，只差这一次代码改动）：
+
+| profile | layout | dom | 判定 |
+|---|---|---|---|
+| diag530（修复前） | `[chart,main,filter]` | `[main,filter,chart]` | 分叉 |
+| diag534（修复后） | `[chart,main,filter]` | `[chart,main,filter]` | 一致 |
+
+提交 `fb4a84a`，附带两条单测（顺序相反时必须重排；顺序一致时必须零搬动）。
+
+#### 11.5.3 全局动作：实测后决定不搬结构，改为固化不变量
+
+§8.5 原本要把「新建分组」「新建 Shell」搬进工作区级动作条。实测三种形态的**真实可见入口数**：
+
+| 形态 | 可见「添加串口」 | 可见「新建 Shell」 |
+|---|---|---|
+| 单分组 | 1（`#add-serial-group-inline-btn`） | 1（`#pane-1-new-shell-tab-btn`） |
+| 多分组 | 1（`#add-serial-group-btn`） | 1（`#add-shell-tab-btn`） |
+| 多分组 + Shell | 1 | 1 |
+
+判据遍历自身与全部祖先的 `display` / `visibility` 并测量实际宽高，**不看 `hidden` 属性**
+（本项目有 `button { display:inline-flex }` 覆盖 `[hidden]` 的历史）。
+
+结论：`syncSerialGroupAddButtonLayer()` 与 `syncShellAddButtonVisibility()` 的互斥逻辑在工作，
+§8.5 描述的「两个添加串口按钮」是**历史缺陷**且已修复。搬结构要改 `index.html`（`#workspace-root` 祖先链敏感）、
+六处放置/回收函数，并同步约 15 个 CDP 脚本的点击入口，收益只是去掉一层判断——
+**用户可见行为不变且现有实现没有缺陷时，不做高风险重构**。
+
+因此改为把「各处恰好一个可见入口」固化为 `verify-add-entry`（8 条断言，含反向对照）。
+结构统一留待 S5 渲染翻转同批处理。
+
+#### 11.5.4 S4 的验证证据
+
+| 维度 | 结果 |
+|---|---|
+| 全量单测 | 540/540（基线 538 + 新增 2） |
+| 全量 CDP（15 个既有脚本） | 全部 `exit=0`、全部 `renderer-diag=clean`，PASS 计数与基线逐条一致 |
+| `verify-flat-pane-split` | 11/11（方案 A 未回归） |
+| `verify-tab-order`（新增） | 8/8，且 `drag-changed-order=true`、`dom == layout` |
+| `verify-add-entry`（新增） | 8/8，含反向对照 |
+| 静态门禁 | `node --check` ×2 通过、`check-renderer-module-load` 输出 `module body initialized without throwing`、`scan-undefined` 输出 `checked=92 missing=none` |
+
+#### 11.5.5 反向对照的两次假失败（脚本缺陷，不是产品缺陷）
+
+`verify-add-entry` 的反向对照最初连续两次失败，都不是产品问题：
+
+1. 首次实现「把隐藏按钮强制显示」——它所在的祖先行整体是 `display:none`，去掉自身 `hidden` 依然不可见，构不出重复入口。
+2. 改成克隆后，把克隆的 `id` 设为 `reverse-control-clone`，而匹配器是 `/add-serial-group/`，克隆直接隐身。
+
+第二个由 `probe-visible-clone3` 的逐节点 `chain` 证据定位：`add-serial-group-btn` 是 `display:none`，
+`add-serial-group-inline-btn` 的祖先链全部可见。修正后判据立刻数到 2，证明**断言确实有区分力**。
+
 
 ## 12. 扩展点
 
