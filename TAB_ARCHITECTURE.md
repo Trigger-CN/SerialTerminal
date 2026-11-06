@@ -309,7 +309,7 @@ function rootFamilyOf(ws) {
 
 ```js
 function layoutColumns(ws) {
-  // 分屏：每个根级 Tab 一列，族被拆开
+  // 分屏：每个根级 Tab 一列
   if (ws.split.enabled) {
     return roots(ws).map(t => ({
       id: t.id,
@@ -319,35 +319,35 @@ function layoutColumns(ws) {
     }));
   }
 
-  // 不分屏 + 扁平 + 有容器：整族共用一个内容区、共用一条 TabRow
-  const fam = rootFamilyOf(ws);
-  if (fam) {
-    const tabItems = roots(ws).flatMap(t => (isContainer(t) ? childrenOf(ws, t) : [t]));
-    return [{
-      id: fam.members[0].id,
-      containerId: fam.container.id,
-      isFamily: true,
-      tabItems
-    }];
-  }
+  // 未分屏：只有一列，所有根级 Tab 共用一条 TabRow
+  const members = roots(ws);
+  if (!members.length) return [];
+  const flat = isFlat(ws);
+  const tabItems = flat
+    // 扁平：容器不渲染为标签，展开成子项，与根级叶（Shell）混排
+    ? members.flatMap(t => (isContainer(t) ? childrenOf(ws, t) : [t]))
+    // 多容器：TabRow 装的是分组标签本身，子项落到各自的 subRow
+    : members.slice();
 
-  // 其余：焦点所在的那一个根级 Tab 独占一列
-  const root = rootOf(ws, tabOf(ws, ws.focusedTabId));
-  return root ? [{
-    id: root.id,
-    containerId: isContainer(root) ? root.id : null,
-    isFamily: false,
-    tabItems: [root]
-  }] : [];
+  // 该列的内容区属于焦点所在的容器
+  const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;
+  return [{
+    id: members[0].id,
+    containerId: isContainer(focusedRoot) ? focusedRoot.id : null,
+    isFamily: flat,
+    tabItems
+  }];
 }
 ```
 
 一个函数返回了列的**全部信息**（列 id、对应容器、是否族列、TabRow 项），渲染层不再需要任何组合判断。这就是第一版拆成 `columns()` + `rowItems()` + `flatRowItems()` 三个函数时丢失的东西：拆得太碎，组合逻辑就漏回渲染层了。
 
+未分屏分支**不能**退化成「焦点所在的那一个根」。TabRow 就是一级标签栏，多分组时用户要靠这一行看到并点击全部分组标签；只列焦点所在的根，其余分组会从界面上整体消失。同理也不能「每个分组各一列」——那会让每列各自渲染一条 TabRow，又回到 `#serial-group-tab-bar` 的借位老路。
+
 | 情形 | 分屏 | 列数 | `isFamily` | TabRow 内容 |
 |---|---|---|---|---|
-| 单组 + Shell | 否 | 1 | 是 | 容器全部子项 + 所有 Shell（按根级 order 混排） |
-| 多组 | 否 | 1 | 否 | 焦点所在根级 Tab |
+| 单组（扁平） | 否 | 1 | 是 | 容器全部子项 + 所有 Shell（按根级 order 混排） |
+| 多组 | 否 | 1 | 否 | **全部分组标签 + 所有 Shell**（子项在各自的 subRow） |
 | 任意 | 是 | `roots().length` | 否 | 每个根级 Tab 各自一条 |
 
 ### 3.4 布局行：每列几条 subRow
@@ -357,7 +357,11 @@ function layoutRowsOf(ws, column) {
   if (!column.containerId) return [];            // 叶列（例如 Shell）没有 subRow
   const container = tabOf(ws, column.containerId);
   const panes = panesOf(container);
-  return container.paneSplit.enabled ? panes : panes.slice(0, 1);
+  const split = Boolean(container.paneSplit && container.paneSplit.enabled);
+  // 扁平（isFamily）下容器不拥有独立行（方案 A）：未开 pane 分屏时为 0 条，
+  // 开了 pane 分屏时按 pane 数展开——否则 pane-2 的标签无处可点（I9）。
+  if (column.isFamily) return split ? panes.slice() : [];
+  return split ? panes.slice() : panes.slice(0, 1);
 }
 ```
 
@@ -369,34 +373,45 @@ function layoutRowsOf(ws, column) {
 function visiblePanelIdsOfColumn(ws, column) {
   const rows = layoutRowsOf(ws, column);
 
-  // 叶列：自己就是唯一面板
-  if (!rows.length) return [column.id];
+  // 按 pane 拆分：每个 pane 显示自己的 activeTabId
+  if (rows.length > 1) return rows.map(p => p.activeTabId).filter(Boolean);
 
-  // 族列 + 未分 pane：内容区跟着焦点走（可以是容器里的叶，也可以是一个 Shell）
-  if (column.isFamily && rows.length === 1) {
+  // 未分屏：整列只有一个内容区，而内容区跟的是**焦点**。
+  // 焦点可能是容器里的叶，也可能是一个未归属的 Shell（它不属于任何 pane，
+  // 但住同一个内容区）——两个形态都必须有分支，否则焦点落在 Shell 上时
+  // 这里返回空集，而页面仍显示 Shell 面板。
+  if (ws.split.enabled === false) {
     const f = tabOf(ws, ws.focusedTabId);
-    if (f && inFamily(ws, f)) return [f.id];
+    if (f && !isContainer(f)) return [f.id];
+    if (f && isContainer(f)) {
+      const pane = panesOf(f)[0];
+      if (pane && pane.activeTabId) return [pane.activeTabId];
+    }
   }
 
-  return rows.map(p => p.activeTabId).filter(Boolean);
-}
+  // 分屏后的普通列：显示该容器自己的激活叶，**不看焦点**——
+  // 分屏时所有列都要各自显示内容，而焦点只有一个。
+  if (column.containerId) {
+    const pane = panesOf(tabOf(ws, column.containerId))[0];
+    if (pane && pane.activeTabId) return [pane.activeTabId];
+  }
 
-function inFamily(ws, tab) {
-  const fam = rootFamilyOf(ws);
-  if (!fam) return false;
-  return tab.parentId === null
-    ? fam.members.some(t => t.id === tab.id)
-    : tab.parentId === fam.container.id;
+  return rows.length ? [rows[0].activeTabId].filter(Boolean) : [];
 }
 
 function visiblePanels(ws) {
   const out = new Set();
   for (const column of layoutColumns(ws)) {
-    for (const id of visiblePanelIdsOfColumn(ws, column)) out.add(id);
+    for (const id of visiblePanelIdsOfColumn(ws, column)) {
+      if (tabOf(ws, id)) out.add(id);
+    }
   }
   return out;
 }
 ```
+
+**不要**用 `[column.id]` 做兵底：列 id 可能是容器 id，而容器没有面板（I3），把它当面板返回会让下游拿到一个永远匹配不到 tabPanel 的 id。
+
 
 **显隐的唯一判据**：
 
@@ -941,7 +956,7 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 | 阶段 | 内容 | 验证 |
 |---|---|---|
 | **S1** ✅ **已完成** | `tab-model.js`：`{ tabs, focusedTabId, split }` 的读写、`rebuildIndex()`、§3 全部派生量、§6 全部不变式、`validateAndRepair()`。未接渲染。配套 `test/tab-model.test.js`（34 条）与独立验收器 `test/tab-model-acceptance.js` | `npm test` 526/526 |
-| **S2** | `renderWorkspace()` 上线：`buildRenderPlan()` + 列/行/按钮/显隐四步；**扁平模式按 §3.3 的族列实现**；删除 `#serial-group-tab-bar` 单例借位 | `verify-group-columns` / `verify-group-split` / **新增 `verify-flat-row`** / **新增 `verify-flat-with-shell`** |
+| **S2** ✅ **已完成（影子校验）** | 模型侧已就绪：`tab-model.js` 三处真实缺陷已修（见 §11.4）；`tabs-workspace-projection.js` 把现状只读投影成模型树；`renderer.js` 暴露只读诊断钩子 `window.__readTabModelPlan()`。**渲染仍走旧路径**，翻转待 S5 迁移后做 | `verify-tab-plan-shadow`（26 项，单分组/双分屏/分屏+Shell/关分屏 五种形态） |
 | **S3** | subRow 按 pane 一条；组内 pane 分屏；删除 Shell 叠层机制 | `verify-shell` / `verify-shell-buttons-split` |
 | **S4** | 删除 `ownerGroupId` / `detachedColumn` / `topRowColumnId` 及其依赖；`finishWorkspaceTabDrag` 改为同栏重排；全局动作移入工作区级动作条 | `verify-shell-drag`（断言改为「只能同栏重排」）/ `verify-shell-switchback` |
 | **S5** | 配置迁移（§9.3）+ 删除旧 `workspaceLayout` | 启动迁移测试 + 全量 CDP |
@@ -976,7 +991,7 @@ test('random operation sequences preserve all invariants', () => {
 1. 扁平 + 有 Shell + 焦点在 Shell → TabRow 必须仍包含容器全部子 Tab；
 2. 扁平 + 有 Shell + 焦点在 MAIN → 内容区必须显示 MAIN，而不是被 Shell 抢走。
 
-### 11.3 S1 的实现情况（已完成）
+### 11.2 S1 的实现情况（已完成）
 
 交付两个文件，不涉及任何现有代码：
 
@@ -990,9 +1005,33 @@ test('random operation sequences preserve all invariants', () => {
 
 实现阶段验证出的一条文档修正（已回写 §3.5）：族列在**未开 pane 分屏**时，内容区跟着焦点走，可能是容器内的叶，也可能是一个 shell；而**开了 pane 分屏**后，每个 pane 各显示自己的 activeTabId——此时不得再套用焦点，否则会返回一个不在任何 pane 里的面板 id。同时 `layoutRowsOf()` 在族列上的行数为 0（未开分屏）/ pane 数（开了分屏），不复用非族列的 1 条。
 
-### 11.2 每阶段的回滚点
+### 11.3 S2 的实现情况（已完成影子校验，尚未翻转向渲染）
 
-每阶段独立提交且保持应用可运行。若 S2 引入族列后出现难以定位的布局问题，回滚 S2 即可回到「旧渲染 + 新模型未接线」，不影响当前发布行为。
+**本阶段与 §11 原计划不同的一点必须写清**：原计划是让 `renderWorkspace()` 直接接管 DOM，实现时改为先做**影子校验**。原因如下。
+
+运行态仍分散在 `serialGroups` / `filterTabsStore` / `chartTabsStore` / `shellTabs` / `groupWorkspaceLayouts` 五处真源上（S5 才合并）。直接翻转意味着同时重写四条互相调用的路径、并删除单例借位机制，一步出错就不可回滚。因此先做一件事：用投影器把现状读成模型树，算出 `buildRenderPlan()`，再与**真实 DOM**（`offsetParent` + `getBoundingClientRect`，不看 `hidden` 属性）逐项比对。此阶段用户可见行为不变；零差异之后才允许翻转。
+
+**S1 模型层被实测抓出的三处缺陷**（都是「模型与已被验证的真实行为不符」，不是实现小错）：
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 未分屏 + 2 个分组时，TabRow 只列出 1 个分组标签，其余分组从界面整体消失 | 未分屏分支退化成「焦点所在的那一个根」 | 未分屏恒返回一列；扁平列各容器子项 + 根级叶，多容器列根级标签本身 |
+| 2 | 分屏时所有列都显示同一个面板 | 普通列也套用了焦点 | 只有「未分屏」才跟随焦点；分屏后的列取自己容器的激活叶 |
+| 3 | 未分屏 + 焦点是未归属 Shell 时，模型返回空集（但页面显示着 Shell） | 只处理了「焦点是叶」与「焦点是容器」两种，且焦点是 Shell 时它不在 family 内 | 去掉 `inFamily` 限定，未分屏时只要焦点是叶就显示它 |
+
+另修了一处 `[column.id]` 兜底：列 id 可能是**容器 id**，而容器没有面板（I3），把它当面板返回会让下游拿到永远匹配不到的 id。
+
+**投影器的对齐点**（容易写错、且写错会让校验变成自证）：
+
+| 点 | 真实契约 |
+|---|---|
+| main 叶 id | `serial-group-dom.js` 的 `mainTabId(groupId)` → `tab-main` / `tab-main-<g>`，**每分组一个**，且落在 `panes[0]` |
+| pane 内容 | 给了真实 `pane.tabIds` 时按它定归属与顺序，但 store 里已存在的 filter/chart 不能丢；shell 一律提出到根级（I1/I2） |
+| 焦点 | 用当前激活分组的激活标签 |
+
+**已知差异（不属于模型错，属 S3/S4 改造范围）**：分屏时现状把未归属 Shell 的**面板叠在**某分组面板上；未归属 Shell 的**按钮**在现状里留在 subRow。S4 删除这两套机制后，差异会自然消失。
+
+**已验证**：`verify-tab-plan-shadow` 26/26 PASS、`renderer-diag=clean`（两种 profile 独立复跑）；全量单测 535/535；全量 CDP 15 个脚本全绿。
 
 ## 12. 扩展点
 
