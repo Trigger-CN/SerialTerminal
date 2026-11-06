@@ -346,6 +346,13 @@ let workspaceLayout = cloneWorkspaceLayout(DEFAULT_WORKSPACE_LAYOUT);
 // 这与 P4 的显示参数缓存、本阶段前半段的 filterTabs 别名是同一手法。
 const groupWorkspaceLayouts = new Map();
 const groupWorkspaceManagers = new Map();
+// 从配置读到的分组布局快照（panes / paneSplit / focusedTabId）。
+//
+// 为什么单独存一份而不直接读 serialGroups：serialGroups 用 let 声明在文件后段，
+// 而 setActiveGroupWorkspace 在模块加载期就会被调用，那时它还没初始化（TDZ）。
+// 这份 Map 声明在加载期安全的位置，由 syncSerialGroupsFromConfig 填充。
+// 值里的 panes 只存配置原样，不在这里变换。
+const groupLayoutSnapshots = new Map();
 let workspaceManager = null;
 let lastAppliedWorkspaceLayoutKey = '';
 let isRestoringWorkspaceSession = false;
@@ -2093,7 +2100,7 @@ function getGroupWorkspaceLayout(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     let layout = groupWorkspaceLayouts.get(id);
     if (!layout) {
         layout = normalizeWorkspaceLayoutShape(
-            createDefaultLayoutForGroup(id),
+            createLayoutFromGroupConfig(id) || createDefaultLayoutForGroup(id),
             { mainTabId: mainTabId(id) }
         );
         groupWorkspaceLayouts.set(id, layout);
@@ -2101,6 +2108,10 @@ function getGroupWorkspaceLayout(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     return layout;
 }
 
+// 默认布局：一个 pane，主标签落在 pane 内。
+//
+// pane id 必须跟着分组走（默认组 'pane-1'，其余 'pane-1-<g>'），
+// 写死 'pane-1' 会让所有分组抢同一个 pane。
 function createDefaultLayoutForGroup(groupId) {
     const id = normalizeGroupId(groupId);
     return createDefaultLayoutFor({
@@ -2109,16 +2120,74 @@ function createDefaultLayoutForGroup(groupId) {
     });
 }
 
+// 从配置里的 panes / paneSplit 构造布局对象（§9.3 迁移的读取端）。
+//
+// 迁移只负责把旧键搬到新位置，真正让它们生效的是这里：少了这一步，
+// 写进配置的 panes / paneSplit 就是死数据（重启后仍走默认布局）。
+//
+// 只做形状搬运，不在这里做不变式修复：pane 数、tab 归属、activeTabId
+// 的合法性统一由 normalizeWorkspaceLayoutShape 负责，这一层再校验一遍
+// 会出现两套规则，改一处漏一处就是新的真源分叉。
+//
+// 返回 null 表示「这个分组没存过布局」，由调用方回落默认布局。不能返回
+// 一个空布局：那会把「从没打开过分屏」与「显式只有一个空 pane」混为一谈，
+// 而后者会让 reconcileEmptyPanes 在启动时把一个本不该存在的 pane 合入。
+//
+// activePaneId 取 paneSplit 里记的那个：它就是用户在分屏下最后操作的那一栏。
+// 不合法时 normalizeWorkspaceLayoutShape 会自己回落，这一层不重复判断。
+function createLayoutFromGroupConfig(groupId) {
+    const id = normalizeGroupId(groupId);
+    const snapshot = groupLayoutSnapshots.get(id);
+    if (!snapshot || !Array.isArray(snapshot.panes) || !snapshot.panes.length) return null;
+
+    const split = snapshot.paneSplit && typeof snapshot.paneSplit === 'object' ? snapshot.paneSplit : {};
+    return normalizeWorkspaceLayoutShape({
+        splitEnabled: split.enabled === true,
+        orientation: split.orientation,
+        activePaneId: split.activePaneId,
+        paneSizes: split.sizes,
+        panes: snapshot.panes
+    }, { mainTabId: mainTabId(id) });
+}
+
 // 把布局持久化到**当前分组**。
 //
 // 双写是必要的：serialGroups[].workspaceLayout 是该分组自己的布局（多分组时唯一真相源），
 // currentConfig.workspaceLayout 继续写默认分组那份作兼容镜像——旧版与未迁移的读取路径
 // 只看它，且新建分组继承的就是默认分组的布局。
+//
+// 同时写 panes / paneSplit 两个新键：配置层的归一化只认它们，不写就等于每次保存
+// 都把布局改回上一次的值（读取端 createLayoutFromGroupConfig 也读它们）。两套写法
+// 写的是同一个布局对象，所以不会出现两份不同的事实。
 function persistWorkspaceLayout() {
     if (!currentConfig) return;
     const payload = cloneWorkspaceLayout(workspaceLayout);
     const target = serialGroups.find(group => group && group.id === activeGroupId);
-    if (target) target.workspaceLayout = payload;
+    if (target) {
+        target.workspaceLayout = payload;
+        target.panes = payload.panes.map(pane => ({
+            id: pane.id,
+            tabIds: [...pane.tabIds],
+            activeTabId: pane.activeTabId
+        }));
+        target.paneSplit = {
+            enabled: payload.splitEnabled === true,
+            orientation: payload.orientation,
+            sizes: { ...payload.paneSizes },
+            activePaneId: payload.activePaneId
+        };
+        target.focusedTabId = payload.panes
+            .find(pane => pane.id === payload.activePaneId && pane.activeTabId)?.activeTabId
+            || payload.panes.find(pane => pane.activeTabId)?.activeTabId
+            || target.focusedTabId
+            || null;
+        // 快照同步回写：否则本轮之后若有人清掉 groupWorkspaceLayouts（例如关分组）
+        // 再重建，就会读到上一次保存时的旧布局。
+        groupLayoutSnapshots.set(activeGroupId, {
+            panes: target.panes,
+            paneSplit: target.paneSplit
+        });
+    }
     if (activeGroupId === REGISTRY_DEFAULT_GROUP_ID) {
         currentConfig.workspaceLayout = payload;
     }
@@ -3696,6 +3765,19 @@ function resolveVisibleGroupWorkspaceEntryIds() {
 function syncSerialGroupsFromConfig(config) {
     const next = normalizeSerialGroupState(config?.serialGroups);
     serialGroups = next;
+    // 配置里的 panes / paneSplit 先全量换成新快照：分组可能被外部配置删掉，
+    // 只增不删会让快照里留着已经不存在的分组。
+    // 必须在下一段 getGroupWorkspaceLayout（经 ensureSerialGroupMainTabDom 间接触发）
+    // 之前完成，否则建的还是上一轮那份旧布局。
+    groupLayoutSnapshots.clear();
+    next.forEach(group => {
+        if (Array.isArray(group.panes) && group.panes.length) {
+            groupLayoutSnapshots.set(group.id, {
+                panes: group.panes,
+                paneSplit: group.paneSplit
+            });
+        }
+    });
     next.forEach(group => {
         serialGroupRegistry.ensureGroup(group.id, { portPath: group.portPath });
         serialGroupContext.ensureContext(group.id);
@@ -5042,6 +5124,7 @@ function closeSerialGroup(groupId) {
     // 也会让 groupWorkspaceManagers 一直增长。
     groupWorkspaceLayouts.delete(id);
     groupWorkspaceManagers.delete(id);
+    groupLayoutSnapshots.delete(id);
     serialGroupRegistry.removeGroup(id);
     document.getElementById(buttonId)?.remove();
     document.getElementById(tabId)?.remove();
