@@ -108,6 +108,17 @@ function inFamily(ws, tab) {
 // ---------------------------------------------------------------------------
 
 // 第一维：列。每列自带 TabRow 项，渲染层不需要再组合。
+//
+// 两种形态（对应文档 §5.2）：
+//   分屏        每个根级 Tab 一列，TabRow 只有它自己
+//   未分屏      只有一列：**所有根级 Tab 共用一条 TabRow**
+//
+// 未分屏时不能「每个分组各一列」：那会让每个分组列各自渲染一条 TabRow，
+// 又回到 #serial-group-tab-bar 的借位老路。也不能只列「焦点所在的那一个根」：
+// TabRow 就是一级标签栏，其余分组标签会从界面上整体消失。
+//
+// isFamily 仅表示「扁平：容器不渲染为标签，展开成它的子项」（§5.2）。
+// 多容器时 TabRow 装的是**分组标签本身**，子项落到各自的 subRow。
 function layoutColumns(ws) {
     if (ws.split.enabled) {
         return roots(ws).map(tab => ({
@@ -118,33 +129,27 @@ function layoutColumns(ws) {
         }));
     }
 
-    const fam = rootFamilyOf(ws);
-    if (fam) {
-        const tabItems = fam.members.flatMap(tab =>
-            (isContainer(tab) ? childrenOf(ws, tab) : [tab])
-        );
-        return [{
-            id: fam.members[0].id,
-            containerId: fam.container.id,
-            isFamily: true,
-            tabItems
-        }];
-    }
+    const members = roots(ws);
+    if (!members.length) return [];
 
-    const root = rootOf(ws, tabOf(ws, ws.focusedTabId));
-    if (!root) return [];
+    const flat = isFlat(ws);
+    const tabItems = flat
+        ? members.flatMap(tab => (isContainer(tab) ? childrenOf(ws, tab) : [tab]))
+        : members.slice();
+
+    const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;
     return [{
-        id: root.id,
-        containerId: isContainer(root) ? root.id : null,
-        isFamily: false,
-        tabItems: [root]
+        id: members[0].id,
+        containerId: isContainer(focusedRoot) ? focusedRoot.id : null,
+        isFamily: flat,
+        tabItems
     }];
 }
 
-// 第二维：行（subRow）。叶列没有行。
+// 第二维：行（subRow）。
 //
-// 扁平模式下容器不拥有独立行（方案 A）：未开 pane 分屏时为 0 条，
-// 开了分屏时按 pane 数展开——否则 pane-2 的标签无处可点（I9）。
+// 扁平模式（isFamily）下容器不拥有独立行（方案 A）：未开 pane 分屏时为零条，
+// 开了 pane 分屏时按 pane 数展开——否则 pane-2 的标签无处可点（I9）。
 function layoutRowsOf(ws, column) {
     if (!column.containerId) return [];
     const container = tabOf(ws, column.containerId);
@@ -155,23 +160,32 @@ function layoutRowsOf(ws, column) {
     return splitEnabled ? panes.slice() : panes.slice(0, 1);
 }
 
-// 某列实际显示哪些面板。
+// 某列实际显示哪些面板。三个分支，分别对应三种布局形态：
+//   有 subRow 且多于一条（分屏 + 列内 paneSplit）→ 每个 pane 显示自己的 activeTabId；
+//   族列（扁平）→ 只一个内容区，显示焦点所在的那个叶（可以是 Shell）；
+//   普通列（分屏后单个分组一列）→ 显示该容器自己的激活叶，不看焦点。
 //
-// 族列在「没有按 pane 拆分」时，内容区跟着焦点走：焦点可以是容器里的叶，
-// 也可以是一个 shell，两者共用同一个内容区。若按 pane 拆分，则每个 pane
-// 各显示自己的 activeTabId。
+// 最后一种不能套用焦点：分屏时其它列也要各自显示内容，而焦点只有一个。
 function visiblePanelIdsOfColumn(ws, column) {
     const rows = layoutRowsOf(ws, column);
+    if (rows.length > 1) return rows.map(pane => pane.activeTabId).filter(Boolean);
 
-    if (column.isFamily && rows.length <= 1) {
+    if (column.isFamily) {
         const focused = tabOf(ws, ws.focusedTabId);
-        if (focused && inFamily(ws, focused) && !isContainer(focused)) return [focused.id];
-        if (rows.length === 1 && rows[0].activeTabId) return [rows[0].activeTabId];
-        return [];
+        if (focused && !isContainer(focused)) return [focused.id];
+        // 焦点是容器本身（用户点的是分组标签）时取该容器自己的激活叶。
+        if (focused && isContainer(focused)) {
+            const pane = panesOf(focused)[0];
+            if (pane && pane.activeTabId) return [pane.activeTabId];
+        }
     }
 
-    if (!rows.length) return [column.id];
-    return rows.map(pane => pane.activeTabId).filter(Boolean);
+    if (column.containerId) {
+        const pane = panesOf(tabOf(ws, column.containerId))[0];
+        if (pane && pane.activeTabId) return [pane.activeTabId];
+    }
+
+    return rows.length ? [rows[0].activeTabId].filter(Boolean) : [column.id];
 }
 
 function visiblePanels(ws) {
