@@ -1053,6 +1053,37 @@ test('random operation sequences preserve all invariants', () => {
 
 **已验证**：`verify-tab-plan-shadow` 26/26 PASS、`renderer-diag=clean`（两种 profile 独立复跑）；全量单测 535/535；全量 CDP 15 个脚本全绿。
 
+### 11.4 S3 的实现情况（进行中）
+
+**S3 开头做的一件事：「扁平 + 组内 pane 分屏」（§5.5 方案 A）的实机测绘。**
+此形态此前从未被任何脚本覆盖过，测绘结果决定 S3 要改什么：
+
+| 观测 | 结果 | 结论 |
+|---|---|---|
+| 扁平、未分屏时的可见标签行 | 仅 `pane-1` 的 `.pane-tabs-header`，`#serial-group-tab-bar` 是 `hidden` | **方案 A 已天然成立**，无需改渲染 |
+| 扁平 + pane 分屏时的可见标签行 | 恰好 2 条（pane-1 含 main、pane-2 含 filter） | 与方案 A 一致，但**模型当时算不出来** |
+| 模型算出的该形态 | 一级行给容器全部子项 + 2 条 subRow | 同一标签会在两处可见，错误 |
+
+**据此修掉的三处真缺陷：**
+
+| # | 位置 | 症状 | 根因 | 修法 |
+|---|---|---|---|---|
+| 1 | `tab-model.js` `layoutColumns()` | 扁平 + pane 分屏时一级行与 subRow 重复列出容器子项 | 扁平分支无条件 `flatMap(childrenOf)` | 新增 `flatPanesSplit` 判定；开启 pane 分屏时一级行只留根级叶（Shell） |
+| 2 | `workspace-manager.js` `moveTabToPane()` | 布局里找不到源 pane 时，DOM 仍然被搬 → 布局与 DOM 永久不一致，`activeTabId` 违反 I6 | 忽略了 `moveWorkspaceTab()` 的 `null` 返回 | `const moved = ...; if (!moved) ensurePaneTabMembership(targetPaneId, tabId);` |
+| 3 | `tabs-workspace-projection.js` | 同一 filter 标签会被归到两个 pane（违反 I3/I4）；空 pane 被补一个 main，使一个 main 叶同时属两 pane | 每个 pane 都无条件 push 全组 store 条目；且未排除「已被别的 pane 认领」的 id | 先算 `unassigned`（排除已存在与已认领），只补给「空 pane 或 pane-1」 |
+
+第 2 条尤其值得记住：`prunePaneTabIds()` 与 `reconcileEmptyPanes()` 都只读 `tabIds`，所以
+「DOM 搬了、布局没搬」这种损伤**永远不会被后续规整自愈**，而用户看到的只是「拖过去没反应」。
+
+**新增验证与门禁：**
+
+- `test/tab-model.test.js`：`flat mode with pane split keeps the top row free of duplicated pane children`、`flat mode with pane split still puts unowned shells on the top row`。
+- `test/tabs-workspace-projection.test.js`：`projection never assigns one filter tab to two panes`。
+- 只读诊断钩子 `window.__readTabModelPlan()` 增加 `sections`（深拷贝快照），用于区分「数据错」还是「模型错」。
+- 新脚本 `verify-flat-pane-split`（11 项）：行数 = pane 数、标签不跨行重复、每行只装自己 pane 的标签、两内容区都激活、布局中 pane-2 确实拥有被移动的 tab、plan 一级行为空、plan 行数与真实 pane 数一致、plan 行互斥。
+
+**已验证**：`node scripts/run-tests.js` 538/538；`verify-flat-pane-split` 11/11；`verify-tab-plan-shadow` 26/26；全量 CDP 15 个脚本全绿且 PASS 计数与基线逐条一致。
+
 ## 12. 扩展点
 
 「通用」不能自证，只能用「新增东西要改几处」量化。目标：**零改动**。

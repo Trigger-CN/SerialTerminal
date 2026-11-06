@@ -487,7 +487,13 @@ function createWorkspaceManager(options = {}) {
             layout.splitEnabled = true;
         }
 
-        moveWorkspaceTab(layout, tabId, targetPaneId, insertionIndex);
+        // moveWorkspaceTab 只改「源 pane 里确实有它」的归属。布局里找不到归属时它
+        // 返回 null，而下一步的 DOM 搬移却会照常执行 —— 结果是 DOM 已在 pane-2、
+        // 布局仍认为它在 pane-1，且 activeTabId 被写成不在 tabIds 里的值（违反 I6）。
+        // 这种不一致不会被后续的 prune/reconcile 修好，因为两者都只读 tabIds。
+        // 所以必须在布局里补登一次归属，让两边同步。
+        const moved = moveWorkspaceTab(layout, tabId, targetPaneId, insertionIndex);
+        if (!moved) ensurePaneTabMembership(targetPaneId, tabId);
         ensurePaneActiveTab(sourcePaneId);
         targetPane.activeTabId = tabId;
 

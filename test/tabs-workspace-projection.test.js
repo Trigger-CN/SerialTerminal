@@ -79,6 +79,28 @@ test('projection falls back to a valid focus when the given one is unknown', () 
     assert.ok(ws.tabs[ws.focusedTabId]);
 });
 
+// 扁平 + pane 分屏：store 里的 filter 只能进一个 pane。
+// 反向对照：旧实现在每个 pane 都 push 一遍 store 条目，并在空 pane 里补一个
+// main，结果是同一个标签同时属于两个 pane、两个 panel 撞成同一个 id。
+test('projection never assigns one filter tab to two panes', () => {
+    const sections = baseSections();
+    sections.groups[0].panes = [
+        { id: 'default-pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' },
+        { id: 'default-pane-2', tabIds: [], activeTabId: null }
+    ];
+    sections.groups[0].paneSplit = { enabled: true, orientation: 'horizontal', sizes: {} };
+    sections.filterTabs.default = [{ id: 'f1', title: 'f' }];
+
+    const ws = projectWorkspace(sections);
+    const panes = ws.tabs.default.panes;
+    const occurrences = panes.reduce(
+        (sum, pane) => sum + pane.tabIds.filter(id => id === 'f1').length, 0);
+    assert.equal(occurrences, 1, 'f1 必须恰好属于一个 pane');
+    assert.equal(panes.some(pane => pane.tabIds.every(id => id === 'tab-main')), true,
+        '空 pane 不得被补一个 main');
+});
+
+
 test('projected workspace satisfies every invariant', () => {
     const sections = baseSections();
     sections.groups.push({

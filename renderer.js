@@ -4406,7 +4406,10 @@ window.__readTabModelPlan = () => {
             panelIds: plan.panelIds
         },
         live,
-        error
+        error,
+        // 投影输入原样带出，供诊断脚本定位「模型与 DOM 不一致到底是数据错还是模型错」。
+        // 只读快照，不持有引用。
+        sections: JSON.parse(JSON.stringify(sections))
     };
 };
 

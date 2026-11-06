@@ -74,6 +74,19 @@ function projectWorkspace(sections) {
         const mainLeaf = createLeaf('main', { id: mainId });
         tabs[mainLeaf.id] = mainLeaf;
 
+        // store 里**任何 pane 都没认领**的 filter/chart，才是候补。
+        // 漏掉「已被别的 pane 认领」的排除会引发一串错位：pane-1 先拿到 filter，
+        // 轮到 pane-2 时它已存在，pane-2 就变空；随后 pane-2 的 activeTabId 被回退，
+        // 模型算出的面板集与真实显示彻底脱钐。
+        const claimed = new Set();
+        panes.forEach(pane => {
+            (pane && Array.isArray(pane.tabIds) ? pane.tabIds : []).forEach(id => claimed.add(id));
+        });
+        const unassigned = [
+            ...normalizeTabIds((src.filterTabs || {})[group.id], 'filter'),
+            ...normalizeTabIds((src.chartTabs || {})[group.id], 'chart')
+        ].filter(item => !tabs[item.id] && !claimed.has(item.id));
+
         const projectedPanes = panes.map((pane, index) => {
             const paneId = pane && typeof pane.id === 'string'
                 ? pane.id
@@ -94,15 +107,20 @@ function projectWorkspace(sections) {
                 if (tabs[id] || isShellId(id)) continue;
                 push(id, id === mainId ? 'main' : 'tab');
             }
-            for (const item of normalizeTabIds((src.filterTabs || {})[group.id], 'filter')) {
-                push(item.id, 'filter');
-            }
-            for (const item of normalizeTabIds((src.chartTabs || {})[group.id], 'chart')) {
-                push(item.id, 'chart');
-            }
 
+            // 主标签只属于 panes[0]（与 workspace-layout-shape 的 unshift 一致）。
+            // 不能“哪个 pane 空了就补一个 main”：每个分组只有一个 main 叶，
+            // 补到第二个 pane 就是同一个标签同时属于两个 pane。
             if (index === 0 && !ids.includes(mainId)) ids.unshift(mainId);
-            if (!ids.length) ids.push(mainId);
+
+            // store 里尚未被任何 pane 认领的标签，只补给**真实布局里为空**的 pane（或主 pane）。
+            // 不能补给已经有真实标签的 pane：那会把 pane-2 自己的标签拽进 pane-1，
+            // 造成模型与真实布局错位（影子校验曾在实机上抓到这一点）。
+            const wantsTopUp = index === 0 || ids.length === 0;
+            while (wantsTopUp && unassigned.length && ids.length) {
+                const item = unassigned.shift();
+                push(item.id, item.kind);
+            }
 
             // activeTabId 可能是被过滤掉的 shell，不能因此把 pane 判成空的。
             let activeTabId = pane && typeof pane.activeTabId === 'string'
