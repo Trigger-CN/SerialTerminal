@@ -171,12 +171,13 @@ function layoutRowsOf(ws, column) {
     return splitEnabled ? panes.slice() : panes.slice(0, 1);
 }
 
-// 某列实际显示哪些面板。三个分支，分别对应三种布局形态：
+// 某列实际显示哪些面板。四个分支，分别对应四种布局形态：
 //   有 subRow 且多于一条（分屏 + 列内 paneSplit）→ 每个 pane 显示自己的 activeTabId；
-//   族列（扁平）→ 只一个内容区，显示焦点所在的那个叶（可以是 Shell）；
-//   普通列（分屏后单个分组一列）→ 显示该容器自己的激活叶，不看焦点。
+//   未分屏 → 整列一个内容区，跟焦点（可以是容器里的叶，也可以是未归属的 Shell）；
+//   分屏后的根级叶列 → 显示这一列自己（Shell 独立列）；
+//   分屏后的普通列 → 显示该容器自己的激活叶，不看焦点。
 //
-// 最后一种不能套用焦点：分屏时其它列也要各自显示内容，而焦点只有一个。
+// 最后一支不能套用焦点：分屏时其它列也要各自显示内容，而焦点只有一个。
 function visiblePanelIdsOfColumn(ws, column) {
     const rows = layoutRowsOf(ws, column);
     if (rows.length > 1) return rows.map(pane => pane.activeTabId).filter(Boolean);
@@ -194,6 +195,14 @@ function visiblePanelIdsOfColumn(ws, column) {
             if (pane && pane.activeTabId) return [pane.activeTabId];
         }
     }
+
+    // 分屏时每一列对应一个根级 Tab。containerId 为 null 表示这一列本身就是一个
+    // 根级叶（典型是未归属的 Shell 独立列）：它没有 pane、没有 subRow，内容区
+    // 显示的就是它自己。
+    //
+    // 不分屏时不能走这一支：那时 column.id 恒为 members[0].id，与焦点所在的叶
+    // 无关，用它顶替会让整列显示错的标签。
+    if (ws.split.enabled && !column.containerId) return tabOf(ws, column.id) ? [column.id] : [];
 
     if (column.containerId) {
         const pane = panesOf(tabOf(ws, column.containerId))[0];

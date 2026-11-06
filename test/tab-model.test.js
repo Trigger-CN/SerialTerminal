@@ -184,6 +184,39 @@ test('split off shows only the column that contains the focus', () => {
     assert.equal(plan.columns[0].containerId, second.id);
 });
 
+// 分屏后一个未归属 Shell 自成一根级叶，它那一列没有容器、没有 pane、没有 subRow，
+// 内容区显示的就是它自己。漏掉这一支会让模型给出空集，而页面实际显示 Shell 面板。
+// 反向对照：删掉 visiblePanelIdsOfColumn 里 `split.enabled && !containerId` 那一行，
+// 下面的 panelIds 会变成空数组，两条断言立刻失败。
+test('a root leaf column exposes its own panel when split is on', () => {
+    const ws = fresh();
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setColumnSplit(ws, true);
+
+    const plan = buildRenderPlan(ws);
+    const shellColumn = plan.columns.find(col => col.columnId === shell.id);
+    assert.ok(shellColumn, 'shell 必须自成一根级列');
+    assert.equal(shellColumn.containerId, null);
+    assert.deepEqual(shellColumn.panelIds, [shell.id]);
+    assert.ok(plan.panelIds.includes(shell.id), '全局可见面板必须包含 shell');
+    assert.deepEqual(shellColumn.rows, [], '根级叶列没有 subRow');
+});
+
+// 未分屏时不能套用上面那一支：那时 column.id 与焦点所在的叶无关，
+// 若用它顶替焦点会让整列显示错的标签。
+test('a root leaf column does not hijack the panel while split is off', () => {
+    const ws = fresh();
+    const main = findLeaf(ws, 'main');
+    const shell = addShell(ws);
+    setColumnSplit(ws, false);
+    activateTab(ws, main.id);
+
+    const plan = buildRenderPlan(ws);
+    assert.deepEqual(plan.panelIds, [main.id]);
+    assert.ok(!plan.panelIds.includes(shell.id), '未分屏时 shell 不得顶替焦点面板');
+});
+
 // ---------------------------------------------------------------------------
 // §4.2 pane 分屏
 // ---------------------------------------------------------------------------
