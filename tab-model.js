@@ -119,6 +119,8 @@ function inFamily(ws, tab) {
 //
 // isFamily 仅表示「扁平：容器不渲染为标签，展开成它的子项」（§5.2）。
 // 多容器时 TabRow 装的是**分组标签本身**，子项落到各自的 subRow。
+// 扁平时还分两种：未开 pane 分屏 → 子项全部上一级行（没有 subRow）；
+// 开了 pane 分屏 → 子项各自落到自己那条 subRow，一级行只留根级叶。
 function layoutColumns(ws) {
     if (ws.split.enabled) {
         return roots(ws).map(tab => ({
@@ -133,8 +135,17 @@ function layoutColumns(ws) {
     if (!members.length) return [];
 
     const flat = isFlat(ws);
+    // 扁平 + 组内 pane 分屏（方案 A）不能把容器子项再列进一级行：
+    // 它们已经各自躺在 pane 的 subRow 里，再列一次就是同一个标签在两处可见，
+    // 用户点哪一处都只是「一半正确」（另一处仍亮着/仍占位）。
+    const flatContainer = flat ? members.find(isContainer) : null;
+    const flatPanesSplit = Boolean(flatContainer
+        && flatContainer.paneSplit
+        && flatContainer.paneSplit.enabled);
     const tabItems = flat
-        ? members.flatMap(tab => (isContainer(tab) ? childrenOf(ws, tab) : [tab]))
+        ? (flatPanesSplit
+            ? members.filter(tab => !isContainer(tab))
+            : members.flatMap(tab => (isContainer(tab) ? childrenOf(ws, tab) : [tab])))
         : members.slice();
 
     const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;

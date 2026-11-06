@@ -214,6 +214,40 @@ test('flat mode with pane split still renders the subRows required by I9', () =>
     assert.deepEqual(validateAndRepair(ws).repairs, []);
 });
 
+// 方案 A 的扁平 + pane 分屏：子项全部落到各自 subRow，一级行不得再重复列一遍。
+// 反向对照：把一级行改成「容器全部子项」后，下面的 disjoint 断言必须失败。
+test('flat mode with pane split keeps the top row free of duplicated pane children', () => {
+    const ws = fresh();
+    const container = Object.values(ws.tabs).find(isContainer);
+    const main = findLeaf(ws, 'main');
+    addLeaf(ws, 'filter');
+    setPaneSplit(ws, container.id, true);
+
+    const plan = buildRenderPlan(ws);
+    const col = plan.columns[0];
+    const topIds = col.tabItems.map(item => item.id);
+    const subIds = col.rows.flatMap(row => row.tabs.map(item => item.id));
+
+    assert.equal(subIds.includes(main.id), true, 'main 必须在自己那条 subRow 里');
+    assert.equal(topIds.includes(main.id), false, '一级行不能再列一遍 main');
+    assert.equal(new Set([...topIds, ...subIds]).size, topIds.length + subIds.length,
+        '一级行与 subRow 的标签不得重叠');
+});
+
+test('flat mode with pane split still puts unowned shells on the top row', () => {
+    const ws = fresh();
+    const container = Object.values(ws.tabs).find(isContainer);
+    setPaneSplit(ws, container.id, true);
+    const shell = addShell(ws);
+
+    const plan = buildRenderPlan(ws);
+    const topIds = plan.columns[0].tabItems.map(item => item.id);
+    const subIds = plan.columns[0].rows.flatMap(row => row.tabs.map(item => item.id));
+
+    assert.deepEqual(topIds, [shell.id], '一级行只应剩未归属 Shell');
+    assert.equal(subIds.includes(shell.id), false, 'Shell 绝不能进 subRow（I1/I2）');
+});
+
 // ---------------------------------------------------------------------------
 // §8.1 激活
 // ---------------------------------------------------------------------------

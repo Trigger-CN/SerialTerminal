@@ -323,10 +323,17 @@ function layoutColumns(ws) {
   const members = roots(ws);
   if (!members.length) return [];
   const flat = isFlat(ws);
+
+  // 扁平 + 组内 pane 分屏（方案 A）：容器子项已经各自躺在自己那条 subRow 里，
+  // 一级行若再列一遍，同一个标签就会在两处同时可见。
+  const flatContainer = flat ? members.find(isContainer) : null;
+  const flatPanesSplit = Boolean(flatContainer
+    && flatContainer.paneSplit && flatContainer.paneSplit.enabled);
+
   const tabItems = flat
-    // 扁平：容器不渲染为标签，展开成子项，与根级叶（Shell）混排
-    ? members.flatMap(t => (isContainer(t) ? childrenOf(ws, t) : [t]))
-    // 多容器：TabRow 装的是分组标签本身，子项落到各自的 subRow
+    ? (flatPanesSplit
+        ? members.filter(t => !isContainer(t))   // 只留根级叶（Shell）
+        : members.flatMap(t => (isContainer(t) ? childrenOf(ws, t) : [t])))
     : members.slice();
 
   // 该列的内容区属于焦点所在的容器
@@ -347,8 +354,14 @@ function layoutColumns(ws) {
 | 情形 | 分屏 | 列数 | `isFamily` | TabRow 内容 |
 |---|---|---|---|---|
 | 单组（扁平） | 否 | 1 | 是 | 容器全部子项 + 所有 Shell（按根级 order 混排） |
+| 单组（扁平） | 否 + pane 分屏 | 1 | 是 | **仅根级叶（Shell）**；容器子项在各自的 subRow |
 | 多组 | 否 | 1 | 否 | **全部分组标签 + 所有 Shell**（子项在各自的 subRow） |
 | 任意 | 是 | `roots().length` | 否 | 每个根级 Tab 各自一条 |
+
+**渲染契约（方案 A 的另一半，必须在渲染层逐字遵守）**：扁平 + pane 分屏时，若 `tabItems` 为空，
+**第一条 subRow 复用一级 TabRow 的宿主**（即 pane-1 的 `.pane-tabs-header`），不另造一条空行；
+若 `tabItems` 非空（有根级 Shell），一级行放这些叶，各 pane 的 subRow 各自独立，此时可见行数 = pane 数 + 1。
+这两句写在这里而不是渲染层，是因为“一级行到底画几条”属于布局语义，一旦漏回渲染层就会再长出一套层数判断。
 
 ### 3.4 布局行：每列几条 subRow
 
@@ -582,24 +595,31 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 2. **语义正确**。`parentId` 表达「属于哪个容器」，是数据事实，与「当前显示几层」无关。把显示状态写进数据模型，正是本文要消除的真源混用。
 3. **可变性最小**。删除容器时只需删除其子树；若 `parentId` 已被改成 `null`，这些节点会变成孤儿根标签，无法与「原本独立的 Shell」区分。
 
-### 5.5 扁平模式 + 组内 pane 分屏（开放项）
+### 5.5 扁平模式 + 组内 pane 分屏（已裁决：方案 A）
 
-**这是本文唯一没有定论的设计点，需要你裁决。**
-
-两条要求同时成立时产生冲突：
+两条要求同时成立时会冲突：
 
 - 「subRow 在只有一个串口组时不可见」→ 扁平模式没有 subRow；
 - 「组内 pane 分屏保留」→ pane 分屏的表现形式是「每个 pane 一条 subRow + 独立内容区」。
 
 于是当**只有一个串口组、又开启了组内分屏**时，pane-2 的标签没有地方显示，用户无法切换它。
 
-| 方案 | 做法 | 代价 |
-|---|---|---|
-| **A. 例外** | 扁平模式默认无 subRow；一旦开启 pane 分屏，临时恢复 N 条 subRow | 回到「两种层数形态」，但仅由用户显式开启分屏触发，可控 |
-| **B. 常显** | pane 分屏开启期间始终显示 subRow | 规则最统一；但单组 + 分屏时会出现用户要求「不可见」的那一行 |
-| **C. 禁止** | 扁平模式下不允许组内 pane 分屏（分屏按钮置灰） | 最简单、无歧义；但功能受限 |
+| 方案 | 做法 | 代价 | 结论 |
+|---|---|---|---|
+| **A. 例外** | 扁平模式默认无 subRow；一旦开启 pane 分屏，临时恢复 N 条 subRow | 回到「两种层数形态」，但仅由用户显式开启分屏触发，可控 | **已采用** |
+| B. 常显 | pane 分屏开启期间始终显示 subRow | 规则最统一；但单组 + 分屏时会出现要求「不可见」的那一行 | 已否决 |
+| C. 禁止 | 扁平模式下不允许组内 pane 分屏（分屏按钮置灰） | 最简单、无歧义；但功能受限 | 已否决 |
 
-**本文暂按方案 A 描述**（它是唯一同时满足两条原始要求、且不删除能力的解），并在 §6 的 I9 中给出对应不变式。若选 B 或 C，只需改 §3.4 的 `layoutRowsOf()` 与 §6 的 I9，其余章节不受影响——这正是把行/列分离后的好处。
+**依据**：A 是唯一同时满足两条原始要求、且不删除任何能力的解——B 违反「单组时那一行不可见」，C 删除能力。
+
+**方案 A 的准确语义**（实现必须逐字对齐，防止把「例外」扩大成「默认」）：
+
+1. 扁平（`isFlat(ws)`，容器数 ≤ 1）且该容器 `paneSplit.enabled === false` → **subRow 行数为 0**，MAIN / FILTER / CHART 与未归属 Shell 全部住在一级 TabRow。
+2. 扁平且 `paneSplit.enabled === true` → **subRow 行数 = pane 数**，每个 pane 一条，内容为该 pane 的 `tabIds`；Shell 仍不进入任何 subRow（I1 / I2）。
+3. 非扁平（容器数 ≥ 2）→ subRow 恒存在（当前内容区所属容器的那一条），与本决策无关。
+4. 关闭 pane 分屏后 subRow 立即回到 0 条，不留残余行。
+
+语义 1 / 2 就是 §3.4 `layoutRowsOf()` 的 `isFamily` 分支与 §6 的 I9，**本次裁决未改动它们的实现**，只把「暂按」升级为「已定」。方案若再变，只需改这两处——这是行/列分离的直接收益。
 
 ## 6. 不变式
 
@@ -956,7 +976,7 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 | 阶段 | 内容 | 验证 |
 |---|---|---|
 | **S1** ✅ **已完成** | `tab-model.js`：`{ tabs, focusedTabId, split }` 的读写、`rebuildIndex()`、§3 全部派生量、§6 全部不变式、`validateAndRepair()`。未接渲染。配套 `test/tab-model.test.js`（34 条）与独立验收器 `test/tab-model-acceptance.js` | `npm test` 526/526 |
-| **S2** ✅ **已完成（影子校验）** | 模型侧已就绪：`tab-model.js` 三处真实缺陷已修（见 §11.4）；`tabs-workspace-projection.js` 把现状只读投影成模型树；`renderer.js` 暴露只读诊断钩子 `window.__readTabModelPlan()`。**渲染仍走旧路径**，翻转待 S5 迁移后做 | `verify-tab-plan-shadow`（26 项，单分组/双分屏/分屏+Shell/关分屏 五种形态） |
+| **S2** ✅ **已完成（影子校验）** | 模型侧已就绪：`tab-model.js` 三处真实缺陷已修（见 §11.3）；`tabs-workspace-projection.js` 把现状只读投影成模型树；`renderer.js` 暴露只读诊断钩子 `window.__readTabModelPlan()`。**渲染仍走旧路径**，翻转待 S5 迁移后做 | `verify-tab-plan-shadow`（26 项，单分组/双分屏/分屏+Shell/关分屏 五种形态） |
 | **S3** | subRow 按 pane 一条；组内 pane 分屏；删除 Shell 叠层机制 | `verify-shell` / `verify-shell-buttons-split` |
 | **S4** | 删除 `ownerGroupId` / `detachedColumn` / `topRowColumnId` 及其依赖；`finishWorkspaceTabDrag` 改为同栏重排；全局动作移入工作区级动作条 | `verify-shell-drag`（断言改为「只能同栏重排」）/ `verify-shell-switchback` |
 | **S5** | 配置迁移（§9.3）+ 删除旧 `workspaceLayout` | 启动迁移测试 + 全量 CDP |
@@ -1058,7 +1078,7 @@ test('random operation sequences preserve all invariants', () => {
 | # | 未验证项 | 说明 |
 |---|---|---|
 | 1 | 两级分屏同时开启的实际观感 | §4.3 的四种组合中，「列开 + pane 开」只有设计推演 |
-| 2 | 扁平 + 多 pane 的标签焦点视觉 | 依赖 §5.5 的裁决；方案 A 下会出现 N 条 subRow |
+| 2 | 扁平 + 多 pane 的标签焦点视觉 | 已裁决方案 A（N 条 subRow）；实机观感与焦点切换待验证 |
 | 3 | 真实鼠标拖动分界条的手感与最小宽度 | 现有证据仅为合成 `PointerEvent`；硬限 `MIN_SHARE = 0.1` |
 | 4 | 四条以上分屏时每一条分界条的独立拖动 | 只有三条的实测 |
 | 5 | 窗口尺寸变化后旧比例是否仍然合理 | 未验证 |
