@@ -96,6 +96,8 @@ const {
     disableSidebarQuickSend,
     deleteQuickSendById
 } = require('./quick-send-reorder');
+const { projectWorkspace } = require('./tabs-workspace-projection');
+const tabModel = require('./tab-model');
 
 const terminalSearchTrackers = new WeakMap();
 
@@ -4282,6 +4284,131 @@ function renderSerialGroupTabBar() {
     syncSerialGroupAddButtonLayer();
     syncShellAddButtonVisibility();
 }
+
+// 只供 CDP 验证脚本调用，不在渲染路径上。
+//
+// 返回模型算出的渲染计划与页面真实形态的快照，供验证脚本逐项比对。
+// 这里只读取真实 DOM（offsetParent + getBoundingClientRect），不写入任何状态，
+// 因为判据必须是「用户眼睛能看到什么」，而不是某个属性被赋了什么值。
+//
+// 注意：模型现阶段尚未接管渲染，本函数只用于证明两边一致，用户可见行为不变。
+window.__readTabModelPlan = () => {
+    const shown = el => Boolean(el) && el.offsetParent !== null
+        && el.getBoundingClientRect().width > 0
+        && el.getBoundingClientRect().height > 0;
+
+    const sections = {
+        groups: serialGroups.map((group, index) => {
+            const layout = groupWorkspaceLayouts.get(group.id);
+            return {
+                id: group.id,
+                title: group.title,
+                order: index,
+                collapsed: false,
+                panes: layout
+                    ? layout.panes.map(pane => ({
+                        id: pane.id,
+                        tabIds: [...pane.tabIds],
+                        activeTabId: pane.activeTabId
+                    }))
+                    : [],
+                paneSplit: layout
+                    ? {
+                        enabled: layout.splitEnabled === true,
+                        orientation: layout.orientation,
+                        sizes: { ...(layout.paneSizes || {}) }
+                    }
+                    : { enabled: false, orientation: 'horizontal', sizes: {} }
+            };
+        }),
+        filterTabs: {},
+        chartTabs: {},
+        shellTabs: shellTabs.map(tab => ({ id: tab.id, title: tab.title })),
+        focusedTabId: getGroupActiveTabId(activeGroupId),
+        split: {
+            enabled: groupWorkspaceSplit.enabled === true && groupWorkspaceSplit.groupIds.length > 1,
+            orientation: groupWorkspaceSplit.orientation,
+            sizes: { ...(groupWorkspaceSplit.sizes || {}) }
+        }
+    };
+    serialGroups.forEach(group => {
+        sections.filterTabs[group.id] = filterTabsStore.getList(group.id).map(tab => ({ id: tab.id, title: tab.title }));
+        sections.chartTabs[group.id] = chartTabsStore.getList(group.id).map(tab => ({ id: tab.id, title: tab.title }));
+    });
+
+    // 一级 TabRow 有两种宿主，必须都算：
+    //   .group-column > .group-tab-row   多分组/分屏时的分组标签行
+    //   .pane-tabs-header                单分组（扁平）时唯一的一层标签行
+    // 只认前者的话，单分组时这里永远是空集，断言就恒假。
+    const groupRows = Array.from(document.querySelectorAll('.group-tab-row'))
+        .filter(row => shown(row) && row.parentElement
+            && row.parentElement.classList.contains('group-column'));
+    const paneHeaders = Array.from(document.querySelectorAll('.pane-tabs-header')).filter(shown);
+
+    const topRowShellTabs = [
+        ...groupRows.flatMap(row => Array.from(row.querySelectorAll('.main-tab[data-target^="tab-shell-"]'))),
+        ...paneHeaders.flatMap(h => Array.from(h.querySelectorAll('.main-tab[data-target^="tab-shell-"]')))
+    ].filter(shown).map(b => b.dataset.target);
+
+    const live = {
+        visibleColumns: Array.from(document.querySelectorAll('#group-workspace > .group-column'))
+            .filter(shown)
+            .map(el => el.id),
+        groupRowGroupTabs: groupRows.flatMap(row =>
+            Array.from(row.querySelectorAll('.serial-group-tab')).map(b => b.dataset.groupId)),
+        groupRowShellTabs: topRowShellTabs,
+        // 只在「没有分组标签行」时才有意义：那种形态下这一层就是一级 TabRow。
+        // 多分组时同样叫 .pane-tabs-list 的列表里装的是 subRow 子项，不能算进来。
+        familyRowTabs: groupRows.length > 0 ? []
+            : Array.from(document.querySelectorAll('.pane-tabs-list'))
+                .flatMap(list => Array.from(list.children))
+                .filter(el => el.classList.contains('main-tab') && shown(el))
+                .map(el => el.dataset.target),
+        // 分屏时页面会把未归属 Shell 的面板盖在某个分组面板上，于是同时出现两个
+        // 带 active 的面板。叠层是 S4 要删除的机制，这里只记录事实。
+        overlaidPanels: Array.from(document.querySelectorAll('.main-tab-pane.active'))
+            .filter(shown)
+            .map(el => el.id),
+        visiblePanels: Array.from(document.querySelectorAll('.main-tab-pane.active'))
+            .filter(shown)
+            .map(el => el.id)
+    };
+
+    let plan = null;
+    let error = null;
+    let ws = null;
+    try {
+        ws = projectWorkspace(sections);
+        plan = tabModel.buildRenderPlan(ws);
+    } catch (err) {
+        error = String(err && err.message || err);
+        console.warn('[TABS SHADOW] buildRenderPlan threw:', error);
+    }
+
+    return {
+        activeGroupId,
+        // 渲染层要区分「这个 id 是容器还是叶子」，供验证脚本把容器映射成分组标签令牌。
+        containerIds: Object.keys(ws ? ws.tabs : {})
+            .filter(id => Array.isArray(ws.tabs[id].panes)),
+        plan: plan && {
+            columns: plan.columns.map(column => ({
+                columnId: column.columnId,
+                containerId: column.containerId,
+                isFamily: column.isFamily,
+                tabIds: column.tabItems.map(tab => tab.id),
+                rows: column.rows.map(row => ({
+                    paneId: row.paneId,
+                    tabIds: row.tabs.map(tab => tab.id),
+                    activeTabId: row.activeTabId
+                })),
+                panelIds: column.panelIds
+            })),
+            panelIds: plan.panelIds
+        },
+        live,
+        error
+    };
+};
 
 // 静态分组行的标签列表只在模块加载时存在一份，委托在这里挂一次即可；
 // 动态列的列表在 ensureSerialGroupWorkspaceDom 里建好后各自挂。

@@ -170,11 +170,15 @@ function visiblePanelIdsOfColumn(ws, column) {
     const rows = layoutRowsOf(ws, column);
     if (rows.length > 1) return rows.map(pane => pane.activeTabId).filter(Boolean);
 
-    if (column.isFamily) {
+    // 未分屏时整列只有一个内容区，而内容区跟的是**焦点**：焦点可能落在容器里的
+    // 某个叶，也可能落在一个未归属的 Shell 上（它不属于任何 pane，但住同一个
+    // 内容区）。两个形态都必须有分支，否则焦点落在 Shell 上时这里返回空集，
+    // 而页面仍显示 Shell 面板——模型就会与实际显示不一致。
+    if (ws.split.enabled === false) {
         const focused = tabOf(ws, ws.focusedTabId);
         if (focused && !isContainer(focused)) return [focused.id];
-        // 焦点是容器本身（用户点的是分组标签）时取该容器自己的激活叶。
         if (focused && isContainer(focused)) {
+            // 焦点是容器本身（用户点的是分组标签）时取该容器自己的激活叶。
             const pane = panesOf(focused)[0];
             if (pane && pane.activeTabId) return [pane.activeTabId];
         }
@@ -185,7 +189,7 @@ function visiblePanelIdsOfColumn(ws, column) {
         if (pane && pane.activeTabId) return [pane.activeTabId];
     }
 
-    return rows.length ? [rows[0].activeTabId].filter(Boolean) : [column.id];
+    return rows.length ? [rows[0].activeTabId].filter(Boolean) : [];
 }
 
 function visiblePanels(ws) {
