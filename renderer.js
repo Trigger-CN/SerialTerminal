@@ -1338,7 +1338,7 @@ function requestSerialGroupContextMenu(groupId) {
         tabId: '',
         paneId: '',
         groupId,
-        isMultiGroup: serialGroups.length > 1,
+        isMultiGroup: isMultiGroupLayer(),
         groupSplitEnabled: groupWorkspaceSplit.enabled,
         labels: getContextMenuLabels()
     });
@@ -2383,7 +2383,7 @@ function hasDetachedShellColumn() {
 // 未分屏时它停在上层共享行，不建列 —— 否则屏幕上会莫名多出一列空标签栏。
 function isShellColumnActive() {
     return groupWorkspaceSplit.enabled
-        && serialGroups.length > 1
+        && isMultiGroupLayer()
         && shellTabs.length > 0
         && hasDetachedShellColumn();
 }
@@ -2992,6 +2992,18 @@ function syncNextShellTabId(tabId) {
 let serialGroups = [];
 let activeGroupId = REGISTRY_DEFAULT_GROUP_ID;
 let isApplyingSessionGroups = false;
+
+// 「当前是不是多分组（两层）形态」的**唯一入口**。
+//
+// 早先这个判断在 8 个地方各写一遍 `serialGroups.length > 1`（1341 / 2386 / 4226 /
+// 4291 / 4419 / 4519 与 4730 / 4775 的 `<= 1`）。它决定四件互斥的事：分组标签行显不显示、
+// 「添加串口」和「新建 Shell」按钮放哪一层、Shell 标签挂在哪一行。四处各自判断，
+// 改一处漏三处就是「改了分组看不到按钮」这类缺陷的固定来源。
+//
+// 必须用 function 而不是 const：最早的调用点在 1341 行，那时本行还没执行；函数声明会提升。
+function isMultiGroupLayer() {
+    return serialGroups.length > 1;
+}
 
 function createDefaultSerialGroupState() {
     const options = currentConfig?.lastSerialOptions || {};
@@ -4223,7 +4235,7 @@ function renderSerialGroupTabBar() {
             active: group.id === activeGroupId,
             connected: group.status === 'connected'
         })),
-        isMultiGroup: serialGroups.length > 1,
+        isMultiGroup: isMultiGroupLayer(),
         defaultGroupId: REGISTRY_DEFAULT_GROUP_ID
     });
 
@@ -4288,7 +4300,7 @@ bindGroupTabListEvents(document.getElementById(GROUP_TAB_LIST_ID));
 // 所以「两层同时存在时 pane 行一个都不给」与「只有一层时那一层给」不会同时成立，
 // 任意时刻屏幕上恰好一个入口。
 function syncShellAddButtonVisibility() {
-    const isMultiGroup = serialGroups.length > 1;
+    const isMultiGroup = isMultiGroupLayer();
     if (addShellTabBtn) addShellTabBtn.hidden = !isMultiGroup;
     if (!isMultiGroup) return;
     // 按 id 后缀扫而不是逐个记引用：组内分屏与新建分组都会现造新 pane，
@@ -4416,7 +4428,7 @@ function bindGroupTabListEvents(listEl) {
 // 注意：这里的 hidden 是否真能隐藏，取决于 CSS 里 [hidden] { display:none !important }，
 // 因为全局 button { display: inline-flex } 会覆盖浏览器默认的 [hidden] 样式。
 function syncSerialGroupAddButtonLayer() {
-    const isMultiGroup = serialGroups.length > 1;
+    const isMultiGroup = isMultiGroupLayer();
     if (addSerialGroupInlineBtn) {
         addSerialGroupInlineBtn.hidden = isMultiGroup;
     }
@@ -4516,7 +4528,7 @@ function resolveShellTopRowColumn(tabState) {
 // 这是判定宿主元素的**唯一入口**：placeShellTabs、resolveWorkspaceTabButtonHost、
 // 以及子行显隐都调它，不允许各自再写一份。
 function resolveShellTabHost(tabState) {
-    const isMultiGroup = serialGroups.length > 1;
+    const isMultiGroup = isMultiGroupLayer();
     const owner = getShellTabOwner(tabState);
 
     // 单分组：退回改造前的形态，Shell 与串口标签混在同一条 pane 行里。
@@ -4727,7 +4739,7 @@ function resolveDisplayedTabIdInPane(paneId) {
 function syncGroupSubRowVisibility() {
     // 单分组时必须把 hidden 清掉：从多分组退回来时上一次的 hidden 会残留，
     // 表现为「关掉其它分组后主终端没有标签栏、也找不到新建 Shell 的按钮」。
-    if (serialGroups.length <= 1) {
+    if (!isMultiGroupLayer()) {
         serialGroups.forEach(group => {
             const headerId = `${groupPaneId(group.id, 1)}-tabs-list`;
             const header = document.getElementById(headerId)?.closest('.pane-tabs-header');
@@ -4772,7 +4784,7 @@ function findWorkspaceTabButton(tabId, paneId) {
 // 与 placeShellTabs 的判断不一致，applyLayoutToDom 会把标签从可见行拽回隐藏行，
 // 用户看到的结果是「切换分组后 Shell 标签消失、拖不动」。
 function resolveWorkspaceTabButtonHost(tabId, paneId) {
-    if (serialGroups.length <= 1) return null;
+    if (!isMultiGroupLayer()) return null;
     if (!isShellTabId(tabId)) return null;
     const tabState = getShellTabState(tabId);
     if (!tabState) return null;
