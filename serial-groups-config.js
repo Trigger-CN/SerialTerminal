@@ -74,6 +74,95 @@ function normalizeGroupSerialOptions(source, fallback = {}) {
   };
 }
 
+// §9.3 的前两行：把旧布局里的 pane 列表与 pane 分屏状态搬到分组对象上。
+//
+// 为什么必须显式搬：主进程每次存盘都会走 normalizeConfig → migrateSerialGroupsConfig
+// 重建整个分组对象，没在这里列出的键会在一次保存后静默丢失。
+//
+// 优先读 source.panes：渲染翻转之后由渲染层直接写这两个键，此时 workspaceLayout
+// 只剩兼容镜像的作用，不能让镜像把新值覆盖回去。panes 与 paneSplit 必须取自同一个
+// 来源，否则会出现「新 pane 列表配旧分屏开关」这种半新半旧的状态。
+//
+// 没有任何布局时返回空对象而不是补默认值：缺省与「显式是默认值」在读取侧语义不同，
+// 与 uiPrefs 的处理保持一致。
+function groupWorkspaceFields(source) {
+  const explicit = Array.isArray(source.panes) ? source.panes : null;
+  const layout = isPlainObject(source.workspaceLayout) ? source.workspaceLayout : null;
+  const rawPanes = explicit || (layout && Array.isArray(layout.panes) ? layout.panes : null);
+  if (!rawPanes) return {};
+
+  const usedPaneIds = new Set();
+  const usedTabIds = new Set();
+  const panes = [];
+  for (const item of rawPanes) {
+    if (!isPlainObject(item)) continue;
+    const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : '';
+    if (!id || usedPaneIds.has(id)) continue;
+    usedPaneIds.add(id);
+
+    const tabIds = [];
+    for (const tabId of (Array.isArray(item.tabIds) ? item.tabIds : [])) {
+      // 同一个标签不能同时属于两个 pane（I4）：重复项保留第一次出现的那一个。
+      if (typeof tabId !== 'string' || !tabId || usedTabIds.has(tabId)) continue;
+      usedTabIds.add(tabId);
+      tabIds.push(tabId);
+    }
+    panes.push({
+      id,
+      tabIds,
+      activeTabId: tabIds.includes(item.activeTabId) ? item.activeTabId : (tabIds[0] || null)
+    });
+  }
+  if (!panes.length) return {};
+
+  const splitSource = isPlainObject(source.paneSplit)
+    ? source.paneSplit
+    : (explicit ? null : {
+      enabled: layout.splitEnabled === true,
+      orientation: layout.orientation,
+      sizes: layout.paneSizes
+    });
+  const activePaneId = explicit
+    ? (typeof source.activePaneId === 'string' ? source.activePaneId : '')
+    : (typeof layout?.activePaneId === 'string' ? layout.activePaneId : '');
+  const sizes = {};
+  if (isPlainObject(splitSource?.sizes)) {
+    for (const [paneId, value] of Object.entries(splitSource.sizes)) {
+      const size = Number(value);
+      if (paneId && Number.isFinite(size) && size > 0) sizes[paneId] = size;
+    }
+  }
+
+  // §9.3 第三行：旧布局的 activePaneId 若指向一个有激活叶的 pane，
+  // 就用它初始化焦点；否则取第一个有激活叶的 pane。
+  // 焦点决定启动后显示哪一列（§2.6），不能凭空补一个默认值。
+  const focusedTabId = focusedTabIdFromPanes(panes, activePaneId);
+
+  return {
+    panes,
+    paneSplit: {
+      enabled: splitSource?.enabled === true,
+      orientation: splitSource?.orientation === 'vertical' ? 'vertical' : 'horizontal',
+      sizes
+    },
+    ...(focusedTabId ? { focusedTabId } : {})
+  };
+}
+
+// 从 pane 列表里取「当前应该聚焦的那个叶」。
+//
+// 优先级：显式 activePaneId 指向的 pane > 第一个有 activeTabId 的 pane。
+// 只看 activeTabId 而不看 tabIds：后者可能是空数组，取 tabIds[0] 会得到 undefined，
+// 那会把一个不存在的 id 当成焦点写进去（I7 直接不成立）。
+function focusedTabIdFromPanes(panes, activePaneId) {
+  const preferred = activePaneId
+    ? panes.find(pane => pane.id === activePaneId && pane.activeTabId)
+    : null;
+  if (preferred) return preferred.activeTabId;
+  const fallback = panes.find(pane => pane.activeTabId);
+  return fallback ? fallback.activeTabId : null;
+}
+
 // 从 v14 的全局字段构造默认分组。
 // title 取端口名（设计文档 9.2）；端口为空时给一个可读的占位名，而不是空字符串，
 // 否则分组标签会变成一块空白，用户不知道那是什么。
@@ -125,7 +214,10 @@ function normalizeSerialGroup(group, index, fallbackOptions) {
     ...(uiPrefs ? { uiPrefs } : {}),
     filterTabs: Array.isArray(source.filterTabs) ? source.filterTabs : [],
     chartTabs: Array.isArray(source.chartTabs) ? source.chartTabs : [],
-    workspaceLayout: isPlainObject(source.workspaceLayout) ? source.workspaceLayout : null
+    workspaceLayout: isPlainObject(source.workspaceLayout) ? source.workspaceLayout : null,
+    // panes / paneSplit 是模型层的新位置。没有布局时整体省略，
+    // 「没有」与「显式是默认值」在读取侧语义不同。
+    ...groupWorkspaceFields(source)
   };
 }
 

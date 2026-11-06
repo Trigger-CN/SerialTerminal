@@ -182,3 +182,162 @@ test('migration never mutates the input object', () => {
   migrateSerialGroupsConfig(original);
   assert.deepEqual(original, snapshot);
 });
+
+// ---- §9.3 布局迁移 -------------------------------------------------------
+
+test('a v14 workspaceLayout is moved onto panes / paneSplit / focusedTabId', () => {
+  const migrated = migrateSerialGroupsConfig({
+    configVersion: 14,
+    lastSerialOptions: { path: 'COM3' },
+    workspaceLayout: {
+      splitEnabled: true,
+      orientation: 'vertical',
+      activePaneId: 'pane-2',
+      paneSizes: { 'pane-1': 0.25, 'pane-2': 0.75 },
+      panes: [
+        { id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' },
+        { id: 'pane-2', tabIds: ['tab-filter-1'], activeTabId: 'tab-filter-1' }
+      ]
+    }
+  });
+
+  const group = migrated.serialGroups[0];
+  assert.deepEqual(group.panes, [
+    { id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' },
+    { id: 'pane-2', tabIds: ['tab-filter-1'], activeTabId: 'tab-filter-1' }
+  ]);
+  assert.deepEqual(group.paneSplit, {
+    enabled: true,
+    orientation: 'vertical',
+    sizes: { 'pane-1': 0.25, 'pane-2': 0.75 }
+  });
+  // 焦点取 activePaneId 指向的那个 pane 的激活叶，而不是 pane-1 的。
+  assert.equal(group.focusedTabId, 'tab-filter-1');
+});
+
+test('an activePaneId pointing at a pane without an active tab is not trusted', () => {
+  const migrated = migrateSerialGroupsConfig({
+    configVersion: 14,
+    workspaceLayout: {
+      activePaneId: 'pane-2',
+      panes: [
+        { id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' },
+        { id: 'pane-2', tabIds: [], activeTabId: null }
+      ]
+    }
+  });
+
+  // 不能把 null / undefined 写成焦点：那会让 I7 直接不成立。
+  assert.equal(migrated.serialGroups[0].focusedTabId, 'tab-main');
+});
+
+test('a workspaceLayout without panes contributes no layout keys at all', () => {
+  const migrated = migrateSerialGroupsConfig({
+    configVersion: 14,
+    workspaceLayout: { splitEnabled: false }
+  });
+  const group = migrated.serialGroups[0];
+
+  // 缺失与「显式是默认值」在读取侧语义不同，不能补一份默认布局。
+  assert.equal(Object.prototype.hasOwnProperty.call(group, 'panes'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(group, 'paneSplit'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(group, 'focusedTabId'), false);
+});
+
+test('new layout keys survive a read-save-read round trip', () => {
+  // 主进程每次存盘都会重建整个分组对象；未显式保留的键会在这里静默丢失。
+  const saved = migrateSerialGroupsConfig({
+    configVersion: 15,
+    serialGroups: [{
+      id: 'g-1',
+      panes: [{ id: 'pane-1-g-1', tabIds: ['tab-main-g-1'], activeTabId: 'tab-main-g-1' }],
+      paneSplit: { enabled: true, orientation: 'horizontal', sizes: { 'pane-1-g-1': 1 } },
+      focusedTabId: 'tab-main-g-1'
+    }]
+  });
+  const reloaded = migrateSerialGroupsConfig(JSON.parse(JSON.stringify(saved)));
+
+  const group = reloaded.serialGroups[0];
+  assert.deepEqual(group.panes, [
+    { id: 'pane-1-g-1', tabIds: ['tab-main-g-1'], activeTabId: 'tab-main-g-1' }
+  ]);
+  assert.deepEqual(group.paneSplit, {
+    enabled: true,
+    orientation: 'horizontal',
+    sizes: { 'pane-1-g-1': 1 }
+  });
+  assert.equal(group.focusedTabId, 'tab-main-g-1');
+});
+
+test('explicit panes win over the workspaceLayout mirror', () => {
+  // 翻转后渲染层直接写 panes / paneSplit，workspaceLayout 只剩兼容镜像。
+  // 若镜像能覆盖新值，用户每次保存都会被回滚到旧布局。
+  const migrated = migrateSerialGroupsConfig({
+    configVersion: 15,
+    serialGroups: [{
+      id: 'g-1',
+      panes: [{ id: 'pane-1', tabIds: ['tab-main', 'tab-filter-1'], activeTabId: 'tab-filter-1' }],
+      paneSplit: { enabled: false, orientation: 'horizontal', sizes: {} },
+      workspaceLayout: {
+        splitEnabled: true,
+        activePaneId: 'pane-9',
+        panes: [{ id: 'pane-9', tabIds: ['tab-stale'], activeTabId: 'tab-stale' }]
+      }
+    }]
+  });
+  const group = migrated.serialGroups[0];
+
+  assert.deepEqual(group.panes, [
+    { id: 'pane-1', tabIds: ['tab-main', 'tab-filter-1'], activeTabId: 'tab-filter-1' }
+  ]);
+  assert.equal(group.paneSplit.enabled, false);
+  // 镜像里的 activePaneId 不得参与：它与 panes 不同源。
+  assert.equal(group.focusedTabId, 'tab-filter-1');
+});
+
+test('a tab claimed by two panes stays in the first one only', () => {
+  // I4：每个非根级 Tab 恰属一个 pane。
+  const migrated = migrateSerialGroupsConfig({
+    configVersion: 14,
+    workspaceLayout: {
+      panes: [
+        { id: 'pane-1', tabIds: ['tab-main', 'tab-filter-1'], activeTabId: 'tab-main' },
+        { id: 'pane-2', tabIds: ['tab-filter-1'], activeTabId: 'tab-filter-1' }
+      ]
+    }
+  });
+  const [first, second] = migrated.serialGroups[0].panes;
+
+  assert.deepEqual(first.tabIds, ['tab-main', 'tab-filter-1']);
+  assert.deepEqual(second.tabIds, []);
+  // 被剔除的那个标签不能再当 activeTabId，否则 I6 不成立。
+  assert.equal(second.activeTabId, null);
+});
+
+test('an activeTabId outside its own pane falls back to that pane first tab', () => {
+  const migrated = migrateSerialGroupsConfig({
+    configVersion: 14,
+    workspaceLayout: {
+      panes: [{ id: 'pane-1', tabIds: ['tab-main', 'tab-filter-1'], activeTabId: 'tab-chart-9' }]
+    }
+  });
+  assert.equal(migrated.serialGroups[0].panes[0].activeTabId, 'tab-main');
+});
+
+test('shell three-state fields are dropped from the persisted group', () => {
+  // §9.3：ownerGroupId / detachedColumn / topRowColumnId 全部丢弃。
+  const migrated = migrateSerialGroupsConfig({
+    configVersion: 15,
+    serialGroups: [{
+      id: 'g-1',
+      ownerGroupId: 'g-2',
+      detachedColumn: true,
+      topRowColumnId: 'g-3'
+    }]
+  });
+  const group = migrated.serialGroups[0];
+
+  assert.equal(Object.prototype.hasOwnProperty.call(group, 'ownerGroupId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(group, 'detachedColumn'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(group, 'topRowColumnId'), false);
+});
