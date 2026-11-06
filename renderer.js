@@ -4782,6 +4782,24 @@ function resolveShellTabHost(tabState) {
 function placeShellTabs() {
     const shellColumn = document.getElementById(shellColumnId());
     if (shellColumn && !isShellColumnActive()) {
+        // 拆列前先把这些 Shell 的「正在显示」状态抹掉。
+        //
+        // 它们接下来会被搬进某一分组列的内容区，与那一列的主/过滤标签共用同一块地方。
+        // 若继续算作「上次显示的就是它」，下面 previouslyShown 会把它重新点亮，用户看到的是
+        // 「关掉分屏后窗口里还是 Shell，而那个分组的主终端不见了」（实测：关分屏后该列只剩
+        // tab-shell-1 可见，tab-main-g-1 被清掉 active 并隐藏）。
+        //
+        // 独立列消失意味着「那一列的独立视图」不存在了，显示权应当交还给该列自己的串口标签；
+        // 用户想再看 Shell，点一下它的标签即可（那时走 activateShellTabInHost 显式点亮）。
+        const columnContentEl = document.getElementById(shellPaneTabsContentId());
+        if (columnContentEl) {
+            shellTabs.forEach(tab => {
+                if (tab.element?.parentElement !== columnContentEl) return;
+                tab.element.classList.remove('active');
+                tab.btn?.classList.remove('active');
+                tab.btn?.setAttribute('aria-selected', 'false');
+            });
+        }
         shellColumn.remove();
         detachedShellActiveTabId = null;
     }
