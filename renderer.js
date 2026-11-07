@@ -4971,7 +4971,12 @@ function syncShellLayoutOwnership() {
     // （实测：close-split 后 activePanels 仍是 tab-shell-1）。未分屏时它只是停在该列
     // 列首行的一个浮层，不该进入 pane 的 tabIds——所以这里不是「不登记」，而是
     // 「主动摘掉」：分屏期间它已经被登记过，光不登记清不掉旧值。
-    const unownedWhenNotSplit = !groupWorkspaceSplit.enabled;
+    //
+    // 但**单分组**是例外，不能摘：那时 Shell 与串口标签混在同一条 pane 行里
+    //（resolveShellTabHost 的第一分支），它本来就该在 pane.tabIds 里参与 active 互斥。
+    // 摘掉之后它不再是布局的成员，面板不再被 applyLayoutToDom 管理，于是与
+    // tab-main 同时保持 active——实测表现为「单分组点 Shell 后两个面板都可见」。
+    const unownedWhenNotSplit = !groupWorkspaceSplit.enabled && isMultiGroupLayer();
     shellTabs.forEach(tabState => {
         if (unownedWhenNotSplit && getShellTabOwner(tabState) === null) {
             serialGroups.forEach(group => {
