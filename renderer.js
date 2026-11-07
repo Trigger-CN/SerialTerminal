@@ -2432,20 +2432,13 @@ function hasDetachedShellColumn() {
     return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.detachedColumn === true);
 }
 
-// Shell 独立列是否应当存在。
-//
-// 语义是「未归属的 Shell 在**分屏时**自成一组」：分屏后每一列都必须能独立显示内容，
-// 而未归属 Shell 不属于任何容器的 pane，如果不给它一列，它就只能叠在某列的内容区上
-// （早期实现就是这样，表现为「两个面板同时 active、fit 算错高度」）。
-//
-// 判据不再看 detachedColumn：那个标记早期用来区分「停在上层行」与「自己成列」，
-// 但它表达的是同一件事的两种写法，于是同一个布局存在两个真源。现在只留一条规则：
-// 未归属 → 分屏时占一列；归属某组 → 住那组的下层行。detachedColumn 仅作为
-// 持久化兼容字段保留，不再参与任何布局判断。
+// Shell 独立列是否应当存在：只有分屏、且用户把某个未归属 Shell 划到了分组标签行才建。
+// 未分屏时它停在上层共享行，不建列 —— 否则屏幕上会莫名多出一列空标签栏。
 function isShellColumnActive() {
     return groupWorkspaceSplit.enabled
         && isMultiGroupLayer()
-        && shellTabs.some(tab => getShellTabOwner(tab) === null);
+        && shellTabs.length > 0
+        && hasDetachedShellColumn();
 }
 
 // 独立列里当前激活的 Shell 标签。独立列不在任何分组的布局里，因此激活态无法由
@@ -4726,12 +4719,22 @@ function resolveShellTabHost(tabState) {
     }
 
     // 已分屏 + 不归属：自占一列，该列只有一行标签栏。
-    //
-    // 旧实现这里要再判一次 detachedColumn（「用户把它拖到了分组标签行」）。
-    // 那个区分已经取消：未归属 Shell 在分屏时本来就该占一列，否则它只能叠在某列
-    // 内容区里，与「每列独立显示内容」直接矛盾。两个分支合并成一个，
-    // 也就不会再出现「存在一个要独立的、其它的跟着搬」那类漏洞。
     if (groupWorkspaceSplit.enabled && owner === null && isShellColumnActive()) {
+        const column = ensureShellColumnDom();
+        if (column) {
+            return {
+                listEl: document.getElementById(shellTabListId()),
+                contentEl: document.getElementById(shellPaneTabsContentId()),
+                layoutGroupId: SHELL_COLUMN_GROUP_ID,
+                layer: 'ownColumn'
+            };
+        }
+    }
+
+    // 用户明确要求自占一列（把它拖到了分组标签行）：该列只有一行标签栏。
+    // 必须逐标签判断：没被拖过的未归属 Shell 不能因为「存在一个要独立的」就跟着搬进去。
+    if (groupWorkspaceSplit.enabled && owner === null
+        && tabState.detachedColumn === true && isShellColumnActive()) {
         const column = ensureShellColumnDom();
         if (column) {
             return {
@@ -4836,11 +4839,11 @@ function placeShellTabs() {
     syncGroupSubRowVisibility();
 
     // 独立列里必须有一个激活的 Shell，否则整列内容区是空白的。
-    //
-    // 候选就是全部未归属 Shell：独立列现在装的就是它们，再按 detachedColumn 过滤
-    // 会让列表为空（那个标记已不参与任何布局判断），整列一直白着。
+    // 只从**明确要求独立**的那几个里选：把普通未归属 Shell 拉进来会让它同时在
+    // 列首行与分组行各出现一次。
     if (document.getElementById(shellColumnId())) {
-        const candidates = shellTabs.filter(tab => getShellTabOwner(tab) === null);
+        const candidates = shellTabs.filter(tab => getShellTabOwner(tab) === null
+            && tab.detachedColumn === true);
         if (!candidates.some(tab => tab.id === detachedShellActiveTabId)) {
             detachedShellActiveTabId = candidates[0]?.id || null;
         }
