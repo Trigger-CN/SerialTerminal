@@ -309,11 +309,11 @@ function rootFamilyOf(ws) {
 
 ```js
 function layoutColumns(ws) {
-  // 分屏：每个根级 Tab 一列
+  // 分屏：每个**容器**一列；根级叶不占列，停在其中一列的列首行
   if (ws.split.enabled) {
-    return roots(ws).map(t => ({
+    return roots(ws).filter(isContainer).map(t => ({
       id: t.id,
-      containerId: isContainer(t) ? t.id : null,
+      containerId: t.id,
       isFamily: false,
       tabItems: [t]
     }));
@@ -356,7 +356,7 @@ function layoutColumns(ws) {
 | 单组（扁平） | 否 | 1 | 是 | 容器全部子项 + 所有 Shell（按根级 order 混排） |
 | 单组（扁平） | 否 + pane 分屏 | 1 | 是 | **仅根级叶（Shell）**；容器子项在各自的 subRow |
 | 多组 | 否 | 1 | 否 | **全部分组标签 + 所有 Shell**（子项在各自的 subRow） |
-| 任意 | 是 | `roots().length` | 否 | 每个根级 Tab 各自一条 |
+| 任意 | 是 | 容器数（`roots().filter(isContainer).length`） | 否 | 每个容器各自一条；根级叶**不占列**，停在其中一列的列首行 |
 
 **渲染契约（方案 A 的另一半，必须在渲染层逐字遵守）**：扁平 + pane 分屏时，若 `tabItems` 为空，
 **第一条 subRow 复用一级 TabRow 的宿主**（即 pane-1 的 `.pane-tabs-header`），不另造一条空行；
@@ -409,6 +409,16 @@ function visiblePanelIdsOfColumn(ws, column) {
     if (pane && pane.activeTabId) return [pane.activeTabId];
   }
 
+  // 分屏后容器列里的根级叶（未归属 Shell 停在列首行）：它不在任何 pane 里，
+  // 焦点落在它身上时该列显示它，而不是那个 pane 的 activeTabId。
+  // 不写这一支，模型会认为该列仍显示串口标签，而页面显示的是 Shell（实测差异）。
+  if (ws.split.enabled) {
+    const focused = tabOf(ws, ws.focusedTabId);
+    if (focused && !isContainer(focused) && paneOfTab(ws, focused) === null) {
+      return [focused.id];
+    }
+  }
+
   return rows.length ? [rows[0].activeTabId].filter(Boolean) : [];
 }
 
@@ -433,6 +443,11 @@ panel.hidden = !visiblePanels(ws).has(tabId);
 ```
 
 没有「谁盖住谁」「哪个更高一层」「是不是叠在宿主分组上」。历史上 `stackShellTabOverHostGroup()` + `hideStackedShellTabsIn()` 存在的唯一理由，是 Shell 被塞进了某个 pane；当 Shell 是根级 Tab，它自己就是（或属于）一列，不需要遮盖任何人。
+
+> **当前实现差距（S5 待关闭）**：渲染层仍在用叠层（`.active` 互斥 + `stackShellTabOverHostGroup`），
+> 因此分屏时 Shell 面板会与该列的串口面板同时可见。这就是 `verify-tab-plan-strict` 的
+> `with-shell-panels` 失败的直接原因。这一项**不能靠改模型或放宽断言解决**——必须删除叠层，
+> 由上面这一行 `panel.hidden = !visiblePanels(ws).has(tabId)` 单一决定显隐。
 
 ### 3.6 派生量总览
 
@@ -494,7 +509,22 @@ function buildRenderPlan(ws) {
 
 ### 4.1 第一级：列
 
-`split.enabled === true` 时，`layoutColumns()` 返回 `roots()` 里每一项各一列（族被拆开，每个 Shell 也各占一列）。分界条数量 = 列数 - 1。
+`split.enabled === true` 时，每一列对应**一个容器**；根级叶（未归属的 Shell）**不额外占列**，
+它停在某一列的列首行，与分组标签同级。分界条数量 = 列数 - 1。
+
+> **这条语义由用户裁决，不是实现细节**：
+> 「两个串口分组左右分屏时，是用户右键点击了某个串口组将他移到左边或者右边，这就是被移动的组，
+> 和其他分组或者 shell 没关系，Shell 肯定是维持原来的位置不动」
+>
+> 因此「未归属 Shell 在分屏时自占一列」是**错误**方案，不得复活。Shell 的位置是标签行里的那个按钮，
+> 不是分组的内容区；关闭分屏后该列必须回到它自己的串口标签。
+>
+> **实现差距（S5 待关闭）**：当前 `layoutColumns()` 仍是 `roots().map(...)`，会给根级叶派生一列；
+> 而渲染层已按裁决不建这一列。因此 `verify-tab-plan-strict` 的 `with-shell-column-count` 与
+> `with-shell-panels` 两项仍失败——它们是**翻转的施工边界**，不是可以用放宽判据掩盖的问题。
+> `with-shell-panels` 之所以无法只靠改模型修好：渲染层当下用叠层让 Shell 面板与该列的
+> `tab-main` 同时可见，而模型一列只表达一个面板。只有删除叠层、由 `visiblePanels()` 单一决定显隐
+> （§3.5）之后，两边才可能逐项相等。
 
 宽度按 `split.sizes[columnId]` 归一化分配，并扣除分界条占位：`flex-basis: calc(<比例>% - <比例 × 分界条总占位>px)`。这个公式是历史缺陷「最右列越界」的修法（`8f55a0f`），必须保留。
 
@@ -527,9 +557,9 @@ function buildRenderPlan(ws) {
 | 组合 | 列数 | 每列 subRow |
 |---|---|---|
 | 列关、pane 关 | 1 | 扁平且无 pane 分屏：0；否则 1 |
-| 列开、pane 关 | `roots().length` | 1 |
+| 列开、pane 关 | 容器数 | 1 |
 | 列关、pane 开 | 1 | `panes.length` |
-| 列开、pane 开 | `roots().length` | 每列各自 `panes.length` |
+| 列开、pane 开 | 容器数 | 每列各自 `panes.length` |
 
 两级互不影响：`layoutColumns()` 只看 `workspace.split` 与根族，`layoutRowsOf()` 只看 `tab.paneSplit`。
 
