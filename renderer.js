@@ -2006,6 +2006,59 @@ function getPaneTabsContent(paneId) {
     return document.getElementById(`${paneId}-tabs-content`);
 }
 
+// 普通标签按钮（main / filter / chart / shell）上的右键菜单。
+//
+// 为什么需要这一层：分组级分屏是「右键标签」触发的，但之前只有 `.serial-group-tab`
+// （分组标签本身）挂了 contextmenu。主终端、过滤页、图表页、Shell 的标签按钮全都没挂，
+// 于是「有些标签右键没反应」——而恰恰是这些标签所属的分组才是用户想移走的那一组。
+//
+// 为什么复用 requestSerialGroupContextMenu 而不是另开一套菜单：右键一个普通标签时，
+// 用户的意图是「把我现在待的这个串口组移走」，作用面仍是分组而不是该标签。菜单项
+// （左右 / 上下 / 关闭分屏 / 新建串口）与分组标签上的完全一致，分出一套只会让两份
+// 模板各自漂移。
+//
+// 为什么必须委托：标签按钮会被 appendChild 在行之间搬动（Shell 在列首行与分组行之间
+// 来回走），构造时用闭包绑定的引用在搬动后仍有效，但拿到的 paneId 可能已经过时。
+// 委托在列表容器上、每次从 dataset 现读，与分组标签的写法保持一致。
+//
+// 定义位置必须在所有 pane 构造器之前：createPaneElement、createGroupPaneElement、
+// ensureShellColumnDom 都在模块加载期或早期调用，而函数声明虽然会提升，
+// 这里的调用发生在同一次加载里，提前定义能避免「某些 pane 先建、委托却没挂上」。
+function bindPaneTabListEvents(listEl) {
+    if (!listEl || listEl.dataset.paneTabEvents === '1') return;
+    listEl.dataset.paneTabEvents = '1';
+    listEl.addEventListener('contextmenu', event => {
+        // 分组标签自己的委托已经处理过，不要重复弹菜单。
+        if (event.target.closest('.serial-group-tab')) return;
+        const button = event.target.closest('.main-tab');
+        if (!button) return;
+        const tabId = button.dataset.target;
+        if (!tabId) return;
+        // 标签属于哪个分组，就用那个分组的分屏菜单。
+        // Shell 不在任何 pane.tabIds 里，resolvePaneId 会回落到默认 pane，
+        // 那时按激活分组算——用户右键 Shell 想移走的也是他当前正在看的那个组。
+        const paneId = resolvePaneId(button.dataset.paneId, tabId);
+        const groupId = groupIdFromPaneId(paneId) || activeGroupId;
+        event.preventDefault();
+        event.stopPropagation();
+        requestSerialGroupContextMenu(groupId);
+    });
+}
+
+// 从 pane id 反查它属于哪个分组。
+//
+// pane id 的拼法有两种：默认分组是 'pane-1' / 'pane-2'，其它分组是 'pane-1-<groupId>'。
+// 不用正则去猜：直接扫一遍已知分组，比对自己的 pane 前缀，拿到第一个命中的。
+// 扫不到（例如 Shell 用的那个合成 pane）就返回 null，由调用方回落激活分组。
+function groupIdFromPaneId(paneId) {
+    if (!paneId) return null;
+    const hit = serialGroups.find(group => {
+        const prefix = groupPaneId(group.id, 1).replace(/-1$/, '');
+        return typeof paneId === 'string' && paneId.startsWith(`${prefix}-`);
+    });
+    return hit ? hit.id : null;
+}
+
 // 按需创建第 3 个及以后的 pane 节点。
 //
 // index.html 里 pane-1 / pane-2 是静态写死的，行为与改造前完全一致；
@@ -2059,6 +2112,9 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
 
     header.appendChild(tabsList);
     header.appendChild(actions);
+    // 右键菜单委托必须在列表建好时就挂上：标签按钮是后来 appendChild 进来的，
+    // 事件委托不依赖子节点已存在。
+    bindPaneTabListEvents(tabsList);
 
     const content = document.createElement('div');
     content.className = 'main-tabs-content pane-tabs-content';
@@ -3410,6 +3466,10 @@ function ensureShellColumnDom() {
     list.className = 'main-tabs-list serial-group-tab-list';
     list.id = shellTabListId();
     list.setAttribute('role', 'tablist');
+    // Shell 标签的右键菜单也要能用（它住在这一行里）。
+    // 该行的 class 与分组标签行相同，但里面装的是 .main-tab 而不是 .serial-group-tab，
+    // 所以 bindGroupTabListEvents 不会误处理它，必须单独挂普通标签的委托。
+    bindPaneTabListEvents(list);
     row.appendChild(list);
     column.appendChild(row);
 
@@ -3585,6 +3645,10 @@ function createGroupPaneElement(groupId, paneId) {
 
     header.appendChild(tabsList);
     header.appendChild(actions);
+    // 非默认分组列里的主/过滤/图表标签也在这个列表里，右键分屏菜单同样要能用。
+    // createPaneElement 与 createGroupPaneElement 是两套并行的 pane 构造器，
+    // 两处都必须挂，漏一处就是「有些标签右键没反应」。
+    bindPaneTabListEvents(tabsList);
 
     const content = document.createElement('div');
     content.className = 'main-tabs-content pane-tabs-content';
@@ -4463,6 +4527,11 @@ window.__readTabModelPlan = () => {
 // 动态列的列表在 ensureSerialGroupWorkspaceDom 里建好后各自挂。
 bindGroupTabListEvents(document.getElementById(GROUP_TAB_LIST_ID));
 
+// 静态 pane-1 的标签行同理。它的列表里装的是主终端、过滤页、图表页这些普通标签，
+// 它们同样需要右键分屏菜单。动态 pane 由 createPaneElement 自己挂，Shell 独立列
+// 由 ensureShellColumnDom 挂（它不走 createPaneElement）。
+bindPaneTabListEvents(document.getElementById('pane-1-tabs-list'));
+
 // 新建 Shell 按钮**永久只在上层标签栏**：只要有分组标签行，pane 行就不再提供入口。
 //
 // 早期 pane 行与分组行各有一个：多分组时两层会同时出现两个一模一样的按钮，
@@ -4581,15 +4650,35 @@ function bindGroupTabListEvents(listEl) {
     });
     // 分组级分屏的唯一入口。不用工具栏按钮：分屏是低频且带方向的开关（左右 / 上下 /
     // 关闭三选一），排成按钮会占满标签栏——用户在布局图里明确要求分组标签不挤在一起。
+    //
+    // 这一行里除了分组标签，还可能住着未归属的 Shell（分屏时它的按钮被搬到该列的列首行）。
+    // Shell 不是 .serial-group-tab，早先这里直接 return，于是它右键毫无反应。现在把它
+    // 归到「普通标签」那一支，用同一个分组菜单——用户右键 Shell 时想移走的也是这个组。
     listEl.addEventListener('contextmenu', event => {
-        const button = event.target.closest('.serial-group-tab');
-        const groupId = button?.dataset.groupId;
-        if (!groupId) return;
+        const groupTab = event.target.closest('.serial-group-tab');
+        if (groupTab) {
+            const groupId = groupTab.dataset.groupId;
+            if (!groupId) return;
+            event.preventDefault();
+            event.stopPropagation();
+            requestSerialGroupContextMenu(groupId);
+            return;
+        }
+        const tabBtn = event.target.closest('.main-tab');
+        if (!tabBtn) return;
+        // 该行属于哪个分组，就用那个分组的菜单。行 id 形如 serial-group-tab-bar-<groupId>，
+        // 但默认分组用的是静态 id serial-group-tab-bar，所以改从 column 上读 dataset。
+        const column = listEl.closest('.group-column');
+        const groupId = column?.dataset.groupId;
+        if (!groupId || groupId === SHELL_COLUMN_GROUP_ID) return;
         event.preventDefault();
         event.stopPropagation();
         requestSerialGroupContextMenu(groupId);
     });
 }
+
+// 普通标签的右键委托与 groupIdFromPaneId 都定义在文件前段（紧邻 getPaneTabsContent），
+// 因为 pane 构造器在加载期就会调它们，定义在这里会来不及。
 
 // 决定「添加串口」按钮显示在哪一层。
 //
