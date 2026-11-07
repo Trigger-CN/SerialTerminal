@@ -4873,25 +4873,23 @@ function resolveShellTabHost(tabState) {
 // 模块级变量，导致「拖动一个 Shell，所有 Shell 一起跟着移动」（用户实测报告）。
 function placeShellTabs() {
     const shellColumn = document.getElementById(shellColumnId());
-    if (shellColumn && !isShellColumnActive()) {
-        // 拆列前先把这些 Shell 的「正在显示」状态抹掉。
+    const closingShellColumn = Boolean(shellColumn) && !isShellColumnActive();
+    if (closingShellColumn) {
+        // 拆列前先把 Shell 的「正在显示」状态抹掉。
         //
         // 它们接下来会被搬进某一分组列的内容区，与那一列的主/过滤标签共用同一块地方。
         // 若继续算作「上次显示的就是它」，下面 previouslyShown 会把它重新点亮，用户看到的是
-        // 「关掉分屏后窗口里还是 Shell，而那个分组的主终端不见了」（实测：关分屏后该列只剩
-        // tab-shell-1 可见，tab-main-g-1 被清掉 active 并隐藏）。
+        // 「关掉分屏后窗口里还是 Shell，而那个分组的主终端不见了」。
         //
-        // 独立列消失意味着「那一列的独立视图」不存在了，显示权应当交还给该列自己的串口标签；
-        // 用户想再看 Shell，点一下它的标签即可（那时走 activateShellTabInHost 显式点亮）。
-        const columnContentEl = document.getElementById(shellPaneTabsContentId());
-        if (columnContentEl) {
-            shellTabs.forEach(tab => {
-                if (tab.element?.parentElement !== columnContentEl) return;
-                tab.element.classList.remove('active');
-                tab.btn?.classList.remove('active');
-                tab.btn?.setAttribute('aria-selected', 'false');
-            });
-        }
+        // 判定不能用 `parentElement === 独立列内容区`：走到这里时面板可能已经被前一轮的
+        // 重排搬进分组列，那个条件会整批落空，等于没清（实测：关分屏后 Shell 一直占着
+        // 内容区，点主标签也切不回去）。改为「只要这次要拆列，就把全部 Shell 的显示状态
+        // 清掉」——拆列意味着独立视图不存在了，显示权应当交还给该列自己的串口标签。
+        shellTabs.forEach(tab => {
+            tab.element?.classList.remove('active');
+            tab.btn?.classList.remove('active');
+            tab.btn?.setAttribute('aria-selected', 'false');
+        });
         shellColumn.remove();
         detachedShellActiveTabId = null;
     }
@@ -4942,6 +4940,15 @@ function placeShellTabs() {
 
     // 没有独立列：让上一次显示的 Shell 继续显示（包括刚被拖进某组的那个）。
     // 只认新宿主里确实已经就位的那一个，不猜。
+    //
+    // 但分屏刚关闭的这一轮必须跳过：previouslyShown 记的是分屏期间的状态，而关分屏的语义是
+    // 「回到单列，看这个分组的串口」。不跳过的话，这里会调 activateShellTabInHost →
+    // stackShellTabOverHostGroup 把 Shell 面板重新盖到该列内容区上，用户看到的是
+    // 「关掉分屏后窗口里还是 Shell，主终端不见了」（实测调用栈已证实这条路径）。
+    //
+    // 判据用「分屏已关」而不是「刚拆了独立列」：未归属的 Shell 在分屏时可能压根没有独立列
+    // （它停在某列列首行），那种形态下拆列分支不会执行，用 closingShellColumn 会漏掉。
+    if (!groupWorkspaceSplit.enabled) return;
     for (const tab of previouslyShown) {
         const host = resolveShellTabHost(tab);
         if (host.contentEl && tab.element.parentElement === host.contentEl) {
@@ -4957,7 +4964,30 @@ function placeShellTabs() {
 // 旧分组的布局仍把它列在 tabIds 里，下一次 applyLayoutToDom 就会把它拽回去（表现为
 // 「拖过去又跳回来」），或者因为找不到而当成不可渲染直接 prune（标签凭空消失）。
 function syncShellLayoutOwnership() {
+    // 未分屏时未归属的 Shell 不能留在任何分组布局里。
+    //
+    // 留在布局里，applyLayoutToDom 会把它当成该 pane 的合法标签并参与 active 互斥，
+    // 结果就是关掉分屏后 Shell 面板依然占着串口分组的内容区、点主标签也切不回去
+    // （实测：close-split 后 activePanels 仍是 tab-shell-1）。未分屏时它只是停在该列
+    // 列首行的一个浮层，不该进入 pane 的 tabIds——所以这里不是「不登记」，而是
+    // 「主动摘掉」：分屏期间它已经被登记过，光不登记清不掉旧值。
+    const unownedWhenNotSplit = !groupWorkspaceSplit.enabled;
     shellTabs.forEach(tabState => {
+        if (unownedWhenNotSplit && getShellTabOwner(tabState) === null) {
+            serialGroups.forEach(group => {
+                const layout = getGroupWorkspaceLayout(group.id);
+                if (!layout.panes.some(pane => pane.tabIds.includes(tabState.id))) return;
+                isSyncingShellLayer = true;
+                try {
+                    getGroupWorkspaceManager(group.id).removeTab(tabState.id, {
+                        fallbackTabId: mainTabId(group.id), persist: false
+                    });
+                } finally {
+                    isSyncingShellLayer = false;
+                }
+            });
+            return;
+        }
         const host = resolveShellTabHost(tabState);
         const target = host.layoutGroupId;
         serialGroups.forEach(group => {
