@@ -17,6 +17,15 @@
 const DEFAULT_PANE_ID = 'pane-1';
 const MAX_DEPTH = 32;
 
+// 所有 `columnMode === 'ownColumn'` 的根级叶**共享同一列**的列 id。
+//
+// 为什么不是「每个叶各一列」：独立列的语义是用户原话「shell 标签页如果独立一组，
+// 则该组只显示一行标签栏」——它描述的是一**组**，不是一个标签。渲染层的 DOM
+// 契约也只有一个这样的列容器（`serial-group-workspace-__shell__`，其 key 就是
+// 这个字符串）。若模型按叶派生多列，翻转后必然出现「模型里有列、DOM 里没有容器」
+// 的空列，标签要么消失要么重复。
+const OWN_COLUMN_ID = '__shell__';
+
 // ---------------------------------------------------------------------------
 // 基础查找
 // ---------------------------------------------------------------------------
@@ -129,23 +138,37 @@ function inFamily(ws, tab) {
 // 不是“分屏就多一列”，而是用户自己要它独立。
 function layoutColumns(ws) {
     if (ws.split.enabled) {
-        const containers = roots(ws).filter(isContainer).map(container => ({
+        const rank = new Map(roots(ws).map((tab, index) => [tab.id, index]));
+        const columns = roots(ws).filter(isContainer).map(container => ({
             id: container.id,
             containerId: container.id,
             isFamily: false,
-            tabItems: [container, ...leafItemsOfColumn(ws, container.id)]
+            tabItems: [container, ...leafItemsOfColumn(ws, container.id)],
+            rank: rank.get(container.id) ?? 0
         }));
-        const own = ownColumnLeaves(ws).map(leaf => ({
-            id: leaf.id,
-            containerId: null,
-            isFamily: false,
-            tabItems: [leaf]
-        }));
+        // 全部独立叶合成**一列**，而不是每叶一列：独立列是「一组只显示一行标签栏」，
+        // 多个 Shell 被拖到分组标签行时它们同住那一行（与渲染层唯一的 Shell 列一致）。
+        const own = ownColumnLeaves(ws);
+        if (own.length) {
+            columns.push({
+                id: OWN_COLUMN_ID,
+                containerId: null,
+                isFamily: false,
+                tabItems: own.slice(),
+                // 排在它第一个叶的根级位置上，用户拖到中间就不会被挤回最右。
+                rank: Math.min(...own.map(leaf => rank.get(leaf.id) ?? 0))
+            });
+        }
         // 顺序：按根级 order 合并两类列，保证独立列出现在它本该在的位置。
         // 先容器后独立列会让独立列总被挤到最右，用户把它拖到中间后会弹回去。
-        const rank = new Map(roots(ws).map((tab, index) => [tab.id, index]));
-        return [...containers, ...own]
-            .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+        return columns
+            .sort((a, b) => a.rank - b.rank)
+            .map(column => ({
+                id: column.id,
+                containerId: column.containerId,
+                isFamily: column.isFamily,
+                tabItems: column.tabItems
+            }));
     }
 
     const members = roots(ws);
@@ -225,7 +248,7 @@ function hostLeavesOfColumn(ws, columnId) {
 // 历史缺陷复活（用户实测报过）。
 function resolveLeafColumnId(ws, leaf) {
     if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;
-    if (leafColumnMode(leaf) === 'ownColumn') return leaf.id;
+    if (leafColumnMode(leaf) === 'ownColumn') return OWN_COLUMN_ID;
     const hosted = leafHostGroup(ws, leaf);
     if (hosted) return hosted;
     const containers = roots(ws).filter(isContainer);
@@ -298,15 +321,19 @@ function visiblePanelIdsOfColumn(ws, column) {
     const rows = layoutRowsOf(ws, column);
     if (rows.length > 1) return rows.map(pane => pane.activeTabId).filter(Boolean);
 
-    // 独立列：它由某个根级叶自己充当列，恒显它自己。
+    // 独立列：这一列只有一行标签栏，住着全部 `ownColumn` 叶。
+    // 焦点落在其中某个叶上就显示它；焦点在别处时显示第一个（与渲染层「独立列必须
+    // 有一个激活 Shell，否则整列内容区空白」的处理一致）。
     //
     // **`ws.split.enabled` 是必需的前提**：未分屏时 `layoutColumns()` 只能返回一列，
     // 而那一列的 `containerId` 在「焦点落在未归属 Shell」时也是 `null`——不加这个
     // 前提就会把那条唯一列当成独立列，于是点容器里的叶时什么面板也不显（实测失败：
     // `in flat mode the content area follows the focus, including a shell`）。
     if (ws.split.enabled && !column.containerId) {
-        const own = tabOf(ws, column.id);
-        return own && !isContainer(own) ? [own.id] : [];
+        const own = column.tabItems.filter(tab => tab && !isContainer(tab));
+        const focused = tabOf(ws, ws.focusedTabId);
+        if (focused && own.some(tab => tab.id === focused.id)) return [focused.id];
+        return own.length ? [own[0].id] : [];
     }
 
     // 未分屏时整列只有一个内容区，而内容区跟的是**焦点**：焦点可能落在容器里的
@@ -358,8 +385,10 @@ function panelIdsOfColumn(ws, column) {
         for (const id of row.tabIds) push(id);
         push(row.activeTabId);
     }
-    // 独立列由叶自己当列，没有行；它的面板就是它自己。
-    if (!column.containerId && ws.split.enabled) push(column.id);
+    // 独立列由叶自己当列，没有行；它的面板就是这一行里的全部叶。
+    if (!column.containerId && ws.split.enabled) {
+        for (const tab of column.tabItems) if (tab && !isContainer(tab)) push(tab.id);
+    }
     return out;
 }
 
@@ -914,6 +943,7 @@ function validateAndRepair(ws) {
 }
 
 module.exports = {
+    OWN_COLUMN_ID,
     isContainer,
     hasOwn,
     tabOf,

@@ -36,7 +36,8 @@ const {
     resetIdSeq,
     normalizeSizes,
     validateAndRepair,
-    withDiagnostics
+    withDiagnostics,
+    OWN_COLUMN_ID
 } = model;
 
 function fresh() {
@@ -249,8 +250,14 @@ test('a root leaf follows its columnId and survives that column being deleted', 
 });
 
 // `columnMode` 是「这个根级叶自不自成独立列」的唯一真源，承接历史上
-// `tabState.detachedColumn` 的职责。独立列必须有自己的一条列，且恒显它自己。
-test('a root leaf with columnMode ownColumn gets its own column while split is on', () => {
+// `tabState.detachedColumn` 的职责。独立列只有一条，住着全部 `ownColumn` 叶。
+//
+// **断言为何从「columnId === shell.id」改为固定列 key**：旧实现按叶派生生列，
+// 每个 ownColumn 叶一列、列 id 就是叶 id；但渲染层只有一个 Shell 列容器
+// （`serial-group-workspace-__shell__`），用户原话也是「shell 标签页如果独立一组，
+// 则该组只显示一行标签栏」——独立列描述的是一**组**而不是一个标签。旧断言把
+// “一个叶 = 一列”固化了，它验证的是实现细节而不是用户可见行为，因此更新为列 key。
+test('a root leaf with columnMode ownColumn gets the shared own column while split is on', () => {
     const ws = fresh();
     addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
     const shell = addShell(ws);
@@ -265,35 +272,51 @@ test('a root leaf with columnMode ownColumn gets its own column while split is o
 
     const plan = buildRenderPlan(ws);
     assert.equal(plan.columns.length, 3, 'ownColumn 必须多出一列');
-    const own = plan.columns.find(col => col.columnId === shell.id);
-    assert.ok(own, '独立列的 columnId 就是叶自己的 id');
+    const own = plan.columns.find(col => col.columnId === OWN_COLUMN_ID);
+    assert.ok(own, '独立列对全部分组共用一个固定 key');
     assert.equal(own.containerId, null, '独立列没有容器');
     assert.deepEqual(own.tabItems.map(t => t.id), [shell.id]);
     assert.deepEqual(own.rows, [], '独立列没有 subRow');
-    assert.deepEqual(own.panelIds, [shell.id], '独立列恒显它自己');
+    assert.deepEqual(own.panelIds, [shell.id], '独立列显示它里面的叶');
     // 它不能同时出现在别的容器的列首行里（否则同一个按钮会在两处可见）。
     assert.ok(!plan.columns.some(col => col.containerId && col.tabItems.some(t => t.id === shell.id)));
     // 反向对照：把 columnMode 改回 row，上面的三列与独立面板必须消失。
     setLeafColumnMode(ws, shell.id, 'row');
     const back = buildRenderPlan(ws);
     assert.equal(back.columns.length, 2);
-    assert.ok(!back.columns.some(col => col.columnId === shell.id));
+    assert.ok(!back.columns.some(col => col.columnId === OWN_COLUMN_ID));
 });
 
-// 把独立列的叶拖回答器列：形态必须自动回 `row`，否则它会同时属于两处。
-test('moving an ownColumn leaf back into a column clears columnMode', () => {
+// 多个 `ownColumn` 叶必须共享**同一列**，而不是每叶一列。
+// 渲染层只有一个 Shell 列容器；若模型派生多列，翻转后必然出现没有对应 DOM 的空列。
+test('multiple ownColumn leaves share one own column ordered by root order', () => {
     const ws = fresh();
-    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const first = addShell(ws);
+    const second = addShell(ws);
     setColumnSplit(ws, true);
-    setLeafColumnMode(ws, shell.id, 'ownColumn');
-    assert.equal(buildRenderPlan(ws).columns.length, 3);
+    setLeafColumnMode(ws, first.id, 'ownColumn');
+    setLeafColumnMode(ws, second.id, 'ownColumn');
 
-    assert.equal(setLeafColumn(ws, shell.id, other.id), true);
-    assert.equal(leafColumnMode(shell), 'row');
+    const plan = buildRenderPlan(ws);
+    assert.equal(plan.columns.length, 3, '两个独立叶仍然只多出一列');
+    const ownColumns = plan.columns.filter(col => col.containerId === null);
+    assert.equal(ownColumns.length, 1);
+    assert.equal(ownColumns[0].columnId, OWN_COLUMN_ID);
+    assert.deepEqual(ownColumns[0].tabItems.map(t => t.id), [first.id, second.id], '按根级 order 排列');
+    assert.deepEqual(ownColumns[0].panelIdsAll, [first.id, second.id], '两个面板都住这一列');
+
+    // 反向对照：只把第二个改回 row，列数不变但列内只剩第一个。
+    setLeafColumnMode(ws, second.id, 'row');
+    const one = buildRenderPlan(ws);
+    assert.equal(one.columns.length, 3);
+    assert.deepEqual(one.columns.find(c => c.columnId === OWN_COLUMN_ID).tabItems.map(t => t.id), [first.id]);
+
+    // 两个都回 row：独立列必须整体消失。
+    setLeafColumnMode(ws, first.id, 'row');
     assert.equal(buildRenderPlan(ws).columns.length, 2);
-    assert.equal(resolveLeafColumnId(ws, shell), other.id);
 });
+
 
 // `hostGroupId` 是「Shell 归属某个分组」的唯一真源，承接历史 `ownerGroupId`。
 // 归属的叶必须落在该列的下层行（rows）里，而不是列首行（tabItems）——
