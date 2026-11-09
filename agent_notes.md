@@ -2236,8 +2236,33 @@ function syncShellAddButtonVisibility() {
 
 #### 四、仍未验证
 
-- 真实用户鼠标连续快速切换时的观感（现有证据是 CDP 合成点击 + `getComputedStyle`）；
 - 大量标签（数十个）下复用路径的相对顺序是否始终与 `pane.tabIds` 一致（未构造这种数据）。
+
+---
+
+### 13A.16 渲染层翻转后的三类组合形态补测（本轮）
+
+`TAB_ARCHITECTURE.md` §11.6.6 之前写着三类形态“零覆盖”：未分屏多受托管叶、四列以上、多 Shell 混合。
+本轮补上，并且它们真的抓到了三处模型缺陷（不是测试写错）：
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 先把 Shell 挂进某组、再拖到分组标签行 → 同一叶同时进独立列与该组下层行（`.test` 层表现为独立列里 0 个按钮） | `setLeafColumnMode('ownColumn')` 只改 `columnMode`；反向的 `setLeafHostGroup` 会清 `columnMode`——互斥只做了一个方向 | 两个写入口**两向互斥**；`renderer.js` 的 `setShellColumnModeInModel` 也同步补 `hostGroupId = null` |
+| 2 | 扁平 + pane 分屏 + 受托管叶 → 该叶同时出现在一级行与 pane-1 行 | 扁平分屏分支只排除容器 | `tabItems` 过滤器加 `!leafHostGroup(ws, tab)` |
+| 3 | 残留第二个非空 pane 时（`paneSplit.enabled === false`），一个没有行的叶被点亮，面板搬不进任何内容区 | 未分屏分支直接返回焦点叶，不校验它是否在本列会画的行上 | 新增 `isShownInColumn(column, rows, tabId)`（行 ∪ 列首行），未命中回落 `rows[0]` |
+
+**随机探针（不入库）**：300 种子 × 80 步随机操作，每步检查三条不变量——同一标签只定位一次 /
+某列亮着的面板必住进该列 / 全局可见面板必属于某一列。修复前 1694 条违规，修复后 **0**。
+
+**另一个只靠真实 DOM 才能发现的缺陷**：`isVisibleColumnKey()` 仍用“只有参与分屏的 `groupIds` 可见”
+这条**已删除的旧语义**。屏幕上五列全在时它只认其中两列，于是记在 g-1 的未归属 Shell 被改成
+当前激活列（实测 `shape-c-top-row-shell-in-group-row` 失败）。改为`isGroupColumnVisible()`（只看列容器是否存在且未隐藏）。
+
+这是 `TAB_ARCHITECTURE.md` 里“重命名/翻转后残留旧判据”的又一例：删语义时要搜**它的判据函数**，不能只删调用点。
+
+**验证证据**：单测 **564/564**；`verify-tab-plan-shapes` **29/29**（`diag862`）；
+回归 `verify-tab-plan-strict` **48/48**（`diag863`）、`verify-shell-drag` **24/24**（`diag864`）、
+全量 `run-all-865.txt` **15 个脚本全部 exit=0 + renderer-diag=clean**。
 
 ---
 

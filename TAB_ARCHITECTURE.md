@@ -1479,8 +1479,9 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 | 维度 | 结果 |
 |---|---|
-| 全量单测 | 557/557 |
+| 全量单测 | 557/557（此后补齐三形态与反向对照，现为 **564/564**） |
 | `verify-tab-plan-strict` | **48/48 PASS**，renderer-diag=clean（含两个独立 Shell、上下分屏） |
+| **`verify-tab-plan-shapes`（后续新增）** | **29/29 PASS**，renderer-diag=clean（未分屏多受托管叶 / 五列 / 多 Shell 混合） |
 | `verify-tab-order` | 8/8；`verify-shell` 16/16；`verify-shell-drag` 24/24；`verify-shell-switchback` 14/14 |
 | 其余既有脚本 | `verify-user-paths` 15/15、`verify-group-columns` 37/37、`verify-group-split` 19/19、`verify-context-menu-and-highlight` 17/17、`verify-split-geometry` 26/26、`verify-shell-buttons-split` 16/16、`verify-no-tab-flash` 18/18、`verify-titles` clean、`verify-sidebar-groups` 14/14、`verify-display-pref-scope` 24/24、`verify-connect-group` 23/23、`verify-same-port-guard` 15/15、`verify-layout-persist` 14/14 |
 | 静态门禁 | `node --check` ×4 通过；`check-renderer-module-load` 通过；`scan-undefined` missing=none |
@@ -1489,7 +1490,34 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 却按旧的「只有参与分屏的分组才可见」语义断言 2 列——该语义已随 ④ 删除（列集合只由容器决定）。
 处理方式是**只改步骤不改断言**：两列段真的只留两个分组，第三个分组挪到三列段再建。
 
-#### 11.6.6 ④ 剩下的已知边界
+#### 11.6.6 补测：三类此前零覆盖的形态（新增）
+
+`verify-tab-plan-strict` 的 48 项只覆盖单形态组合。��下来的三类形态此前**一支脚本都没有**，
+而标签体系历史上恰恰是组合形态出错（11.6.4 的七类缺陷里有三类是组合错）：
+
+| 形态 | 模型侧新增用例 | 真实 DOM 侧判据 |
+|---|---|---|
+| 未分屏 + 多分组 + **多个受托管叶** | `split off with several hosted leaves keeps every leaf in exactly one place` | `shape-a-*`（13 项） |
+| **五列**（4 容器 + 一个共享独立列） | `four containers plus one shared own column keep five columns in root order` | `shape-b-*`（8 项，含 4 条分界条） |
+| **多 Shell 混合**（列首行 / 独立列 / 受托管） | `mixed shell placements never put one shell in two columns` | `shape-c-*`（8 项，逐个 Shell 验真实宿主列表） |
+
+**补测直接抽出三处模型缺陷**（不是测试写错）：
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 先挂进某组、再拖到分组标签行 → 同一叶同时进独立列与那组的下层行（独立列**一个按钮都没有**） | `setLeafColumnMode('ownColumn')` 只改 `columnMode`，不清 `hostGroupId`；反向的 `setLeafHostGroup` 会清 `columnMode`，只清了一个方向 | 两个写入口**两向互斥**：切成独立列时同时 `hostGroupId = null`；`validateAndRepair` 不再需要猜 |
+| 2 | 扁平 + pane 分屏 + 受托管叶 → 该叶同时出现在一级行与 pane-1 行 | 扁平分屏分支只排除了容器，没排除受托管叶 | 一级行 `filter(tab => !isContainer(tab) && !leafHostGroup(ws, tab))` |
+| 3 | 未分屏但布局里残留第二个非空 pane 时，一个**没有行**的叶被点亮 | `visiblePanelIdsOfColumn` 的未分屏分支直接返回焦点叶，不检查它是否在本列真正会画的行上 | 新增 `isShownInColumn(column, rows, tabId)`（行 ∪ 列首行），未命中则回落 `rows[0]` |
+
+**验证证据**：单测 **564/564**；`verify-tab-plan-shapes` **29/29**（diag862）；
+回归 `verify-tab-plan-strict` **48/48**（diag863）、`verify-shell-drag` **24/24**（diag864）、
+全量 `run-all-865` **15 个脚本全部 exit=0 + renderer-diag=clean**。
+
+**一处预置判据的修订（旧断言失效，不是产品缺陷）**：`verify-tab-plan-shapes` 的 B 段最初点两次
+「添加分组」，实际建出 6 个容器却按 5 列断言——与 11.6.5 的两处同类。只改步骤（A 段只建 1 个额外分组），
+`shape-b-five-columns` / `shape-b-five-visible-columns` / `shape-b-four-splitters` 三条断言一字未改。
+
+#### 11.6.7 ④ 剩下的已知边界
 
 - 渲染层仍保留少量兼容旧调用方的薄封装（`renderSerialGroupTabBar` / `applyGroupWorkspaceSplitLayout` / `syncGroupWorkspaceVisibility`），它们只调 `renderWorkspaceNow()`。
 - `ensureShellColumnDom` 必须保留：它建的正是模型 `OWN_COLUMN_ID` 那一列的真实容器。
@@ -1521,7 +1549,10 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 指的是尚未做过用户手测的体验类问题，而不是实现缺失。
 
 当前已具备的证据：`tab-model.js` 全部派生量与 I1–I10 有性质测试（120 种子 × 120 步）；
-`buildRenderPlan()` 在**渲染层已消费它**的前提下与真实 DOM 在 10 类形态下逐项相等（`verify-tab-plan-strict` 48/48）。
+`buildRenderPlan()` 在**渲染层已消费它**的前提下与真实 DOM 逐项相等：`verify-tab-plan-strict` 48/48
+覆盖 10 类单形态，`verify-tab-plan-shapes` 29/29 覆盖三类组合形态（未分屏多受托管叶 / 五列 / 多 Shell 混合）。
+另外有一支定位不入库的随机探针（300 种子 × 80 步）在纯模型上验证三条不变量：
+同一标签只定位一次、某列亮着的面板必住进该列、全局可见面板必属于某一列。零违规。
 以下事项仍需在实际操作中重新取证：
 
 | # | 未验证项 | 说明 |
