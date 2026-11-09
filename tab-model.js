@@ -407,18 +407,54 @@ function visiblePanels(ws) {
 }
 
 // 渲染层的唯一输入。
+//
+// 这份计划必须**自足**：渲染层不允许再出现 split / paneSplit / isFlat / roots /
+// childrenOf / rootFamilyOf。凡是「画在哪、画几行、显哪个」的判断都在这里算完，
+// 渲染层只负责比对 DOM 与计划的差异。
 function buildRenderPlan(ws) {
     const cols = layoutColumns(ws);
+    const containers = roots(ws).filter(isContainer);
+    const focused = tabOf(ws, ws.focusedTabId);
+    const focusedLeafColumn = focused && !isContainer(focused)
+        ? resolveLeafColumnId(ws, focused)
+        : null;
+    const firstContainerId = containers.length ? containers[0].id : null;
+    // 列容器的 DOM key。不能直接用 column.id：
+    //   未分屏的非扁平形态只返回一列，它的 id 取 `members[0].id`（可能是个容器 id，
+    //   也可能是别的），而真正承载 pane 的是 `containerId` 指向的那个列。
+    //   独立列的 id 就是 OWN_COLUMN_ID。
+    // 这个映射属于「布局事实」，因此在这里算完，渲染层不再自己推导。
+    const domKeyOf = column => {
+        if (column.id === OWN_COLUMN_ID) return OWN_COLUMN_ID;
+        if (column.containerId) return column.containerId;
+        // 非分屏形态根本没有独立列：焦点落在 `ownColumn` 的叶上时，
+        // resolveLeafColumnId 会返回 OWN_COLUMN_ID，直接拿它当 domKey 会凭空造出一列
+        // （实测：关分屏后 Shell 列仍在，两个列容器一隐一显）。
+        // 那一列真正该是「该叶自己的 columnId」，退一步至少是第一容器列。
+        if (focusedLeafColumn === OWN_COLUMN_ID) return firstContainerId || column.id;
+        return focusedLeafColumn || firstContainerId || column.id;
+    };
     return {
         columns: cols.map(column => {
             const container = column.containerId ? tabOf(ws, column.containerId) : null;
             const rows = layoutRowsOf(ws, column);
+            const paneSplit = container && container.paneSplit ? container.paneSplit : null;
+            const domKey = domKeyOf(column);
             return {
                 columnId: column.id,
+                // 渲染层据此找/建列容器；容器列 = 容器 id，独立列 = OWN_COLUMN_ID。
+                domKey,
                 containerId: column.containerId,
                 isFamily: column.isFamily,
                 tabItems: column.tabItems,
                 collapsed: container ? container.collapsed === true : false,
+                // 「这一列内部要不要分屏」也是渲染层需要的事实：它决定 subRow 数量与
+                // 各 pane 的显示，但**判断本身**在模型里已经做完，渲染层只读结果。
+                splitEnabled: Boolean(paneSplit && paneSplit.enabled === true),
+                orientation: paneSplit && paneSplit.orientation === 'vertical' ? 'vertical' : 'horizontal',
+                paneSizes: paneSplit ? { ...(paneSplit.sizes || {}) } : {},
+                // 这一列在分组级分屏里的占比（外层容器按它写 flex-basis）。
+                size: ws.split && ws.split.enabled ? (ws.split.sizes || {})[domKey] : null,
                 rows: rows.map(pane => ({
                     paneId: pane.id,
                     tabs: pane.tabIds.map(id => tabOf(ws, id)).filter(Boolean),
@@ -430,6 +466,15 @@ function buildRenderPlan(ws) {
                 panelIdsAll: panelIdsOfColumn(ws, column)
             };
         }),
+        // 外层（列级）分屏：方向与占比。渲染层只按它写类名与 flex-basis。
+        columnLayout: {
+            enabled: Boolean(ws.split && ws.split.enabled === true),
+            orientation: ws.split && ws.split.orientation === 'vertical' ? 'vertical' : 'horizontal',
+            sizes: { ...((ws.split && ws.split.sizes) || {}) }
+        },
+        // 一级 TabRow 是否显示（分组标签行）。只有一个容器时那是纯噪声。
+        containerCount: containers.length,
+        tabBarVisible: containers.length > 1,
         panelIds: [...visiblePanels(ws)],
         subRowTabIds: cols.flatMap(column =>
             layoutRowsOf(ws, column).flatMap(pane => pane.tabIds.slice())

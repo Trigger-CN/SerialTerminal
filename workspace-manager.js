@@ -45,17 +45,11 @@ function createWorkspaceManager(options = {}) {
         onTabMoved,
         ensurePaneElement,
         fitWorkspace,
-        // 可选：让调用方接管「某个标签的按钮应挂在哪个容器里」。返回 null 表示按默认规则
-        // （留在所属 pane 的 tabsList）。Shell 标签在多分组时会搬到分组栏，而它仍属于
-        // pane-1 的 tabIds，因此布局层仍要能找到它的按钮并给它上激活态。
-        resolveTabButtonHost,
-        // 可选：按 data-target 查找标签按钮。默认只在 pane 内找，但被搬到外层的按钮
-        // 不在那个 pane 里，必须允许调用方提供更宽的查找。
-        findTabButton,
-        // 可选：把「本分组的工作区根节点 / 分组内分界条 / 本分组的 pane 元素列表」
-        // 接管成注入式。P5 两级分屏后每个分组各有一套 root 与 splitter，id 带分组后缀（非默认
-        // 分组是 workspace-root-g-1 这类），全局 getElementById('workspace-root') 会永远
-        // 取到默认分组那份。不注入时逐字沿用改造前的全局写法，单串口行为零变化。
+        // 布局变了就请求渲染。**这是布局层唯一能影响 DOM 的方式**：
+        // 它不再直接搬按钮 / 搬面板 / 改 .active —— 那些全部归 renderWorkspace()。
+        // 早期这里传的是 resolveTabButtonHost / findTabButton，让布局层反过来问渲染层
+        // 「这个按钮该挂哪一行」，于是两边都能写 DOM，出现两套真源。
+        onLayoutChanged,
         getWorkspaceRoot,
         getSplitter,
         getPaneElements
@@ -65,34 +59,9 @@ function createWorkspaceManager(options = {}) {
         return getLayout();
     }
 
-    // 以下三个解析器是 P5 两级分屏的接入点：每个分组各有一套 root / splitter / pane 集合，
-    // 默认回调逐字沿用改造前的全局写法（单串口行为零变化），非默认分组由调用方注入。
-    function resolveWorkspaceRoot() {
-        if (typeof getWorkspaceRoot === 'function') {
-            const root = getWorkspaceRoot();
-            if (root) return root;
-        }
-        return document.getElementById('workspace-root');
-    }
-
-    function resolveSplitter() {
-        if (typeof getSplitter === 'function') {
-            const splitter = getSplitter();
-            if (splitter) return splitter;
-        }
-        return document.getElementById('workspace-splitter');
-    }
-
-    // 注意必须返回「本分组自己的」pane 元素。用 document.querySelectorAll('.workspace-pane')
-    // 会把其它分组的 pane 一并算进来：两组同时存在时切 activePaneId 会把两个分组的 pane
-    // 激活态一起改，表现为「切一个分组，另一个分组的边框也亮了」。
-    function resolvePaneElements() {
-        if (typeof getPaneElements === 'function') {
-            const list = getPaneElements();
-            if (Array.isArray(list)) return list;
-        }
-        return Array.from(document.querySelectorAll('.workspace-pane'));
-    }
+    // 布局层不再需要 workspace root / splitter / pane 元素集合：它们全部是
+    // renderWorkspace() 的职责范围（按 plan 建列建行）。保留这三个注入点会让
+    // 布局层又具备写 DOM 的能力，因此不再消费。
 
     // 布局可能包含 DOM 里还不存在的 pane（静态页只有两个，而布局层已支持 N 个）。
     // 必须在任何 appendChild 之前把节点补齐，否则 appendChild(null) 会静默丢掉标签页。
@@ -201,39 +170,32 @@ function createWorkspaceManager(options = {}) {
         return getLayoutState().panes.some(pane => pane.activeTabId === tabId);
     }
 
+    // 「这个标签能不能渲染」只看**模型**：它是不是一个在 workspace 里存在的节点。
+    //
+    // 早期这里查 DOM（按钮在不在 pane 里、面板在不在 pane 里），于是布局层反过来
+    // 依赖渲染结果：渲染层一旦把 Shell 的按钮搬到分组行，布局层就判它不可渲染并把
+    // 它从 tabIds 里 prune 掉，标签彻底消失。现在渲染层怎么摆都不会改变模型的成员资格。
     function hasRenderableTab(paneId, tabId) {
-        if (!tabId) return false;
-        const paneEl = getPaneDom(paneId);
-        if (!paneEl) return false;
-        // 面板一定在这个 pane 里；按钮则可能被调用方搬到外层容器（多分组时的 Shell 标签）。
-        // 若仍用 paneEl.querySelector 找按钮，被搬走的标签会被判为不可渲染，随后被
-        // prunePaneTabIds() 从布局里删掉，表现为「切到多分组后 Shell 标签彻底消失」。
-        const tabButton = findTabButton
-            ? findTabButton(tabId, paneId)
-            : paneEl.querySelector(`.main-tab[data-target="${tabId}"]`);
-        const tabPane = paneEl.querySelector(`.main-tab-pane#${tabId}`);
-        return Boolean(tabButton && tabPane);
+        return Boolean(tabId);
     }
 
     function findFirstRenderableTabId(paneId) {
         const pane = getPaneById(paneId);
-        return pane.tabIds.find(tabId => hasRenderableTab(paneId, tabId)) || null;
+        return pane.tabIds[0] || null;
     }
 
     function prunePaneTabIds(paneId) {
-        const pane = getPaneById(paneId);
-        pane.tabIds = pane.tabIds.filter(tabId => hasRenderableTab(paneId, tabId));
+        // 成员资格不在这里修剪：空 pane 由 reconcileEmptyPanes 统一收敛。
     }
 
     function ensurePaneActiveTab(paneId) {
         const pane = getPaneById(paneId);
-        prunePaneTabIds(paneId);
         if (!pane.tabIds.length) {
             pane.activeTabId = null;
             return;
         }
-        if (!pane.activeTabId || !pane.tabIds.includes(pane.activeTabId) || !hasRenderableTab(paneId, pane.activeTabId)) {
-            pane.activeTabId = findFirstRenderableTabId(paneId) || pane.tabIds[0] || null;
+        if (!pane.activeTabId || !pane.tabIds.includes(pane.activeTabId)) {
+            pane.activeTabId = pane.tabIds[0] || null;
         }
     }
 
@@ -246,16 +208,13 @@ function createWorkspaceManager(options = {}) {
 
         // 宿主 pane 由规整逻辑决定（两 pane 时是 pane-1，多 pane 时是有内容的那个），
         // 它会写进 layout.activePaneId，这里必须跟着走，不能再写死 'pane-1'。
+        //
+        // DOM 成动静交给渲染层：这里只把「哪个标签从哪个 pane 搬到了哪个 pane」
+        // 这个事实报给上层（onTabMoved 负责写回 tabState.paneId / 持久化）。
         const hostPaneId = layout.activePaneId || getPrimaryPaneId();
         result.movedTabIds.forEach(tabId => {
             const sourcePaneId = [...tabsBefore.entries()]
                 .find(([paneId, tabIds]) => paneId !== hostPaneId && tabIds.includes(tabId))?.[0] || hostPaneId;
-            const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
-            const tabPane = document.getElementById(tabId);
-            getPaneTabsList(hostPaneId)?.appendChild(tabBtn);
-            getPaneTabsContent(hostPaneId)?.appendChild(tabPane);
-            if (tabBtn) tabBtn.dataset.paneId = hostPaneId;
-            if (tabPane) tabPane.dataset.paneId = hostPaneId;
             onTabMoved?.({ tabId, sourcePaneId, targetPaneId: hostPaneId });
         });
         return result;
@@ -265,12 +224,11 @@ function createWorkspaceManager(options = {}) {
         const layout = getLayoutState();
         const paneIds = getPaneIds();
         layout.activePaneId = paneIds.includes(paneId) ? paneId : (paneIds[0] || 'pane-1');
-        resolvePaneElements().forEach(paneEl => {
-            paneEl.classList.toggle('active', paneEl.dataset.paneId === layout.activePaneId);
-        });
+        // 当前 pane 的视觉高亮（只影响边框）交给渲染层统一下发，这里不再自己 toggle。
         if (persist) {
             persistLayout();
         }
+        onLayoutChanged?.();
     }
 
     function ensurePaneTabMembership(paneId, tabId) {
@@ -284,184 +242,30 @@ function createWorkspaceManager(options = {}) {
         }
     }
 
-    function updatePaneVisibility() {
-        const root = resolveWorkspaceRoot();
-        const splitter = resolveSplitter();
-        if (!root) return;
-        root.classList.toggle('split-vertical', getOrientation() === 'vertical');
-        root.classList.toggle('split-horizontal', getOrientation() !== 'vertical');
-        // 除首个 pane 外，其余 pane 只在分屏开启时可见；pane 数量不再假设为 2。
-        getPaneIds().forEach((paneId, index) => {
-            const paneEl = getPaneDom(paneId);
-            if (!paneEl) return;
-            paneEl.hidden = index === 0 ? false : !isSplitEnabled();
-        });
-        if (splitter) splitter.hidden = !isSplitEnabled();
-    }
+    // 布局层不再直接写 DOM：pane 的显隐 / 尺寸 / 按钮顺序 / 面板归属全部由
+    // renderWorkspace() 按 buildRenderPlan() 收敛。这里不再保留「自己再算一遍」的实现，
+    // 否则就回到两套真源的老路。
 
-    function applyPaneSizes() {
-        const root = resolveWorkspaceRoot();
-        if (!root) return;
-        // 旧实现用两个 CSS 变量（--pane-1-size / --pane-2-size）表达尺寸，pane 一多就无法表达。
-        // 改为把尺寸直接写到每个 pane 的 flex-basis 上，任意 pane 数都成立。
-        root.style.removeProperty('--pane-1-size');
-        root.style.removeProperty('--pane-2-size');
-        const layout = getLayoutState();
-        const paneIds = getPaneIds();
-        const sizes = isSplitEnabled() ? normalizePaneSizes(layout.paneSizes, paneIds) : null;
-        paneIds.forEach(paneId => {
-            const paneEl = getPaneDom(paneId);
-            if (!paneEl?.style) return;
-            // 未分屏时不固定 flex-basis，交给 CSS 的 flex: 1 1 0 撑满。
-            if (!sizes) {
-                paneEl.style.removeProperty('flex-basis');
-                return;
-            }
-            paneEl.style.flexBasis = `${(sizes[paneId] || 0) * 100}%`;
-        });
-    }
-
-    // 把本 pane 标签按钮的 DOM 顺序对齐到 pane.tabIds。
+    // 布局落地：只把"缺的 pane 节点建出来"，然后请求渲染。
     //
-    // 只在两个节点都在同一个列表里时调整相对次序，因此：
-    //   - 被搬到外层行的 Shell（宿主不是本列表）不会被拉回来；
-    //   - 父节点没变的节点不会被无意义地搬动（C2，避免动画/重排重放）。
-    // 列表对象不具备真实 DOM 能力时（单测替身常只提供 appendChild）直接跳过，
-    // 不假装排序成功，也不因为能力缺失而报错。
-    function syncTabOrderInPane(pane, tabsList) {
-        if (!tabsList || typeof tabsList.insertBefore !== 'function') return;
-        const ordered = pane.tabIds
-            .map(tabId => (findTabButton
-                ? findTabButton(tabId, pane.id)
-                : (typeof tabsList.querySelector === 'function'
-                    ? tabsList.querySelector(`.main-tab[data-target="${tabId}"]`)
-                    : null)))
-            .filter(button => button && button.parentElement === tabsList);
-        ordered.forEach((button, index) => {
-            const next = ordered[index + 1] || null;
-            if (next && button.nextElementSibling !== next) {
-                tabsList.insertBefore(button, next);
-            }
-        });
-    }
-
+    // **这里不再搬按钮、搬面板、改 .active。** 那些职责全部归 renderWorkspace()。
+    // 早期本函数同时做三件事（pane 内按钮排序 / 面板搬移 / active 互斥），并通过
+    // findTabButton / resolveTabButtonHost 反向询问渲染层，于是"布局"与"渲染"
+    // 两边都能写 DOM，形成第二套真源——这正是本次重构要消除的东西。
     function applyLayoutToDom() {
-        // 先把布局里有、DOM 里没有的 pane 建出来，后续 appendChild 才不会拿到 null。
         ensurePaneElements();
         const layout = getLayoutState();
-        updatePaneVisibility();
-        applyPaneSizes();
-        // 清激活态必须**限定在本分组自己的 pane 内**。
-        //
-        // 原实现用全局 `.main-tab` / `.main-tab-pane` 清，多分组时会把别的分组
-        // 已经激活的标签一起清掉：那个分组的布局状态没变，不会重算，于是它的
-        // 主标签面板永远停在「没有 active」的状态——表现为「加了一个分组，另一个
-        // 分组的 Main 就白掉了」。
-        //
-        // 被搬到外层容器的按钮（多分组时的 Shell）不在 paneEl 里，所以按 tabId 再找一次。
-        layout.panes.forEach(pane => {
-            const paneEl = getPaneDom(pane.id);
-            if (!paneEl) return;
-            paneEl.querySelectorAll('.main-tab-pane').forEach(el => el.classList.remove('active'));
-            pane.tabIds.forEach(tabId => {
-                const button = findTabButton
-                    ? findTabButton(tabId, pane.id)
-                    : paneEl.querySelector(`.main-tab[data-target="${tabId}"]`);
-                button?.classList.remove('active');
-                button?.setAttribute?.('aria-selected', 'false');
-            });
-        });
-        layout.panes.forEach(pane => {
-            const tabsList = getPaneTabsList(pane.id);
-            const tabsContent = getPaneTabsContent(pane.id);
-            pane.tabIds.forEach(tabId => {
-                const tabButton = document.querySelector(`.main-tab[data-target="${tabId}"]`);
-                const tabPane = document.getElementById(tabId);
-                const previousPaneId = tabButton?.dataset?.paneId || tabPane?.dataset?.paneId || null;
-                // 只在宿主真的变了时才搬节点。
-                //
-                // appendChild 对「已经在该父节点下的子节点」也是先摘再插，动画与 iframe/canvas
-                // 会在那一刻重放；而本函数在每次切标签、切分组、分屏时都会跑一遍。
-                // 目标父节点一致就跳过，既避免重播动画，也不再触发整行重排。
-                const buttonHost = resolveTabButtonHost ? resolveTabButtonHost(tabId, pane.id) : null;
-                const effectiveTabsList = buttonHost || tabsList;
-                if (tabButton && effectiveTabsList) {
-                    if (tabButton.parentElement !== effectiveTabsList) {
-                        effectiveTabsList.appendChild(tabButton);
-                    }
-                    tabButton.dataset.paneId = pane.id;
-                }
-                if (tabPane && tabsContent) {
-                    if (tabPane.parentElement !== tabsContent) {
-                        tabsContent.appendChild(tabPane);
-                    }
-                    tabPane.dataset.paneId = pane.id;
-                }
-                if (previousPaneId && previousPaneId !== pane.id) {
-                    onTabMoved?.({ tabId, sourcePaneId: previousPaneId, targetPaneId: pane.id });
-                }
-            });
-            // 行内顺序的唯一真源是布局的 tabIds，DOM 顺序必须跟着它。
-            //
-            // 上面那个循环只在「宿主变了」时 appendChild，不做排序。于是同栏拖动会
-            // 把 tabIds 改成新顺序而按钮原地不动：实测（probe-tab-order, diag530）
-            // 拖动后 layout=[chart,main,filter] 而 DOM 仍是 [main,filter,chart]，
-            // 用户看到的是「拖了没反应，标签弹回原位」。
-            //
-            // 只调整这些按钮之间的相对次序；被搬到外层行的 Shell（宿主不是本列表）
-            // 不在其中，父节点没变的节点也不会被搬动（C2）。
-            syncTabOrderInPane(pane, tabsList);
-            prunePaneTabIds(pane.id);
-            ensurePaneActiveTab(pane.id);
-            const paneEl = getPaneDom(pane.id);
-            if (!paneEl) return;
-            if (pane.activeTabId) {
-                const findButton = id => (findTabButton
-                    ? findTabButton(id, pane.id)
-                    : paneEl.querySelector(`.main-tab[data-target="${id}"]`));
-                const tabButton = findButton(pane.activeTabId);
-                const tabPane = paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`);
-                if (!tabButton || !tabPane) {
-                    pane.activeTabId = findFirstRenderableTabId(pane.id) || null;
-                }
-                if (pane.activeTabId) {
-                    const activeTab = findButton(pane.activeTabId);
-                    activeTab?.classList.add('active');
-                    activeTab?.setAttribute?.('aria-selected', 'true');
-                    paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`)?.classList.add('active');
-                }
-            }
-        });
+        // 先收敛空 pane：这是布局落地的一部分（只改模型，不碰 DOM）。
+        // 少了它，「两个 pane 但第二个是空的」这种布局会一直停在 splitEnabled=true，
+        // 渲染层就会画出一个没有标签的空列。
         reconcileEmptyPanes();
-        updatePaneVisibility();
-        applyPaneSizes();
-        setActivePane(layout.activePaneId, { persist: false });
-        if (typeof onLayoutApplied === 'function') {
-            onLayoutApplied(layout);
-        }
+        ensurePaneActiveTab(getLayoutState().activePaneId || getPrimaryPaneId());
+        onLayoutChanged?.();
     }
 
-    function applyActiveTabToPane(paneId) {
-        const pane = getPaneById(paneId);
-        const paneEl = getPaneDom(paneId);
-        if (!paneEl) return;
-        // 激活类必须先按全文档清一遍：被搬到外层容器的按钮（多分组时的 Shell）不在 paneEl 里，
-        // 只清 paneEl 会把它上一个激活态留在分组栏上，表现为「两个标签同时亮着」。
-        document.querySelectorAll('.main-tab.active').forEach(tab => {
-            if (tab.dataset?.paneId === paneId) tab.classList.remove('active');
-        });
-        document.querySelectorAll('.main-tab[aria-selected="true"]').forEach(tab => {
-            if (tab.dataset?.paneId === paneId) tab.setAttribute('aria-selected', 'false');
-        });
-        paneEl.querySelector('.main-tab-pane.active')?.classList.remove('active');
-        if (!pane.activeTabId) return;
-        const activeTab = findTabButton
-            ? findTabButton(pane.activeTabId, paneId)
-            : paneEl.querySelector(`.main-tab[data-target="${pane.activeTabId}"]`);
-        const activePane = paneEl.querySelector(`.main-tab-pane#${pane.activeTabId}`);
-        activeTab?.classList.add('active');
-        activeTab?.setAttribute?.('aria-selected', 'true');
-        activePane?.classList.add('active');
+    // 只改布局状态，不碰 DOM：切完通知一次，由渲染层决定谁亮。
+    function applyActiveTabToPane() {
+        onLayoutChanged?.();
     }
 
     function switchPaneTab(paneId, tabId, { persist = true } = {}) {
@@ -507,34 +311,27 @@ function createWorkspaceManager(options = {}) {
         fitWorkspace?.();
     }
 
+    // 只改布局：把标签从源 pane 移到目标 pane，并让两边 activeTabId 一致。
+    // DOM 搬移由渲染层按新的 rows 完成。
     function moveTabToPane(tabId, targetPaneId, { preserveSplit = false, insertionIndex = null } = {}) {
         const layout = getLayoutState();
         const sourcePaneId = getPaneIdForTabId(tabId);
-        const sourcePane = getPaneById(sourcePaneId);
         const targetPane = getPaneById(targetPaneId);
-        const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
-        const tabPane = document.getElementById(tabId);
-        if (!tabBtn || !tabPane) return;
+        if (!targetPane) return;
+        const sourcePane = getPaneById(sourcePaneId);
 
         // 目标 pane 不是首个 pane 就一定需要分屏；多 pane 时不能只比 'pane-2'。
         if (targetPaneId !== getPrimaryPaneId()) {
             layout.splitEnabled = true;
         }
 
-        // moveWorkspaceTab 只改「源 pane 里确实有它」的归属。布局里找不到归属时它
-        // 返回 null，而下一步的 DOM 搬移却会照常执行 —— 结果是 DOM 已在 pane-2、
-        // 布局仍认为它在 pane-1，且 activeTabId 被写成不在 tabIds 里的值（违反 I6）。
-        // 这种不一致不会被后续的 prune/reconcile 修好，因为两者都只读 tabIds。
-        // 所以必须在布局里补登一次归属，让两边同步。
+        // moveWorkspaceTab 只改「源 pane 里确实有它」的归属。布局里找不到归属时补登一次，
+        // 否则 activeTabId 会被写成不在 tabIds 里的值（违反 I6），且后续 prune/reconcile
+        // 都只读 tabIds，修不回来。
         const moved = moveWorkspaceTab(layout, tabId, targetPaneId, insertionIndex);
         if (!moved) ensurePaneTabMembership(targetPaneId, tabId);
         ensurePaneActiveTab(sourcePaneId);
         targetPane.activeTabId = tabId;
-
-        getPaneTabsList(targetPaneId)?.appendChild(tabBtn);
-        getPaneTabsContent(targetPaneId)?.appendChild(tabPane);
-        tabBtn.dataset.paneId = targetPaneId;
-        tabPane.dataset.paneId = targetPaneId;
 
         const reconciliation = reconcileEmptyPanes();
         if (!reconciliation.collapsed && !preserveSplit) {
@@ -545,9 +342,7 @@ function createWorkspaceManager(options = {}) {
             onTabMoved({ tabId, sourcePaneId, targetPaneId });
         }
 
-        const finalPaneId = reconciliation.movedTabIds.includes(tabId) ? layout.activePaneId : targetPaneId;
         applyLayoutToDom();
-        switchPaneTab(finalPaneId, tabId, { persist: false });
         persistLayout();
         fitWorkspace?.();
     }
@@ -596,7 +391,7 @@ function createWorkspaceManager(options = {}) {
     }
 
     // 把除首个 pane 之外的所有 pane 合入首个 pane，然后关闭分屏。
-    // 旧实现只处理 pane-1/pane-2，pane 一多就会漏掉内容。
+    // 只改布局；DOM 由渲染层按新的布局重排（它会把按钮与面板一起搬到新宿主）。
     function collapseSplit() {
         const layout = getLayoutState();
         const hostPane = getPaneById(getPrimaryPaneId());
@@ -615,12 +410,6 @@ function createWorkspaceManager(options = {}) {
         });
 
         movedTabIds.forEach(tabId => {
-            const tabBtn = document.querySelector(`.main-tab[data-target="${tabId}"]`);
-            const tabPane = document.getElementById(tabId);
-            getPaneTabsList(hostPaneId)?.appendChild(tabBtn);
-            getPaneTabsContent(hostPaneId)?.appendChild(tabPane);
-            if (tabBtn) tabBtn.dataset.paneId = hostPaneId;
-            if (tabPane) tabPane.dataset.paneId = hostPaneId;
             onTabMoved?.({ tabId, sourcePaneId: layout.activePaneId, targetPaneId: hostPaneId });
         });
 
@@ -683,7 +472,9 @@ function createWorkspaceManager(options = {}) {
             });
             layout.paneSizes = nextSizes;
         }
-        applyPaneSizes();
+        // 尺寸变化后需重新渲染（写 flex-basis）并重新 fit。
+        onLayoutChanged?.();
+        fitWorkspace?.();
         if (persist) {
             persistLayout();
         }

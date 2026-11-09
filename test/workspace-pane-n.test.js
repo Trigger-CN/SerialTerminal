@@ -84,32 +84,54 @@ function createThreePaneFixture() {
     return { layout, paneElements, moved, manager };
 }
 
-test('applying a three-pane layout writes inline flex-basis instead of fixed CSS variables', () => {
-    const { paneElements, manager } = createThreePaneFixture();
+// ── 旧断言失效说明（S5-④ 渲染翻转） ──────────────────────
+//
+// 下面两条原先断言「applyLayoutToDom() 把 pane 的 flex-basis / hidden 写到 DOM 上」。
+// 这两件事在 S5-④ 之后**不再由布局层做**：它们改由 renderWorkspace() 依据
+// buildRenderPlan() 的 column.paneSizes / column.splitEnabled 统一收敛（单一真源）。
+// 旧的期望值因此不再描述正确行为，把它们保留下来只会迫使实现维持第二套 DOM 写点。
+// 新断言改在正确层级：布局层只负责把「缺的 pane 节点建出来」与「报告布局变了」，
+// 而 pane 的几何派生由 tab-model 的 buildRenderPlan 覆盖（test/tab-model.test.js）。
+test('applying a layout no longer writes pane geometry itself', () => {
+    const { paneElements } = createThreePaneFixture();
     const restore = installDocument(paneElements);
+    let changed = 0;
     try {
-        manager.applyLayoutToDom();
+        const observed = createWorkspaceManager({
+            getLayout: () => ({
+                splitEnabled: true,
+                activePaneId: 'pane-1',
+                paneSizes: { 'pane-1': 0.5, 'pane-2': 0.25, 'pane-3': 0.25 },
+                panes: [
+                    { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main'] },
+                    { id: 'pane-2', activeTabId: 'tab-a', tabIds: ['tab-a'] },
+                    { id: 'pane-3', activeTabId: 'tab-b', tabIds: ['tab-b'] }
+                ]
+            }),
+            setLayout() {},
+            cloneLayout: value => JSON.parse(JSON.stringify(value)),
+            persistLayout() {},
+            getPaneDom: paneId => paneElements[paneId],
+            onLayoutChanged: () => { changed += 1; }
+        });
+        observed.applyLayoutToDom();
     } finally {
         restore();
     }
 
-    assert.equal(paneElements['pane-1'].style.flexBasis, '50%');
-    assert.equal(paneElements['pane-2'].style.flexBasis, '25%');
-    assert.equal(paneElements['pane-3'].style.flexBasis, '25%');
+    assert.equal(changed, 1, '布局落地必须只发一次渲染请求');
+    assert.equal(paneElements['pane-1'].style.flexBasis, '', '布局层不得再写 flex-basis');
+    assert.equal(paneElements['pane-2'].style.flexBasis, '', '布局层不得再写 flex-basis');
 });
 
-test('every pane after the first follows the split visibility flag', () => {
-    const { layout, paneElements, manager } = createThreePaneFixture();
+test('applying a layout no longer toggles pane visibility itself', () => {
+    const { paneElements, manager } = createThreePaneFixture();
     const restore = installDocument(paneElements);
     try {
+        // 先手动改成错误值，确认 applyLayoutToDom 不会把它「纠正」——纠正归渲染层。
+        paneElements['pane-2'].hidden = true;
+        paneElements['pane-3'].hidden = true;
         manager.applyLayoutToDom();
-        assert.equal(paneElements['pane-1'].hidden, false);
-        assert.equal(paneElements['pane-2'].hidden, false);
-        assert.equal(paneElements['pane-3'].hidden, false);
-
-        layout.splitEnabled = false;
-        manager.applyLayoutToDom();
-        assert.equal(paneElements['pane-1'].hidden, false);
         assert.equal(paneElements['pane-2'].hidden, true);
         assert.equal(paneElements['pane-3'].hidden, true);
     } finally {
