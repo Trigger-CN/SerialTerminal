@@ -1225,7 +1225,8 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 | **S5-①** | 配置迁移（§9.3）：`serial-groups-config.js` 显式产出 `panes` / `paneSplit` / `focusedTabId`，`renderer.js` 改读写这三个新键 | ✅ `7ce7c3c` / `00b5187` | `verify-layout-persist` 14/14 |
 | **S5-②** | 分屏语义按用户裁决纠正；右键菜单入口补齐；关分屏后显示权归位 | ✅ `6088a70` / `9e8e681` / `78e653c` / `c8deeba` / `62e99dc` / `dacdcdd` | 15 脚本全量回归 |
 | **S5-③** | `tabs[id].columnId` 成为「根级叶停在哪一列」的唯一真源；`layoutColumns()` 分屏分支只由容器决定列集合；严格判据扩到 36 项 | ✅ `80ea701` / `e18aa24` | `verify-tab-plan-strict` **36/36** |
-| **S5-④** | 渲染翻转：从零实现 `renderWorkspace()` 并接管 DOM（第 1–4 步 + 第五步 `sweepStaleColumns`），与三态字段 / 叠层机制**同批删除**；布局层交出全部 DOM 职责；焦点成为真实模块级字段 | ✅ 待填提交号 | 全量 15 脚本 + `verify-tab-plan-strict` **48/48**（含两个独立 Shell、上下分屏） |
+| **S5-③'** | `columnMode`（是否自成独立列，全部共享 `OWN_COLUMN_ID`）与 `hostGroupId`（归属哪组下层行）进模型；老配置回落新键 | ✅ `bc0bb41` / `418dadc` / `80f4e98` / `73adab2` / `1929217` | 单测 558/558 + 严格判据 48/48 |
+| **S5-④** | 渲染翻转：从零实现 `renderWorkspace()` 并接管 DOM（第 1–4 步 + 第五步 `sweepStaleColumns`），与三态字段 / 叠层机制**同批删除**；布局层交出全部 DOM 职责；焦点成为真实模块级字段 | ✅ `f2f02f4` | 全量 15 脚本全绿 + `verify-tab-plan-strict` **48/48**（含两个独立 Shell、上下分屏） |
 
 **核心纪律**：所有交互只改 `workspace`，然后调 `renderWorkspace()`；不允许任何地方直接改 DOM。S2 之后若仍发现「某处直接 `appendChild` 标签按钮」，说明该处漏改。
 
@@ -1271,7 +1272,7 @@ test('random operation sequences preserve all invariants', () => {
 
 实现阶段验证出的一条文档修正（已回写 §3.5）：族列在**未开 pane 分屏**时，内容区跟着焦点走，可能是容器内的叶，也可能是一个 shell；而**开了 pane 分屏**后，每个 pane 各显示自己的 activeTabId——此时不得再套用焦点，否则会返回一个不在任何 pane 里的面板 id。同时 `layoutRowsOf()` 在族列上的行数为 0（未开分屏）/ pane 数（开了分屏），不复用非族列的 1 条。
 
-### 11.3 S2 的实现情况（已完成影子校验，尚未翻转向渲染）
+### 11.3 S2 的实现情况（已完成影子校验，后来由 S5-④ 翻转）
 
 **本阶段与 §11 原计划不同的一点必须写清**：原计划是让 `renderWorkspace()` 直接接管 DOM，实现时改为先做**影子校验**。原因如下。
 
@@ -1437,7 +1438,7 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 | ② 分屏语义纠偏 | 回退「未归属 Shell 自占一列」；补齐普通标签的右键菜单；关分屏后显示权交还分组；单分组例外 | `78e653c` / `c8deeba` / `62e99dc` / `dacdcdd` | 15 脚本全量回归全绿 |
 | ③ 落列真源进模型 | 新增 `tabs[id].columnId` + `resolveLeafColumnId()` / `setLeafColumn()`；`layoutColumns()` 分屏分支只由容器决定列集合；严格判据 24 → 36 项 | `80ea701` / `e18aa24` | `verify-tab-plan-strict` **36/36** |
 | ③' 另两个叶级事实 | `columnMode`（是否自成独立列，全部共享 `OWN_COLUMN_ID`）与 `hostGroupId`（归属哪组下层行）；老配置回落新键 | `bc0bb41` / `418dadc` / `80f4e98` / `73adab2` / `1929217` | 单测 + 严格判据 48/48 |
-| ④ 渲染翻转 | `renderWorkspace()` 接管列/行/按钮/面板（五步含 `sweepStaleColumns`）；布局层交出全部 DOM 职责；三态字段与叠层机制同批删除；焦点成为真实模块级字段 | `S5-④` 提交号见 §11.6.5 | 15 脚本全量回归 + 严格判据 **48/48** |
+| ④ 渲染翻转 | `renderWorkspace()` 接管列/行/按钮/面板（五步含 `sweepStaleColumns`）；布局层交出全部 DOM 职责；三态字段与叠层机制同批删除；焦点成为真实模块级字段 | `f2f02f4` | 15 脚本全量回归 + 严格判据 **48/48** |
 
 #### 11.6.2 翻转前必须先对齐模型的原因（③ 必须先于 ④）
 
