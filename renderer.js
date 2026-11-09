@@ -4493,7 +4493,10 @@ window.__readTabModelPlan = () => {
             .map(el => el.id),
         visiblePanels: Array.from(document.querySelectorAll('.main-tab-pane.active'))
             .filter(shown)
-            .map(el => el.id)
+            .map(el => el.id),
+        // 可见的 subRow 行数（第二维）。严格判据用它把模型的 rows 与真实 DOM 对齐。
+        // 只数可见的 .pane-tabs-header：分屏时每个 pane 各一条，收起/隐藏的不算。
+        subRowCount: paneHeaders.length
     };
 
     let plan = null;
