@@ -2445,19 +2445,21 @@ function getPaneIdForTabId(tabId) {
 // 用户实测报告为「拖动 shell，所有 shell 会跟着一起移动」。归属写进每个
 // tabState.ownerGroupId，互不干扰。
 //
-//   null        不归属任何串口分组 —— 属于「上层标签栏」那一层。
+// 不归属任何串口分组 —— 属于「上层标签栏」那一层。
 //               未分屏时它在激活列的上层共享行里（与分组标签同级）；
-//               已分屏时同样在**那一列的列首行**里（与分组标签同级、不新开列），
+//               已分屏时同样在**那一列的首行**里（与分组标签同级、不新开列），
 //               除非用户把它拖到了分组标签行上（columnMode === 'ownColumn'，见 §2.3.2）。
 //   <分组 id>   归属该分组 —— 出现在那组的**下层**标签行里（图中 COM2 下方的 SHELL1）。
 //
 // 为什么不需要第三种归属值：「独立成组」不是另一个归属，而是「不归属」的一个显示变体。
 // 把它当成第三种归属值，会出现「未分屏却要凭空占一列」这种与用户期望相反的情况。
 //
-// **显示形态的判据已进模型**（tab-model 的 leafColumnMode / setLeafColumnMode），
-// 这里的 tabState.detachedColumn 只是持久化与拖拽过程的兼容镜像，不再参与列派生。
+// **字段名与模型一致**（`hostGroupId` / `columnMode` / `columnId`）：这一层直接持有
+// 同一份事实，只是挂在 tabState 而不是 tabs 字典上。早期叫 `ownerGroupId` /
+// `detachedColumn` / `topRowColumnId`，三个名字各代表同一份事实的一半，读的人必须先
+// 学一套映射才能看懂——那正是「每个事实只有一处可写」被破坏的方式。
 function getShellTabOwner(tabState) {
-    const owner = tabState?.ownerGroupId;
+    const owner = tabState?.hostGroupId;
     if (owner && serialGroups.some(group => group.id === owner)) return owner;
     return null;
 }
@@ -2465,11 +2467,10 @@ function getShellTabOwner(tabState) {
 function setShellTabOwner(tabId, owner) {
     const tabState = getShellTabState(tabId);
     if (!tabState) return false;
-    tabState.ownerGroupId = owner && serialGroups.some(group => group.id === owner) ? owner : null;
+    tabState.hostGroupId = owner && serialGroups.some(group => group.id === owner) ? owner : null;
     // 归属一变，「独立成列」这个附加标记就没意义了：归进分组的 Shell 住下层行。
-    // 模型那边没有独立的「归属」字段（I1/I2 禁止 Shell 进 pane），所以这里只同步形态；
-    // 「停在列首行」由 setLeafColumn 在拖拽落点处写入。
-    if (tabState.ownerGroupId) tabState.detachedColumn = false;
+    // 两处同时成立会让同一个标签在两处可点。
+    if (tabState.hostGroupId) tabState.columnMode = 'row';
     return true;
 }
 
@@ -2509,7 +2510,7 @@ function setShellColumnInModel(tabId, columnId) {
 // 早期把两种形态合并成「只要不归属就占一列」，于是「新建一个 Shell 再开分屏」
 // 会凭空多出一列 Shell，用户实测报为「会变成三个串口列 + 一个 Shell 列」。
 function hasDetachedShellColumn() {
-    return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.detachedColumn === true);
+    return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.columnMode === 'ownColumn');
 }
 
 // Shell 独立列是否应当存在：只有分屏、多分组、且用户把某个未归属 Shell 划到了分组标签行才建。
@@ -2755,18 +2756,14 @@ function finishWorkspaceTabDrag(state) {
             setShellOwnerGroup(state.tabId, null);
             const tabState = getShellTabState(state.tabId);
             if (tabState) {
-                tabState.detachedColumn = true;
-                // 同步写进模型：`columnMode` 是「是否自成独立列」的唯一真源，
-                // tabState.detachedColumn 只是同一事实在渲染层的镜像（供持久化与拖拽热路径用）。
+                // `columnMode` 是「是否自成独立列」的唯一事实，`columnId` 是「停在哪一列」
+                // 的唯一事实。两者都直接写 tabState 上的同名字段，不再分成两组名字。
                 setShellColumnModeInModel(state.tabId, 'ownColumn');
                 // 它也确定了落点：独立列在右边，但直接拖到别的分组标签行时先把目标列
                 // 记下来，后续即使列集合变了也不会又跟着激活分组跑。
                 const dropGroupId = document.getElementById(state.targetColumnId)
                     ?.dataset.groupId;
-                if (dropGroupId) {
-                    tabState.topRowColumnId = dropGroupId;
-                    setShellColumnInModel(state.tabId, dropGroupId);
-                }
+                if (dropGroupId) setShellColumnInModel(state.tabId, dropGroupId);
                 syncShellWorkspaceLayout();
                 persistShellTabs();
             }
@@ -4467,19 +4464,17 @@ window.__readTabModelPlan = () => {
         //   hostGroupId  挂靠在哪个分组的**下层行**（"归属"）
         //   columnId     停在哪一列的**列首行**（未归属时才有意义）
         //   columnMode   是否**自成独立列**
-        // 早期把「归属」也写成 columnId，于是模型分不出「住在该组下层行」与「停在该列首行」；
-        // 模型现在有 hostGroupId 这个独立字段（承接历史 ownerGroupId），这里必须分开传。
+        // 三个字段在 tabState 上就是这三个名字，这里直接转出，不再拆成两组同义名。
         shellTabs: shellTabs.map(tab => {
             const owner = getShellTabOwner(tab);
             return {
                 id: tab.id,
                 title: tab.title,
                 hostGroupId: owner,
-                columnMode: tab.columnMode === 'ownColumn' || tab.detachedColumn === true
-                    ? 'ownColumn' : 'row',
+                columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row',
                 // 归属某组时它不进列首行，columnId 无意义；未归属时用渲染层唯一的落列判据
                 // `resolveShellTopRowColumn()`（记忆列 → 唯一可见列 → 激活列）而不是裸读
-                // topRowColumnId：后者首次为 null，裸读会把它算到第一列。
+                // columnId：后者首次为 null，裸读会把它算到第一列。
                 columnId: owner === null ? resolveShellTopRowColumn(tab) : null
             };
         }),
@@ -4833,10 +4828,10 @@ function isVisibleColumnKey(columnId) {
 // 判定顺序：先看这标签自己记住的列是否还可见 → 再看是不是只剩唯一可见列 → 最后才用
 // 激活列。首两次都不会因为「用户切了分组」而变，所以 Shell 不会再跟着激活分组跑。
 function resolveShellTopRowColumn(tabState) {
-    const remembered = tabState?.topRowColumnId;
+    const remembered = tabState?.columnId;
     if (isVisibleColumnKey(remembered)) return remembered;
     const next = getSingleVisibleGroupId() || activeGroupId;
-    if (tabState && tabState.topRowColumnId !== next) tabState.topRowColumnId = next;
+    if (tabState && tabState.columnId !== next) tabState.columnId = next;
     return next;
 }
 
@@ -4875,7 +4870,7 @@ function resolveShellTabHost(tabState) {
     // 用户明确要求自占一列（把它拖到了分组标签行）：该列只有一行标签栏。
     // 必须逐标签判断：没被拖过的未归属 Shell 不能因为「存在一个要独立的」就跟着搬进去。
     if (groupWorkspaceSplit.enabled && owner === null
-        && tabState.detachedColumn === true && isShellColumnActive()) {
+        && tabState.columnMode === 'ownColumn' && isShellColumnActive()) {
         const column = ensureShellColumnDom();
         if (column) {
             return {
@@ -4982,7 +4977,7 @@ function placeShellTabs() {
     // 列首行与分组行各出现一次。
     if (document.getElementById(shellColumnId())) {
         const candidates = shellTabs.filter(tab => getShellTabOwner(tab) === null
-            && tab.detachedColumn === true);
+            && tab.columnMode === 'ownColumn');
         if (!candidates.some(tab => tab.id === detachedShellActiveTabId)) {
             detachedShellActiveTabId = candidates[0]?.id || null;
         }
@@ -5158,10 +5153,10 @@ function setShellOwnerGroup(tabId, owner) {
     const tabState = getShellTabState(tabId);
     if (!tabState) return;
     const before = getShellTabOwner(tabState);
-    const wasDetachedColumn = tabState.detachedColumn === true;
+    const beforeMode = tabState.columnMode;
     setShellTabOwner(tabId, owner);
     const after = getShellTabOwner(tabState);
-    const changed = before !== after || wasDetachedColumn !== (tabState.detachedColumn === true);
+    const changed = before !== after || beforeMode !== tabState.columnMode;
     if (changed) persistShellTabs();
     if (!changed) return;
     syncShellWorkspaceLayout();
@@ -5337,7 +5332,7 @@ function closeSerialGroup(groupId) {
     const shellMovedOut = shellTabs.some(tabState => getShellTabOwner(tabState) === id);
     if (shellMovedOut) {
         shellTabs.forEach(tabState => {
-            if (getShellTabOwner(tabState) === id) tabState.ownerGroupId = null;
+            if (getShellTabOwner(tabState) === id) tabState.hostGroupId = null;
         });
         detachedShellActiveTabId = null;
     }
@@ -5495,12 +5490,11 @@ function persistShellTabs() {
             title: tab.title || '',
             paneId: tab.paneId || getTabPaneId(tab.id),
             profileId: tab.profileId || '',
-            ownerGroupId: getShellTabOwner(tab),
-            detachedColumn: tab.detachedColumn === true,
-            // 与模型同义的两个字段，必须一并落盘：否则重开后将丢掉用户「把它拖到分组标签行」的决定。
-            // detachedColumn 保留为兼容镜像（老版本仍会读它）。
-            columnMode: tab.columnMode === 'ownColumn' || tab.detachedColumn === true
-                ? 'ownColumn' : 'row',
+            // 与模型同名的三个字段：归属 / 停在哪列 / 是否自成独立列。
+            // 旧键（ownerGroupId / detachedColumn / topRowColumnId）不再写：写入两套名字，
+            // 就会有两个都可能正确的值，而哪一个才是用户拖拽的决定也说不准。
+            hostGroupId: getShellTabOwner(tab),
+            columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row',
             columnId: typeof tab.columnId === 'string' ? tab.columnId : null
         }))
     });
@@ -5602,14 +5596,13 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         shellMouseTrackingMode: undefined,
         textMode: false,
         // 归属是**逐标签**的：null 表示停在上层标签栏，<groupId> 表示落在该分组的下层行。
-        // 早期把它写成模块级单变量，导致拖动一个 Shell 会带走全部（见 getShellTabOwner 注释）。
-        ownerGroupId: typeof initialState.ownerGroupId === 'string' && initialState.ownerGroupId
-            ? initialState.ownerGroupId
+        // 字段名与模型、与持久化一致（hostGroupId / columnMode / columnId），
+        // 读代码时不需要再记一套映射。
+        hostGroupId: typeof initialState.hostGroupId === 'string' && initialState.hostGroupId
+            ? initialState.hostGroupId
             : null,
         // 未归属时的两种形态：默认与分组标签同级（不新开列），只有被拖到分组标签行才独立成列。
-        // columnMode / columnId 是与模型同义的镜像（模型那边是 tabs[id].columnMode / .columnId）。
-        // 老配置里没有 columnMode，以 detachedColumn 为准初始化，两边不会分叉。
-        detachedColumn: initialState.detachedColumn === true,
+        // 老配置只有 detachedColumn（没有 columnMode）时按它换算，两边不会分叉。
         columnMode: initialState.columnMode === 'ownColumn' || initialState.detachedColumn === true
             ? 'ownColumn' : 'row',
         columnId: typeof initialState.columnId === 'string' ? initialState.columnId : null,

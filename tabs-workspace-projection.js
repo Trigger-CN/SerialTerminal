@@ -27,11 +27,22 @@ function normalizeTabIds(list, kind) {
             id: tab.id,
             kind: tab.kind || kind,
             title: pickTitle(tab, tab.id),
-            // columnId / columnMode 必须一并带过去：它们是「这个根级叶停在哪列、
-            // 是不是自成独立列」的真源。在这里丢掉会让下游永远回落到第一列（实测：
-            // verify-tab-plan-strict 的 with-shell-panels 两次修复无效，就是因为丢在这一层）。
+            // columnId / columnMode / hostGroupId 必须一并带过去：它们是「这个根级叶停在哪列、
+            // 是不是自成独立列、挂靠在哪个分组」的真源。在这里丢掉会让下游永远回落到默认值。
+            // 实测教训：连续两轮修复无效、诊断输出字节完全相同，就是因为丢在这一层。
             columnId: typeof tab.columnId === 'string' ? tab.columnId : null,
-            columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row'
+            columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row',
+            hostGroupId: typeof tab.hostGroupId === 'string' ? tab.hostGroupId : null,
+            // 旧键名也原样带过去：它们只用于「新键缺失时回退」，不参与新逻辑。
+            // 丢掉它们会让老配置静默丢失归属（见 shell 叶投影处的注释）。
+            ownerGroupId: typeof tab.ownerGroupId === 'string' ? tab.ownerGroupId : null,
+            detachedColumn: tab.detachedColumn === true,
+            topRowColumnId: typeof tab.topRowColumnId === 'string' ? tab.topRowColumnId : null,
+            // **哪个键原本真的存在**必须单独记：上面每个字段都填了默认值，
+            // 下游用 hasOwnProperty 判断「有没有新键」会恒为 true，回退就永远不会触发。
+            hasHostGroupId: Object.prototype.hasOwnProperty.call(tab, 'hostGroupId'),
+            hasColumnMode: Object.prototype.hasOwnProperty.call(tab, 'columnMode'),
+            hasColumnId: Object.prototype.hasOwnProperty.call(tab, 'columnId')
         }));
 }
 
@@ -166,14 +177,27 @@ function projectWorkspace(sections) {
     //   是否**自成独立列**（历史 detachedColumn）
     // 早期把「归属」也写成 columnId，于是两件事共一个字段；模型现在把它们解耦，
     // 这里必须逐项转发——投影是白名单重建，不显式列出的键会被静默丢弃。
+    //
+    // **老配置回退是必需的**：升级用户盘上只有旧键，而渲染层已改读新键。
+    // 不回退的话，他们重开后所有 Shell 都会回到「未归属 + 停第一列」，
+    // 拖进分组的决定与独立列形态一起丢失，且不会报错。
     const shellStart = groups.length;
     normalizeTabIds(src.shellTabs, 'shell').forEach((item, index) => {
         const leaf = createLeaf('shell', { id: item.id });
         leaf.parentId = null;
         leaf.order = shellStart + index;
-        leaf.hostGroupId = typeof item.hostGroupId === 'string' ? item.hostGroupId : null;
-        leaf.columnId = typeof item.columnId === 'string' ? item.columnId : null;
-        leaf.columnMode = item.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
+        // 回退判据是「新键**原本是否存在**」——normalizeTabIds 会给每个字段填默认值，
+        // 所以不能在这里用 hasOwnProperty 判 item，必须用它保留下来的 has* 标记。
+        // 新键显式为 null 是合法状态（未归属、不独立），不能被旧键覆写：
+        // 否则老配置里的残留值会把用户最新的拖拽结果换回去。
+        leaf.hostGroupId = item.hasHostGroupId
+            ? (typeof item.hostGroupId === 'string' ? item.hostGroupId : null)
+            : (typeof item.ownerGroupId === 'string' ? item.ownerGroupId : null);
+        leaf.columnId = item.hasColumnId
+            ? (typeof item.columnId === 'string' ? item.columnId : null)
+            : (typeof item.topRowColumnId === 'string' ? item.topRowColumnId : null);
+        leaf.columnMode = (item.hasColumnMode ? item.columnMode === 'ownColumn' : item.detachedColumn === true)
+            ? 'ownColumn' : 'row';
         tabs[leaf.id] = leaf;
     });
 

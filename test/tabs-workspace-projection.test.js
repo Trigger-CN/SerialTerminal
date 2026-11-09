@@ -160,3 +160,75 @@ test('two groups with column split give one column each', () => {
     assert.equal(plan.columns.length, 2);
     assert.ok(plan.columns.every(col => col.isFamily === false));
 });
+
+// 新键直接透传：hostGroupId / columnMode / columnId 是模型与渲染层共用的三个名字，
+// 投影是白名单重建，任何一项漏掉都会在下游静默变成 null。
+test('projection forwards the three shell facts by their new names', () => {
+    const sections = baseSections();
+    sections.split.enabled = true;
+    sections.shellTabs = [{
+        id: 's1',
+        title: 's',
+        hostGroupId: 'default',
+        columnMode: 'row',
+        columnId: 'default'
+    }];
+
+    const ws = projectWorkspace(sections);
+    const leaf = ws.tabs.s1;
+    assert.equal(leaf.hostGroupId, 'default');
+    assert.equal(leaf.columnMode, 'row');
+    assert.equal(leaf.columnId, 'default');
+});
+
+// 老配置只有旧键（ownerGroupId / detachedColumn / topRowColumnId）。
+// 升级用户盘上就是这种形状，必须能读成新键，否则它们的 Shell 归属与独立列形态会静默丢失。
+// 反向对照：删掉旧键后，同一输入只能得到 null / row，证明回退真的在起作用。
+test('projection falls back to legacy shell keys when the new ones are absent', () => {
+    const sections = baseSections();
+    sections.split.enabled = true;
+    sections.shellTabs = [{
+        id: 's1',
+        title: 's',
+        ownerGroupId: 'default',
+        detachedColumn: true,
+        topRowColumnId: 'default'
+    }];
+
+    const ws = projectWorkspace(sections);
+    const leaf = ws.tabs.s1;
+    assert.equal(leaf.hostGroupId, 'default', '旧 ownerGroupId 必须读成 hostGroupId');
+    assert.equal(leaf.columnMode, 'ownColumn', '旧 detachedColumn 必须读成 ownColumn');
+    assert.equal(leaf.columnId, 'default', '旧 topRowColumnId 必须读成 columnId');
+
+    // 反向对照：把旧键全部去掉，上面三个值就必须回落。
+    const bare = baseSections();
+    bare.split.enabled = true;
+    bare.shellTabs = [{ id: 's1', title: 's' }];
+    const bareLeaf = projectWorkspace(bare).tabs.s1;
+    assert.equal(bareLeaf.hostGroupId, null);
+    assert.equal(bareLeaf.columnMode, 'row');
+    assert.equal(bareLeaf.columnId, null);
+});
+
+// 新键优先于旧键：两边同时存在时以新键为准，否则一旦残留旧值就会覆盖用户最新的拖拽结果。
+test('new shell keys win over legacy ones when both are present', () => {
+    const sections = baseSections();
+    sections.split.enabled = true;
+    sections.shellTabs = [{
+        id: 's1',
+        title: 's',
+        hostGroupId: null,
+        columnMode: 'row',
+        columnId: 'col-new',
+        ownerGroupId: 'default',
+        detachedColumn: true,
+        topRowColumnId: 'col-old'
+    }];
+
+    const ws = projectWorkspace(sections);
+    const leaf = ws.tabs.s1;
+    assert.equal(leaf.hostGroupId, null, '新键 null 不能被旧键覆盖');
+    assert.equal(leaf.columnMode, 'row');
+    assert.equal(leaf.columnId, 'col-new');
+});
