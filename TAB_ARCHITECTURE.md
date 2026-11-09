@@ -311,11 +311,11 @@ function rootFamilyOf(ws) {
 function layoutColumns(ws) {
   // 分屏：每个**容器**一列；根级叶不占列，停在其中一列的列首行
   if (ws.split.enabled) {
-    return roots(ws).filter(isContainer).map(t => ({
-      id: t.id,
-      containerId: t.id,
+    return roots(ws).filter(isContainer).map(container => ({
+      id: container.id,
+      containerId: container.id,
       isFamily: false,
-      tabItems: [t]
+      tabItems: [container, ...leafItemsOfColumn(ws, container.id)]
     }));
   }
 
@@ -346,6 +346,29 @@ function layoutColumns(ws) {
   }];
 }
 ```
+
+分屏分支的 `tabItems` 有两段：**容器自身**（分组标签），加上 `leafItemsOfColumn()` 挑出的根级叶。后者按 `resolveLeafColumnId()` 归列，也就是 §2.3.1 里那个唯一真源——渲染层不再自己记「这个 Shell 停在哪一列」。
+
+```js
+// 根级叶该挂到哪一列。它是这类事实在模型里的唯一表示。
+function resolveLeafColumnId(ws, leaf) {
+  if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;  // 第 0 条是前置条件
+  const containers = roots(ws).filter(isContainer);
+  if (!containers.length) return null;
+  const wanted = typeof leaf.columnId === 'string' ? leaf.columnId : '';
+  if (wanted && containers.some(c => c.id === wanted)) return wanted;
+  return containers[0].id;   // 悬空或未指定：落到第一个容器列，不跟焦点跑
+}
+
+function leafItemsOfColumn(ws, columnId) {
+  return roots(ws).filter(leaf => !isContainer(leaf)
+    && resolveLeafColumnId(ws, leaf) === columnId);
+}
+```
+
+**第 0 条不可省**：少了它，`tab-main-g-1` 这类容器子项也会被当成「停在第一个容器列的根级叶」，于是那一列的面板被判成别的分组的标签（实测 `verify-tab-plan-strict` 的 `split-panels` 一度因此失败）。
+
+**只看 `columnId`、不看焦点**：跟着焦点走会让「点一下别的分组，Shell 整列搬过去」这一历史缺陷复活。
 
 一个函数返回了列的**全部信息**（列 id、对应容器、是否族列、TabRow 项），渲染层不再需要任何组合判断。这就是第一版拆成 `columns()` + `rowItems()` + `flatRowItems()` 三个函数时丢失的东西：拆得太碎，组合逻辑就漏回渲染层了。
 
@@ -411,10 +434,12 @@ function visiblePanelIdsOfColumn(ws, column) {
 
   // 分屏后容器列里的根级叶（未归属 Shell 停在列首行）：它不在任何 pane 里，
   // 焦点落在它身上时该列显示它，而不是那个 pane 的 activeTabId。
-  // 不写这一支，模型会认为该列仍显示串口标签，而页面显示的是 Shell（实测差异）。
+  // 判据必须限定「焦点确实是**这一列**的根级叶」，不能只看它不属于任何 pane：
+  // 后者对任何一列的 Shell 都成立，分屏时会串台到别的列。
   if (ws.split.enabled) {
     const focused = tabOf(ws, ws.focusedTabId);
-    if (focused && !isContainer(focused) && paneOfTab(ws, focused) === null) {
+    if (focused && !isContainer(focused)
+        && resolveLeafColumnId(ws, focused) === column.containerId) {
       return [focused.id];
     }
   }
@@ -443,11 +468,6 @@ panel.hidden = !visiblePanels(ws).has(tabId);
 ```
 
 没有「谁盖住谁」「哪个更高一层」「是不是叠在宿主分组上」。历史上 `stackShellTabOverHostGroup()` + `hideStackedShellTabsIn()` 存在的唯一理由，是 Shell 被塞进了某个 pane；当 Shell 是根级 Tab，它自己就是（或属于）一列，不需要遮盖任何人。
-
-> **当前实现差距（S5 待关闭）**：渲染层仍在用叠层（`.active` 互斥 + `stackShellTabOverHostGroup`），
-> 因此分屏时 Shell 面板会与该列的串口面板同时可见。这就是 `verify-tab-plan-strict` 的
-> `with-shell-panels` 失败的直接原因。这一项**不能靠改模型或放宽断言解决**——必须删除叠层，
-> 由上面这一行 `panel.hidden = !visiblePanels(ws).has(tabId)` 单一决定显隐。
 
 ### 3.6 派生量总览
 
@@ -518,19 +538,12 @@ function buildRenderPlan(ws) {
 >
 > 因此「未归属 Shell 在分屏时自占一列」是**错误**方案，不得复活。Shell 的位置是标签行里的那个按钮，
 > 不是分组的内容区；关闭分屏后该列必须回到它自己的串口标签。
->
-> **实现差距（S5 待关闭）**：当前 `layoutColumns()` 仍是 `roots().map(...)`，会给根级叶派生一列；
-> 而渲染层已按裁决不建这一列。因此 `verify-tab-plan-strict` 的 `with-shell-column-count` 与
-> `with-shell-panels` 两项仍失败——它们是**翻转的施工边界**，不是可以用放宽判据掩盖的问题。
-> `with-shell-panels` 之所以无法只靠改模型修好：渲染层当下用叠层让 Shell 面板与该列的
-> `tab-main` 同时可见，而模型一列只表达一个面板。只有删除叠层、由 `visiblePanels()` 单一决定显隐
-> （§3.5）之后，两边才可能逐项相等。
 
 宽度按 `split.sizes[columnId]` 归一化分配，并扣除分界条占位：`flex-basis: calc(<比例>% - <比例 × 分界条总占位>px)`。这个公式是历史缺陷「最右列越界」的修法（`8f55a0f`），必须保留。
 
 `split.enabled === false` 时只有一列，分界条全部隐藏，内容区由焦点决定。
 
-**关键点**：列归属不写进 Tab。分屏时「每个根 Tab 一列」，所以「谁在哪列」是 `roots()` 顺序的派生结果。关掉再打开，列顺序不变——因为 `order` 没变。
+**关键点**：列顺序由 `roots()` 的 `order` 决定，关掉再打开不变。而「根级叶停在哪一列」是 `tabs[id].columnId`——它是**存储的**，因为用户可以把 Shell 拖到任意一列，这个选择无法从 `order` 重新算出。两者不是同一类事实，不要混为一谈。
 
 ### 4.2 第二级：组内 pane
 
@@ -1003,13 +1016,16 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 
 正向替换，不做大爆炸。每阶段独立可验证、独立可提交。
 
-| 阶段 | 内容 | 验证 |
-|---|---|---|
-| **S1** ✅ **已完成** | `tab-model.js`：`{ tabs, focusedTabId, split }` 的读写、`rebuildIndex()`、§3 全部派生量、§6 全部不变式、`validateAndRepair()`。未接渲染。配套 `test/tab-model.test.js`（34 条）与独立验收器 `test/tab-model-acceptance.js` | `npm test` 526/526 |
-| **S2** ✅ **已完成（影子校验）** | 模型侧已就绪：`tab-model.js` 三处真实缺陷已修（见 §11.3）；`tabs-workspace-projection.js` 把现状只读投影成模型树；`renderer.js` 暴露只读诊断钩子 `window.__readTabModelPlan()`。**渲染仍走旧路径**，翻转待 S5 迁移后做 | `verify-tab-plan-shadow`（26 项，单分组/双分屏/分屏+Shell/关分屏 五种形态） |
-| **S3** | subRow 按 pane 一条；组内 pane 分屏；删除 Shell 叠层机制 | `verify-shell` / `verify-shell-buttons-split` |
-| **S4** | 删除 `ownerGroupId` / `detachedColumn` / `topRowColumnId` 及其依赖；`finishWorkspaceTabDrag` 改为同栏重排；全局动作移入工作区级动作条 | `verify-shell-drag`（断言改为「只能同栏重排」）/ `verify-shell-switchback` |
-| **S5** | 配置迁移（§9.3）+ 删除旧 `workspaceLayout` | 启动迁移测试 + 全量 CDP |
+| 阶段 | 内容 | 状态 | 验证 |
+|---|---|---|---|
+| **S1** | `tab-model.js`：`{ tabs, focusedTabId, split }` 的读写、`rebuildIndex()`、§3 全部派生量、§6 全部不变式、`validateAndRepair()`。未接渲染。配套 `test/tab-model.test.js`（39 条）与独立验收器 `test/tab-model-acceptance.js` | ✅ `1e2b1b2` | 全量单测 |
+| **S2** | 影子校验：`tabs-workspace-projection.js` 把现状只读投影成模型树；`renderer.js` 暴露只读诊断钩子 `window.__readTabModelPlan()`；`buildRenderPlan()` 与真实 DOM 逐项比对 | ✅ `cf8ec4d` / `0e8940e` / `be59884` | `verify-tab-plan-shadow` |
+| **S3** | subRow 按 pane 一条；组内 pane 分屏；方案 A（扁平 + pane 分屏）落模型并实机测绘，修掉三处真缺陷 | ✅ `82a32eb` / `859933b` | `verify-flat-pane-split` |
+| **S4** | 死代码清理、同栏顺序真源修复、全局动作入口不变量固化。**三态字段与叠层机制实测证明不能独立删**（§11.5.1），推迟到 S5 | ✅ `3ba9733` / `fb4a84a` / `89067dd` | `verify-tab-order` / `verify-add-entry` |
+| **S5-①** | 配置迁移（§9.3）：`serial-groups-config.js` 显式产出 `panes` / `paneSplit` / `focusedTabId`，`renderer.js` 改读写这三个新键 | ✅ `7ce7c3c` / `00b5187` | `verify-layout-persist` 14/14 |
+| **S5-②** | 分屏语义按用户裁决纠正；右键菜单入口补齐；关分屏后显示权归位 | ✅ `6088a70` / `9e8e681` / `78e653c` / `c8deeba` / `62e99dc` / `dacdcdd` | 15 脚本全量回归 |
+| **S5-③** | `tabs[id].columnId` 成为「根级叶停在哪一列」的唯一真源；`layoutColumns()` 分屏分支只由容器决定列集合；严格判据扩到 36 项 | ✅ `80ea701` / `e18aa24` | `verify-tab-plan-strict` **36/36** |
+| **S5-④** | 渲染翻转：从零实现 `renderWorkspace()` 并接管 DOM，与三态字段 / 叠层机制**同批删除** | ⏳ 未开始 | 全量 15 脚本 + 36 项严格判据 |
 
 **核心纪律**：所有交互只改 `workspace`，然后调 `renderWorkspace()`；不允许任何地方直接改 DOM。S2 之后若仍发现「某处直接 `appendChild` 标签按钮」，说明该处漏改。
 
@@ -1113,7 +1129,6 @@ test('random operation sequences preserve all invariants', () => {
 - 新脚本 `verify-flat-pane-split`（11 项）：行数 = pane 数、标签不跨行重复、每行只装自己 pane 的标签、两内容区都激活、布局中 pane-2 确实拥有被移动的 tab、plan 一级行为空、plan 行数与真实 pane 数一致、plan 行互斥。
 
 **已验证**：`node scripts/run-tests.js` 538/538；`verify-flat-pane-split` 11/11；`verify-tab-plan-shadow` 26/26；全量 CDP 15 个脚本全绿且 PASS 计数与基线逐条一致。
-**已验证**：`node scripts/run-tests.js` 538/538；`verify-flat-pane-split` 11/11；`verify-tab-plan-shadow` 26/26；全量 CDP 15 个脚本全绿且 PASS 计数与基线逐条一致。
 
 ### 11.5 S4 的实现情况（已完成）
 
@@ -1212,6 +1227,48 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 第二个由 `probe-visible-clone3` 的逐节点 `chain` 证据定位：`add-serial-group-btn` 是 `display:none`，
 `add-serial-group-inline-btn` 的祖先链全部可见。修正后判据立刻数到 2，证明**断言确实有区分力**。
 
+### 11.6 S5 到目前为止（主体未开始）
+
+#### 11.6.1 已关闭的三部分（S5-①②③）
+
+| 阶段 | 做了什么 | 关键提交 | 证据 |
+|---|---|---|---|
+| ① 配置迁移 | `serial-groups-config.js` 显式产出 `panes` / `paneSplit` / `focusedTabId`；`renderer.js` 读写这三个键 | `7ce7c3c` / `00b5187` | `verify-layout-persist` 14/14；反向对照 12/14 |
+| ② 分屏语义纠偏 | 回退「未归属 Shell 自占一列」；补齐普通标签的右键菜单；关分屏后显示权交还分组；单分组例外 | `78e653c` / `c8deeba` / `62e99dc` / `dacdcdd` | 15 脚本全量回归全绿 |
+| ③ 落列真源进模型 | 新增 `tabs[id].columnId` + `resolveLeafColumnId()` / `setLeafColumn()`；`layoutColumns()` 分屏分支只由容器决定列集合；严格判据 24 → 36 项 | `80ea701` / `e18aa24` | `verify-tab-plan-strict` **36/36** |
+
+#### 11.6.2 为什么 ③ 必须先于 ④ 做（而不是一次性翻转）
+
+**因为模型需要先与真实 DOM 逐项相等，翻转才有比较基准。**
+
+`renderWorkspace()` 的输入是 `buildRenderPlan(ws)`，而 `buildRenderPlan()` 之前对「根级叶停在哪一列」毫无概念——
+它按 `roots()` 派生列，于是分屏时给 Shell 也派生一列。如果先写渲染层再去补模型，就会出现「新渲染层按模型画了 3 列，
+而用户裁决要求 2 列」这种两边都错、且无法局部修复的状态。
+
+所以顺序是：**先把模型与现状 DOM 对齐（③），再换渲染层去消费它（④）**。③ 完成时，36 项严格判据已经证明
+模型在六类形态（单组 / 双组未分屏 / 分组分屏 / 带 Shell 分屏 / 关分屏 / pane 分屏 / 三列 / Shell 归属某组）
+下与真实 DOM 逐项相等——这就是 ④ 的安全网。
+
+#### 11.6.3 ③ 的两次无效修复与真正的根因（可直接复用的教训）
+
+| 次 | 改动 | 结果 |
+|---|---|---|
+| 1 | 投影器裸读 `tabState.topRowColumnId` | 仍 22/24（该字段首次为 `null`，回落第一列） |
+| 2 | 改用 `resolveShellTopRowColumn(tab)` | 仍 23/24，且两份诊断输出**字节完全相同** |
+| 3 | 发现 `normalizeTabIds()` 只保留 `id/kind/title`，**把 `columnId` 丢了**，补上 | **24/24** |
+
+**教训**：连续两次改动后输出字节完全相同 = 改动不在生效路径上。此时应逐跳读数据传递链，而不是在下一层继续猜。
+`normalizeTabIds()` 是一个把对象**重建成只含白名单字段**的函数——任何新增字段默认都会在这里被静默丢弃。
+
+#### 11.6.4 ③ 的模型与渲染仍有三处临时接缝（④ 会同批消除）
+
+| 接缝 | 现状 | ④ 后的形态 |
+|---|---|---|
+| 「Shell 停在哪一列」 | 模型读 `tabs[id].columnId`；渲染层读 `tabState.topRowColumnId` + `resolveShellTopRowColumn()` | 只剩 `columnId` |
+| `__readTabModelPlan()` 的 shell 项 | 用 `resolveShellTopRowColumn(tab)` 把渲染层的落列喂给投影器 | 直接读模型 |
+| 面板显隐 | `visiblePanels()` 与 `.active` 互斥 + 叠层并存 | 只剩 `visiblePanels()` |
+
+
 
 ## 12. 扩展点
 
@@ -1233,7 +1290,12 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 ## 13. 已知边界
 
-**本文的模型尚未实现，零代码、零 GUI 验证。** 以下事项在实施时必须重新取证：
+**模型层已全部实现并被实机判据验证；渲染层尚未翻转（S5-④ 未开始）。** 因此下文里标「未验证」的项，
+指的是**渲染翻转之后**才会被真正检验的东西，而不是模型缺失。
+
+当前已具备的证据：`tab-model.js` 全部派生量与 I1–I10 有性质测试（120 种子 × 120 步）；
+`buildRenderPlan()` 与真实 DOM 在 8 种形态下逐项相等（`verify-tab-plan-strict` 36/36）。
+以下事项仍需在实际操作中重新取证：
 
 | # | 未验证项 | 说明 |
 |---|---|---|
@@ -1274,6 +1336,6 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 **相关文档**
 
-- `MULTI_SERIAL_DESIGN.md` §6A —— **当前实现**的权威描述（本文的目标状态尚未落地）
+- `MULTI_SERIAL_DESIGN.md` §6A —— 多串口实现的背景描述（标签体系部分以本文为准）
 - `agent_notes.md` §13A.9–§13A.15 —— 标签相关的历次缺陷与教训
 - `ToDo.md` —— CDP 验证清单（15 个脚本 / 281 条断言）
