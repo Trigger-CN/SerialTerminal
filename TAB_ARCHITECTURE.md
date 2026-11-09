@@ -201,8 +201,8 @@ function rebuildIndex(ws) {
 | 同上的 `activePaneId` | **升级为 `workspace.focusedTabId`**（见 §2.6） |
 | `filterTabsStore` / `chartTabsStore`（每组一份） | `tabs` 中的节点，`parentId` 指向所属容器 |
 | `shellTabs`（全局一份） | `tabs` 中 `parentId === null` 的节点 |
-| `tabState.ownerGroupId` / `detachedColumn` / `topRowColumnId` | **全部删除**，无对应字段 |
-| `SHELL_COLUMN_GROUP_ID` / `shellColumnId()` | **删除**，不再有虚拟 shell 列 |
+| `tabState.ownerGroupId` / `detachedColumn` / `topRowColumnId` | **已改名**为 `hostGroupId` / `columnMode` / `columnId`（仍保留为浅层 `tabState` 镜像，用于持久化与投影） |
+| `SHELL_COLUMN_GROUP_ID` / `shellColumnId()` | **保留**：DOM id 契约要求 Shell 独立列容器 id 逐字不变；模型侧对应 `OWN_COLUMN_ID = '__shell__'` |
 | `activeTopTabId`（若存在） | **删除**，由 `focusedTabId` 派生 |
 
 ### 2.6 焦点是模型状态，不是渲染状态
@@ -309,34 +309,54 @@ function rootFamilyOf(ws) {
 
 ```js
 function layoutColumns(ws) {
-  // 分屏：每个**容器**一列；根级叶不占列，停在其中一列的列首行
+  // 分屏：列集合 = 容器集合 +（若有）一个共享独立列。
+  // 根级叶**不占列**，停在其中一列的列首行（§2.3.1）。
   if (ws.split.enabled) {
-    return roots(ws).filter(isContainer).map(container => ({
+    const rank = new Map(roots(ws).map((tab, index) => [tab.id, index]));
+    const columns = roots(ws).filter(isContainer).map(container => ({
       id: container.id,
       containerId: container.id,
       isFamily: false,
-      tabItems: [container, ...leafItemsOfColumn(ws, container.id)]
+      tabItems: [container, ...leafItemsOfColumn(ws, container.id)],
+      rank: rank.get(container.id) ?? 0
     }));
+    // 全部 ownColumn 叶合成**一个**列：独立列是「一组只显示一行标签栏」，
+    // 不是「每叶一列」。它与渲染层唯一的 Shell 列容器一一对应。
+    const own = ownColumnLeaves(ws);
+    if (own.length) {
+      columns.push({
+        id: OWN_COLUMN_ID,          // '__shell__'
+        containerId: null,
+        isFamily: false,
+        tabItems: own.slice(),
+        rank: Math.min(...own.map(leaf => rank.get(leaf.id) ?? 0))
+      });
+    }
+    return columns
+      .sort((a, b) => a.rank - b.rank)
+      .map(column => ({
+        id: column.id,
+        containerId: column.containerId,
+        isFamily: column.isFamily,
+        tabItems: column.tabItems
+      }));
   }
 
-  // 未分屏：只有一列，所有根级 Tab 共用一条 TabRow
+  // 未分屏：只有一列
   const members = roots(ws);
   if (!members.length) return [];
   const flat = isFlat(ws);
-
-  // 扁平 + 组内 pane 分屏（方案 A）：容器子项已经各自躺在自己那条 subRow 里，
-  // 一级行若再列一遍，同一个标签就会在两处同时可见。
   const flatContainer = flat ? members.find(isContainer) : null;
   const flatPanesSplit = Boolean(flatContainer
     && flatContainer.paneSplit && flatContainer.paneSplit.enabled);
 
   const tabItems = flat
     ? (flatPanesSplit
-        ? members.filter(t => !isContainer(t))   // 只留根级叶（Shell）
-        : members.flatMap(t => (isContainer(t) ? childrenOf(ws, t) : [t])))
-    : members.slice();
+        ? members.filter(tab => !isContainer(tab))
+        : members.flatMap(tab => (isContainer(tab) ? childrenOf(ws, tab) : [tab])))
+    // 多分组不扁平：受托管叶（hostGroupId）住在那组的下层行，不能再列进列首行
+    : members.filter(tab => !leafHostGroup(ws, tab));
 
-  // 该列的内容区属于焦点所在的容器
   const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;
   return [{
     id: members[0].id,
@@ -351,8 +371,19 @@ function layoutColumns(ws) {
 
 ```js
 // 根级叶该挂到哪一列。它是这类事实在模型里的唯一表示。
+//
+// 优先级（§2.3.1）：
+//   0. 不是根级叶 → null（由 subRow 管，不参与列首行）
+//   1. columnMode === 'ownColumn' → OWN_COLUMN_ID（共享独立列）
+//   2. hostGroupId 指向现存容器 → 该容器列
+//   3. 显式 columnId 且该列存在 → 用它
+//   4. 悬空或未指定 → 第一个容器列（位置稳定，不跟焦点跑）
+//   5. 根本没有容器列 → null
 function resolveLeafColumnId(ws, leaf) {
   if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;  // 第 0 条是前置条件
+  if (leafColumnMode(leaf) === 'ownColumn') return OWN_COLUMN_ID;
+  const hosted = leafHostGroup(ws, leaf);
+  if (hosted) return hosted;
   const containers = roots(ws).filter(isContainer);
   if (!containers.length) return null;
   const wanted = typeof leaf.columnId === 'string' ? leaf.columnId : '';
@@ -360,15 +391,35 @@ function resolveLeafColumnId(ws, leaf) {
   return containers[0].id;   // 悬空或未指定：落到第一个容器列，不跟焦点跑
 }
 
+// 停在该列**列首行**的根级叶。受托管叶（hostGroupId）必须排除：
+// 它们住在那组下层行（layoutRowsOf 会并进 pane-1 那一条 row），
+// 再列进列首行就是同一个标签在两处可点。
 function leafItemsOfColumn(ws, columnId) {
   return roots(ws).filter(leaf => !isContainer(leaf)
+    && leafHostGroup(ws, leaf) === null
     && resolveLeafColumnId(ws, leaf) === columnId);
 }
+
+// 根级叶的显示形态：'row'（停在本列列首行）或 'ownColumn'（进共享独立列）。
+function leafColumnMode(leaf) {
+  return leaf && !isContainer(leaf) && leaf.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
+}
+
+// 自成独立列的根级叶（全部共享 OWN_COLUMN_ID 那一列）。
+function ownColumnLeaves(ws) {
+  return roots(ws).filter(leaf => !isContainer(leaf) && leafColumnMode(leaf) === 'ownColumn');
+}
+
+// 挂在某个容器下层标签行上的根级叶（历史上 ownerGroupId 的职责）。
+// 指向已不存在的容器时返回 null（不猜、不回落，让 validateAndRepair 负责修数据）。
+function leafHostGroup(ws, leaf) {
+  if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;
+  const wanted = typeof leaf.hostGroupId === 'string' ? leaf.hostGroupId : '';
+  if (!wanted) return null;
+  const container = tabOf(ws, wanted);
+  return isContainer(container) ? wanted : null;
+}
 ```
-
-**第 0 条不可省**：少了它，`tab-main-g-1` 这类容器子项也会被当成「停在第一个容器列的根级叶」，于是那一列的面板被判成别的分组的标签（实测 `verify-tab-plan-strict` 的 `split-panels` 一度因此失败）。
-
-**只看 `columnId`、不看焦点**：跟着焦点走会让「点一下别的分组，Shell 整列搬过去」这一历史缺陷复活。
 
 一个函数返回了列的**全部信息**（列 id、对应容器、是否族列、TabRow 项），渲染层不再需要任何组合判断。这就是第一版拆成 `columns()` + `rowItems()` + `flatRowItems()` 三个函数时丢失的东西：拆得太碎，组合逻辑就漏回渲染层了。
 
@@ -376,10 +427,10 @@ function leafItemsOfColumn(ws, columnId) {
 
 | 情形 | 分屏 | 列数 | `isFamily` | TabRow 内容 |
 |---|---|---|---|---|
-| 单组（扁平） | 否 | 1 | 是 | 容器全部子项 + 所有 Shell（按根级 order 混排） |
-| 单组（扁平） | 否 + pane 分屏 | 1 | 是 | **仅根级叶（Shell）**；容器子项在各自的 subRow |
-| 多组 | 否 | 1 | 否 | **全部分组标签 + 所有 Shell**（子项在各自的 subRow） |
-| 任意 | 是 | 容器数（`roots().filter(isContainer).length`） | 否 | 每个容器各自一条；根级叶**不占列**，停在其中一列的列首行 |
+| 单组（扁平） | 否 | 1 | 是 | 容器全部子项 + 未受托管根级叶（按根级 order 混排） |
+| 单组（扁平） | 否 + pane 分屏 | 1 | 是 | **仅未受托管根级叶**；容器子项在各自的 subRow |
+| 多组 | 否 | 1 | 否 | **全部分组标签 + 停在本列的根级叶**（受托管叶在那组下层行） |
+| 任意 | 是 | 容器数（`roots().filter(isContainer).length`）+（若有）1 个共享独立列 | 否 | 每个容器各自一条；根级叶**不占列**，停在其中一列的列首行 |
 
 **渲染契约（方案 A 的另一半，必须在渲染层逐字遵守）**：扁平 + pane 分屏时，若 `tabItems` 为空，
 **第一条 subRow 复用一级 TabRow 的宿主**（即 pane-1 的 `.pane-tabs-header`），不另造一条空行；
@@ -412,6 +463,17 @@ function visiblePanelIdsOfColumn(ws, column) {
   // 按 pane 拆分：每个 pane 显示自己的 activeTabId
   if (rows.length > 1) return rows.map(p => p.activeTabId).filter(Boolean);
 
+  // 独立列（共享 __shell__）：没有容器、没有 pane。焦点落在其中某个叶就显示它，
+  // 否则显示第一个（独立列必须恒定有一个激活 Shell）。
+  // **必须先判 ws.split.enabled**：未分屏时非扁平分支的唯一列 containerId 也是 null，
+  // 不加前提会被误判成独立列而返回空集（实测 not ok 435：actual [] vs expected ['shell-3']）。
+  if (ws.split.enabled && !column.containerId) {
+    const focused = tabOf(ws, ws.focusedTabId);
+    const hit = focused && column.tabItems.some(item => item.id === focused.id);
+    if (hit) return [focused.id];
+    return column.tabItems.length ? [column.tabItems[0].id] : [];
+  }
+
   // 未分屏：整列只有一个内容区，而内容区跟的是**焦点**。
   // 焦点可能是容器里的叶，也可能是一个未归属的 Shell（它不属于任何 pane，
   // 但住同一个内容区）——两个形态都必须有分支，否则焦点落在 Shell 上时
@@ -425,13 +487,6 @@ function visiblePanelIdsOfColumn(ws, column) {
     }
   }
 
-  // 分屏后的普通列：显示该容器自己的激活叶，**不看焦点**——
-  // 分屏时所有列都要各自显示内容，而焦点只有一个。
-  if (column.containerId) {
-    const pane = panesOf(tabOf(ws, column.containerId))[0];
-    if (pane && pane.activeTabId) return [pane.activeTabId];
-  }
-
   // 分屏后容器列里的根级叶（未归属 Shell 停在列首行）：它不在任何 pane 里，
   // 焦点落在它身上时该列显示它，而不是那个 pane 的 activeTabId。
   // 判据必须限定「焦点确实是**这一列**的根级叶」，不能只看它不属于任何 pane：
@@ -443,6 +498,14 @@ function visiblePanelIdsOfColumn(ws, column) {
       return [focused.id];
     }
   }
+
+  // 分屏后的普通列：显示该容器自己的激活叶，**不看焦点**——
+  // 分屏时所有列都要各自显示内容，而焦点只有一个。
+  if (column.containerId) {
+    const pane = panesOf(tabOf(ws, column.containerId))[0];
+    if (pane && pane.activeTabId) return [pane.activeTabId];
+  }
+
 
   return rows.length ? [rows[0].activeTabId].filter(Boolean) : [];
 }
@@ -459,6 +522,26 @@ function visiblePanels(ws) {
 ```
 
 **不要**用 `[column.id]` 做兵底：列 id 可能是容器 id，而容器没有面板（I3），把它当面板返回会让下游拿到一个永远匹配不到 tabPanel 的 id。
+
+与「此刻该亮哪个」分开的另一个问题：**这一列的内容区里必须住着哪些面板**（先搬面板，再按 `visiblePanelIdsOfColumn` 点亮）：
+
+```js
+function panelIdsOfColumn(ws, column) {
+  const out = [];
+  const push = (id) => {
+    if (typeof id === 'string' && tabOf(ws, id) && !out.includes(id)) out.push(id);
+  };
+  for (const row of layoutRowsOf(ws, column)) {
+    for (const id of row.tabIds) push(id);
+    push(row.activeTabId);
+  }
+  // 独立列没有行；它的面板就是这一行里的全部叶。
+  if (!column.containerId && ws.split.enabled) {
+    for (const tab of column.tabItems) if (tab && !isContainer(tab)) push(tab.id);
+  }
+  return out;
+}
+```
 
 
 **显隐的唯一判据**：
@@ -495,26 +578,78 @@ panel.hidden = !visiblePanels(ws).has(tabId);
 
 ```js
 function buildRenderPlan(ws) {
-  return layoutColumns(ws).map(column => {
-    const container = column.containerId ? tabOf(ws, column.containerId) : null;
-    return {
-      columnId: column.id,
-      containerId: column.containerId,
-      isFamily: column.isFamily,
-      tabItems: column.tabItems,
-      collapsed: container ? container.collapsed === true : false,
-      rows: layoutRowsOf(ws, column).map(pane => ({
-        paneId: pane.id,
-        tabs: pane.tabIds.map(id => tabOf(ws, id)).filter(Boolean),
-        activeTabId: pane.activeTabId
-      })),
-      panelIds: visiblePanelIdsOfColumn(ws, column)
-    };
-  });
+  const cols = layoutColumns(ws);
+  const containers = roots(ws).filter(isContainer);
+  const focused = tabOf(ws, ws.focusedTabId);
+  const focusedLeafColumn = focused && !isContainer(focused)
+    ? resolveLeafColumnId(ws, focused) : null;
+  const firstContainerId = containers.length ? containers[0].id : null;
+
+  // 列容器的 DOM key：容器列 = 容器 id；独立列 = OWN_COLUMN_ID；
+  // 其余情况取「焦点叶所在列」，缺失时回落第一个容器列。
+  // 独立列不得在**非分屏**形态下被当成 key，否则会凭空建出一列空壳。
+  const domKeyOf = (column) => {
+    if (column.id === OWN_COLUMN_ID) return OWN_COLUMN_ID;
+    if (column.containerId) return column.containerId;
+    if (focusedLeafColumn === OWN_COLUMN_ID) return firstContainerId || column.id;
+    return focusedLeafColumn || firstContainerId || column.id;
+  };
+
+  return {
+    columns: cols.map(column => {
+      const container = column.containerId ? tabOf(ws, column.containerId) : null;
+      const rows = layoutRowsOf(ws, column);
+      const paneSplit = container && container.paneSplit ? container.paneSplit : null;
+      const domKey = domKeyOf(column);
+      return {
+        columnId: column.id,
+        domKey,
+        containerId: column.containerId,
+        isFamily: column.isFamily,
+        tabItems: column.tabItems,
+        collapsed: container ? container.collapsed === true : false,
+        splitEnabled: Boolean(paneSplit && paneSplit.enabled === true),
+        orientation: paneSplit && paneSplit.orientation === 'vertical' ? 'vertical' : 'horizontal',
+        paneSizes: paneSplit ? { ...(paneSplit.sizes || {}) } : {},
+        size: ws.split && ws.split.enabled ? (ws.split.sizes || {})[domKey] : null,
+        rows: rows.map(pane => ({
+          paneId: pane.id,
+          tabs: pane.tabIds.map(id => tabOf(ws, id)).filter(Boolean),
+          activeTabId: pane.activeTabId
+        })),
+        panelIds: visiblePanelIdsOfColumn(ws, column),       // 此刻该亮哪个
+        panelIdsAll: panelIdsOfColumn(ws, column)            // 面板必须住在哪
+      };
+    }),
+    columnLayout: {
+      enabled: Boolean(ws.split && ws.split.enabled === true),
+      orientation: ws.split && ws.split.orientation === 'vertical' ? 'vertical' : 'horizontal',
+      sizes: { ...((ws.split && ws.split.sizes) || {}) }
+    },
+    containerCount: containers.length,
+    tabBarVisible: containers.length > 1,
+    panelIds: [...visiblePanels(ws)],
+    subRowTabIds: cols.flatMap(column =>
+      layoutRowsOf(ws, column).flatMap(pane => pane.tabIds.slice())
+    )
+  };
 }
 ```
 
-渲染层只做三件事：遍历 plan 建列 → 用 `tabItems` 排按钮 → 用 `rows` 排 subRow，最后用 `panelIds` 决定显隐。**它是纯数据消费者，不含任何布局判断。**
+渲染层只做四件事：按 `columns` 比对列容器 → 按 `rows` 比对行 → 按 `tabItems` / `rows[].tabs` 复用并重排按钮 → 按 `panelIds` 写 `.active`。**它是纯数据消费者，不含任何布局判断。**
+
+| 字段 | 语义 |
+|---|---|
+| `columns[].columnId` | 模型里的列 id（容器列 = 容器 id，独立列 = `OWN_COLUMN_ID`） |
+| `columns[].domKey` | 渲染层据以找/建列容器的 key |
+| `columns[].panelIds` | 此刻该亮的面板（一列一个） |
+| `columns[].panelIdsAll` | 必须住进该列内容区的全部面板（先搬面板，再按 `panelIds` 点亮） |
+| `columns[].size` | 列级分屏占比（未分屏为 `null`） |
+| `columnLayout` | 列级分屏方向与占比，渲染层只据它写类名与 `flex-basis` |
+| `containerCount` / `tabBarVisible` | 容器数；一级分组标签行是否显示（> 1） |
+| `panelIds` / `subRowTabIds` | 全局面板可见集 / 全部 subRow 的标签 id |
+
+**字段名陷阱**：`layoutColumns()` 的列对象用 `id`，`buildRenderPlan()` 的用 `columnId`，渲染层另用 `domKey`。
 
 这也是本文的定量验收标准：**渲染层不允许出现 `split`、`paneSplit`、`isFlat`、`roots`、`childrenOf`、`rootFamilyOf`。** 出现即说明组合逻辑漏回了渲染层。
 
@@ -529,8 +664,10 @@ function buildRenderPlan(ws) {
 
 ### 4.1 第一级：列
 
-`split.enabled === true` 时，每一列对应**一个容器**；根级叶（未归属的 Shell）**不额外占列**，
-它停在某一列的列首行，与分组标签同级。分界条数量 = 列数 - 1。
+`split.enabled === true` 时，**列集合 = 容器集合 +（若有）一个共享独立列**。根级叶（未归属的 Shell）
+默认**不额外占列**，它停在某一列的列首行，与分组标签同级；只有 `columnMode === 'ownColumn'` 的叶
+才进那个唯一的共享独立列（`OWN_COLUMN_ID = '__shell__'`，全部独立叶共用一列，不是每叶一列）。
+分界条数量 = 列数 - 1。
 
 > **这条语义由用户裁决，不是实现细节**：
 > 「两个串口分组左右分屏时，是用户右键点击了某个串口组将他移到左边或者右边，这就是被移动的组，
@@ -722,20 +859,31 @@ renderWorkspace(ws)          // 唯一入口
 
 所有交互都只做两件事：改 `workspace`，然后调 `renderWorkspace()`。
 
-**不允许任何其它地方直接改标签的类名、`hidden` 或 DOM 位置。** 现有的 `placeShellTabs()` / `stackShellTabOverHostGroup()` / `applyLayoutToDom()` 三套「各自搬一段 DOM」的实现正是混乱来源。
+**不允许任何其它地方直接改标签的类名、`hidden` 或 DOM 位置。** 历史上 `placeShellTabs()` /
+`stackShellTabOverHostGroup()` / `applyLayoutToDom()` 三套各自搬一段 DOM，正是混乱来源（已随 S5-④ 全部删除）。
 
-### 7.2 渲染四步
+### 7.2 渲染五步
 
 ```
-renderWorkspace(ws)
+renderWorkspace(ws)                     // 唯一入口，自带重入闸（isRenderingWorkspace）
   ├── 0. plan = buildRenderPlan(ws)     ← 只读这一个，不自己算
-  ├── 1. reconcileColumns(plan)         按 plan 的列数与顺序
-  ├── 2. reconcileRows(plan)            每列：一条 TabRow + plan 里 rows 的条数
-  ├── 3. reconcileButtons(plan)         按每列 tabItems 复用或创建按钮
-  └── 4. applyVisibility(plan)          对每个叶：hidden = 不在该列 panelIds 里
+  ├── 1. reconcileColumns(plan)         按 plan 的列数与顺序（建列 / 显隐 / 方向类名 / 分界条 / flex-basis）
+  ├── 2. reconcileRows(plan)            每列：分组标签行显隐 + 每 pane 一条行 + pane 建/隐/尺寸
+  ├── 3. reconcileButtons(plan)         按 tabItems / rows[].tabs 复用或创建按钮，并按 plan 顺序重排
+  ├── 4. applyVisibility(plan)          面板搬进内容区 + 唯一一次写 .active
+  └── 5. sweepStaleColumns(plan)        四步之后才拆残留列（只拆空壳列）
 ```
 
 每步都「比对现状、只改差异」，不是「先清空再重建」。
+
+**第 5 步的顺序不可调换**：拆列必须在搬完按钮与面板之后。`querySelector` 找不到节点时不报错，只表现为
+标签静默消失——历史上 `reconcileColumns` 提前 `remove()` 空壳列就踩过两次（关分屏、关分组）。
+真正的拆列只拆「既无 `.main-tab` 也无 `.main-tab-pane`」的空壳，否则只 `hidden = true`。
+
+**焦点是模型状态**：`renderWorkspace` 消费的 `ws.focusedTabId` 来自一个真实的模块级字段（`focusedWorkspaceTabId`），
+不是每次渲染新建的投影快照——往投影树上写状态下一刻就丢。
+
+渲染结束时对可见终端调一次 `fitWorkspaceTerminals()`；它内部的可见性判据只看 DOM（`.active` + `offsetParent` + 宽高）。
 
 ### 7.3 三条渲染约束
 
@@ -786,27 +934,58 @@ I8 成立后每个 pane 只有一个可见面板，`fit()` 不可能对隐藏面
 
 ### 8.1 激活：一个入口
 
-现有的四条切换路径（`switchPaneTab` / `switchShellTab` / `activateShellTabInHost` / `revealSerialGroupActiveTab`）合并为一个：
+现有的四条切换路径（`switchPaneTab` / `switchShellTab` / `activateShellTabInHost` / `revealSerialGroupActiveTab`）合并为一个。
+模型层是 `activateTab`；渲染层对应 `setFocusedTab`——后者在写模型前先把焦点写进真实字段
+`focusedWorkspaceTabId`，因为投影器是只读的，投影快照上写的状态下一刻就丢。
 
 ```js
-function activateTab(ws, tabId) {
-  const tab = tabOf(ws, tabId);
-  if (!tab) return;
+// 当前工作区的模型快照（每次新建）。**只供读**：投影器是纯函数，往它上面写状态下一刻就丢。
+function workspaceTabState() {
+  return buildLiveWorkspace();
+}
 
-  ws.focusedTabId = tab.id;                    // 唯一的写入
+function workspaceTabOf(tabId) {
+  return tabOf(workspaceTabState(), tabId);
+}
 
-  const hit = paneOfTab(ws, tab);
-  if (hit) {
-    hit.pane.activeTabId = tab.id;             // 叶：让所在 pane 显示它
-  } else if (isContainer(tab)) {
-    for (const pane of panesOf(tab)) {         // 容器：补全缺失的 activeTabId
-      if (!pane.activeTabId && pane.tabIds.length) pane.activeTabId = pane.tabIds[0];
-    }
+function setFocusedTab(tabId) {
+  const tab = workspaceTabOf(tabId);
+  if (!tab) return false;
+  if (isContainer(tab)) {
+    // 容器：抬回它自己的激活叶（用户点分组标签 = 看这个分组的串口终端）
+    const pane = panesOf(tab)[0];
+    return pane && pane.activeTabId ? setFocusedTab(pane.activeTabId) : false;
   }
-
-  renderWorkspace(ws);
+  focusedWorkspaceTabId = tab.id;              // 先写焦点：接下来的渲染必须看到它
+  const hit = paneOfTab(workspaceTabState(), tab);
+  if (hit && hit.pane) {
+    // 叶属于某个 pane：走布局管理器的真实写入口（不能用投影快照）
+    const ownerGroupId = resolveGroupIdFromPaneId(hit.pane.id);
+    getGroupWorkspaceManager(ownerGroupId).switchPaneTab(hit.pane.id, tab.id, { persist: true });
+  }
+  renderWorkspaceNow();
+  return true;
 }
 ```
+
+这四个入口的实现在 `renderer.js`；本文只固定它们的契约（空函数体表示「实现见渲染层」）：
+
+```js
+// 把当前 section 投影成模型树（唯一投影入口，渲染与影子判据共用）。只读。
+function buildLiveWorkspace() {}
+
+// 渲染入口的薄封装。
+function renderWorkspaceNow() {}
+
+// pane id 的形状是 pane-<n>-<groupId>（默认分组无后缀）；这是它唯一的解析入口。
+function resolveGroupIdFromPaneId(paneId) {}
+
+// 每个串口分组一个布局管理器；按分组 id 取（缺失时现建）。
+function getGroupWorkspaceManager(groupId) {}
+```
+
+三条必须同时写焦点的时机（否则屏幕不动）：`switchPaneTab`（布局层只写 activeTabId）、
+`applyActiveSerialGroup`（切组后上一组焦点仍「有效」）、`setGroupWorkspaceSplit(false)`（关分屏后焦点必须抬回主标签）。
 
 **关键点：不再有「哪一列可见」这个写入。** 它由 `focusedTabId` 在 `layoutColumns()` 里派生。历史上 `revealSerialGroupActiveTab()` 要单独「揭露」被遮住的串口，正是因为「可见列」和「激活项」是两套状态；合并成一个焦点后，这个函数没有存在理由。
 
@@ -835,13 +1014,17 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 }
 ```
 
-**跨行拖动一律不做**：
+**同栏拖动**只改变顺序（行内 `reorderInRow`）；**Shell 的跨层拖动是另一类事实**：它不是「换个行显示」，而是改三个叶级字段之一：
 
-- Shell 不可能进入 subRow（I1 / I2）；
-- 组内叶不可能升到根级（否则 `parentId` 无处安放，且违反 I4）；
-- 因此「拖到别的行」没有任何合法落点。
+| 落点 | 写入 | 结果 |
+|---|---|---|
+| 某列的分组标签行 | `setLeafHostGroup(ws, leafId, null)` + `setLeafColumnMode(ws, leafId, 'ownColumn')` | 进共享独立列（`OWN_COLUMN_ID`） |
+| 某组的下层标签行 | `setLeafHostGroup(ws, leafId, groupId)`（自动把 `columnMode` 清回 `row`） | 住进那组的 pane-1 下层行 |
+| 某一列的列首行 | `setLeafColumn(ws, leafId, columnId)` | 停在那列列首行 |
 
-拖拽代码只剩一个入口，不再需要 `targetColumnId` / `targetGroupId` / `isShell` 三分支。现有 `finishWorkspaceTabDrag()` 里约 50 行分支（含 2640–2648 的 `setShellOwnerGroup` 调用）可整体删除。
+为什么 Shell 能跨层而其它叶不能：I1 / I2 保证 Shell 永远不进 `panes[].tabIds`，它的位置由 `hostGroupId` / `columnMode` / `columnId`
+三条**互斥**的叶级事实描述（同一时刻至多一条生效），所以不存在「半只脚进了 pane」的中间态。
+组内叶仍然不能拖出 pane（`parentId` 无处安放），根级叶也不能进 subRow 当普通成员。
 
 ### 8.3 收起
 
@@ -921,11 +1104,23 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 | 旧字段 | 处理 |
 |---|---|
 | `group.workspaceLayout.panes[]` | 搬到容器的 `panes[]` |
-| `group.workspaceLayout.splitEnabled` / `orientation` / `paneSizes` | 搬到容器的 `paneSplit` |
-| `group.workspaceLayout.activePaneId` | 若其 pane 有 `activeTabId`，用它初始化 `focusedTabId`；否则丢弃 |
-| `shellTab.ownerGroupId` / `detachedColumn` / `topRowColumnId` | **全部丢弃** |
+| `group.workspaceLayout.splitEnabled` / `orientation` / `paneSizes` | 搬到容器的 `paneSplit`（与 `panes` 同源：优先 `source.panes`，否则回退 `workspaceLayout`） |
+| `group.workspaceLayout.activePaneId` | 若其 pane 有 `activeTabId`，用它初始化 `focusedTabId`；否则丢弃。**只看 `activeTabId` 不看 `tabIds[0]`**——后者可能是空数组 |
+| `shellTab.ownerGroupId` | **已改名** `hostGroupId`（Shell 归属哪个分组） |
+| `shellTab.detachedColumn` | **已改名** `columnMode`（`'row'` / `'ownColumn'`） |
+| `shellTab.topRowColumnId` | **已改名** `columnId`（停在那一列的列首行） |
 | `shellTabs[]` / `filterTabs[]` / `chartTabs[]` | 转为 `tabs` 节点，`parentId` 分别为 `null` / 所属容器 |
 | `workspaceLayout.split`（组级） | 搬到 `workspace.split` |
+
+**三个 Shell 键的老配置回落规则**（投影器 `normalizeTabIds` 负责）：
+判据是「新键**原本是否存在**」（`hasOwnProperty` 在重建后恒为 true，不能用；「是否为字符串」也不行——
+会让合法的新键 `null` 被旧键覆写）：
+
+| 情形 | 结果 |
+|---|---|
+| 新键存在（含显式 `null`） | 用新键 |
+| 新键不存在、旧键存在 | 用旧键 |
+| 两者都不存在 | 默认值（`null` / `'row'` / `null`） |
 
 迁移流程：
 
@@ -950,26 +1145,31 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 
 ### 10.1 删除清单
 
-| 位置（HEAD） | 现有实现 | 新模型 |
+| 位置（HEAD） | 现有实现 | 处理（S5-④ 已执行） |
 |---|---|---|
-| 2332 | `getShellTabOwner(tabState)` | 删除 |
-| 2338 | `setShellTabOwner(tabId, owner)` | 删除 |
-| 2352 | `setShellDetachedColumn(tabId, detached)` | 删除 |
-| 2608–2657 | `finishWorkspaceTabDrag(state)` 的 `targetColumnId` / `isShell` 分支 | 改为 `reorderInRow()` |
-| 4203 | `renderSerialGroupTabBar()` | 由 `renderWorkspace()` 取代 |
-| 4290 | `syncShellAddButtonVisibility()` | 删除：新建 Shell 移入工作区级动作条（§8.5） |
-| 4418 | `syncSerialGroupAddButtonLayer()` | 删除：不再有「哪一层放按钮」的判断 |
-| 4442 | `syncShellTabLayer()`（含 `isSyncingShellLayer` 重入闸） | 删除：递归环 `placeShellTabs → addTabToPane → applyLayoutToDom` 不再存在 |
-| 4518–4600 | `resolveShellTabHost(tabState)` 三分支 | 删除：Shell 宿主恒为 TabRow |
-| 4664 | `syncShellLayoutOwnership()`（整函数） | 删除：不再需要「从 A 组摘、登记进 B 组」 |
-| 4706 | `isUnownedShellActiveIn(groupId)` | 删除（现为零引用死代码） |
-| 4727 | `syncGroupSubRowVisibility()` | 由 `renderWorkspace()` 第 2 步取代 |
-| 4774 | `resolveWorkspaceTabButtonHost(tabId, paneId)` | 删除：布局层不再反向量子询问渲染层 |
-| 4825 | `stackShellTabOverHostGroup()` / `hideStackedShellTabsIn()` | 删除：Shell 不再叠在任何 pane 上 |
-| 4881 | `revealSerialGroupActiveTab(groupId)` | 删除：可见列由 `focusedTabId` 派生 |
-| 4872 | `lastSerialTabByPane`（Map） | 删除 |
-| 5123 | `persistShellTabs()` 写 `ownerGroupId` / `detachedColumn` | 改为写 `workspace.tabs` |
-| 5136 | `createShellTab()` 里的 `ownerGroupId`（5233）/ `detachedColumn`（5237） | 删除这两个字段 |
+| 2332 | `getShellTabOwner(tabState)` | **保留**：读取 `tabState.hostGroupId`，作为投影器的唯一读数入口 |
+| 2338 | `setShellTabOwner(tabId, owner)` | **保留**：写 `tabState.hostGroupId`（写入口只此一处） |
+| 2352 | `setShellDetachedColumn(tabId, detached)` | 删除（S4 已删） |
+| 2608–2657 | `finishWorkspaceTabDrag(state)` 的 Shelf 跨层分支 | 保留落点三分支，但改走 `setShellTabOwner` + `setShellColumnModeInModel` + `setShellColumnInModel`，每次落点后 `renderWorkspaceNow()` |
+| 4203 | `renderSerialGroupTabBar()` | **退化为薄封装**：只调 `renderWorkspaceNow()` |
+| 4290 | `syncShellAddButtonVisibility()` | 保留（按钮分层仍有意义，见 §11.5.3） |
+| 4418 | `syncSerialGroupAddButtonLayer()` | 保留（同上） |
+| 4442 | `syncShellTabLayer()`（含 `isSyncingShellLayer` 重入闸） | **删除** |
+| 4518–4600 | `resolveShellTabHost(tabState)` | **删除** |
+| 4664 | `syncShellLayoutOwnership()` | **删除** |
+| 4706 | `isUnownedShellActiveIn(groupId)` | 删除（S4 已删） |
+| 4727 | `syncGroupSubRowVisibility()` | **删除**（由 `reconcileRows` 取代） |
+| 4774 | `resolveWorkspaceTabButtonHost(tabId, paneId)` | **删除** |
+| 4825 | `stackShellTabOverHostGroup()` / `hideStackedShellTabsIn()` | **删除** |
+| 4881 | `revealSerialGroupActiveTab(groupId)` | **删除** |
+| 4872 | `lastSerialTabByPane`（Map） | **删除** |
+| 5123 | `persistShellTabs()` 写 `ownerGroupId` / `detachedColumn` | 改为写 `hostGroupId` / `columnMode` / `columnId`（`main.js` 用 `{...tab}` 展开，新键能落盘） |
+| 5136 | `createShellTab()` 的初值 | 改为 `hostGroupId: null` / `columnMode: 'row'` / `columnId: null` |
+
+同批删除的还有：`syncShellTabLayer` / `activateShellTabInHost` / `placeShellTabs` / `resolveDisplayedTabIdInPane` /
+`findWorkspaceTabButton` / `setShellOwnerGroup` / `detachedShellActiveTabId` / `isSyncingShellLayer` / `isShellColumnActive`，
+以及 `applyGroupWorkspaceSplitLayout` / `syncGroupWorkspaceVisibility` 的旧实现（各退化为 `renderWorkspaceNow()`）。
+`ensureShellColumnDom` **保留**——它建的正是模型 `OWN_COLUMN_ID` 那一列的真实容器。
 
 ### 10.2 保留并改造
 
@@ -1025,7 +1225,7 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 | **S5-①** | 配置迁移（§9.3）：`serial-groups-config.js` 显式产出 `panes` / `paneSplit` / `focusedTabId`，`renderer.js` 改读写这三个新键 | ✅ `7ce7c3c` / `00b5187` | `verify-layout-persist` 14/14 |
 | **S5-②** | 分屏语义按用户裁决纠正；右键菜单入口补齐；关分屏后显示权归位 | ✅ `6088a70` / `9e8e681` / `78e653c` / `c8deeba` / `62e99dc` / `dacdcdd` | 15 脚本全量回归 |
 | **S5-③** | `tabs[id].columnId` 成为「根级叶停在哪一列」的唯一真源；`layoutColumns()` 分屏分支只由容器决定列集合；严格判据扩到 36 项 | ✅ `80ea701` / `e18aa24` | `verify-tab-plan-strict` **36/36** |
-| **S5-④** | 渲染翻转：从零实现 `renderWorkspace()` 并接管 DOM，与三态字段 / 叠层机制**同批删除** | ⏳ 未开始 | 全量 15 脚本 + 36 项严格判据 |
+| **S5-④** | 渲染翻转：从零实现 `renderWorkspace()` 并接管 DOM（第 1–4 步 + 第五步 `sweepStaleColumns`），与三态字段 / 叠层机制**同批删除**；布局层交出全部 DOM 职责；焦点成为真实模块级字段 | ✅ 待填提交号 | 全量 15 脚本 + `verify-tab-plan-strict` **48/48**（含两个独立 Shell、上下分屏） |
 
 **核心纪律**：所有交互只改 `workspace`，然后调 `renderWorkspace()`；不允许任何地方直接改 DOM。S2 之后若仍发现「某处直接 `appendChild` 标签按钮」，说明该处漏改。
 
@@ -1227,17 +1427,19 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 第二个由 `probe-visible-clone3` 的逐节点 `chain` 证据定位：`add-serial-group-btn` 是 `display:none`，
 `add-serial-group-inline-btn` 的祖先链全部可见。修正后判据立刻数到 2，证明**断言确实有区分力**。
 
-### 11.6 S5 到目前为止（主体未开始）
+### 11.6 S5 的实现情况（已全部完成）
 
-#### 11.6.1 已关闭的三部分（S5-①②③）
+#### 11.6.1 五个部分（S5-①②③④）
 
 | 阶段 | 做了什么 | 关键提交 | 证据 |
 |---|---|---|---|
 | ① 配置迁移 | `serial-groups-config.js` 显式产出 `panes` / `paneSplit` / `focusedTabId`；`renderer.js` 读写这三个键 | `7ce7c3c` / `00b5187` | `verify-layout-persist` 14/14；反向对照 12/14 |
 | ② 分屏语义纠偏 | 回退「未归属 Shell 自占一列」；补齐普通标签的右键菜单；关分屏后显示权交还分组；单分组例外 | `78e653c` / `c8deeba` / `62e99dc` / `dacdcdd` | 15 脚本全量回归全绿 |
 | ③ 落列真源进模型 | 新增 `tabs[id].columnId` + `resolveLeafColumnId()` / `setLeafColumn()`；`layoutColumns()` 分屏分支只由容器决定列集合；严格判据 24 → 36 项 | `80ea701` / `e18aa24` | `verify-tab-plan-strict` **36/36** |
+| ③' 另两个叶级事实 | `columnMode`（是否自成独立列，全部共享 `OWN_COLUMN_ID`）与 `hostGroupId`（归属哪组下层行）；老配置回落新键 | `bc0bb41` / `418dadc` / `80f4e98` / `73adab2` / `1929217` | 单测 + 严格判据 48/48 |
+| ④ 渲染翻转 | `renderWorkspace()` 接管列/行/按钮/面板（五步含 `sweepStaleColumns`）；布局层交出全部 DOM 职责；三态字段与叠层机制同批删除；焦点成为真实模块级字段 | `S5-④` 提交号见 §11.6.5 | 15 脚本全量回归 + 严格判据 **48/48** |
 
-#### 11.6.2 为什么 ③ 必须先于 ④ 做（而不是一次性翻转）
+#### 11.6.2 翻转前必须先对齐模型的原因（③ 必须先于 ④）
 
 **因为模型需要先与真实 DOM 逐项相等，翻转才有比较基准。**
 
@@ -1245,8 +1447,8 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 它按 `roots()` 派生列，于是分屏时给 Shell 也派生一列。如果先写渲染层再去补模型，就会出现「新渲染层按模型画了 3 列，
 而用户裁决要求 2 列」这种两边都错、且无法局部修复的状态。
 
-所以顺序是：**先把模型与现状 DOM 对齐（③），再换渲染层去消费它（④）**。③ 完成时，36 项严格判据已经证明
-模型在六类形态（单组 / 双组未分屏 / 分组分屏 / 带 Shell 分屏 / 关分屏 / pane 分屏 / 三列 / Shell 归属某组）
+所以顺序是：**先把模型与现状 DOM 对齐（③），再换渲染层去消费它（④）**。严格判据在 ④ 之前已证明
+模型在八类形态（单组 / 双组未分屏 / 分组分屏 / 带 Shell 分屏 / 关分屏 / pane 分屏 / 三列 / Shell 归属某组）
 下与真实 DOM 逐项相等——这就是 ④ 的安全网。
 
 #### 11.6.3 ③ 的两次无效修复与真正的根因（可直接复用的教训）
@@ -1260,13 +1462,37 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 **教训**：连续两次改动后输出字节完全相同 = 改动不在生效路径上。此时应逐跳读数据传递链，而不是在下一层继续猜。
 `normalizeTabIds()` 是一个把对象**重建成只含白名单字段**的函数——任何新增字段默认都会在这里被静默丢弃。
 
-#### 11.6.4 ③ 的模型与渲染仍有三处临时接缝（④ 会同批消除）
+#### 11.6.4 ④ 落地时修掉的七类真实缺陷（都有实测取证）
 
-| 接缝 | 现状 | ④ 后的形态 |
+| # | 缺陷 | 根因 / 修法 |
 |---|---|---|
-| 「Shell 停在哪一列」 | 模型读 `tabs[id].columnId`；渲染层读 `tabState.topRowColumnId` + `resolveShellTopRowColumn()` | 只剩 `columnId` |
-| `__readTabModelPlan()` 的 shell 项 | 用 `resolveShellTopRowColumn(tab)` 把渲染层的落列喂给投影器 | 直接读模型 |
-| 面板显隐 | `visiblePanels()` 与 `.active` 互斥 + 叠层并存 | 只剩 `visiblePanels()` |
+| 1 | 关分组直接招 `ReferenceError: shellMovedOut is not defined` | 删叠层时漏掉的变量；改为无条件遍历摘 `hostGroupId` |
+| 2 | 建分组标签按钮招 `describeGroupTab is not defined` | 只解构了 `describeGroupTabBar`，补进 require 解构 |
+| 3 | 点 Shell 无反应（`workspaceTabOf is not defined`） | 重写 `setFocusedTab` 时误删两个只读辅助函数，补回 |
+| 4 | 非分屏且激活组≠default 时「添加串口 / 新建 Shell」按钮落进隐藏行 | `getVisibleGroupRow` 恒返回静态行；改为「取该列自己的行，未隐藏就用它」 |
+| 5 | 新建 Shell / 新建过滤页后屏幕不切 | `switchPaneTab` 只写 `panes[].activeTabId`，而模型未分屏时跟 `focusedTabId`；补写焦点 |
+| 6 | 把主终端拖到第三位后下次投影又弹回第一位 | `projectWorkspace` 无条件 `unshift(mainId)`；改为声明里保位、只在缺失时补队首 |
+| 7 | 关分屏后 Shell 标签静默消失 / 幽灵 Shell 列 | 拆列太早（按钮与面板还在里面）+ 非分屏下 `domKey` 取了 `OWN_COLUMN_ID`；拆列移到四步后的 `sweepStaleColumns`，`domKeyOf` 加非分屏守卫 |
+
+#### 11.6.5 ④ 的验证证据
+
+| 维度 | 结果 |
+|---|---|
+| 全量单测 | 557/557 |
+| `verify-tab-plan-strict` | **48/48 PASS**，renderer-diag=clean（含两个独立 Shell、上下分屏） |
+| `verify-tab-order` | 8/8；`verify-shell` 16/16；`verify-shell-drag` 24/24；`verify-shell-switchback` 14/14 |
+| 其余既有脚本 | `verify-user-paths` 15/15、`verify-group-columns` 37/37、`verify-group-split` 19/19、`verify-context-menu-and-highlight` 17/17、`verify-split-geometry` 26/26、`verify-shell-buttons-split` 16/16、`verify-no-tab-flash` 18/18、`verify-titles` clean、`verify-sidebar-groups` 14/14、`verify-display-pref-scope` 24/24、`verify-connect-group` 23/23、`verify-same-port-guard` 15/15、`verify-layout-persist` 14/14 |
+| 静态门禁 | `node --check` ×4 通过；`check-renderer-module-load` 通过；`scan-undefined` missing=none |
+
+**两处验证脚本的步骤修正（不是产品缺陷，断言未改）**：`verify-split-geometry` 与 `verify-shell-buttons-split` 的 setup 段建了三个分组，
+却按旧的「只有参与分屏的分组才可见」语义断言 2 列——该语义已随 ④ 删除（列集合只由容器决定）。
+处理方式是**只改步骤不改断言**：两列段真的只留两个分组，第三个分组挪到三列段再建。
+
+#### 11.6.6 ④ 剩下的已知边界
+
+- 渲染层仍保留少量兼容旧调用方的薄封装（`renderSerialGroupTabBar` / `applyGroupWorkspaceSplitLayout` / `syncGroupWorkspaceVisibility`），它们只调 `renderWorkspaceNow()`。
+- `ensureShellColumnDom` 必须保留：它建的正是模型 `OWN_COLUMN_ID` 那一列的真实容器。
+- `syncSerialGroupAddButtonLayer` / `syncShellAddButtonVisibility` 保留：按钮分层仍然有意义（§11.5.3）。
 
 
 
@@ -1290,11 +1516,11 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 ## 13. 已知边界
 
-**模型层已全部实现并被实机判据验证；渲染层尚未翻转（S5-④ 未开始）。** 因此下文里标「未验证」的项，
-指的是**渲染翻转之后**才会被真正检验的东西，而不是模型缺失。
+**模型层与渲染层均已实现，渲染层已翻转（S5-④ 已完成）。** 下文里标「未验证」的项，
+指的是尚未做过用户手测的体验类问题，而不是实现缺失。
 
 当前已具备的证据：`tab-model.js` 全部派生量与 I1–I10 有性质测试（120 种子 × 120 步）；
-`buildRenderPlan()` 与真实 DOM 在 8 种形态下逐项相等（`verify-tab-plan-strict` 36/36）。
+`buildRenderPlan()` 在**渲染层已消费它**的前提下与真实 DOM 在 10 类形态下逐项相等（`verify-tab-plan-strict` 48/48）。
 以下事项仍需在实际操作中重新取证：
 
 | # | 未验证项 | 说明 |
