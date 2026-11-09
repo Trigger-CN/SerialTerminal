@@ -28,6 +28,8 @@ const {
     setLeafColumn,
     leafColumnMode,
     setLeafColumnMode,
+    leafHostGroup,
+    setLeafHostGroup,
     visiblePanels,
     buildRenderPlan,
     isContainer,
@@ -291,6 +293,64 @@ test('moving an ownColumn leaf back into a column clears columnMode', () => {
     assert.equal(leafColumnMode(shell), 'row');
     assert.equal(buildRenderPlan(ws).columns.length, 2);
     assert.equal(resolveLeafColumnId(ws, shell), other.id);
+});
+
+// `hostGroupId` 是「Shell 归属某个分组」的唯一真源，承接历史 `ownerGroupId`。
+// 归属的叶必须落在该列的下层行（rows）里，而不是列首行（tabItems）——
+// 那是它和「停在此列列首行」的根本区别。
+test('a hosted root leaf sits on the column subRow instead of its tab row', () => {
+    const ws = fresh();
+    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setColumnSplit(ws, true);
+
+    assert.equal(setLeafHostGroup(ws, shell.id, other.id), true);
+    assert.equal(leafHostGroup(ws, shell), other.id);
+    assert.equal(resolveLeafColumnId(ws, shell), other.id, '归属决定它算哪一列');
+
+    const plan = buildRenderPlan(ws);
+    const hosted = plan.columns.find(col => col.columnId === other.id);
+    assert.ok(hosted, '归属列必须存在');
+    assert.equal(hosted.tabItems.some(t => t.id === shell.id), false, '不能同时占列首行');
+    assert.ok(hosted.rows.length > 0, '归属列必须有下层行');
+    assert.ok(hosted.rows[0].tabs.some(t => t.id === shell.id), '必须出现在第一行的 tabs 里');
+    assert.ok(hosted.panelIdsAll.includes(shell.id), '面板必须赖在这一列的内容区');
+    // 它不能同时算作别的列的叶。
+    assert.equal(plan.columns.filter(col => col.containerId && col.columnId !== other.id)
+        .some(col => col.rows.some(row => row.tabs.some(t => t.id === shell.id))), false);
+
+    // 反向对照：解除归属后它回到列首行，不再进任何 rows。
+    assert.equal(setLeafHostGroup(ws, shell.id, null), true);
+    assert.equal(leafHostGroup(ws, shell), null);
+    const back = buildRenderPlan(ws);
+    assert.equal(back.columns.some(col => col.rows.some(
+        row => row.tabs.some(t => t.id === shell.id))), false);
+    assert.ok(back.columns.some(col => col.tabItems.some(t => t.id === shell.id)));
+});
+
+// 归属与「自成独立列」是两件互斥的事：同时成立会让同一个标签在两处可见。
+// 关闭分组后 hostGroupId 悬空，必须被自愈清掉。
+test('hosting a leaf clears ownColumn and is repaired when the group is gone', () => {
+    const ws = fresh();
+    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setColumnSplit(ws, true);
+    setLeafColumnMode(ws, shell.id, 'ownColumn');
+    assert.equal(buildRenderPlan(ws).columns.length, 3);
+
+    assert.equal(setLeafHostGroup(ws, shell.id, other.id), true);
+    assert.equal(leafColumnMode(shell), 'row', '挂进分组就不再是独立列');
+    assert.equal(buildRenderPlan(ws).columns.length, 2);
+
+    // 传入不存在的分组：拒绝写入，不静默落一个悬空 id。
+    assert.equal(setLeafHostGroup(ws, shell.id, 'no-such-group'), false);
+    assert.equal(leafHostGroup(ws, shell), other.id);
+
+    closeTab(ws, other.id);
+    const repaired = validateAndRepair(ws);
+    assert.ok(repaired.ok);
+    assert.ok(repaired.repairs.some(text => text.includes('hostGroupId')), repaired.repairs);
+    assert.equal(leafHostGroup(ws, shell), null);
 });
 
 // 未分屏时不能套用上面那一支：那时 column.id 与焦点所在的叶无关，

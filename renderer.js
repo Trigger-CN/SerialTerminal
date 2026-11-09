@@ -4463,21 +4463,26 @@ window.__readTabModelPlan = () => {
         }),
         filterTabs: {},
         chartTabs: {},
-        // 每个 Shell 带自己的落列。「它停在哪一列」在渲染层只有一个判据
-        // `resolveShellTopRowColumn()`（记忆列 → 唯一可见列 → 激活列），这里必须调它而不是
-        // 裸读 `topRowColumnId`：后者首次为 null，裸读会把 Shell 算到第一列，而实际停在
-        // 激活列（实测 verify-tab-plan-strict 的 with-shell-panels 就是这么错的）。
-        // 模型那边它是 tabs[id].columnId / columnMode，两处是同一事实，不再各算一份。
-        shellTabs: shellTabs.map(tab => ({
-            id: tab.id,
-            title: tab.title,
-            columnMode: tab.columnMode === 'ownColumn' || tab.detachedColumn === true
-                ? 'ownColumn' : 'row',
-            columnId: (() => {
-                const owner = getShellTabOwner(tab);
-                return owner === null ? resolveShellTopRowColumn(tab) : owner;
-            })()
-        })),
+        // 每个 Shell 带三个互不相同的事实，不能混着发：
+        //   hostGroupId  挂靠在哪个分组的**下层行**（"归属"）
+        //   columnId     停在哪一列的**列首行**（未归属时才有意义）
+        //   columnMode   是否**自成独立列**
+        // 早期把「归属」也写成 columnId，于是模型分不出「住在该组下层行」与「停在该列首行」；
+        // 模型现在有 hostGroupId 这个独立字段（承接历史 ownerGroupId），这里必须分开传。
+        shellTabs: shellTabs.map(tab => {
+            const owner = getShellTabOwner(tab);
+            return {
+                id: tab.id,
+                title: tab.title,
+                hostGroupId: owner,
+                columnMode: tab.columnMode === 'ownColumn' || tab.detachedColumn === true
+                    ? 'ownColumn' : 'row',
+                // 归属某组时它不进列首行，columnId 无意义；未归属时用渲染层唯一的落列判据
+                // `resolveShellTopRowColumn()`（记忆列 → 唯一可见列 → 激活列）而不是裸读
+                // topRowColumnId：后者首次为 null，裸读会把它算到第一列。
+                columnId: owner === null ? resolveShellTopRowColumn(tab) : null
+            };
+        }),
         focusedTabId: getGroupActiveTabId(activeGroupId),
         split: {
             enabled: groupWorkspaceSplit.enabled === true && groupWorkspaceSplit.groupIds.length > 1,

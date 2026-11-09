@@ -52,7 +52,7 @@ function isShellId(id) {
 //              collapsed, order }],
 //   filterTabs: { [groupId]: [{ id, title }] },
 //   chartTabs:  { [groupId]: [{ id, title }] },
-//   shellTabs:  [{ id, title }],
+//   shellTabs:  [{ id, title, hostGroupId, columnId, columnMode }],
 //   activeGroupId,
 //   focusedTabId,
 //   split: { enabled, orientation, sizes }
@@ -160,14 +160,18 @@ function projectWorkspace(sections) {
 
     // shell 永远在根级（I1 / I2）
     //
-    // columnId / columnMode 是「这个 Shell 停在哪列、是不是自成独立列」的真源。
-    // 数据源里每项可以带；不带时交给 resolveLeafColumnId / leafColumnMode 回落，
-    // 不在这里猜（猜了就是第二套规则）。
+    // `hostGroupId` / `columnId` / `columnMode` 是三个不同的事实，必须在投影时分开：
+    //   挂靠在哪个分组的**下层行**（历史 ownerGroupId）
+    //   停在哪一列的**列首行**（历史 topRowColumnId）
+    //   是否**自成独立列**（历史 detachedColumn）
+    // 早期把「归属」也写成 columnId，于是两件事共一个字段；模型现在把它们解耦，
+    // 这里必须逐项转发——投影是白名单重建，不显式列出的键会被静默丢弃。
     const shellStart = groups.length;
     normalizeTabIds(src.shellTabs, 'shell').forEach((item, index) => {
         const leaf = createLeaf('shell', { id: item.id });
         leaf.parentId = null;
         leaf.order = shellStart + index;
+        leaf.hostGroupId = typeof item.hostGroupId === 'string' ? item.hostGroupId : null;
         leaf.columnId = typeof item.columnId === 'string' ? item.columnId : null;
         leaf.columnMode = item.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
         tabs[leaf.id] = leaf;

@@ -184,15 +184,38 @@ function leafColumnMode(leaf) {
     return leaf && !isContainer(leaf) && leaf.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
 }
 
+// 根级叶**挂在哪个容器的下层标签行**上（用户把 Shell 拖进了某个分组）。
+//
+// 这是历史上 `tabState.ownerGroupId` 的职责。它必须进模型，否则删掉那个字段就等于
+// 删掉「Shell 落在该组 subRow」这项能力；而它又不能写成 `panes[].tabIds`——I1/I2
+// 明确禁止 Shell 进入 pane。所以它是一条**独立的叶级事实**：指向一个容器的 id，
+// 由派生函数把它并进那一列的下层标签行。
+//
+// 指向已不存在的容器时返回 null（不猜、不回落，让 validateAndRepair 负责修数据）。
+function leafHostGroup(ws, leaf) {
+    if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;
+    const wanted = typeof leaf.hostGroupId === 'string' ? leaf.hostGroupId : '';
+    if (!wanted) return null;
+    const container = tabOf(ws, wanted);
+    return isContainer(container) ? wanted : null;
+}
+
+// 受某个容器托管、因而坐在该列下层标签行里的根级叶。
+function hostLeavesOfColumn(ws, columnId) {
+    return roots(ws).filter(leaf => !isContainer(leaf)
+        && leafHostGroup(ws, leaf) === columnId);
+}
+
 // 根级叶**该挂到哪一列**。这是「Shell 停在哪一列」的唯一判据，也是模型里唯一
 // 表示该事实的地方——不再靠渲染层记一个 topRowColumnId 反向量子询问。
 //
-// 四条规则，按优先级：
+// 五条规则，按优先级：
 //   0. 不是根级叶（属于某个 pane 的子项）→ null。它们由 subRow 管，不参与列首行；
 //   1. 自成独立列的叶（leafColumnMode === 'ownColumn'）→ 它自己就是一个列 id，不进容器列；
-//   2. 显式指定了 columnId 且那一列确实存在 → 用它（用户把 Shell 拖进了某列）；
-//   3. 没指定 / 指定的列已被删除 → 落到第一个容器列（位置稳定，不跟着焦点跑）；
-//   4. 根本没有容器列 → null（未分屏形态不用它）。
+//   2. 被某个容器托管（hostGroupId）→ 就是那一列；
+//   3. 显式指定了 columnId 且那一列确实存在 → 用它（用户把 Shell 拖进了某列）；
+//   4. 没指定 / 指定的列已被删除 → 落到第一个容器列（位置稳定，不跟着焦点跑）；
+//   5. 根本没有容器列 → null（未分屏形态不用它）。
 //
 // 第 0 条是必需的前置条件：少了它会将 `tab-main-g-1` 这种容器子项也当成「停在 default
 // 列的根级叶」，于是 default 列的面板被判成别的分组的标签（实测 verify-tab-plan-strict
@@ -203,6 +226,8 @@ function leafColumnMode(leaf) {
 function resolveLeafColumnId(ws, leaf) {
     if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;
     if (leafColumnMode(leaf) === 'ownColumn') return leaf.id;
+    const hosted = leafHostGroup(ws, leaf);
+    if (hosted) return hosted;
     const containers = roots(ws).filter(isContainer);
     if (!containers.length) return null;
     const wanted = typeof leaf.columnId === 'string' ? leaf.columnId : '';
@@ -214,9 +239,13 @@ function resolveLeafColumnId(ws, leaf) {
 //
 // 分屏时它们与分组标签同级、不新开列；未分屏时整列共用一条 TabRow，
 // 由 layoutColumns() 的另一支自己把叶混排进去，不走这里。
+//
+// **托管叶要排除**：它住在该列的下层标签行（见 hostLeavesOfColumn），不是列首行。
+// 两边都列一次就是同一个标签在两处可点。
 function leafItemsOfColumn(ws, columnId) {
     return roots(ws).filter(leaf => !isContainer(leaf)
         && leafColumnMode(leaf) !== 'ownColumn'
+        && !leafHostGroup(ws, leaf)
         && resolveLeafColumnId(ws, leaf) === columnId);
 }
 
@@ -234,14 +263,28 @@ function ownColumnLeaves(ws) {
 //
 // 扁平模式（isFamily）下容器不拥有独立行（方案 A）：未开 pane 分屏时为零条，
 // 开了 pane 分屏时按 pane 数展开——否则 pane-2 的标签无处可点（I9）。
+//
+// **受托管根级叶归入本列 pane-1 那条行**：它们不属 `panes[].tabIds`（I2），
+// 但按钮与面板确实坐在 pane-1 里，所以渲染层必须能从 rows 里拿到它们——否则
+// 翻转后它们将没有任何行可去。不就地修改 pane 对象，返回一份新的行描述。
 function layoutRowsOf(ws, column) {
     if (!column.containerId) return [];
     const container = tabOf(ws, column.containerId);
     if (!isContainer(container)) return [];
     const panes = panesOf(container);
     const splitEnabled = Boolean(container.paneSplit && container.paneSplit.enabled);
-    if (column.isFamily) return splitEnabled ? panes.slice() : [];
-    return splitEnabled ? panes.slice() : panes.slice(0, 1);
+    const base = column.isFamily
+        ? (splitEnabled ? panes.slice() : [])
+        : (splitEnabled ? panes.slice() : panes.slice(0, 1));
+    const hosted = hostLeavesOfColumn(ws, column.containerId).map(leaf => leaf.id);
+    if (!hosted.length || !base.length) return base;
+    return base.map((pane, index) => (index === 0
+        ? {
+            id: pane.id,
+            tabIds: [...pane.tabIds, ...hosted],
+            activeTabId: pane.activeTabId
+        }
+        : pane));
 }
 
 // 某列实际显示哪些面板。四个分支，分别对应四种布局形态：
@@ -300,6 +343,26 @@ function visiblePanelIdsOfColumn(ws, column) {
     return rows.length ? [rows[0].activeTabId].filter(Boolean) : [];
 }
 
+// 某列**全部可显示的面板**：行里出现的每个标签，一个不多一个不少。
+//
+// 与 `visiblePanelIdsOfColumn` 的分工：那个回答「此刻该亮哪个」（一列一个），
+// 这个回答「哪些面板必须待在这一列的内容区里」。渲染层需要后者——它要先把面板搬进
+// 正确的列，再按前者决定加不加 `.active`。两个问题混在一个函数里，就会重蹈
+// 「先查 DOM 再回落布局」那种双向询问。
+function panelIdsOfColumn(ws, column) {
+    const out = [];
+    const push = id => {
+        if (typeof id === 'string' && tabOf(ws, id) && !out.includes(id)) out.push(id);
+    };
+    for (const row of layoutRowsOf(ws, column)) {
+        for (const id of row.tabIds) push(id);
+        push(row.activeTabId);
+    }
+    // 独立列由叶自己当列，没有行；它的面板就是它自己。
+    if (!column.containerId && ws.split.enabled) push(column.id);
+    return out;
+}
+
 function visiblePanels(ws) {
     const out = new Set();
     for (const column of layoutColumns(ws)) {
@@ -328,7 +391,10 @@ function buildRenderPlan(ws) {
                     tabs: pane.tabIds.map(id => tabOf(ws, id)).filter(Boolean),
                     activeTabId: pane.activeTabId
                 })),
-                panelIds: visiblePanelIdsOfColumn(ws, column)
+                panelIds: visiblePanelIdsOfColumn(ws, column),
+                // 这一列的内容区里必须住着哪些面板（含全部行里的标签）。
+                // 与 panelIds 的区别：panelIds 是「此刻亮哪个」，这个是「面板住在哪」。
+                panelIdsAll: panelIdsOfColumn(ws, column)
             };
         }),
         panelIds: [...visiblePanels(ws)],
@@ -336,6 +402,21 @@ function buildRenderPlan(ws) {
             layoutRowsOf(ws, column).flatMap(pane => pane.tabIds.slice())
         )
     };
+}
+
+// 某列面板实际所在的**内容区 id**。渲染层搬面板要用它，不能自己拼 id——
+// 扁平形态下内容区是静态 `pane-1-tabs-content`，与容器 id 无关。
+//
+//   有行        第一条行的 paneId（扁平 + paneSplit 时也是它，方案 A 复用一级宿主）
+//   独立列      `containerId` 为 null，没有 pane，返回 null，由渲染层落到列自己的内容区
+//   无行容器列  pane-1 的内容区（未分屏多容器时内容区仍在 pane-1）
+function contentPaneIdOfColumn(ws, column) {
+    const rows = layoutRowsOf(ws, column);
+    if (rows.length) return rows[0].id;
+    if (!column.containerId) return null;
+    const container = tabOf(ws, column.containerId);
+    const panes = panesOf(container);
+    return panes.length ? panes[0].id : null;
 }
 
 // 把 workspace 加工一份供验收器检查：带上只读判据，不污染真源。
@@ -346,6 +427,7 @@ function withDiagnostics(ws) {
 }
 
 // ---------------------------------------------------------------------------
+// 写入：索引重建
 // 写入：索引重建
 // ---------------------------------------------------------------------------
 
@@ -460,6 +542,27 @@ function setLeafColumnMode(ws, leafId, mode) {
     const leaf = tabOf(ws, leafId);
     if (!leaf || isContainer(leaf) || leaf.parentId !== null) return false;
     leaf.columnMode = mode === 'ownColumn' ? 'ownColumn' : 'row';
+    return true;
+}
+
+// 把根级叶挂到某个容器的**下层标签行**（用户把它拖进了那个分组），或解除挂靠（传 null）。
+//
+// 这是「Shell 归属某组」的唯一写入口，也是历史上 `tabState.ownerGroupId` 的替代物。
+// 它与 `columnId` 的区别是「住在哪一行」而不是「停在哪一列」：这条叶不进
+// `panes[].tabIds`（I2），只靠这个字段被 layoutRowsOf 并进本列 pane-1 那条行。
+//
+// 传入已不存在的容器 id 时返回 false，不静默写垃圾值（否则要靠自愈才能清掉）。
+function setLeafHostGroup(ws, leafId, groupId) {
+    const leaf = tabOf(ws, leafId);
+    if (!leaf || isContainer(leaf) || leaf.parentId !== null) return false;
+    if (groupId === null || groupId === undefined) {
+        leaf.hostGroupId = null;
+        return true;
+    }
+    if (typeof groupId !== 'string' || !isContainer(tabOf(ws, groupId))) return false;
+    leaf.hostGroupId = groupId;
+    // 挂进某个分组的下层行，就不再是独立列——两处同时成立会让同一个标签在两处可点。
+    leaf.columnMode = 'row';
     return true;
 }
 
@@ -796,6 +899,17 @@ function validateAndRepair(ws) {
         repairs.push(`叶 ${leaf.id} 的 columnMode 被重置`);
     }
 
+    // hostGroupId 悬空：它指向的容器已被关掉。写回 null 而不是回落到第一个容器列——
+    // 「挂靠在某个不存在的组下面」与「停在哪一列」是两件不同的事，后者有 columnId 兜底。
+    for (const leaf of Object.values(ws.tabs)) {
+        if (isContainer(leaf) || leaf.parentId !== null) continue;
+        const wanted = leaf.hostGroupId;
+        if (wanted === null || wanted === undefined) continue;
+        if (typeof wanted === 'string' && isContainer(tabOf(ws, wanted))) continue;
+        leaf.hostGroupId = null;
+        repairs.push(`叶 ${leaf.id} 的 hostGroupId 被重置`);
+    }
+
     return { ok: true, fatal: false, repairs };
 }
 
@@ -815,12 +929,16 @@ module.exports = {
     layoutColumns,
     layoutRowsOf,
     resolveLeafColumnId,
+    leafHostGroup,
+    hostLeavesOfColumn,
+    setLeafHostGroup,
+    panelIdsOfColumn,
+    contentPaneIdOfColumn,
     leafItemsOfColumn,
     ownColumnLeaves,
     leafColumnMode,
     setLeafColumn,
     setLeafColumnMode,
-    visiblePanelIdsOfColumn,
     visiblePanels,
     buildRenderPlan,
     withDiagnostics,
