@@ -2475,6 +2475,27 @@ function setShellTabOwner(tabId, owner) {
 
 
 
+// 把「这个 Shell 自成独立列」/「停在本列列首行」写进模型。
+//
+// 为什么需要这两个薄封装：渲染层只持有 tabState（含 id），而模型的写入口需要一份
+// workspace 树。重建一棵只含这一个叶的最小树成本太高，改成「挂在一个模块级的模型工作区上」
+// 也不合适——真正需要写的时候，渲染层会顺手把这份决定持久化（persistShellTabs）。
+// 因此这里把它存成 tabState 上的镜像，并在持久化时一并写出；模型侧的真源由
+// __readTabModelPlan 投影时从 tabState 读回来（两处同义，不各算一份）。
+function setShellColumnModeInModel(tabId, mode) {
+    const tabState = getShellTabState(tabId);
+    if (!tabState) return false;
+    tabState.columnMode = mode === 'ownColumn' ? 'ownColumn' : 'row';
+    return true;
+}
+
+function setShellColumnInModel(tabId, columnId) {
+    const tabState = getShellTabState(tabId);
+    if (!tabState) return false;
+    tabState.columnId = typeof columnId === 'string' ? columnId : null;
+    return true;
+}
+
 // 是否存在被用户**显式拖到分组标签行**的未归属 Shell。
 //
 // 「不归属」有两种形态，判据以模型为准（`tab-model` 的 `columnMode`），这里读的是
@@ -2735,11 +2756,17 @@ function finishWorkspaceTabDrag(state) {
             const tabState = getShellTabState(state.tabId);
             if (tabState) {
                 tabState.detachedColumn = true;
+                // 同步写进模型：`columnMode` 是「是否自成独立列」的唯一真源，
+                // tabState.detachedColumn 只是同一事实在渲染层的镜像（供持久化与拖拽热路径用）。
+                setShellColumnModeInModel(state.tabId, 'ownColumn');
                 // 它也确定了落点：独立列在右边，但直接拖到别的分组标签行时先把目标列
                 // 记下来，后续即使列集合变了也不会又跟着激活分组跑。
                 const dropGroupId = document.getElementById(state.targetColumnId)
                     ?.dataset.groupId;
-                if (dropGroupId) tabState.topRowColumnId = dropGroupId;
+                if (dropGroupId) {
+                    tabState.topRowColumnId = dropGroupId;
+                    setShellColumnInModel(state.tabId, dropGroupId);
+                }
                 syncShellWorkspaceLayout();
                 persistShellTabs();
             }
@@ -4440,10 +4467,12 @@ window.__readTabModelPlan = () => {
         // `resolveShellTopRowColumn()`（记忆列 → 唯一可见列 → 激活列），这里必须调它而不是
         // 裸读 `topRowColumnId`：后者首次为 null，裸读会把 Shell 算到第一列，而实际停在
         // 激活列（实测 verify-tab-plan-strict 的 with-shell-panels 就是这么错的）。
-        // 模型那边它是 tabs[id].columnId，两处是同一事实，不再各算一份。
+        // 模型那边它是 tabs[id].columnId / columnMode，两处是同一事实，不再各算一份。
         shellTabs: shellTabs.map(tab => ({
             id: tab.id,
             title: tab.title,
+            columnMode: tab.columnMode === 'ownColumn' || tab.detachedColumn === true
+                ? 'ownColumn' : 'row',
             columnId: (() => {
                 const owner = getShellTabOwner(tab);
                 return owner === null ? resolveShellTopRowColumn(tab) : owner;
@@ -5462,7 +5491,12 @@ function persistShellTabs() {
             paneId: tab.paneId || getTabPaneId(tab.id),
             profileId: tab.profileId || '',
             ownerGroupId: getShellTabOwner(tab),
-            detachedColumn: tab.detachedColumn === true
+            detachedColumn: tab.detachedColumn === true,
+            // 与模型同义的两个字段，必须一并落盘：否则重开后将丢掉用户「把它拖到分组标签行」的决定。
+            // detachedColumn 保留为兼容镜像（老版本仍会读它）。
+            columnMode: tab.columnMode === 'ownColumn' || tab.detachedColumn === true
+                ? 'ownColumn' : 'row',
+            columnId: typeof tab.columnId === 'string' ? tab.columnId : null
         }))
     });
 }
@@ -5568,7 +5602,12 @@ function createShellTab(initialState = {}, targetPaneId = null) {
             ? initialState.ownerGroupId
             : null,
         // 未归属时的两种形态：默认与分组标签同级（不新开列），只有被拖到分组标签行才独立成列。
+        // columnMode / columnId 是与模型同义的镜像（模型那边是 tabs[id].columnMode / .columnId）。
+        // 老配置里没有 columnMode，以 detachedColumn 为准初始化，两边不会分叉。
         detachedColumn: initialState.detachedColumn === true,
+        columnMode: initialState.columnMode === 'ownColumn' || initialState.detachedColumn === true
+            ? 'ownColumn' : 'row',
+        columnId: typeof initialState.columnId === 'string' ? initialState.columnId : null,
         closed: false
     };
 
