@@ -27,10 +27,11 @@ function normalizeTabIds(list, kind) {
             id: tab.id,
             kind: tab.kind || kind,
             title: pickTitle(tab, tab.id),
-            // columnId 必须一并带过去：它是「这个根级叶停在哪一列」的真源，
-            // 在这里丢掉会让下游永远回落到第一列（实测：verify-tab-plan-strict 的
-            // with-shell-panels 两次修复无效，就是因为丢在这一层）。
-            columnId: typeof tab.columnId === 'string' ? tab.columnId : null
+            // columnId / columnMode 必须一并带过去：它们是「这个根级叶停在哪列、
+            // 是不是自成独立列」的真源。在这里丢掉会让下游永远回落到第一列（实测：
+            // verify-tab-plan-strict 的 with-shell-panels 两次修复无效，就是因为丢在这一层）。
+            columnId: typeof tab.columnId === 'string' ? tab.columnId : null,
+            columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row'
         }));
 }
 
@@ -159,14 +160,16 @@ function projectWorkspace(sections) {
 
     // shell 永远在根级（I1 / I2）
     //
-    // columnId 是「这个 Shell 停在哪一列」的真源。数据源里每项可以带 columnId；
-    // 不带时交给 resolveLeafColumnId 回落，不在这里猜（猜了就是第二套规则）。
+    // columnId / columnMode 是「这个 Shell 停在哪列、是不是自成独立列」的真源。
+    // 数据源里每项可以带；不带时交给 resolveLeafColumnId / leafColumnMode 回落，
+    // 不在这里猜（猜了就是第二套规则）。
     const shellStart = groups.length;
     normalizeTabIds(src.shellTabs, 'shell').forEach((item, index) => {
         const leaf = createLeaf('shell', { id: item.id });
         leaf.parentId = null;
         leaf.order = shellStart + index;
         leaf.columnId = typeof item.columnId === 'string' ? item.columnId : null;
+        leaf.columnMode = item.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
         tabs[leaf.id] = leaf;
     });
 

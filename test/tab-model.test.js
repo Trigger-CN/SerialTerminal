@@ -26,6 +26,8 @@ const {
     layoutRowsOf,
     resolveLeafColumnId,
     setLeafColumn,
+    leafColumnMode,
+    setLeafColumnMode,
     visiblePanels,
     buildRenderPlan,
     isContainer,
@@ -242,6 +244,53 @@ test('a root leaf follows its columnId and survives that column being deleted', 
     assert.ok(repaired.repairs.some(text => text.includes('columnId')), repaired.repairs);
     assert.notEqual(shell.columnId, other.id);
     assert.ok(roots(ws).filter(isContainer).some(c => c.id === shell.columnId));
+});
+
+// `columnMode` 是「这个根级叶自不自成独立列」的唯一真源，承接历史上
+// `tabState.detachedColumn` 的职责。独立列必须有自己的一条列，且恒显它自己。
+test('a root leaf with columnMode ownColumn gets its own column while split is on', () => {
+    const ws = fresh();
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setColumnSplit(ws, true);
+
+    // 默认是 row：不占列，仅停在某一列的列首行上。
+    assert.equal(leafColumnMode(shell), 'row');
+    assert.equal(buildRenderPlan(ws).columns.length, 2, '默认形态：列数等于容器数');
+
+    assert.equal(setLeafColumnMode(ws, shell.id, 'ownColumn'), true);
+    assert.equal(leafColumnMode(shell), 'ownColumn');
+
+    const plan = buildRenderPlan(ws);
+    assert.equal(plan.columns.length, 3, 'ownColumn 必须多出一列');
+    const own = plan.columns.find(col => col.columnId === shell.id);
+    assert.ok(own, '独立列的 columnId 就是叶自己的 id');
+    assert.equal(own.containerId, null, '独立列没有容器');
+    assert.deepEqual(own.tabItems.map(t => t.id), [shell.id]);
+    assert.deepEqual(own.rows, [], '独立列没有 subRow');
+    assert.deepEqual(own.panelIds, [shell.id], '独立列恒显它自己');
+    // 它不能同时出现在别的容器的列首行里（否则同一个按钮会在两处可见）。
+    assert.ok(!plan.columns.some(col => col.containerId && col.tabItems.some(t => t.id === shell.id)));
+    // 反向对照：把 columnMode 改回 row，上面的三列与独立面板必须消失。
+    setLeafColumnMode(ws, shell.id, 'row');
+    const back = buildRenderPlan(ws);
+    assert.equal(back.columns.length, 2);
+    assert.ok(!back.columns.some(col => col.columnId === shell.id));
+});
+
+// 把独立列的叶拖回答器列：形态必须自动回 `row`，否则它会同时属于两处。
+test('moving an ownColumn leaf back into a column clears columnMode', () => {
+    const ws = fresh();
+    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setColumnSplit(ws, true);
+    setLeafColumnMode(ws, shell.id, 'ownColumn');
+    assert.equal(buildRenderPlan(ws).columns.length, 3);
+
+    assert.equal(setLeafColumn(ws, shell.id, other.id), true);
+    assert.equal(leafColumnMode(shell), 'row');
+    assert.equal(buildRenderPlan(ws).columns.length, 2);
+    assert.equal(resolveLeafColumnId(ws, shell), other.id);
 });
 
 // 未分屏时不能套用上面那一支：那时 column.id 与焦点所在的叶无关，

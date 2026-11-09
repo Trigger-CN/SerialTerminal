@@ -110,7 +110,8 @@ function inFamily(ws, tab) {
 // 第一维：列。每列自带 TabRow 项，渲染层不需要再组合。
 //
 // 两种形态（对应文档 §5.2）：
-//   分屏        每个容器一列；根级叶不占列，而是归入它自己指定的那一列
+//   分屏        每个容器一列；另外，显式 `ownColumn` 的根级叶各自成一列；
+//               其余根级叶不占列，归入它自己指定的那一列
 //   未分屏      只有一列：**所有根级 Tab 共用一条 TabRow**
 //
 // 未分屏时不能「每个分组各一列」：那会让每个分组列各自渲染一条 TabRow，
@@ -122,17 +123,29 @@ function inFamily(ws, tab) {
 // 扁平时还分两种：未开 pane 分屏 → 子项全部上一级行（没有 subRow）；
 // 开了 pane 分屏 → 子项各自落到自己那条 subRow，一级行只留根级叶。
 //
-// **根级叶不自成列（用户裁决）**：分屏只作用于被移动的那个串口组，Shell 维持原位不动。
-// Shell 的位置就是它 `columnId` 指向的那一列的列首行（与分组标签同级），
-// 所以列集合只由容器决定，叶只负责「挂到哪一列」。
+// **根级叶不自占列（用户裁决）**：分屏只作用于被移动的那个串口组，Shell 维持原位不动。
+// Shell 的位置就是它 `columnId` 指向的那一列的列首行（与分组标签同级）。
+// **唯一例外是显式拖到分组标签行的叶**（`leafColumnMode === 'ownColumn'`）——
+// 不是“分屏就多一列”，而是用户自己要它独立。
 function layoutColumns(ws) {
     if (ws.split.enabled) {
-        return roots(ws).filter(isContainer).map(container => ({
+        const containers = roots(ws).filter(isContainer).map(container => ({
             id: container.id,
             containerId: container.id,
             isFamily: false,
             tabItems: [container, ...leafItemsOfColumn(ws, container.id)]
         }));
+        const own = ownColumnLeaves(ws).map(leaf => ({
+            id: leaf.id,
+            containerId: null,
+            isFamily: false,
+            tabItems: [leaf]
+        }));
+        // 顺序：按根级 order 合并两类列，保证独立列出现在它本该在的位置。
+        // 先容器后独立列会让独立列总被挤到最右，用户把它拖到中间后会弹回去。
+        const rank = new Map(roots(ws).map((tab, index) => [tab.id, index]));
+        return [...containers, ...own]
+            .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
     }
 
     const members = roots(ws);
@@ -161,14 +174,25 @@ function layoutColumns(ws) {
     }];
 }
 
+// 根级叶的**显示形态**：`row`（默认，停在本列列首行）还是 `ownColumn`（自成独立列）。
+//
+// 这一条是历史上 `tabState.detachedColumn` 的职责。它在渲染层时只是标签对象上的一个
+// 布尔值，导致「列集合」这项布局事实被渲染层私有；现在它进模型，列派生只看这里。
+//
+// 只有根级叶有形态；容器子项返回 `row`（它们由 subRow 管）。
+function leafColumnMode(leaf) {
+    return leaf && !isContainer(leaf) && leaf.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
+}
+
 // 根级叶**该挂到哪一列**。这是「Shell 停在哪一列」的唯一判据，也是模型里唯一
 // 表示该事实的地方——不再靠渲染层记一个 topRowColumnId 反向量子询问。
 //
-// 三条规则，按优先级：
+// 四条规则，按优先级：
 //   0. 不是根级叶（属于某个 pane 的子项）→ null。它们由 subRow 管，不参与列首行；
-//   1. 显式指定了 columnId 且那一列确实存在 → 用它（用户把 Shell 拖进了某列）；
-//   2. 没指定 / 指定的列已被删除 → 栽到第一个容器列（位置稳定，不跟着焦点跑）；
-//   3. 根本没有容器列 → null（未分屏形态不用它）。
+//   1. 自成独立列的叶（leafColumnMode === 'ownColumn'）→ 它自己就是一个列 id，不进容器列；
+//   2. 显式指定了 columnId 且那一列确实存在 → 用它（用户把 Shell 拖进了某列）；
+//   3. 没指定 / 指定的列已被删除 → 落到第一个容器列（位置稳定，不跟着焦点跑）；
+//   4. 根本没有容器列 → null（未分屏形态不用它）。
 //
 // 第 0 条是必需的前置条件：少了它会将 `tab-main-g-1` 这种容器子项也当成「停在 default
 // 列的根级叶」，于是 default 列的面板被判成别的分组的标签（实测 verify-tab-plan-strict
@@ -178,6 +202,7 @@ function layoutColumns(ws) {
 // 历史缺陷复活（用户实测报过）。
 function resolveLeafColumnId(ws, leaf) {
     if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;
+    if (leafColumnMode(leaf) === 'ownColumn') return leaf.id;
     const containers = roots(ws).filter(isContainer);
     if (!containers.length) return null;
     const wanted = typeof leaf.columnId === 'string' ? leaf.columnId : '';
@@ -191,7 +216,18 @@ function resolveLeafColumnId(ws, leaf) {
 // 由 layoutColumns() 的另一支自己把叶混排进去，不走这里。
 function leafItemsOfColumn(ws, columnId) {
     return roots(ws).filter(leaf => !isContainer(leaf)
+        && leafColumnMode(leaf) !== 'ownColumn'
         && resolveLeafColumnId(ws, leaf) === columnId);
+}
+
+// 分屏时**自成独立列**的根级叶（用户把它拖到了分组标签行）。
+//
+// 为什么不并进 `layoutColumns()` 的容器那段：独立列的 id 就是叶自己的 id，没有容器，
+// 它的 subRow 为 0 条（layoutRowsOf 对 containerId === null 直接返回空）。
+// 这也从根上保证了「未归属 Shell 不因分屏额外占列」：只有显式 ownColumn 的才建。
+function ownColumnLeaves(ws) {
+    return roots(ws).filter(leaf => !isContainer(leaf)
+        && leafColumnMode(leaf) === 'ownColumn');
 }
 
 // 第二维：行（subRow）。
@@ -208,15 +244,27 @@ function layoutRowsOf(ws, column) {
     return splitEnabled ? panes.slice() : panes.slice(0, 1);
 }
 
-// 某列实际显示哪些面板。三个分支，分别对应三种布局形态：
+// 某列实际显示哪些面板。四个分支，分别对应四种布局形态：
 //   列内有 submRow 且多于一条（paneSplit）→ 每个 pane 显示自己的 activeTabId；
 //   未分屏 → 整列一个内容区，跟焦点（可以是容器里的叶，也可以是未归属的 Shell）；
+//   独立列（containerId === null）→ 那一列只有它自己，恒显它；
 //   分屏后的容器列 → 根级叶在这列上就显示它（列首行被点中），否则显示该容器激活叶。
 //
-// 最后一支不能套用焦点：分屏时其它列也要各自显示内容，而焦点只有一个。
+// 最后一个分支不能套用焦点：分屏时其它列也要各自显示内容，而焦点只有一个。
 function visiblePanelIdsOfColumn(ws, column) {
     const rows = layoutRowsOf(ws, column);
     if (rows.length > 1) return rows.map(pane => pane.activeTabId).filter(Boolean);
+
+    // 独立列：它由某个根级叶自己充当列，恒显它自己。
+    //
+    // **`ws.split.enabled` 是必需的前提**：未分屏时 `layoutColumns()` 只能返回一列，
+    // 而那一列的 `containerId` 在「焦点落在未归属 Shell」时也是 `null`——不加这个
+    // 前提就会把那条唯一列当成独立列，于是点容器里的叶时什么面板也不显（实测失败：
+    // `in flat mode the content area follows the focus, including a shell`）。
+    if (ws.split.enabled && !column.containerId) {
+        const own = tabOf(ws, column.id);
+        return own && !isContainer(own) ? [own.id] : [];
+    }
 
     // 未分屏时整列只有一个内容区，而内容区跟的是**焦点**：焦点可能落在容器里的
     // 某个叶，也可能落在一个未归属的 Shell 上（它不属于任何 pane，但住同一个
@@ -234,8 +282,8 @@ function visiblePanelIdsOfColumn(ws, column) {
 
     // 分屏后焦点落在某列的根级叶上（用户点了那一列列首行的 Shell）：
     // 那一列的内容区就显示它，而不是容器的 activeTabId。
-    // 判据限定「焦点确实是该列的叶」，不能用 [column.id] 做兵底——
-    // 列 id 是容器 id，而容器没有面板（I3）。
+    // 判据限定「焦点确实是该列的叶」：只看「不属于任何 pane」会对每个容器列都成立，
+    // 于是 Shell 的面板会同时出现在所有列上。
     if (ws.split.enabled) {
         const focused = tabOf(ws, ws.focusedTabId);
         if (focused && !isContainer(focused)
@@ -386,18 +434,32 @@ function addShell(ws) {
     // 回落）。不跟着焦点实时跑：这里只写下创建那一刻的位置，之后用户拖到哪列就改到哪列。
     const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;
     shell.columnId = isContainer(focusedRoot) ? focusedRoot.id : null;
+    shell.columnMode = 'row';
     ws.tabs[shell.id] = shell;
     return shell;
 }
 
 // 把根级叶移到指定列（用户在列首行上拖动它，或它那一列被删后的自愈）。
 // 这是「Shell 停在哪一列」的**唯一写入口**：其余代码只读 columnId。
+// 移回答器列同时消掉独立列形态——归位到某一列的叶不可能同时自成列。
 function setLeafColumn(ws, leafId, columnId) {
     const leaf = tabOf(ws, leafId);
     if (!leaf || isContainer(leaf)) return false;
     const containers = roots(ws).filter(isContainer);
     if (!containers.some(container => container.id === columnId)) return false;
     leaf.columnId = columnId;
+    leaf.columnMode = 'row';
+    return true;
+}
+
+// 把根级叶切成「自成独立列」或「停在本列列首行」。
+// 这是「是否独立成列」的**唯一写入口**。用户把它拖到分组标签行时置成 `ownColumn`，
+// 拖回某列列首行时调 setLeafColumn（自动回 `row`）。
+// 非根级叶返回 false：容器子项永远不独立成列。
+function setLeafColumnMode(ws, leafId, mode) {
+    const leaf = tabOf(ws, leafId);
+    if (!leaf || isContainer(leaf) || leaf.parentId !== null) return false;
+    leaf.columnMode = mode === 'ownColumn' ? 'ownColumn' : 'row';
     return true;
 }
 
@@ -704,13 +766,34 @@ function validateAndRepair(ws) {
     // 根级叶的 columnId 悬空：它指向的列已被删除（关组），或者干脆不是容器。
     // 不修的话 resolveLeafColumnId 会回落，看似能用；但那意味着真源里存了一个不存在的
     // 列，下次增加一个同名分组时它会酶然命中——写回去才是真的修好。
+    // 注意：自成独立列的叶（ownColumn）不用 columnId，它自己就是列 id，跳过。
     const columnIds = roots(ws).filter(isContainer).map(container => container.id);
     for (const leaf of Object.values(ws.tabs)) {
         if (isContainer(leaf) || leaf.parentId !== null) continue;
+        if (leafColumnMode(leaf) === 'ownColumn') {
+            // 独立列占不到任何容器列：只把悬空的「拖回落点」修正，形态不变。
+            if (leaf.columnId && !columnIds.includes(leaf.columnId)) {
+                leaf.columnId = columnIds[0] || null;
+            }
+            continue;
+        }
         if (leaf.columnId && columnIds.includes(leaf.columnId)) continue;
         if (leaf.columnId === null || leaf.columnId === undefined) continue;
         leaf.columnId = columnIds[0] || null;
         repairs.push(`叶 ${leaf.id} 的 columnId 被重置`);
+    }
+
+    // columnMode 只允许两个值；其他垃圾值当 `row` 处理。不静默保留垃圾值，
+    // 否则渲染层会拿一个它不认识的形态去查分支，结果整列不画。
+    for (const leaf of Object.values(ws.tabs)) {
+        if (isContainer(leaf) || leaf.parentId !== null) continue;
+        if (leaf.columnMode === 'row' || leaf.columnMode === 'ownColumn') continue;
+        if (leaf.columnMode === undefined || leaf.columnMode === null) {
+            leaf.columnMode = 'row';
+            continue;
+        }
+        leaf.columnMode = 'row';
+        repairs.push(`叶 ${leaf.id} 的 columnMode 被重置`);
     }
 
     return { ok: true, fatal: false, repairs };
@@ -733,7 +816,10 @@ module.exports = {
     layoutRowsOf,
     resolveLeafColumnId,
     leafItemsOfColumn,
+    ownColumnLeaves,
+    leafColumnMode,
     setLeafColumn,
+    setLeafColumnMode,
     visiblePanelIdsOfColumn,
     visiblePanels,
     buildRenderPlan,

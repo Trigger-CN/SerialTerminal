@@ -2445,17 +2445,17 @@ function getPaneIdForTabId(tabId) {
 // 用户实测报告为「拖动 shell，所有 shell 会跟着一起移动」。归属写进每个
 // tabState.ownerGroupId，互不干扰。
 //
-// 取值只有两种（不再有第三种「独立成组」）：
-//
 //   null        不归属任何串口分组 —— 属于「上层标签栏」那一层。
 //               未分屏时它在激活列的上层共享行里（与分组标签同级）；
 //               已分屏时同样在**那一列的列首行**里（与分组标签同级、不新开列），
-//               除非用户把它拖到了分组标签行上（tabState.detachedColumn）。
+//               除非用户把它拖到了分组标签行上（columnMode === 'ownColumn'，见 §2.3.2）。
 //   <分组 id>   归属该分组 —— 出现在那组的**下层**标签行里（图中 COM2 下方的 SHELL1）。
 //
-// 为什么不需要第三种归属值：「独立成组」不是另一个归属，而是「不归属」的一个显示变体，
-// 用 tabState.detachedColumn 这个逐标签标记表达就够了。把它当成第三种归属值，
-// 会出现「未分屏却要凭空占一列」这种与用户期望相反的情况。
+// 为什么不需要第三种归属值：「独立成组」不是另一个归属，而是「不归属」的一个显示变体。
+// 把它当成第三种归属值，会出现「未分屏却要凭空占一列」这种与用户期望相反的情况。
+//
+// **显示形态的判据已进模型**（tab-model 的 leafColumnMode / setLeafColumnMode），
+// 这里的 tabState.detachedColumn 只是持久化与拖拽过程的兼容镜像，不再参与列派生。
 function getShellTabOwner(tabState) {
     const owner = tabState?.ownerGroupId;
     if (owner && serialGroups.some(group => group.id === owner)) return owner;
@@ -2467,6 +2467,8 @@ function setShellTabOwner(tabId, owner) {
     if (!tabState) return false;
     tabState.ownerGroupId = owner && serialGroups.some(group => group.id === owner) ? owner : null;
     // 归属一变，「独立成列」这个附加标记就没意义了：归进分组的 Shell 住下层行。
+    // 模型那边没有独立的「归属」字段（I1/I2 禁止 Shell 进 pane），所以这里只同步形态；
+    // 「停在列首行」由 setLeafColumn 在拖拽落点处写入。
     if (tabState.ownerGroupId) tabState.detachedColumn = false;
     return true;
 }
@@ -2475,12 +2477,13 @@ function setShellTabOwner(tabId, owner) {
 
 // 是否存在被用户**显式拖到分组标签行**的未归属 Shell。
 //
-// 「不归属」现在有两种形态，靠 tabState.detachedColumn 区分：
+// 「不归属」有两种形态，判据以模型为准（`tab-model` 的 `columnMode`），这里读的是
+// 渲染层那份 tabState 上的镜像，由拖拽热路径写入；两处同名同义，不各算一份。
 //
-//   false（默认）  停在上层标签栏：分屏时与分组标签同级，宿主是**激活列的列首行**，
+//   row（默认）     停在上层标签栏：分屏时与分组标签同级，宿主是**激活列的列首行**，
 //                  不新开列。用户原话：`拖动到分组标签栏，意味着和所有串口标签页分屏显示`
 //                  —— 分层不靠多开一列，靠每列内部的两行标签。
-//   true           用户明确要求它独立成列（同一句话里「自己成为独立一组」）。
+//   ownColumn      用户明确要求它独立成列（同一句话里「自己成为独立一组」）。
 //
 // 早期把两种形态合并成「只要不归属就占一列」，于是「新建一个 Shell 再开分屏」
 // 会凭空多出一列 Shell，用户实测报为「会变成三个串口列 + 一个 Shell 列」。
@@ -2488,7 +2491,7 @@ function hasDetachedShellColumn() {
     return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.detachedColumn === true);
 }
 
-// Shell 独立列是否应当存在：只有分屏、且用户把某个未归属 Shell 划到了分组标签行才建。
+// Shell 独立列是否应当存在：只有分屏、多分组、且用户把某个未归属 Shell 划到了分组标签行才建。
 // 未分屏时它停在上层共享行，不建列 —— 否则屏幕上会莫名多出一列空标签栏。
 function isShellColumnActive() {
     return groupWorkspaceSplit.enabled
