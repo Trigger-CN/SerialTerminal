@@ -184,7 +184,10 @@ function layoutColumns(ws) {
         && flatContainer.paneSplit.enabled);
     const tabItems = flat
         ? (flatPanesSplit
-            ? members.filter(tab => !isContainer(tab))
+            // 开了 pane 分屏时一级行只留根级叶，容器子项由各 pane 的行负责。
+            // **受托管叶也要排除**：layoutRowsOf 已把它并进 pane-1 那条行，
+            // 两边都列一次就是同一个标签在两处占位（探针实测 shell 重复定位）。
+            ? members.filter(tab => !isContainer(tab) && !leafHostGroup(ws, tab))
             : members.flatMap(tab => (isContainer(tab) ? childrenOf(ws, tab) : [tab])))
         // 多分组不扁平：一级行装的是**分组标签**与停在列首行的根级叶。
         // 受托管（hostGroupId）的叶必须排除——它住在那组的下层标签行（layoutRowsOf
@@ -314,6 +317,17 @@ function layoutRowsOf(ws, column) {
         : pane));
 }
 
+// 某个叶是不是本列真正会画出来的标签。
+//
+// 判据是「行 + 列首行」两侧的并集，不能只看 pane 对象：`panes[].tabIds` 里可能
+// 还留着第二个 pane 的标签，而 `paneSplit.enabled` 已经是 false——那些标签不会画在
+// 任何一行上，也不会有面板被搬进内容区；反过来扁平未分屏时 `rows` 为空，
+// 但整列的标签都在 `tabItems` 里（一级行就是 pane-1 的标签行）。
+function isShownInColumn(column, rows, tabId) {
+    if (rows.some(row => row.tabIds.includes(tabId))) return true;
+    return column.tabItems.some(tab => tab && !isContainer(tab) && tab.id === tabId);
+}
+
 // 某列实际显示哪些面板。四个分支，分别对应四种布局形态：
 //   列内有 submRow 且多于一条（paneSplit）→ 每个 pane 显示自己的 activeTabId；
 //   未分屏 → 整列一个内容区，跟焦点（可以是容器里的叶，也可以是未归属的 Shell）；
@@ -344,14 +358,19 @@ function visiblePanelIdsOfColumn(ws, column) {
     // 某个叶，也可能落在一个未归属的 Shell 上（它不属于任何 pane，但住同一个
     // 内容区）。两个形态都必须有分支，否则焦点落在 Shell 上时这里返回空集，
     // 而页面仍显示 Shell 面板——模型就会与实际显示不一致。
+    //
+    // **焦点必须是本列看得见的标签**：`paneSplit.enabled === false` 而布局里还残留着
+    // 第二个非空 pane 时（旧配置 / 写入中断），那些叶没有对应的行，直接返回它们会让
+    // `panelIds` 包含一个不在 `panelIdsAll` 里的面板——面板被点亮却搬不进任何内容区。
     if (ws.split.enabled === false) {
         const focused = tabOf(ws, ws.focusedTabId);
-        if (focused && !isContainer(focused)) return [focused.id];
+        if (focused && !isContainer(focused) && isShownInColumn(column, rows, focused.id)) return [focused.id];
         if (focused && isContainer(focused)) {
             // 焦点是容器本身（用户点的是分组标签）时取该容器自己的激活叶。
             const pane = panesOf(focused)[0];
             if (pane && pane.activeTabId) return [pane.activeTabId];
         }
+        return rows.length ? [rows[0].activeTabId].filter(Boolean) : [];
     }
 
     // 分屏后焦点落在某列的根级叶上（用户点了那一列列首行的 Shell）：
@@ -389,10 +408,14 @@ function panelIdsOfColumn(ws, column) {
         for (const id of row.tabIds) push(id);
         push(row.activeTabId);
     }
-    // 独立列由叶自己当列，没有行；它的面板就是这一行里的全部叶。
-    if (!column.containerId && ws.split.enabled) {
-        for (const tab of column.tabItems) if (tab && !isContainer(tab)) push(tab.id);
-    }
+    // 列首行的叶也住在这**一列**的内容区里：渲染层的 applyVisibility 会先把它们搬进
+    // 本列首个 pane 的内容区。它们不在任何 row 里，所以必须单独补上——少了这一段，
+    // `panelIdsAll` 就不含本列真正要显示的面板，而 `visiblePanelIdsOfColumn` 又可能
+    // 返回它，两个派生量自相矛盾。
+    //
+    // **不能加 `ws.split.enabled` 前提**：未分屏且焦点落在未归属叶时，唯一那一列的
+    // `containerId` 也是 null，加了前提会让它的 panelIdsAll 变成空集。
+    for (const tab of column.tabItems) if (tab && !isContainer(tab)) push(tab.id);
     return out;
 }
 
@@ -613,13 +636,22 @@ function setLeafColumn(ws, leafId, columnId) {
 }
 
 // 把根级叶切成「自成独立列」或「停在本列列首行」。
+//
 // 这是「是否独立成列」的**唯一写入口**。用户把它拖到分组标签行时置成 `ownColumn`，
 // 拖回某列列首行时调 setLeafColumn（自动回 `row`）。
+//
+// 与 `setLeafHostGroup` 的互斥必须**两向**都成立：那个函数在挂靠时把 `columnMode`
+// 清回 `row`；这里在切成独立列时也必须把 `hostGroupId` 清掉。只清一个方向就会出现
+// 「先挂进某组、再拖到分组标签行」把同一叶留在两个位置——独立列被建出来却一个按钮
+// 都没有，标签实际仍停在那一组的下层行（实测：`__shell__` 空列）。
+//
 // 非根级叶返回 false：容器子项永远不独立成列。
 function setLeafColumnMode(ws, leafId, mode) {
     const leaf = tabOf(ws, leafId);
     if (!leaf || isContainer(leaf) || leaf.parentId !== null) return false;
-    leaf.columnMode = mode === 'ownColumn' ? 'ownColumn' : 'row';
+    const next = mode === 'ownColumn' ? 'ownColumn' : 'row';
+    leaf.columnMode = next;
+    if (next === 'ownColumn') leaf.hostGroupId = null;
     return true;
 }
 

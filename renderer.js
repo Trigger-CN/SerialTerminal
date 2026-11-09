@@ -2473,7 +2473,13 @@ function setShellTabOwner(tabId, owner) {
 function setShellColumnModeInModel(tabId, mode) {
     const tabState = getShellTabState(tabId);
     if (!tabState) return false;
-    tabState.columnMode = mode === 'ownColumn' ? 'ownColumn' : 'row';
+    const next = mode === 'ownColumn' ? 'ownColumn' : 'row';
+    tabState.columnMode = next;
+    // 与 setShellTabOwner 的互斥必须**两向**都成立：归进分组时那个函数会把 columnMode
+    // 清回 row；反过来切成独立列时也必须把 hostGroupId 摘掉。只清一个方向就会出现
+    // 「先拖进某组、再拖到分组标签行」把同一个 Shell 留在两个位置——独立列被建出来
+    // 却一个按钮都没有，标签实际上仍停在那一组的下层行。
+    if (next === 'ownColumn') tabState.hostGroupId = null;
     return true;
 }
 
@@ -4951,18 +4957,15 @@ function getSingleVisibleGroupId() {
 //
 // 未归属 Shell 的落点判定用它：分屏出多列后没有「唯一那一列」，只能记住上次落在哪一列。
 //
-// 判据只看两件事：这一列的真实容器是否存在且未隐藏（渲染层的产物），以及分屏开关。
-// 早期 Shell 独立列走的是 `isShellColumnActive()`——那是叠层时代的「哪一列被 Shell 盖住」
-// 概念，已随叠层机制整体删除；激活现在只由 focusedTabId 派生，列可见性只看 DOM 事实。
+// **判据只有一个：这一列的真实容器存在且未被隐藏。** 早期这里用的是
+// `groupWorkspaceSplit.groupIds.includes(columnId)`——那是「只有参与分屏的分组可见」
+// 的旧语义，已随渲染翻转删除（列集合只由容器决定，见 TAB_ARCHITECTURE §4.1）。
+// 留着旧判据的后果：五列全在屏幕上时，只有被记进 groupIds 的那两列算「可见」，
+// 于是记忆在 g-1 的 Shell 会被改成当前激活列 g-5——正是「Shell 跟着激活分组跑」
+// 那个历史缺陷（实测：shape-c-top-row-shell-in-group-row）。
 function isVisibleColumnKey(columnId) {
     if (!columnId) return false;
-    if (columnId === SHELL_COLUMN_GROUP_ID) {
-        const column = document.getElementById(shellColumnId());
-        return Boolean(column) && !column.hidden;
-    }
-    return groupWorkspaceSplit.enabled
-        ? groupWorkspaceSplit.groupIds.includes(columnId)
-        : columnId === activeGroupId;
+    return isGroupColumnVisible(columnId);
 }
 
 // 未归属 Shell 的「上层行」落在哪一列（仅用于渲染层镜像写入与持久化回写）。

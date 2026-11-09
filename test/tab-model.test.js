@@ -787,3 +787,184 @@ test('I10 is really checked: collapsing a single-row container is reported', () 
     container.collapsed = true;                  // 绕过 setCollapsed 的保护
     expectRule(ws, 'I10');
 });
+
+// ---------------------------------------------------------------------------
+// §5.5 点名未覆盖的三类形态（本轮补齐）
+// ---------------------------------------------------------------------------
+//
+// 这三支不是「再测一遍已经测过的」，而是此前**一支都没有**的形态：
+//   1. 未分屏 + 多分组 + 多个受托管叶
+//   2. 四列以上（列集合 = 4 个容器 + 一个共享独立列）
+//   3. 多 Shell 混合（列首行 / 独立列 / 受托管 三种落点同时存在）
+// 它们此前只能靠「按单形态推理应该没问题」，而标签体系历史上恰恰是组合形态出错。
+
+test('split off with several hosted leaves keeps every leaf in exactly one place', () => {
+    const ws = fresh();
+    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
+    const first = addShell(ws);
+    const second = addShell(ws);
+    setColumnSplit(ws, false);
+    setLeafHostGroup(ws, first.id, g2.id);
+    setLeafHostGroup(ws, second.id, g2.id);
+    activateTab(ws, g2.panes[0].activeTabId);
+
+    const plan = buildRenderPlan(ws);
+    assert.equal(plan.columns.length, 1, '未分屏只有一列');
+    const column = plan.columns[0];
+    assert.equal(column.containerId, g2.id, '这一列跟着焦点所在的分组');
+
+    // 受托管叶住该列 pane-1 的行里，不能同时出现在列首行。
+    assert.deepEqual(column.rows[0].tabs.map(t => t.id),
+        [g2.panes[0].tabIds[0], first.id, second.id]);
+    assert.equal(column.tabItems.some(t => t.id === first.id || t.id === second.id), false,
+        '受托管叶不能同时占列首行');
+
+    // 全局每个叶只出现一次（列首行 + 各行合并后去重前）。
+    const placed = [
+        ...column.tabItems.map(t => t.id),
+        ...column.rows.flatMap(row => row.tabs.map(t => t.id))
+    ];
+    const dupes = placed.filter((id, index) => placed.indexOf(id) !== index);
+    assert.deepEqual(dupes, [], '同一标签不得在两处占位');
+});
+
+test('four containers plus one shared own column keep five columns in root order', () => {
+    const ws = fresh();
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
+    addContainerTab(ws, { id: 'grp-4', groupId: 'g4' });
+    const first = addShell(ws);
+    const second = addShell(ws);
+    setColumnSplit(ws, true);
+    setLeafColumnMode(ws, first.id, 'ownColumn');
+    setLeafColumnMode(ws, second.id, 'ownColumn');
+
+    const plan = buildRenderPlan(ws);
+    assert.equal(plan.columns.length, 5, '四个容器各一列 + 一个共享独立列');
+    assert.deepEqual(plan.columns.map(c => c.columnId),
+        ['grp-default', 'grp-2', 'grp-3', 'grp-4', OWN_COLUMN_ID]);
+    assert.deepEqual(plan.columns[4].tabItems.map(t => t.id), [first.id, second.id],
+        '两个独立叶同住一列，按根级 order');
+    assert.equal(plan.columns[4].panelIds.length, 1, '独立列只有一个内容区');
+    assert.deepEqual(plan.columns[4].panelIdsAll, [first.id, second.id]);
+
+    // 每一列都必须有且只有一个「此刻该亮」的面板，且它必须住在这列。
+    for (const column of plan.columns) {
+        assert.equal(column.panelIds.length, 1, `${column.columnId} 应恰好一个可见面板`);
+        assert.ok(column.panelIds.every(id => column.panelIdsAll.includes(id)),
+            `${column.columnId} 的可见面板必须住在本列`);
+    }
+});
+
+test('mixed shell placements never put one shell in two columns', () => {
+    const ws = fresh();
+    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const hosted = addShell(ws);
+    const own = addShell(ws);
+    const topRow = addShell(ws);
+    setColumnSplit(ws, true);
+    setLeafHostGroup(ws, hosted.id, g2.id);
+    setLeafColumnMode(ws, own.id, 'ownColumn');
+    setLeafColumn(ws, topRow.id, 'grp-2');
+
+    const plan = buildRenderPlan(ws);
+    const locate = (id) => plan.columns
+        .filter(column => column.tabItems.some(t => t.id === id)
+            || column.rows.some(row => row.tabs.some(t => t.id === id)))
+        .map(column => column.columnId);
+    assert.deepEqual(locate(hosted.id), ['grp-2']);
+    assert.deepEqual(locate(own.id), [OWN_COLUMN_ID]);
+    assert.deepEqual(locate(topRow.id), ['grp-2']);
+
+    // 本列的列首行只应包含容器标签与停在首行的那个叶，不能把独立叶混进来。
+    const g2Column = plan.columns.find(c => c.columnId === 'grp-2');
+    assert.deepEqual(g2Column.tabItems.map(t => t.id), ['grp-2', topRow.id]);
+    assert.ok(g2Column.rows[0].tabs.some(t => t.id === hosted.id));
+    assert.equal(g2Column.rows[0].tabs.some(t => t.id === own.id), false);
+});
+
+// 反向对照：这两条正是本轮探针真实抓到的两处模型缺陷。
+test('marking a hosted leaf as ownColumn releases its host (no two places)', () => {
+    const ws = fresh();
+    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setColumnSplit(ws, true);
+
+    assert.equal(setLeafHostGroup(ws, shell.id, g2.id), true);
+    assert.equal(setLeafColumnMode(ws, shell.id, 'ownColumn'), true);
+    assert.equal(leafHostGroup(ws, shell), null, '切成独立列必须同时解除挂靠');
+    assert.equal(leafColumnMode(shell), 'ownColumn');
+
+    const plan = buildRenderPlan(ws);
+    const places = plan.columns.filter(column => column.tabItems.some(t => t.id === shell.id)
+        || column.rows.some(row => row.tabs.some(t => t.id === shell.id)));
+    assert.deepEqual(places.map(c => c.columnId), [OWN_COLUMN_ID]);
+
+    // 反方向早已存在：挂靠时把 columnMode 清回 row。
+    setLeafHostGroup(ws, shell.id, g2.id);
+    assert.equal(leafColumnMode(shell), 'row');
+    assert.equal(leafHostGroup(ws, shell), g2.id);
+});
+
+test('every visible panel of a column lives in that column content area', () => {
+    const ws = fresh();
+    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    addShell(ws);
+    setColumnSplit(ws, true);
+    setPaneSplit(ws, g2.id, true);
+    const shell = addShell(ws);
+    setLeafHostGroup(ws, shell.id, g2.id);
+
+    const plan = buildRenderPlan(ws);
+    for (const column of plan.columns) {
+        for (const id of column.panelIds) {
+            assert.ok(column.panelIdsAll.includes(id),
+                `${id} 在 ${column.columnId} 亮着却没住进这列的内容区`);
+        }
+    }
+});
+
+test('flat pane split does not list a hosted leaf on the top row as well', () => {
+    const ws = fresh();
+    const container = Object.values(ws.tabs).find(isContainer);
+    addLeaf(ws, 'filter', container.id);
+    const shell = addShell(ws);
+    setPaneSplit(ws, container.id, true);
+    setLeafHostGroup(ws, shell.id, container.id);
+
+    const plan = buildRenderPlan(ws);
+    const column = plan.columns[0];
+    assert.equal(column.tabItems.some(t => t.id === shell.id), false,
+        '受托管叶已经在下层行里，不能再占一级行');
+    assert.ok(column.rows[0].tabs.some(t => t.id === shell.id));
+    // 一级行与两行里出现的每个标签都必须在 panelIdsAll 里（一个不多一个不少）。
+    const shown = [...column.tabItems.map(t => t.id), ...column.rows.flatMap(r => r.tabs.map(t => t.id))];
+    assert.deepEqual([...column.panelIdsAll].sort(), [...new Set(shown)].sort());
+});
+
+test('a stale second pane does not light a panel that has no row', () => {
+    const ws = fresh();
+    // 必须多一个容器：扁平形态的一级行会列出全部 pane 的子项（方案 A），
+    // 那个形态下「没有行」的标签仍然有自己的按钮，不构成缺陷。
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const container = Object.values(ws.tabs).find(isContainer);
+    // paneSplit 已关，但布局里还留着第二个非空 pane（旧配置 / 写入中断）。
+    container.panes.push({ id: 'pane-2', tabIds: ['stale-main'], activeTabId: 'stale-main' });
+    ws.tabs['stale-main'] = model.createLeaf('main', { id: 'stale-main' });
+    container.paneSplit.enabled = false;
+    // 只把 id 塞进 pane.tabIds 不够：`parentId` 是派生缓存（由 rebuildIndex 重算），
+    // 不重算的话这个叶会被当成「停在列首行的根级叶」，那它就有按钮、也有面板，
+    // 不构成「没有行」的场景。这里必须让它真的属于那个 pane。
+    model.rebuildIndex(ws);
+    activateTab(ws, 'stale-main');
+
+    const plan = buildRenderPlan(ws);
+    assert.deepEqual(plan.columns[0].rows.map(r => r.paneId), [container.panes[0].id],
+        '未分屏只画一条行');
+    assert.deepEqual(plan.panelIds, [container.panes[0].activeTabId],
+        '焦点落在没有行的叶上时必须回落到唯一那条行，而不是点亮一个搬不进去的面板');
+    for (const column of plan.columns) {
+        assert.ok(column.panelIds.every(id => column.panelIdsAll.includes(id)));
+    }
+});
