@@ -4433,7 +4433,19 @@ window.__readTabModelPlan = () => {
         }),
         filterTabs: {},
         chartTabs: {},
-        shellTabs: shellTabs.map(tab => ({ id: tab.id, title: tab.title })),
+        // 每个 Shell 带自己的落列。「它停在哪一列」在渲染层只有一个判据
+        // `resolveShellTopRowColumn()`（记忆列 → 唯一可见列 → 激活列），这里必须调它而不是
+        // 裸读 `topRowColumnId`：后者首次为 null，裸读会把 Shell 算到第一列，而实际停在
+        // 激活列（实测 verify-tab-plan-strict 的 with-shell-panels 就是这么错的）。
+        // 模型那边它是 tabs[id].columnId，两处是同一事实，不再各算一份。
+        shellTabs: shellTabs.map(tab => ({
+            id: tab.id,
+            title: tab.title,
+            columnId: (() => {
+                const owner = getShellTabOwner(tab);
+                return owner === null ? resolveShellTopRowColumn(tab) : owner;
+            })()
+        })),
         focusedTabId: getGroupActiveTabId(activeGroupId),
         split: {
             enabled: groupWorkspaceSplit.enabled === true && groupWorkspaceSplit.groupIds.length > 1,

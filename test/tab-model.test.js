@@ -21,8 +21,11 @@ const {
     setCollapsed,
     closeTab,
     rootFamilyOf,
+    roots,
     layoutColumns,
     layoutRowsOf,
+    resolveLeafColumnId,
+    setLeafColumn,
     visiblePanels,
     buildRenderPlan,
     isContainer,
@@ -184,27 +187,64 @@ test('split off shows only the column that contains the focus', () => {
     assert.equal(plan.columns[0].containerId, second.id);
 });
 
-// 分屏后一个未归属 Shell 自成一根级叶，它那一列没有容器、没有 pane、没有 subRow，
-// 内容区显示的就是它自己。漏掉这一支会让模型给出空集，而页面实际显示 Shell 面板。
-// 反向对照：删掉 visiblePanelIdsOfColumn 里 `split.enabled && !containerId` 那一行，
-// 下面的 panelIds 会变成空数组，两条断言立刻失败。
-test('a root leaf column exposes its own panel when split is on', () => {
+// 分屏后一个未归属 Shell **不自成列**（用户裁决），它停在某一列的列首行；
+// 点中它时，那一列的内容区显示它自己，而不是该容器的 activeTabId。
+//
+// 旧用例断言的是「shell 必须自成一根级列」，已随用户裁决失效：分屏只作用于被移动的
+// 那一个串口组，Shell 维持原位不动。它不是被删掉，而是被改成了下面这个更准的判据。
+// 反向对照：删掉 visiblePanelIdsOfColumn 里「焦点是该列的根级叶」那一文，
+// panelIds 会退回容器 activeTabId，下面两条断言立刻失败。
+test('a root leaf sitting on a column shows its own panel when focused', () => {
     const ws = fresh();
     addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
     const shell = addShell(ws);
     setColumnSplit(ws, true);
 
     const plan = buildRenderPlan(ws);
-    const shellColumn = plan.columns.find(col => col.columnId === shell.id);
-    assert.ok(shellColumn, 'shell 必须自成一根级列');
-    assert.equal(shellColumn.containerId, null);
-    assert.deepEqual(shellColumn.panelIds, [shell.id]);
-    assert.ok(plan.panelIds.includes(shell.id), '全局可见面板必须包含 shell');
-    assert.deepEqual(shellColumn.rows, [], '根级叶列没有 subRow');
+    // 列集合只由容器决定：两个容器两列，Shell 不占列。
+    assert.equal(plan.columns.length, 2, '分屏列数等于容器数');
+    assert.ok(!plan.columns.some(col => col.columnId === shell.id), 'Shell 不得自成列');
+
+    // Shell 坐在某列的列首行：col.tabItems 里能找到它（与分组标签同级）。
+    const home = plan.columns.find(col => col.tabItems.some(t => t.id === shell.id));
+    assert.ok(home, 'Shell 必须出现在某一列的列首行');
+    assert.equal(home.containerId, resolveLeafColumnId(ws, shell));
+
+    // 未点时那一列显示容器自己的激活叶，不显示 Shell。
+    assert.ok(!plan.panelIds.includes(shell.id), '未点中时 Shell 不占面板');
+
+    // 点中后那一列显示 Shell，而不是容器的 activeTabId。
+    activateTab(ws, shell.id);
+    const after = buildRenderPlan(ws);
+    const sameColumn = after.columns.find(col => col.columnId === home.columnId);
+    assert.deepEqual(sameColumn.panelIds, [shell.id]);
+    assert.ok(after.panelIds.includes(shell.id), '全局可见面板必须包含 shell');
+    assert.deepEqual(sameColumn.rows.length, 1, '容器列仍保留自己那条 subRow');
+});
+
+// 根级叶的 columnId 是「它停在哪一列」的唯一真源：拖到哪列就跟到哪列，
+// 而那一列的删除会把它自愈回现存的第一列。
+test('a root leaf follows its columnId and survives that column being deleted', () => {
+    const ws = fresh();
+    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setColumnSplit(ws, true);
+
+    assert.equal(setLeafColumn(ws, shell.id, other.id), true);
+    assert.equal(resolveLeafColumnId(ws, shell), other.id);
+    const moved = buildRenderPlan(ws).columns.find(col => col.columnId === other.id);
+    assert.ok(moved.tabItems.some(t => t.id === shell.id), '改列后必须挂在新的那一列');
+
+    // 删掉它那一列 → columnId 悬空，validateAndRepair 写回现存的第一列。
+    closeTab(ws, other.id);
+    const repaired = validateAndRepair(ws);
+    assert.ok(repaired.ok);
+    assert.ok(repaired.repairs.some(text => text.includes('columnId')), repaired.repairs);
+    assert.notEqual(shell.columnId, other.id);
+    assert.ok(roots(ws).filter(isContainer).some(c => c.id === shell.columnId));
 });
 
 // 未分屏时不能套用上面那一支：那时 column.id 与焦点所在的叶无关，
-// 若用它顶替焦点会让整列显示错的标签。
 test('a root leaf column does not hijack the panel while split is off', () => {
     const ws = fresh();
     const main = findLeaf(ws, 'main');

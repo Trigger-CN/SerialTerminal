@@ -110,7 +110,7 @@ function inFamily(ws, tab) {
 // 第一维：列。每列自带 TabRow 项，渲染层不需要再组合。
 //
 // 两种形态（对应文档 §5.2）：
-//   分屏        每个根级 Tab 一列，TabRow 只有它自己
+//   分屏        每个容器一列；根级叶不占列，而是归入它自己指定的那一列
 //   未分屏      只有一列：**所有根级 Tab 共用一条 TabRow**
 //
 // 未分屏时不能「每个分组各一列」：那会让每个分组列各自渲染一条 TabRow，
@@ -121,13 +121,17 @@ function inFamily(ws, tab) {
 // 多容器时 TabRow 装的是**分组标签本身**，子项落到各自的 subRow。
 // 扁平时还分两种：未开 pane 分屏 → 子项全部上一级行（没有 subRow）；
 // 开了 pane 分屏 → 子项各自落到自己那条 subRow，一级行只留根级叶。
+//
+// **根级叶不自成列（用户裁决）**：分屏只作用于被移动的那个串口组，Shell 维持原位不动。
+// Shell 的位置就是它 `columnId` 指向的那一列的列首行（与分组标签同级），
+// 所以列集合只由容器决定，叶只负责「挂到哪一列」。
 function layoutColumns(ws) {
     if (ws.split.enabled) {
-        return roots(ws).map(tab => ({
-            id: tab.id,
-            containerId: isContainer(tab) ? tab.id : null,
+        return roots(ws).filter(isContainer).map(container => ({
+            id: container.id,
+            containerId: container.id,
             isFamily: false,
-            tabItems: [tab]
+            tabItems: [container, ...leafItemsOfColumn(ws, container.id)]
         }));
     }
 
@@ -157,6 +161,39 @@ function layoutColumns(ws) {
     }];
 }
 
+// 根级叶**该挂到哪一列**。这是「Shell 停在哪一列」的唯一判据，也是模型里唯一
+// 表示该事实的地方——不再靠渲染层记一个 topRowColumnId 反向量子询问。
+//
+// 三条规则，按优先级：
+//   0. 不是根级叶（属于某个 pane 的子项）→ null。它们由 subRow 管，不参与列首行；
+//   1. 显式指定了 columnId 且那一列确实存在 → 用它（用户把 Shell 拖进了某列）；
+//   2. 没指定 / 指定的列已被删除 → 栽到第一个容器列（位置稳定，不跟着焦点跑）；
+//   3. 根本没有容器列 → null（未分屏形态不用它）。
+//
+// 第 0 条是必需的前置条件：少了它会将 `tab-main-g-1` 这种容器子项也当成「停在 default
+// 列的根级叶」，于是 default 列的面板被判成别的分组的标签（实测 verify-tab-plan-strict
+// 的 split-panels 就是因此失败的）。
+//
+// 只看 `columnId` 不看焦点：跟着焦点跑会让「点一下别的分组，Shell 整列搬过去」
+// 历史缺陷复活（用户实测报过）。
+function resolveLeafColumnId(ws, leaf) {
+    if (!leaf || isContainer(leaf) || leaf.parentId !== null) return null;
+    const containers = roots(ws).filter(isContainer);
+    if (!containers.length) return null;
+    const wanted = typeof leaf.columnId === 'string' ? leaf.columnId : '';
+    if (wanted && containers.some(container => container.id === wanted)) return wanted;
+    return containers[0].id;
+}
+
+// 某列的列首行上还坐着哪些根级叶（未归属的 Shell）。
+//
+// 分屏时它们与分组标签同级、不新开列；未分屏时整列共用一条 TabRow，
+// 由 layoutColumns() 的另一支自己把叶混排进去，不走这里。
+function leafItemsOfColumn(ws, columnId) {
+    return roots(ws).filter(leaf => !isContainer(leaf)
+        && resolveLeafColumnId(ws, leaf) === columnId);
+}
+
 // 第二维：行（subRow）。
 //
 // 扁平模式（isFamily）下容器不拥有独立行（方案 A）：未开 pane 分屏时为零条，
@@ -171,11 +208,10 @@ function layoutRowsOf(ws, column) {
     return splitEnabled ? panes.slice() : panes.slice(0, 1);
 }
 
-// 某列实际显示哪些面板。四个分支，分别对应四种布局形态：
-//   有 subRow 且多于一条（分屏 + 列内 paneSplit）→ 每个 pane 显示自己的 activeTabId；
+// 某列实际显示哪些面板。三个分支，分别对应三种布局形态：
+//   列内有 submRow 且多于一条（paneSplit）→ 每个 pane 显示自己的 activeTabId；
 //   未分屏 → 整列一个内容区，跟焦点（可以是容器里的叶，也可以是未归属的 Shell）；
-//   分屏后的根级叶列 → 显示这一列自己（Shell 独立列）；
-//   分屏后的普通列 → 显示该容器自己的激活叶，不看焦点。
+//   分屏后的容器列 → 根级叶在这列上就显示它（列首行被点中），否则显示该容器激活叶。
 //
 // 最后一支不能套用焦点：分屏时其它列也要各自显示内容，而焦点只有一个。
 function visiblePanelIdsOfColumn(ws, column) {
@@ -196,13 +232,17 @@ function visiblePanelIdsOfColumn(ws, column) {
         }
     }
 
-    // 分屏时每一列对应一个根级 Tab。containerId 为 null 表示这一列本身就是一个
-    // 根级叶（典型是未归属的 Shell 独立列）：它没有 pane、没有 subRow，内容区
-    // 显示的就是它自己。
-    //
-    // 不分屏时不能走这一支：那时 column.id 恒为 members[0].id，与焦点所在的叶
-    // 无关，用它顶替会让整列显示错的标签。
-    if (ws.split.enabled && !column.containerId) return tabOf(ws, column.id) ? [column.id] : [];
+    // 分屏后焦点落在某列的根级叶上（用户点了那一列列首行的 Shell）：
+    // 那一列的内容区就显示它，而不是容器的 activeTabId。
+    // 判据限定「焦点确实是该列的叶」，不能用 [column.id] 做兵底——
+    // 列 id 是容器 id，而容器没有面板（I3）。
+    if (ws.split.enabled) {
+        const focused = tabOf(ws, ws.focusedTabId);
+        if (focused && !isContainer(focused)
+            && resolveLeafColumnId(ws, focused) === column.containerId) {
+            return [focused.id];
+        }
+    }
 
     if (column.containerId) {
         const pane = panesOf(tabOf(ws, column.containerId))[0];
@@ -342,8 +382,23 @@ function createWorkspace(options) {
 function addShell(ws) {
     const shell = createLeaf('shell');
     shell.order = rootOrder(ws);
+    // 新建的 Shell 停在当前焦点所在的那一列（没有容器列时为 null，由 resolveLeafColumnId
+    // 回落）。不跟着焦点实时跑：这里只写下创建那一刻的位置，之后用户拖到哪列就改到哪列。
+    const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;
+    shell.columnId = isContainer(focusedRoot) ? focusedRoot.id : null;
     ws.tabs[shell.id] = shell;
     return shell;
+}
+
+// 把根级叶移到指定列（用户在列首行上拖动它，或它那一列被删后的自愈）。
+// 这是「Shell 停在哪一列」的**唯一写入口**：其余代码只读 columnId。
+function setLeafColumn(ws, leafId, columnId) {
+    const leaf = tabOf(ws, leafId);
+    if (!leaf || isContainer(leaf)) return false;
+    const containers = roots(ws).filter(isContainer);
+    if (!containers.some(container => container.id === columnId)) return false;
+    leaf.columnId = columnId;
+    return true;
 }
 
 function addContainerTab(ws, options) {
@@ -646,6 +701,18 @@ function validateAndRepair(ws) {
         }
     }
 
+    // 根级叶的 columnId 悬空：它指向的列已被删除（关组），或者干脆不是容器。
+    // 不修的话 resolveLeafColumnId 会回落，看似能用；但那意味着真源里存了一个不存在的
+    // 列，下次增加一个同名分组时它会酶然命中——写回去才是真的修好。
+    const columnIds = roots(ws).filter(isContainer).map(container => container.id);
+    for (const leaf of Object.values(ws.tabs)) {
+        if (isContainer(leaf) || leaf.parentId !== null) continue;
+        if (leaf.columnId && columnIds.includes(leaf.columnId)) continue;
+        if (leaf.columnId === null || leaf.columnId === undefined) continue;
+        leaf.columnId = columnIds[0] || null;
+        repairs.push(`叶 ${leaf.id} 的 columnId 被重置`);
+    }
+
     return { ok: true, fatal: false, repairs };
 }
 
@@ -664,6 +731,9 @@ module.exports = {
     inFamily,
     layoutColumns,
     layoutRowsOf,
+    resolveLeafColumnId,
+    leafItemsOfColumn,
+    setLeafColumn,
     visiblePanelIdsOfColumn,
     visiblePanels,
     buildRenderPlan,

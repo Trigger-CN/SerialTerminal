@@ -23,7 +23,15 @@ function normalizeTabIds(list, kind) {
     if (!Array.isArray(list)) return [];
     return list
         .filter(tab => tab && typeof tab.id === 'string')
-        .map(tab => ({ id: tab.id, kind: tab.kind || kind, title: pickTitle(tab, tab.id) }));
+        .map(tab => ({
+            id: tab.id,
+            kind: tab.kind || kind,
+            title: pickTitle(tab, tab.id),
+            // columnId 必须一并带过去：它是「这个根级叶停在哪一列」的真源，
+            // 在这里丢掉会让下游永远回落到第一列（实测：verify-tab-plan-strict 的
+            // with-shell-panels 两次修复无效，就是因为丢在这一层）。
+            columnId: typeof tab.columnId === 'string' ? tab.columnId : null
+        }));
 }
 
 // 与 serial-group-dom.js 的 mainTabId() 逐字一致：默认分组无后缀。
@@ -150,11 +158,15 @@ function projectWorkspace(sections) {
     }
 
     // shell 永远在根级（I1 / I2）
+    //
+    // columnId 是「这个 Shell 停在哪一列」的真源。数据源里每项可以带 columnId；
+    // 不带时交给 resolveLeafColumnId 回落，不在这里猜（猜了就是第二套规则）。
     const shellStart = groups.length;
     normalizeTabIds(src.shellTabs, 'shell').forEach((item, index) => {
         const leaf = createLeaf('shell', { id: item.id });
         leaf.parentId = null;
         leaf.order = shellStart + index;
+        leaf.columnId = typeof item.columnId === 'string' ? item.columnId : null;
         tabs[leaf.id] = leaf;
     });
 
