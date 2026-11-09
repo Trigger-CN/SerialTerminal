@@ -2572,6 +2572,29 @@ window.__switchWorkspaceTab = switchPaneTab;
 // 所以验证到的是真实代码路径，而不是另写一套仅供测试的分支。
 window.__handleContextMenuAction = handleTerminalContextMenuAction;
 
+// 仅供 CDP 验证脚本调用：把 Shell 的三事实直接写到 tabState 并重排。
+//
+// 为什么需要：拖动是合成 pointer 手势，在本环境不可靠（同一脚本两次运行结论可以相反）。
+// 这个钩子走的是**产品同一套写入路径**（setShellTabOwner / setShellColumnModeInModel /
+// setShellColumnInModel + syncShellWorkspaceLayout + persistShellTabs），
+// 不是另写一套分支；它只是把「拖到哪」这个输入参数化，用来验证渲染结果。
+window.__setShellPlacement = (tabId, placement = {}) => {
+    const tabState = getShellTabState(tabId);
+    if (!tabState) return false;
+    if (Object.prototype.hasOwnProperty.call(placement, 'hostGroupId')) {
+        setShellTabOwner(tabId, placement.hostGroupId || null);
+    }
+    if (Object.prototype.hasOwnProperty.call(placement, 'columnMode')) {
+        setShellColumnModeInModel(tabId, placement.columnMode);
+    }
+    if (Object.prototype.hasOwnProperty.call(placement, 'columnId')) {
+        setShellColumnInModel(tabId, placement.columnId);
+    }
+    syncShellWorkspaceLayout();
+    persistShellTabs();
+    return true;
+};
+
 // 以下三个也只供 CDP 验证脚本使用。
 //
 // 侧栏按钮的验证难点在于：没有真实串口连接时无法让终端产生内容，而「清空」
@@ -4514,9 +4537,18 @@ window.__readTabModelPlan = () => {
             && row.parentElement.classList.contains('group-column'));
     const paneHeaders = Array.from(document.querySelectorAll('.pane-tabs-header')).filter(shown);
 
+    // 一级行里的 Shell 只在两种宿主里算：
+    //   .serial-group-tab-list > .main-tab    分组列首行（topRow）
+    //   .pane-tabs-header > .pane-tabs-list   仅在扁平（没有分组标签行）时，那条 pane 行就是一级行
+    // **不能**把 pane 标题里所有 Shell 都算进来：归属某组的 Shell 住在该组的下层行，
+    // 它属于 subRow（模型 rows），算进一级行令牌会让「模型少一个」变成假失败。
     const topRowShellTabs = [
-        ...groupRows.flatMap(row => Array.from(row.querySelectorAll('.main-tab[data-target^="tab-shell-"]'))),
-        ...paneHeaders.flatMap(h => Array.from(h.querySelectorAll('.main-tab[data-target^="tab-shell-"]')))
+        ...groupRows.flatMap(row => Array.from(
+            row.querySelectorAll('.serial-group-tab-list > .main-tab[data-target^="tab-shell-"]')
+        )),
+        ...(groupRows.length === 0
+            ? paneHeaders.flatMap(h => Array.from(h.querySelectorAll('.main-tab[data-target^="tab-shell-"]')))
+            : [])
     ].filter(shown).map(b => b.dataset.target);
 
     const live = {
@@ -4868,19 +4900,6 @@ function resolveShellTabHost(tabState) {
             layoutGroupId: REGISTRY_DEFAULT_GROUP_ID,
             layer: 'subRow'
         };
-    }
-
-    // 已分屏 + 不归属：自占一列，该列只有一行标签栏。
-    if (groupWorkspaceSplit.enabled && owner === null && isShellColumnActive()) {
-        const column = ensureShellColumnDom();
-        if (column) {
-            return {
-                listEl: document.getElementById(shellTabListId()),
-                contentEl: document.getElementById(shellPaneTabsContentId()),
-                layoutGroupId: SHELL_COLUMN_GROUP_ID,
-                layer: 'ownColumn'
-            };
-        }
     }
 
     // 用户明确要求自占一列（把它拖到了分组标签行）：该列只有一行标签栏。

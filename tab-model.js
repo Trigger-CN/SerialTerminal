@@ -186,7 +186,11 @@ function layoutColumns(ws) {
         ? (flatPanesSplit
             ? members.filter(tab => !isContainer(tab))
             : members.flatMap(tab => (isContainer(tab) ? childrenOf(ws, tab) : [tab])))
-        : members.slice();
+        // 多分组不扁平：一级行装的是**分组标签**与停在列首行的根级叶。
+        // 受托管（hostGroupId）的叶必须排除——它住在那组的下层标签行（layoutRowsOf
+        // 会把它并进该列 pane-1 那一条 row），再列进一级行就是同一个标签在两处可点。
+        // 扁平单组不在此列：那时一级行**就是** pane-1 的标签行，两者是同一条。
+        : members.filter(tab => !leafHostGroup(ws, tab));
 
     const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;
     return [{
