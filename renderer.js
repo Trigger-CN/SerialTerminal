@@ -4422,18 +4422,14 @@ function renderSerialGroupTabBar() {
     syncShellAddButtonVisibility();
 }
 
-// 只供 CDP 验证脚本调用，不在渲染路径上。
+// 把渲染层当前状态投影成模型的输入形状。
 //
-// 返回模型算出的渲染计划与页面真实形态的快照，供验证脚本逐项比对。
-// 这里只读取真实 DOM（offsetParent + getBoundingClientRect），不写入任何状态，
-// 因为判据必须是「用户眼睛能看到什么」，而不是某个属性被赋了什么值。
+// **唯一入口**：`__readTabModelPlan`（只读影子判据）与 `renderWorkspace`（真实渲染）
+// 必须读同一份投影。两处各拼一份 sections 会让「判据全绿但界面不同」成为可能——
+// 那正是这次重构要消除的那类问题。
 //
-// 注意：模型现阶段尚未接管渲染，本函数只用于证明两边一致，用户可见行为不变。
-window.__readTabModelPlan = () => {
-    const shown = el => Boolean(el) && el.offsetParent !== null
-        && el.getBoundingClientRect().width > 0
-        && el.getBoundingClientRect().height > 0;
-
+// 只读，不修改任何输入。
+function buildLiveWorkspaceSections() {
     const sections = {
         groups: serialGroups.map((group, index) => {
             const layout = groupWorkspaceLayouts.get(group.id);
@@ -4489,6 +4485,25 @@ window.__readTabModelPlan = () => {
         sections.filterTabs[group.id] = filterTabsStore.getList(group.id).map(tab => ({ id: tab.id, title: tab.title }));
         sections.chartTabs[group.id] = chartTabsStore.getList(group.id).map(tab => ({ id: tab.id, title: tab.title }));
     });
+    return sections;
+}
+
+// 投影出当前工作区的模型树。渲染与影子判据共用。
+function buildLiveWorkspace() {
+    return projectWorkspace(buildLiveWorkspaceSections());
+}
+
+// 只供 CDP 验证脚本调用，不在渲染路径上。
+//
+// 返回模型算出的渲染计划与页面真实形态的快照，供验证脚本逐项比对。
+// 这里只读取真实 DOM（offsetParent + getBoundingClientRect），不写入任何状态，
+// 因为判据必须是「用户眼睛能看到什么」，而不是某个属性被赋了什么值。
+window.__readTabModelPlan = () => {
+    const shown = el => Boolean(el) && el.offsetParent !== null
+        && el.getBoundingClientRect().width > 0
+        && el.getBoundingClientRect().height > 0;
+
+    const sections = buildLiveWorkspaceSections();
 
     // 一级 TabRow 有两种宿主，必须都算：
     //   .group-column > .group-tab-row   多分组/分屏时的分组标签行
@@ -4535,7 +4550,7 @@ window.__readTabModelPlan = () => {
     let error = null;
     let ws = null;
     try {
-        ws = projectWorkspace(sections);
+        ws = buildLiveWorkspace();
         plan = tabModel.buildRenderPlan(ws);
     } catch (err) {
         error = String(err && err.message || err);
@@ -4558,7 +4573,8 @@ window.__readTabModelPlan = () => {
                     tabIds: row.tabs.map(tab => tab.id),
                     activeTabId: row.activeTabId
                 })),
-                panelIds: column.panelIds
+                panelIds: column.panelIds,
+                panelIdsAll: column.panelIdsAll
             })),
             panelIds: plan.panelIds
         },
