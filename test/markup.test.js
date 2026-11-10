@@ -643,10 +643,13 @@ test('chart tabs discover sample fields and consume raw serial bytes independent
   assert.match(renderer, /function openChartParsingGuide\(\)/);
   assert.match(renderer, /chartParsingGuideOpen\?\.addEventListener\('click', openChartParsingGuide\)/);
   assert.match(main, /chartTabs: \[\]/);
-  // 白名单新增 'group'（分组标签右键菜单）后，原先写死四项的正则失效；
-  // 这里改成校验白名单包含 chart（本用例的图表主题）且实际覆盖了 'group'，
-  // 而不是把整个列表再写死一遍——否则以后再加类型还会重现同样的误报。
-  assert.match(main, /\['main', 'filter', 'shell', 'chart', 'group'\]\.includes\(payload\.terminalType\)/);
+  // 白名单新增 'group'（分组标签右键菜单）后又新增 'tab'（单分组右键标签），
+  // 原先写死列表的正则已经两次因此失效。这里改成**只校验白名单里确实包含本用例
+  // 关心的 chart，且同时包含 group / tab 两支菜单类型**，不再把整个列表写死——
+  // 否则以后再加类型还会重现同样的误报（断言过期的根源是断言写死了实现细节）。
+  assert.match(main, /const terminalType = \[[^\]]*'chart'[^\]]*\]\.includes\(payload\.terminalType\)/);
+  assert.match(main, /const terminalType = \[[^\]]*'group'[^\]]*\]\.includes\(payload\.terminalType\)/);
+  assert.match(main, /const terminalType = \[[^\]]*'tab'[^\]]*\]\.includes\(payload\.terminalType\)/);
   assert.match(main, /terminalType === 'group' \? \[/);
   assert.match(main, /terminalType === 'chart' \? \[/);
   assert.match(main, /terminalType === 'chart' \? \[/);

@@ -123,22 +123,27 @@ function projectWorkspace(sections) {
                 tabs[leaf.id] = leaf;
                 ids.push(leaf.id);
             };
+            // 主标签在哪个 pane，是**布局事实**，投影必须原样保留。
+            //
+            // 早期这里在 `index === 0` 之外直接 `continue` 跳过主标签，然后在末尾把
+            // 它 unshift 回 pane-1。用户右键主终端「Move to Right Split」后，布局已把
+            // tab-main 移到 pane-2，投影又把它拽回 pane-1，于是 pane-2 永远是空的 ——
+            // 屏幕上就是用户报的「分屏里有一块是空的」（实测 diag918/919）。
+            const declaredMain = panes.findIndex(item => item
+                && Array.isArray(item.tabIds)
+                && item.tabIds.includes(mainId));
             for (const id of declared) {
-                // 主标签已经在上面登记过，`push()` 会因 `tabs[id]` 已存在而跳过它——
-                // 那样就丢掉了它在 pane.tabIds 里的**真实位置**，下面又会把它 unshift 到队首。
-                // 实测后果：用户把主终端拖到第三位后，下一次投影又把它排回第一，
-                // DOM 与布局顺序永久对不上（verify-tab-order 的 dom-order-equals-layout-order）。
                 if (id === mainId) {
-                    if (index === 0 && !ids.includes(mainId)) ids.push(mainId);
+                    if (!ids.includes(mainId)) ids.push(mainId);
                     continue;
                 }
                 if (tabs[id] || isShellId(id)) continue;
                 push(id, 'tab');
             }
 
-            // 主标签只属于 panes[0]（与 workspace-layout-shape 的 unshift 一致）。
-            // 只有它根本没出现在声明里时才补到队首，否则必须保留声明顺序。
-            if (index === 0 && !ids.includes(mainId)) ids.unshift(mainId);
+            // 主标签只在「任何 pane 都没声明它」时才补到 pane-1 队首（与
+            // workspace-layout-shape 的 unshift 一致）；声明在 pane-2 时不得再补回 pane-1。
+            if (declaredMain < 0 && index === 0 && !ids.includes(mainId)) ids.unshift(mainId);
 
             // store 里尚未被任何 pane 认领的标签，只补给**真实布局里为空**的 pane（或主 pane）。
             // 不能补给已经有真实标签的 pane：那会把 pane-2 自己的标签拽进 pane-1，

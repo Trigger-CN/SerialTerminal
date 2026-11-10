@@ -1020,3 +1020,105 @@ test('split off keeps column sizes out of the plan', () => {
     assert.deepEqual(plan.columnLayout.sizes, {});
     assert.ok(plan.columns.every(column => column.size === null), JSON.stringify(plan.columns.map(c => c.size)));
 });
+
+// ---------------------------------------------------------------------------
+// 两条真实用户路径回归（对应 TAB_ARCHITECTURE §11.6.9）
+// ---------------------------------------------------------------------------
+
+// 焦点落在未归属 Shell 上时，列仍必须知道自己属于哪个容器。
+//
+// 旧实现用 `rootOf(focused)` 判列容器；Shell 的根是它自己，于是 containerId 被写成
+// null → layoutRowsOf 看到「无容器列」返回 0 条 → paneSplit 整条不渲染。实测
+// diag919：containerPaneSplit.enabled=true 而 plan.columns[0].splitEnabled=false /
+// rows=[]，用户报「右键日志窗口分屏出现空的分屏」。
+//
+// 反向对照：把 containerId 的判据改回 rootOf(focused) 后，下面 rows.length 会退回 0。
+test('a focused unowned shell still resolves its column container', () => {
+    const ws = fresh();
+    const container = Object.values(ws.tabs).find(isContainer);
+    const shell = addShell(ws);
+    // setPaneSplit 自动补第 2 个 pane（带一个新 main 叶），不能重复 addPane，否则会变成 3 条行。
+    setPaneSplit(ws, container.id, true);
+    assert.equal(ws.tabs[container.id].panes.length, 2);
+    // 主标签被移到 pane-2，Shell 停在 pane-1（就是用户右键主终端分屏后的形态）。
+    ws.tabs[container.id].panes[0].tabIds = [shell.id];
+    ws.tabs[container.id].panes[0].activeTabId = shell.id;
+    ws.tabs[container.id].panes[1].tabIds = [mainLeafIdOf(ws)];
+    ws.tabs[container.id].panes[1].activeTabId = mainLeafIdOf(ws);
+    // 主标签被移到 pane-2，Shell 停在 pane-1（就是用户右键主终端分屏后的形态）。
+    ws.tabs[container.id].panes[0].tabIds = [shell.id];
+    ws.tabs[container.id].panes[0].activeTabId = shell.id;
+    ws.tabs[container.id].panes[1].tabIds = [mainLeafIdOf(ws)];
+    ws.tabs[container.id].panes[1].activeTabId = mainLeafIdOf(ws);
+    model.rebuildIndex(ws);
+    activateTab(ws, shell.id);
+
+    const plan = buildRenderPlan(ws);
+    assert.equal(plan.columns.length, 1);
+    assert.equal(plan.columns[0].containerId, container.id, '焦点在 Shell 上时列仍属于容器');
+    assert.equal(plan.columns[0].splitEnabled, true, 'pane 分屏必须仍然生效');
+    assert.equal(plan.columns[0].rows.length, 2, '两个 pane 各一条行');
+});
+
+function mainLeafIdOf(ws) {
+    return Object.values(ws.tabs).find(tab => tab.kind === 'main' && !isContainer(tab)).id;
+}
+
+// 主标签被移到 pane-2 后，投影不得把它拽回 pane-1。
+//
+// 旧投影在 `index !== 0` 时直接 `continue` 跳过主标签，最后又在 pane-1 里 unshift
+// 一次 —— 右键主终端「Move to Right Split」后布局是 pane-2=[tab-main]，投影却是
+// pane-1=[tab-main] / pane-2=[]，屏幕上必然有一块是空的（diag918/919）。
+//
+// 反向对照：删掉 `declaredMain` 判定、改回无条件 unshift，下面 pane-2 的 tabIds 立即变空。
+test('projection keeps the main tab in the pane that actually declares it', () => {
+    const { projectWorkspace } = require('../tabs-workspace-projection');
+    const sections = {
+        groups: [{
+            id: 'default',
+            title: '串口 1',
+            order: 0,
+            panes: [
+                { id: 'pane-1', tabIds: ['tab-shell-1'], activeTabId: 'tab-shell-1' },
+                { id: 'pane-2', tabIds: ['tab-main'], activeTabId: 'tab-main' }
+            ],
+            paneSplit: { enabled: true, orientation: 'horizontal', sizes: { 'pane-1': 0.5, 'pane-2': 0.5 } },
+            collapsed: false
+        }],
+        filterTabs: {},
+        chartTabs: {},
+        shellTabs: [{ id: 'tab-shell-1', title: 'shell', hostGroupId: null, columnMode: 'row', columnId: null }],
+        focusedTabId: 'tab-main',
+        split: { enabled: false, orientation: 'horizontal', sizes: {} }
+    };
+
+    const ws = projectWorkspace(sections);
+    const panes = ws.tabs.default.panes;
+    assert.deepEqual(panes[0].tabIds, [], 'pane-1 不得再出现主标签');
+    assert.deepEqual(panes[1].tabIds, ['tab-main'], '主标签必须留在声明它的 pane-2');
+    assert.equal(panes[1].activeTabId, 'tab-main');
+});
+
+// 反过来：任何 pane 都没声明主标签时，仍要按老行为补到 pane-1 队首。
+// 这一条是上一条的反向对照，两条一起才能证明「保留声明位置」没有把兜底补位删掉。
+test('projection still prepends the main tab when no pane declares it', () => {
+    const { projectWorkspace } = require('../tabs-workspace-projection');
+    const sections = {
+        groups: [{
+            id: 'default',
+            title: '串口 1',
+            order: 0,
+            panes: [{ id: 'pane-1', tabIds: [], activeTabId: null }],
+            paneSplit: { enabled: false, orientation: 'horizontal', sizes: {} },
+            collapsed: false
+        }],
+        filterTabs: {},
+        chartTabs: {},
+        shellTabs: [],
+        focusedTabId: null,
+        split: { enabled: false, orientation: 'horizontal', sizes: {} }
+    };
+
+    const ws = projectWorkspace(sections);
+    assert.deepEqual(ws.tabs.default.panes[0].tabIds, ['tab-main']);
+});

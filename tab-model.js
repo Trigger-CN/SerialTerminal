@@ -195,10 +195,37 @@ function layoutColumns(ws) {
         // 扁平单组不在此列：那时一级行**就是** pane-1 的标签行，两者是同一条。
         : members.filter(tab => !leafHostGroup(ws, tab));
 
-    const focusedRoot = ws.focusedTabId ? rootOf(ws, tabOf(ws, ws.focusedTabId)) : null;
+    // 这一列内部属于哪个容器，是「行」与「pane 分屏」能否派生的前提。
+    //
+    // **不能用 `rootOf(focused)` 判**：焦点落在未归属的 Shell 上时，它的根就是它自己，
+    // `rootOf` 返回的不是容器，containerId 被写成 null → `layoutRowsOf` 看到空容器返回 0 条
+    // → 已开启的 pane 分屏整条不渲染。实测 diag919：containerPaneSplit.enabled=true 而
+    // plan.columns[0].splitEnabled=false / rows=[]，用户看到的就是「右键分屏没反应」。
+    const focused = ws.focusedTabId ? tabOf(ws, ws.focusedTabId) : null;
+    let columnContainerId = null;
+    if (focused) {
+        if (isContainer(focused)) {
+            columnContainerId = focused.id;
+        } else if (focused.parentId !== null) {
+            // 容器子项：父级就是它所在的容器。
+            const owner = tabOf(ws, focused.parentId);
+            columnContainerId = isContainer(owner) ? owner.id : null;
+        } else {
+            // 根级叶：它停在哪一列，那一列的容器就是本列的容器。
+            const leafColumn = resolveLeafColumnId(ws, focused);
+            const columnOwner = leafColumn ? tabOf(ws, leafColumn) : null;
+            columnContainerId = isContainer(columnOwner) ? columnOwner.id : null;
+        }
+    }
+    // 焦点缺失、或焦点所在位置没有容器时，落到第一个容器列：列不能因为没有焦点就
+    // 退化成「无容器的叶列」——那会让这一列既没有行、也没有 pane。
+    if (!columnContainerId) {
+        const firstContainer = members.find(isContainer);
+        columnContainerId = isContainer(firstContainer) ? firstContainer.id : null;
+    }
     return [{
         id: members[0].id,
-        containerId: isContainer(focusedRoot) ? focusedRoot.id : null,
+        containerId: columnContainerId,
         isFamily: flat,
         tabItems
     }];

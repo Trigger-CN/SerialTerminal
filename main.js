@@ -2297,11 +2297,13 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   const hasSelection = Boolean(payload.hasSelection);
   const isConnected = Boolean(payload.isConnected);
   const canLocateInMain = Boolean(payload.canLocateInMain);
-  // 分组级分屏至少需要两个分组才有意义；单分组时菜单项禁用而不是隐藏。
   const isMultiGroup = Boolean(payload.isMultiGroup);
-  const terminalType = ['main', 'filter', 'shell', 'chart', 'group'].includes(payload.terminalType)
+  // 'tab' = 单分组时右键某个普通标签：只给组内 pane 分屏那几项。
+  // 多分组仍走 'group'（分组级菜单），两者作用面不同，不要合并。
+  const terminalType = ['main', 'filter', 'shell', 'chart', 'group', 'tab'].includes(payload.terminalType)
     ? payload.terminalType
     : 'main';
+  const canSplitTab = Boolean(payload.canSplit);
   const labels = payload.labels || {};
 
   const sendAction = (action) => {
@@ -2316,7 +2318,30 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   // 分组级分屏走单独的一套菜单：动作作用于「分组」而不是某个标签页。
   // 它与下面的组内 pane 分屏（split-horizontal / split-vertical）是两件事，
   // 后者把单个标签移动另一个 pane，前者决定哪些分组并排显示。
-  const template = terminalType === 'group' ? [
+  //
+  // 'tab' 是单分组专用：此时分组级分屏无对象（candidates < 2），直接给组内 pane 分屏。
+  // canSplit 为假（该组 pane 里只有一个标签）时置灰而不是隐藏：移走唯一标签会被
+  // reconcileEmptyPanes 立即折叠回一个 pane，用户看到的是「点了没反应」。
+  const template = terminalType === 'tab' ? [
+    {
+      label: labels.splitHorizontal || 'Move Tab to Right Split',
+      ...menuIcon('vertical_split'),
+      enabled: canSplitTab,
+      click: () => sendAction('split-horizontal')
+    },
+    {
+      label: labels.splitVertical || 'Move Tab to Bottom Split',
+      ...menuIcon('horizontal_split'),
+      enabled: canSplitTab,
+      click: () => sendAction('split-vertical')
+    },
+    {
+      label: labels.closeSplit || 'Close Split',
+      ...menuIcon('close_fullscreen'),
+      enabled: Boolean(payload.splitEnabled),
+      click: () => sendAction('close-split')
+    }
+  ] : terminalType === 'group' ? [
     {
       label: labels.groupSplitHorizontal || 'Split Groups Left/Right',
       ...menuIcon('vertical_split'),
