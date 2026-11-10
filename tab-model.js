@@ -456,7 +456,17 @@ function buildRenderPlan(ws) {
         // 那一列真正该是「该叶自己的 columnId」，退一步至少是第一容器列。
         if (focusedLeafColumn === OWN_COLUMN_ID) return firstContainerId || column.id;
         return focusedLeafColumn || firstContainerId || column.id;
+        return focusedLeafColumn || firstContainerId || column.id;
     };
+    // 列 key 的完整列表（与渲染层同构），用来做比例归一化。
+    //
+    // `normalizeSizes` 在这里是**唯一**的归一化点：它丢弃表里不存在的键、给缺失列补 1、
+    // 再把总和缩到 1。早先这里是裸转发 `ws.split.sizes`，使用端对缺失列回落 `1/N`，
+    // 两者叠加就超过 1 —— 四列时第 4 列被挤到容器右侧之外（实测 overflowRight > 0）。
+    const domKeys = cols.map(column => domKeyOf(column));
+    const layoutSizes = (ws.split && ws.split.enabled && domKeys.length > 1)
+        ? normalizeSizes((ws.split && ws.split.sizes) || {}, domKeys)
+        : {};
     return {
         columns: cols.map(column => {
             const container = column.containerId ? tabOf(ws, column.containerId) : null;
@@ -477,7 +487,12 @@ function buildRenderPlan(ws) {
                 orientation: paneSplit && paneSplit.orientation === 'vertical' ? 'vertical' : 'horizontal',
                 paneSizes: paneSplit ? { ...(paneSplit.sizes || {}) } : {},
                 // 这一列在分组级分屏里的占比（外层容器按它写 flex-basis）。
-                size: ws.split && ws.split.enabled ? (ws.split.sizes || {})[domKey] : null,
+                //
+                // **必须取归一化后的值**：`ws.split.sizes` 可能只覆盖部分列（旧配置、
+                // 刚开分屏、或 groupIds 少于屏幕列数）。直接把原始值抛给渲染层，渲染层
+                // 对缺失列回落 `1/N`，两侧相加就超过 1，最右列被挤到容器外（实测溢出）。
+                // `normalizeSizes` 只补「缺失」与归一，是一门纯函数，不写回 ws。
+                size: layoutSizes[domKey] === undefined ? null : layoutSizes[domKey],
                 rows: rows.map(pane => ({
                     paneId: pane.id,
                     tabs: pane.tabIds.map(id => tabOf(ws, id)).filter(Boolean),
@@ -493,7 +508,7 @@ function buildRenderPlan(ws) {
         columnLayout: {
             enabled: Boolean(ws.split && ws.split.enabled === true),
             orientation: ws.split && ws.split.orientation === 'vertical' ? 'vertical' : 'horizontal',
-            sizes: { ...((ws.split && ws.split.sizes) || {}) }
+            sizes: layoutSizes
         },
         // 一级 TabRow 是否显示（分组标签行）。只有一个容器时那是纯噪声。
         containerCount: containers.length,

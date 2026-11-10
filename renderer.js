@@ -2972,7 +2972,14 @@ function bindGroupWorkspaceSplitter() {
     const flush = () => {
         rafId = null;
         if (pendingRatio === null || !dragLeftId || !dragRightId) return;
-        const participants = groupWorkspaceSplit.groupIds;
+        // 参与者 = **屏幕上真实存在的列**（DOM 顺序），不是 groupWorkspaceSplit.groupIds。
+        //
+        // `groupIds` 只记录「分屏是围绕哪两个组打开的」，而列集合由容器数决定
+        // （layoutColumns：每个容器一列，外加可选的共享独立列）。4 个容器时屏幕上是
+        // 4 列 3 条分界条，`groupIds` 却只有两项：第 2/3 条分界条在 groupIds 里找不到
+        // 左邻，`participants[leftIndex + 1] !== dragRightId` 直接 return，拖了没有任何反应
+        // （实测 colWidths 全程 171.75×4、sizes 仍为 {}）。
+        const participants = getGroupWorkspaceVisibleColumnKeys();
         const leftIndex = participants.indexOf(dragLeftId);
         if (leftIndex < 0 || participants[leftIndex + 1] !== dragRightId) return;
 
@@ -2980,21 +2987,27 @@ function bindGroupWorkspaceSplitter() {
         const minShare = 0.1;
         const clamped = Math.min(1 - minShare, Math.max(minShare, pendingRatio));
 
-        // 先算旧比例（两张表必须一致，缺失时按平均分配），再写回。
-        const previous = participants.map(id => Number(groupWorkspaceSplit.sizes[id]) || 0);
-        const totalWeight = previous.reduce((sum, value) => sum + value, 0);
-        const shares = previous.map(value => (totalWeight > 0 ? value / totalWeight : 1 / participants.length));
-        const pairShare = (shares[leftIndex] + shares[leftIndex + 1]) || (2 / participants.length);
+        // 旧比例取**当前实际列宽**，不取 sizes 表：sizes 可能只覆盖部分列（旧配置、
+        // 刚开分屏、或 groupIds 少于屏幕列数）。用「缺失 = 0」去归一化会把其余列归成 0，
+        // applyColumnSizes 再给它们各自回落 1/N，列宽之和就超过容器（最右列被挤到窗口外）。
+        const shares = participants.map(id => {
+            const el = getGroupColumnElement(id);
+            return el ? el.getBoundingClientRect().width : 0;
+        });
+        const totalWidth = shares.reduce((sum, value) => sum + value, 0);
+        if (totalWidth <= 0) return;
+        for (let index = 0; index < shares.length; index++) shares[index] /= totalWidth;
 
+        const pairShare = shares[leftIndex] + shares[leftIndex + 1];
         shares[leftIndex] = pairShare * clamped;
         shares[leftIndex + 1] = pairShare * (1 - clamped);
+
+        // 把**每一列**都写进比例表，保证它是一份完整、和为 1 的快照。
         groupWorkspaceSplit.sizes = {};
         participants.forEach((id, index) => {
             groupWorkspaceSplit.sizes[id] = shares[index];
         });
         renderWorkspaceNow();
-        fitWorkspaceTerminals();
-        pendingRatio = null;
         fitWorkspaceTerminals();
         pendingRatio = null;
     };

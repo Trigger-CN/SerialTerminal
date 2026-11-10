@@ -968,3 +968,55 @@ test('a stale second pane does not light a panel that has no row', () => {
         assert.ok(column.panelIds.every(id => column.panelIdsAll.includes(id)));
     }
 });
+
+test('a partial split ratio table is normalized for every visible column', () => {
+    const ws = fresh();
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
+    setColumnSplit(ws, true);
+    // 屏幕上会画 3 列（每个容器一列），但比例表只覆盖两列——这正是 4 列形态下
+    // 真实出现过的输入（groupIds 只有两项，列却被容器数撑到 4）。
+    // 键必须是**真实的容器 id**（默认容器的 id 是 grp-default，不是 'default'）。
+    const ids = Object.values(ws.tabs).filter(isContainer).map(c => c.id);
+    ws.split.sizes = { [ids[0]]: 0.7, [ids[1]]: 0.3 };
+
+    const plan = buildRenderPlan(ws);
+    assert.equal(plan.columns.length, 3);
+    const sizes = plan.columns.map(column => column.size);
+    assert.ok(sizes.every(value => Number.isFinite(value) && value > 0),
+        `每一列都必须拿到正比例，实际 ${JSON.stringify(sizes)}`);
+    const total = sizes.reduce((sum, value) => sum + value, 0);
+    assert.ok(Math.abs(total - 1) < 1e-9, `比例之和必须为 1，实际 ${total}`);
+    // 给定两列保持 7:3 的相对关系，缺失的那一列按等权补齐后再一起归一。
+    assert.ok(Math.abs(sizes[0] / sizes[1] - 0.7 / 0.3) < 1e-9, JSON.stringify(sizes));
+
+    // columnLayout.sizes 与每列的 size 必须同源，渲染层只读这一份。
+    const layoutTotal = plan.columns.reduce(
+        (sum, column) => sum + plan.columnLayout.sizes[column.domKey], 0);
+    assert.ok(Math.abs(layoutTotal - 1) < 1e-9, `columnLayout.sizes 之和必须为 1，实际 ${layoutTotal}`);
+});
+
+test('an empty split ratio table gives every column an equal share', () => {
+    const ws = fresh();
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
+    setColumnSplit(ws, true);
+
+    const plan = buildRenderPlan(ws);
+    const sizes = plan.columns.map(column => column.size);
+    assert.equal(sizes.length, 3);
+    assert.ok(sizes.every(value => Math.abs(value - 1 / 3) < 1e-9), JSON.stringify(sizes));
+});
+
+test('split off keeps column sizes out of the plan', () => {
+    const ws = fresh();
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    setColumnSplit(ws, true);
+    ws.split.sizes = { default: 0.9, 'grp-2': 0.1 };
+    setColumnSplit(ws, false);
+
+    const plan = buildRenderPlan(ws);
+    assert.equal(plan.columnLayout.enabled, false);
+    assert.deepEqual(plan.columnLayout.sizes, {});
+    assert.ok(plan.columns.every(column => column.size === null), JSON.stringify(plan.columns.map(c => c.size)));
+});
