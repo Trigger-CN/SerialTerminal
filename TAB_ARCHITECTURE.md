@@ -1018,9 +1018,17 @@ function reorderInRow(ws, scope, tabId, targetIndex) {
 
 | 落点 | 写入 | 结果 |
 |---|---|---|
-| 某列的分组标签行 | `setLeafHostGroup(ws, leafId, null)` + `setLeafColumnMode(ws, leafId, 'ownColumn')` | 进共享独立列（`OWN_COLUMN_ID`） |
+| 普通分组列的**分组标签行**（列首行） | `setLeafHostGroup(ws, leafId, null)` + `setLeafColumnMode(ws, leafId, 'row')` + `setLeafColumn(ws, leafId, 该列 id)` | 停在那列的列首行；**不新建列** |
+| 共享 Shell 独立列自身（`OWN_COLUMN_ID`） | `setLeafHostGroup(ws, leafId, null)` + `setLeafColumnMode(ws, leafId, 'ownColumn')` | 进共享独立列 |
 | 某组的下层标签行 | `setLeafHostGroup(ws, leafId, groupId)`（自动把 `columnMode` 清回 `row`） | 住进那组的 pane-1 下层行 |
-| 某一列的列首行 | `setLeafColumn(ws, leafId, columnId)` | 停在那列列首行 |
+| 某一列的列首行（程序化写入） | `setLeafColumn(ws, leafId, columnId)` | 停在那列列首行 |
+
+> **旧语义已作废（重要）**：本文早期版本的第一行写的是「拖到分组标签行 → `columnMode='ownColumn'` → 进共享独立列」。
+> 那个语义已被用户实测裁决修正：多组左右分屏后把 Shell 拖回原来那一屏，旧语义会凭空建出第三列，用户报告为
+> 「shell 无法拖回到原来屏，拖动后会跑到新建第三分屏」。现行规则是**只有拖到共享 Shell 独立列自身或明确的独立成列动作才置 `ownColumn`**；
+> 拖到普通分组列的列首行只是「停到那一列的列首行」。`ownColumn` 与 `hostGroupId` 两个写入口仍然两向互斥。
+> 对应实现：`updateWorkspaceTabDrag` 里落点存的是**列的 groupId**（`rowTarget.groupId`），不是行元素 id——行元素上没有 `data-group-id`，
+> 旧代码拿 `row.id` 反查恒为 `undefined`，写不进 `columnId` 就会落到兜底分支、变成新建第三列。
 
 为什么 Shell 能跨层而其它叶不能：I1 / I2 保证 Shell 永远不进 `panes[].tabIds`，它的位置由 `hostGroupId` / `columnMode` / `columnId`
 三条**互斥**的叶级事实描述（同一时刻至多一条生效），所以不存在「半只脚进了 pane」的中间态。
@@ -1585,6 +1593,60 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 
 
+#### 11.6.9 三项真实用户分屏回归的闭环（新增）
+
+用户实测报告（逐字）：
+
+> `只有一个分组的时候，右键点击标签分屏无反应，右键点击日志窗口分屏会出现分屏异常，出现空的分屏，并且不能调整分屏宽度；
+> 多个串口分组时，右键点击串口2组分屏，会将串口2组和所有shell一起移到新分屏，并且shell无法拖回到原来屏，拖动后会跑到新建第三分屏；
+> 分屏变化、窗口大小变化等情况，终端窗口内容显示大小没有实时跟随`
+
+三项都先复现取证再改，最终抽出 **7 条代码缺陷**（没有一条是测试写错）：
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 单分组右键标签「分屏无反应」（菜单全灰） | 普通标签右键恒发 `terminalType:'group'`；主进程分组菜单里两项分屏 `enabled: isMultiGroup`，单分组时全灰不可点，组内 pane 分屏入口完全不可达 | 新增 `requestWorkspaceTabContextMenu`：单分组发 `terminalType:'tab'`，主进程新增 `'tab'` 模板；多分组仍走 `'group'` |
+| 2 | 组内 pane 分界条从不显示 / 不能调宽 | `reconcileRows` 只写 pane 显隐与 `flex-basis`，从不按 `column.splitEnabled` 设置本组 `workspace-splitter` 的 `hidden`（静态与动态条初始都是 `hidden`），且 `flex-basis` 没扣除 10px 占位 | `reconcileRows` 写 `splitterEl.hidden = !(column.splitEnabled && specs.length > 1)`，**先显示再读 rect 算 gutter**；`flex-basis = calc(<ratio>% - <ratio × gutter>px)`；隐藏 pane 时清掉残留 inline `flex-basis` |
+| 3 | 非激活分组的 pane 条拖不动 / 拖了改错组 | `bindWorkspaceSplitter` 整条拖动路径用模块级别名（`isSplitEnabled` / `getOrientation` / `setPaneSizes` / `persistWorkspaceLayout`），它们只指向**激活分组** | 按 `splitter.dataset.groupId` 取该组 manager（`getGroupWorkspaceManager`），新增 `persistGroupWorkspaceLayout(groupId)`；`persistWorkspaceLayout` 降为薄封装 |
+| 4 | 「空的分屏」：主标签被移进 pane-2 后投影又拽回 pane-1 | 投影器在 `index !== 0` 时对 `mainId` 直接 `continue`，末尾无条件 `unshift(mainId)` 到 pane-1 | 新增 `declaredMain`：哪个 pane 声明了主标签就放哪；仅当**没有任何 pane 声明**时才补到 pane-1 队首 |
+| 5 | 已开启的 pane 分屏完全不出行（焦点在未归属 Shell 上） | `layoutColumns()` 非分屏分支用 `rootOf(focused)` 定 `containerId`；焦点在 Shell 上时它的根是自己，`containerId` 变 `null` → `layoutRowsOf` 返回 0 条 → `splitEnabled` 恒 `false` | `containerId` 改为「焦点是容器→它自己；焦点是容器子项→`parentId`；焦点是根级叶→`resolveLeafColumnId` 指向的容器；仍无→第一个容器」 |
+| 6 | Shell 跟着激活分组跑；分组级分屏把全部 Shell 搬进那一列 | `resolveShellTopRowColumn()` **写** `tabState.columnId`（被只读投影器调用），且用「当前是否可见」否定已有列记忆，回落值就是激活组；新建 Shell 时 `columnId` 留 `null` | 改纯读：`isColumnKeyAlive(remembered)` 命中就用（不看 `hidden`）；新增 `isColumnKeyAlive`；`createShellTab` 创建时就把 `columnId` 写成创建所在分组 |
+| 7 | Shell 拖回原屏却新建第三列 | 拖动落点存的是**行元素 id**（行上没有 `data-group-id`，反查恒 `undefined`），且 `finishWorkspaceTabDrag` 无条件 `setShellColumnModeInModel(tabId, 'ownColumn')` | 落点存 `rowTarget.groupId`；分组行分支改为 `hostGroupId=null` + `columnMode='row'` + `columnId=该列`（旧 §8.2 语义作废，见该节） |
+
+另有 1 条**产品裁决**（不是缺陷）：**组内 pane 分屏需要 ≥2 个可移动标签**。移走唯一标签后 `reconcileEmptyPanes` 必然把布局折叠回一个 pane，
+用户看到的就是「点了没反应」；而「空的分屏」又被用户明确视为缺陷。⇒ 菜单项按 `canSplit = totalTabs >= 2` 置灰，动作入口 `splitWorkspaceTabIntoPane` 再兜底 `totalTabs < 2` 直接返回。**不引入空 pane 方案，不得复活。**
+
+**验证证据（全部为真实 rect / 真实 OS 鼠标输入 / 真实 term.cols）**
+
+| 脚本 | 结果 | 关键数字 |
+|---|---|---|
+| `verify-split-regressions`（37 项） | **37/37 PASS**，renderer-diag=clean（diag923） | 单组 pane 分屏后两 pane 各 `394.5×585`、`flexBasis: calc(50% - 5px)`；分界条 `10×585 hidden:false`；真实拖动 +120px → `394.5 → 512.89 / 276.11`，不拖则完全不变；关分屏 pane-2 `hidden / 0×0 / flexBasis:''`；三个 Shell 切组后仍 `columnId:'default'`；分组级分屏后 `default` 列含 `shell-1..3`、`g-1` 列无 Shell、仍 2 列；拖到分组行后仍 2 列且 `columnMode:'row'`；同宽两列 `49×29` vs `47×33`（cols 差 2） |
+| `verify-split-resize-fit`（15 项，新增） | **15/15 PASS**，renderer-diag=clean（diag925） | 1280×800：两列各 538px、面板各 536×609，`default` 67×35 / `g-1` 65×40；900×640：面板各 346×449，`default` 42×26 / `g-1` 41×29；回到 1280×800 完全复原（67×35 / 65×40）；同宽重复 fit、同尺寸重复 resize 均不变（反向对照）。全程**未手动调用 fit**，只靠 `window.resize` 处理器 |
+| 全量回归 `run-all -Start 954`（17 脚本） | 17/17 `exit=0` + `renderer-diag=clean` | 含 `verify-split-regressions` 与 `verify-split-resize-fit`（已纳入 `run-all`） |
+| 全量单测 | **570/570 / 0 fail** | 567 → 570：新增「焦点在未归属 Shell 上时列仍属于容器」+ 两条互为反向对照的投影用例 |
+
+**窗口 resize 这一要素过去一直没测过**：§11.6.8 的 39/39 里「窗口缩放」量的是**默认分组**的 cols（32 vs 20），
+没有验「两个分组的 cols 都必须跟随」。本轮用 Win32 `SetWindowPos` 改真实窗口（走用户拖边框同一条 `WM_SIZE` 路径；
+本 Electron 的 CDP 没有 `Browser.getWindowForTarget` / `Browser.setWindowBounds`），轮询 `innerWidth` 到连续三次稳定再量，
+结论是**两个分组都跟随、往返可复原**。
+
+**两处验证脚本的过期断言（不是产品缺陷，断言按新语义改写）**：
+
+1. `verify-shell-drag` 的 `group-tab-row-drag-creates-shell-column` / `shell-column-is-visible` / `shell-column-has-exactly-one-visible-tab-row` /
+   `shell-column-has-no-pane-tab-row` / `shell-tab-sits-in-shell-column-row` / `shell-pane-rendered-in-shell-column` —— 全部是
+   「拖到分组标签行 = `ownColumn` 独立列」旧语义的直接推论。改为 5 条新判据：`group-row-drop-creates-no-shell-column` / `-keeps-column-count` /
+   `-keeps-row-mode` / `-lands-on-target-column` / `-shell-stays-in-a-group-tab-row`（23/23 PASS，diag952）。
+2. `verify-shell-switchback` 的 `P6-shell-in-top-row-keeps-sub-row-visible` —— 判据（该列下层行必须可见）没变，
+   变的是**步骤取哪一列**：旧步骤按 `sidebar-active-group` 找列，而 Shell 现在停在自己的 `columnId` 列，点开 Shell 后激活组列是 `hidden`，
+   于是量到一根隐藏列的行（`offsetParent=null`）——是**量错列**，不是产品把行藏了。改为取 Shell 按钮所在的列（14/14 PASS，diag953）。
+
+**探针自身踩到的 5 处坑（不得记成产品缺陷）**：`window.ipcRenderer` 恒 `undefined`（必须 `require('electron').ipcRenderer`）；
+`setPaneSplit(ws, id, true)` 自带 `addPane`（测试里再手动加就变 3 个 pane）；非默认分组 runtime 惰性创建（测 fit 前先 `serialRuntimes.getOrCreate`）；
+`paneGutter` 必须在写 `hidden = false` **之后**读 rect（否则读到 0，`flex-basis` 少扣 10px）；箭头 IIFE 把长表达式链写成简写返回会抛
+`Unexpected end of input`（改块体即可）。
+
+
+## 12. 扩展点
 ## 12. 扩展点
 
 「通用」不能自证，只能用「新增东西要改几处」量化。目标：**零改动**。
@@ -1622,7 +1684,7 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 | 3 | 真实鼠标拖动分界条的手感与最小宽度 | 已用 `Input.dispatchMouseEvent` 发 OS 级事件实测四条以上分屏（§11.6.8），硬限 `MIN_SHARE = 0.1`；手感仍需用户手测 |
 | 4 | 四条以上分屏时每一条分界条的独立拖动 | **已验证**：4 列 3 条逐条拖动 + 反向对照（39/39，diag889） |
 | 5 | 窗口尺寸变化后旧比例是否仍然合理 | **已验证**：1280×800 / 900×640 两档下占比形状漂移 ≤0.02、列宽和 ≤ 容器（同 39/39） |
-| 6 | 两级分屏下 xterm `fit()` 从 `display:none` 切回的尺寸 | **已验证**：隐藏列不 refit、切回后 cols 落回该宽度单列区间（同 39/39） |
+| 6 | 两级分屏下 xterm `fit()` 从 `display:none` 切回的尺寸 | **已验证**：隐藏列不 refit、切回后 cols 落回该宽度单列区间（同 39/39）；本轮另证分屏变化（47 → 97 cols）与真实窗口 resize（1280×800 / 900×640 两档、两个分组 cols 都跟随、往返可复原，15/15 diag925） |
 | 7 | 迁移后旧配置的实际恢复效果 | 需要真实旧版配置样本 |
 | 8 | 工作区级动作条在窄窗口下的换行表现 | 新增 UI 元素，未设计 |
 
@@ -1632,6 +1694,8 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
   （21/21，diag913；环境限制与三处步骤前提见 §11.6.8）。原生右键菜单已实测弹出（Aura `Chrome_WidgetWin_2`，非 `#32768`；12/12，diag881）。
 - per-group 作用域下两组同时收数据时各自的日志前缀 / 回显，只有 `getPrefix()` 直接调用的证据。
 - 标签切换闪烁的修复（`0bf62ea`）只有 CDP 合成点击 + `getComputedStyle` 证据，未做真实用户手测。
+- **单标签时的组内 pane 分屏**：已裁决不做（菜单项置灰、动作入口拒绝），理由是移走唯一标签必被 `reconcileEmptyPanes` 折叠回一个 pane，而空 pane 又被用户明确视为缺陷。这不是未实现，是**有意的产品边界**。
+- **Shell 拖到分组标签行的语义已由用户裁决修正**（§8.2 的落点表）：旧「拖到分组标签栏 = `ownColumn` 独立列」已作废；现在拖到普通分组列的列首行只是停在那列，不新建列。
 
 ## 14. 需求覆盖核对
 
@@ -1656,5 +1720,5 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 **相关文档**
 
 - `MULTI_SERIAL_DESIGN.md` §6A —— 多串口实现的背景描述（标签体系部分以本文为准）
-- `agent_notes.md` §13A.9–§13A.15 —— 标签相关的历次缺陷与教训
-- `ToDo.md` —— CDP 验证清单（19 个脚本 / 382 条断言；新增的三支目前只定点跑过，未纳入 `run-all`）
+- `agent_notes.md` §13A.9–§13A.18 —— 标签相关的历次缺陷与教训
+- `ToDo.md` —— CDP 验证清单（**21 个脚本**；其中 `run-all` 17 个脚本新近一次全量回归 17/17 `exit=0` + `renderer-diag=clean`，`verify-native-context-menu` / `verify-four-column-drag-fit` / `verify-two-port-isolation` 为定点跑过）

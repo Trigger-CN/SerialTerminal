@@ -2351,6 +2351,79 @@ Close Group Split、Add Serial Port）。属**探针假设错误**，不是产�
 
 ---
 
+### 13A.18 三项真实用户分屏回归的闭环（本轮）
+
+用户实测报告（逐字）：
+
+> `只有一个分组的时候，右键点击标签分屏无反应，右键点击日志窗口分屏会出现分屏异常，出现空的分屏，并且不能调整分屏宽度；
+> 多个串口分组时，右键点击串口2组分屏，会将串口2组和所有shell一起移到新分屏，并且shell无法拖回到原来屏，拖动后会跑到新建第三分屏；
+> 分屏变化、窗口大小变化等情况，终端窗口内容显示大小没有实时跟随`
+
+#### 13A.18.1 七条代码缺陷（全部有实测取证，没有一条是测试写错）
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 单分组右键标签「分屏无反应」 | 普通标签右键恒发 `terminalType:'group'`；主进程分组菜单两项分屏 `enabled: isMultiGroup`，单分组时全灰不可点，组内 pane 分屏入口完全不可达（diag914 B0 实测 payload `isMultiGroup:false`） | 新增 `requestWorkspaceTabContextMenu`：单分组发 `terminalType:'tab'` 并带 `canSplit`；`main.js` 白名单加 `'tab'` 与对应模板；多分组仍走 `'group'` |
+| 2 | 组内 pane 分界条从不显示 / 不能调宽 | `reconcileRows` 只写 pane 显隐与 `flex-basis`，**从不按 `column.splitEnabled` 设置本组 `workspace-splitter` 的 `hidden`**（静态与动态条初始都是 `hidden`）；`flex-basis` 也没扣 10px 占位（diag916：`splitEnabled:true` 但条仍 `hidden / 0×0`） | `splitterEl.hidden = !(column.splitEnabled && specs.length > 1)`，**先显示再读 rect 算 gutter**（顺序反了读到 0）；`flex-basis = calc(<ratio>% - <ratio × gutter>px)`；隐藏 pane 时清掉残留 inline `flex-basis` |
+| 3 | 非激活分组的 pane 条拖不动 / 拖了改错组 | `bindWorkspaceSplitter` 整条拖动路径用模块级别名（`isSplitEnabled` / `getOrientation` / `setPaneSizes` / `persistWorkspaceLayout`），只指向**激活分组** | 按 `splitter.dataset.groupId` 取该组 manager，新增 `persistGroupWorkspaceLayout(groupId)`；`persistWorkspaceLayout` 降为薄封装 |
+| 4 | 「空的分屏」：主标签被移到 pane-2 后投影又拽回 pane-1 | 投影器在 `index !== 0` 时对 `mainId` 直接 `continue`，末尾无条件 `unshift(mainId)`（diag918：layout 已 `pane-1=[shell] / pane-2=[main]`，投影却是 `pane-1=[main] / pane-2=[]`） | 新增 `declaredMain`：哪个 pane 声明了主标签就放哪；仅当**没有任何 pane 声明**时才补到 pane-1 队首（两条互为反向对照的单测） |
+| 5 | 已开启的 pane 分屏完全不出行（焦点在未归属 Shell 上） | `layoutColumns()` 非分屏分支用 `rootOf(focused)` 定 `containerId`；焦点在 Shell 上时它的根是自己，`containerId` 变 `null` → `layoutRowsOf` 返回 0 条 → `splitEnabled` 恒 false（diag919：`containerPaneSplit.enabled:true` 而 `rawPlan.columns[0].splitEnabled:false / rows:[]`） | `containerId` 改为「焦点是容器→它自己；焦点是容器子项→`parentId`；焦点是根级叶→`resolveLeafColumnId` 指向的容器；仍无→第一个容器」 |
+| 6 | Shell 跟着激活分组跑；分组级分屏把全部 Shell 搬进那一列 | `resolveShellTopRowColumn()` **写** `tabState.columnId`（被只读投影器调用，投影改变模型），且用「当前是否可见」否定已有列记忆，回落值就是激活组；`createShellTab` 初始 `columnId: null`（diag914 C1：**仅点一下 g-1 组标签**，两个 Shell 的 `columnId` 就从 `default` 变 `g-1`） | 改纯读：`isColumnKeyAlive(remembered)` 命中就用（**不看 `hidden`**）；新增 `isColumnKeyAlive`；创建 Shell 时就把 `columnId` 写成创建所在分组 |
+| 7 | Shell 拖回原屏却新建第三列 | 落点存的是**行元素 id**（行上没有 `data-group-id`，反查恒 `undefined`），且分组行分支无条件 `setShellColumnModeInModel(tabId, 'ownColumn')`（diag915 F3：拖一下变三列，各 233px） | 落点存 `rowTarget.groupId`；分组行分支改为 `hostGroupId=null` + `columnMode='row'` + `columnId=该列`（旧 §8.2 语义作废） |
+
+**另有 1 条产品裁决**（不是缺陷）：**组内 pane 分屏需要 ≥2 个可移动标签**。移走唯一标签后 `reconcileEmptyPanes` 必然折叠回一个 pane，
+用户看到的就是「点了没反应」；而空 pane 又被用户明确视为缺陷。⇒ 菜单项按 `canSplit = totalTabs >= 2` 置灰，动作入口再兜底。
+**不引入空 pane，不得复活。**
+
+#### 13A.18.2 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `verify-split-regressions`（37 项，新增） | **37/37 PASS**，renderer-diag=clean（`diag923`） |
+| `verify-split-resize-fit`（15 项，新增，真实窗口 resize） | **15/15 PASS**，renderer-diag=clean（`diag925`） |
+| 全量单测 | **570/570 / 0 fail**（567 → 570） |
+| 全量回归 `run-all -Start 954`（17 脚本，两支新脚本已纳入） | **17/17 `exit=0` + `renderer-diag=clean`** |
+
+窗口 resize 的关键数字：1280×800 两列各 538px、面板各 536×609，`default` 67×35 / `g-1` 65×40；900×640 面板各 346×449，
+`default` 42×26 / `g-1` 41×29；回到 1280×800 **完全复原**。同宽重复 `fitWorkspaceTerminals` 与同尺寸重复 resize 均不变（反向对照）。
+**全程未手动调用 fit**，只靠 `window.resize` 处理器——这一条是本轮唯一新增的要素（用户原话的「窗口大小变化」）。
+
+#### 13A.18.3 两处过期断言（不是产品缺陷，按新语义改写）
+
+| 脚本 | 旧断言/步骤固化了什么 | 新判据 |
+|---|---|---|
+| `verify-shell-drag` | 「拖到分组标签行 = `ownColumn` 独立列」的 6 条断言（`group-tab-row-drag-creates-shell-column` 等） | 新语义 5 条：`group-row-drop-creates-no-shell-column` / `-keeps-column-count` / `-keeps-row-mode` / `-lands-on-target-column` / `-shell-stays-in-a-group-tab-row`（23/23，diag952） |
+| `verify-shell-switchback` | `P6` 步骤按 `sidebar-active-group` 找列，固化了「Shell 借住在激活组列」的旧行为 | 判据不变（该列下层行必须可见），步骤改为取 **Shell 按钮所在列**（14/14，diag953） |
+
+#### 13A.18.4 探针 / 编辑自身的 bug（9 处，全部未改产品代码）
+
+| # | 症状 | 根因（探针或编辑自身） | 处置 |
+|---|---|---|---|
+| 1 | 一条 menu payload 都抓不到（`:: null`） | `window.ipcRenderer` 在 CDP 里恒 `undefined`（renderer 用 `require('electron').ipcRenderer`） | 改 `require('electron').ipcRenderer` 挂 send 探针 |
+| 2 | 单测 `expected 2 actual 3` | `setPaneSplit(ws, id, true)` **自带 `addPane`**，测试里又手动加一次 | 删掉手动 `addPane`，并断言 `panes.length === 2` |
+| 3 | `terms['g-1'] = null` | 非默认分组 runtime 惰性创建，未连接时 `serialRuntimes.get('g-1')` 为 `null` | 测 fit 前显式 `serialRuntimes.getOrCreate('g-1')` |
+| 4 | 分界条显示后 pane 仍溢出 | 先读 splitter rect（当时 hidden）再写 `hidden=false`，gutter 读到 0 | 交换顺序：先写 hidden，再读 rect |
+| 5 | `exit=1` 且结果文件 0 字节，`.err` 报 `SyntaxError: missing ) after argument list` | 探针模板字符串里嵌了反引号 | 改成 `require('electron')` 写法 |
+| 6 | `scan-undefined.js` 报 `Unexpected token ']'` | 候选数组里多了一个 `]` | 改回正确结尾 |
+| 7 | `renderer.js` 连续报 `missing )` / `Unexpected token '}'` / `Unexpected token 'function'` | 多次 `File.Edit` 分别留下多余的 `}`、重复的 `handlePointerUp` 段、重复的 `fitWorkspaceTerminals` 收尾 | 按 `node --check` 报的行号逐个删除，直到 `module body initialized without throwing` |
+| 8 | `move-to-other-pane` 出现两个 `case` | 替换时旧分支未删 | 删除旧分支 |
+| 9 | `verify-split-resize-fit` 首跑 `exit=2`，`Uncaught SyntaxError: Unexpected end of input` | `visibleColumns` 的箭头 IIFE 把长表达式链写成简写返回，括号层数不够 | 改成块体 `(() => { ... })()` |
+
+**教训（可直接复用）**：同一份代码连续两次改动后输出字节完全相同 = 改动不在生效路径上；
+UI 缺陷只认 `getBoundingClientRect` / `offsetParent` / `term.cols`，plan 与模型快照全对也可能界面是空的；
+反过来，**断言失败也不一定是产品缺陷**——本轮两处都是步骤量错了列或固化了已作废语义。
+
+#### 13A.18.5 旧 §8.2 语义被用户裁决修正（必须记住）
+
+`TAB_ARCHITECTURE.md` §8.2 的落点表早期写着「拖到某列的分组标签行 → `setLeafColumnMode(ownColumn)` → 进共享独立列」。
+该语义直接导致用户报告的「shell 无法拖回到原来屏，拖动后会跑到新建第三分屏」，**已作废**。现行规则：
+
+- 拖到**普通分组列**的分组标签行 → `hostGroupId=null` + `columnMode='row'` + `columnId=该列`（停在那列列首行，**不新建列**）；
+- 只有拖到**共享 Shell 独立列自身**或明确的独立成列动作才置 `ownColumn`；
+- 两个写入口仍两向互斥（`ownColumn ⇄ hostGroupId` 不能同时成立）。
+
+---
+
 ## 14. AI 接手时建议的工作流程
 
 
