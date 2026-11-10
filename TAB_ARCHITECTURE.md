@@ -1479,11 +1479,14 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 | 维度 | 结果 |
 |---|---|
-| 全量单测 | 557/557（此后补齐三形态与反向对照，现为 **564/564**） |
+| 全量单测 | **567/567**（557 → 564 补齐三形态与反向对照；564 → 567 补「列级比例归一化」三条） |
 | `verify-tab-plan-strict` | **48/48 PASS**，renderer-diag=clean（含两个独立 Shell、上下分屏） |
 | **`verify-tab-plan-shapes`（后续新增）** | **29/29 PASS**，renderer-diag=clean（未分屏多受托管叶 / 五列 / 多 Shell 混合） |
 | `verify-tab-order` | 8/8；`verify-shell` 16/16；`verify-shell-drag` 24/24；`verify-shell-switchback` 14/14 |
 | 其余既有脚本 | `verify-user-paths` 15/15、`verify-group-columns` 37/37、`verify-group-split` 19/19、`verify-context-menu-and-highlight` 17/17、`verify-split-geometry` 26/26、`verify-shell-buttons-split` 16/16、`verify-no-tab-flash` 18/18、`verify-titles` clean、`verify-sidebar-groups` 14/14、`verify-display-pref-scope` 24/24、`verify-connect-group` 23/23、`verify-same-port-guard` 15/15、`verify-layout-persist` 14/14 |
+| **`verify-four-column-drag-fit`（后续新增）** | **39/39 PASS**，renderer-diag=clean（diag889）：4 列 3 条分界条、真实 OS 级鼠标拖第 2/第 1 条、反向对照、两档窗口 1280×800 / 900×640、隐藏列不 refit、切回后 refit |
+| **`verify-native-context-menu`（后续新增）** | **12/12 PASS**，renderer-diag=clean（diag881）：可见 `Chrome_WidgetWin_2` 从 0 → 1 → Escape 后回 0，并用 `PrintWindow` 抓到菜单四项 |
+| **`verify-two-port-isolation`（后续新增）** | **21/21 PASS**，renderer-diag=clean（diag913）：单端口真实字节流 + 双端口同时打开下的隔离；**未做双端口回环**，见 §13 |
 | 静态门禁 | `node --check` ×4 通过；`check-renderer-module-load` 通过；`scan-undefined` missing=none |
 
 **两处验证脚本的步骤修正（不是产品缺陷，断言未改）**：`verify-split-geometry` 与 `verify-shell-buttons-split` 的 setup 段建了三个分组，
@@ -1492,7 +1495,7 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 #### 11.6.6 补测：三类此前零覆盖的形态（新增）
 
-`verify-tab-plan-strict` 的 48 项只覆盖单形态组合。��下来的三类形态此前**一支脚本都没有**，
+`verify-tab-plan-strict` 的 48 项只覆盖单形态组合。剩下的三类形态此前**一支脚本都没有**，
 而标签体系历史上恰恰是组合形态出错（11.6.4 的七类缺陷里有三类是组合错）：
 
 | 形态 | 模型侧新增用例 | 真实 DOM 侧判据 |
@@ -1509,7 +1512,7 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 | 2 | 扁平 + pane 分屏 + 受托管叶 → 该叶同时出现在一级行与 pane-1 行 | 扁平分屏分支只排除了容器，没排除受托管叶 | 一级行 `filter(tab => !isContainer(tab) && !leafHostGroup(ws, tab))` |
 | 3 | 未分屏但布局里残留第二个非空 pane 时，一个**没有行**的叶被点亮 | `visiblePanelIdsOfColumn` 的未分屏分支直接返回焦点叶，不检查它是否在本列真正会画的行上 | 新增 `isShownInColumn(column, rows, tabId)`（行 ∪ 列首行），未命中则回落 `rows[0]` |
 
-**验证证据**：单测 **564/564**；`verify-tab-plan-shapes` **29/29**（diag862）；
+**验证证据**：单测 **564/564**（此后补列级比例归一化三条，现为 **567/567**）；`verify-tab-plan-shapes` **29/29**（diag862）；
 回归 `verify-tab-plan-strict` **48/48**（diag863）、`verify-shell-drag` **24/24**（diag864）、
 全量 `run-all-865` **15 个脚本全部 exit=0 + renderer-diag=clean**。
 
@@ -1522,6 +1525,63 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 - 渲染层仍保留少量兼容旧调用方的薄封装（`renderSerialGroupTabBar` / `applyGroupWorkspaceSplitLayout` / `syncGroupWorkspaceVisibility`），它们只调 `renderWorkspaceNow()`。
 - `ensureShellColumnDom` 必须保留：它建的正是模型 `OWN_COLUMN_ID` 那一列的真实容器。
 - `syncSerialGroupAddButtonLayer` / `syncShellAddButtonVisibility` 保留：按钮分层仍然有意义（§11.5.3）。
+
+
+#### 11.6.8 四项真实用户路径缺口的闭环（新增）
+
+§11.6.7 列出的四个缺口（四级以上真实拖动、窗口缩放与 fit、原生右键菜单、双端口字节流）
+已逐项取证。**其中两项直接抽出真实产品缺陷**，不是测试写错。
+
+**缺陷 A：四级以上分屏时分界条完全拖不动。**
+
+- 观测（`probe-fourcol-defects.js`，4 容器 → 屏幕 4 列 3 条分界条）：
+  三条分界条逐条拖动，列宽全程 `[171.75, 171.75, 171.75, 171.75]` 不变，`groupWorkspaceSplit.sizes` 仍为 `{}`。
+- 根因：拖动逻辑把 `groupWorkspaceSplit.groupIds` 当参与者表，而它只记录「分屏是围绕哪两组打开的」
+  （默认分支 = 激活组 + 邻组，实测只有两项），**列集合却由容器数决定**（`layoutColumns` 每个容器一列）。
+  于是第 1/2/3 条分界条都在 `participants.indexOf(dragLeftId) < 0` 处直接 return。
+- 对照取证：仅在内存里把 `groupIds` 扩到 4 项、不动产品代码，拖第 2 条立刻生效
+  （`[171.75, 294.25, 49.23, 171.75]`、`widthSum 698.98 ≈ 699`、`overflowRight -0.02`）——锁定根因。
+- 修法（`bindGroupWorkspaceSplitter` 的 `flush`）：
+  参与者改用 `getGroupWorkspaceVisibleColumnKeys()`（DOM 里真实可见的列，按顺序）；
+  旧比例改按**当前实际列宽**归一（不再用可能只覆盖部分列的 `sizes` 表）；
+  写回时把每一列都写进 `sizes`，保证它是一份完整、和为 1 的快照。
+
+**缺陷 B：列比例表只覆盖部分列 → 最右列被挤到容器外。**
+
+- 根因：列级比例这份事实在**两个地方各自补齐**——模型原样转发 `ws.split.sizes`，
+  渲染层 `applyColumnSizes` 对缺失列回落 `1 / plan.columns.length`；两者相加超过 1。
+- 修法（`buildRenderPlan`）：新增 `domKeys` 与 `layoutSizes = normalizeSizes(ws.split.sizes, domKeys)`，
+  `columns[].size` 与 `columnLayout.sizes` 同源于它；未分屏时不产生比例（`{}` / `size: null`）。
+  `normalizeSizes` 是纯函数，不写回 `ws`。
+- 单测 +3 条（部分比例表归一化 / 空比例表等分 / 关分屏不带比例），单测 **564 → 567**。
+
+**四项的验证判据与结果（全部为真实观测）**
+
+| 缺口 | 判据 | 结果 |
+|---|---|---|
+| ① 四级以上真实拖动 | `Input.dispatchMouseEvent` 发 OS 级鼠标事件（合成 `MouseEvent` 缺 `isPrimary` 会被拖动入口静默丢弃）；拖第 2 条时第 1/4 列变化 ≤1.5 px、第 2/3 列 >20 px；反向对照拖第 1 条时第 3/4 列不动 | **39/39 PASS**（`verify-four-column-drag-fit`，diag889） |
+| ② 窗口缩放与 fit | Win32 `SetWindowPos` 改真实窗口（本 Electron 的 CDP **没有** `Browser.getWindowForTarget` / `Browser.setWindowBounds`，返回 -32601），轮询 `innerWidth` 到稳定；1280×800 / 900×640 两档下列数不变、列宽和 ≤ 容器、占比形状漂移 ≤0.02；默认终端 cols 32 vs 20；单列形态切走默认分组（`display:none`）后缩放 cols 不变、切回后重新 fit | 同上 **39/39** |
+| ③ 原生右键菜单真的弹出 | 可见 `Chrome_WidgetWin_2` 顶层窗口计数 0 → 1 → Escape 后回 0；`PrintWindow(hwnd, hdc, 2)` 抓到菜单四项（Split Groups Left/Right、Top/Bottom、Close Group Split、Add Serial Port） | **12/12 PASS**（`verify-native-context-menu`，diag881）+ `popup-menu.png` |
+| ④ 单端口真实字节流 + 双端口同时打开隔离 | COM11（设备侧 115200）收真实 `Motor value reached` 行进终端与 `<logPath>/COM11/`；第二分组同时开 COM17 后两组都 connected、默认组继续收（7 → 10 条）、第二组终端与日志均无串入；波特率按分组各一份（115200 / 9600） | **21/21 PASS**（`verify-two-port-isolation`，diag913） |
+
+**④ 的三处「测不下去」全部是测试步骤前提不成立，不是产品缺陷**（先定性、未改产品代码）：
+
+1. **波特率不匹配**：脚本用 UI 默认 9600，而 COM11 设备侧是 115200。直开串口实测：
+   `115200 → 126 字节 / 5 秒、3 条 Motor 行`；`9600 → 7 字节乱码、0 条`。改为脚本先把侧栏波特率切到 115200。
+2. **日志读取时机**：tab 日志先写 `tabLogBuffers`，由 `flushTabLogEntrySync` 在 `flush-tab-logs` / 断开 / 定时才落盘，
+   连接中直接读目录必然是空的。改为读盘前先发产品自己的 IPC `flush-tab-logs`，断言一字未改。
+3. **rAF 在不可见窗口里被完全节流**：CDP 起的实例窗口不可见时 `document.visibilityState === 'hidden'`，
+   实测 500 ms 内 **0 帧**，串口字节压在 `serialOutputBuckets` 里不上屏（`pendingBytes` 持续增长）；
+   手动 `flushPendingSerialOutput()` 后立刻出现 Motor 行。`Page.bringToFront` 与 Win32 `SetForegroundWindow` 都无效，
+   只有 `Emulation.setFocusEmulationEnabled({enabled: true})` 能把它翻成 `visible`（rAF 恢复约 52 帧 / 500 ms）。
+   ⇒ 这是**测试环境**问题：产品本来就设计成隐藏时缓冲、恢复可见时再分批上屏（与 `[Display output skipped ...]` 的修复同源）。
+
+**探针假设被证伪（不是产品缺陷）**：曾用 Win32 经典菜单窗口类 `#32768` 作原生菜单判据，40 ms 采样恒为 0。
+这个 Electron（28.3.3 / Windows）的菜单走 Chromium Aura，不是 HMENU；真正的判据是 `Chrome_WidgetWin_2` + `SysShadow`。
+
+**环境限制（必须如实标注）**：本机 `SerialPort.list()` 只有 COM17 / COM1 / COM18 / COM11（另有幽灵 COM6，打开报 Access denied），
+12 个有序端口对全部试过均无回环，也没有 `com0com`。⇒ **没有做双端口收发回环验证**，只做了「单端口真实字节流 + 双端口同时打开下的隔离」；
+任何人不得把这件事说成「双端口端到端回环已验证」。
 
 
 
@@ -1559,16 +1619,17 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 |---|---|---|
 | 1 | 两级分屏同时开启的实际观感 | §4.3 的四种组合中，「列开 + pane 开」只有设计推演 |
 | 2 | 扁平 + 多 pane 的标签焦点视觉 | 已裁决方案 A（N 条 subRow）；实机观感与焦点切换待验证 |
-| 3 | 真实鼠标拖动分界条的手感与最小宽度 | 现有证据仅为合成 `PointerEvent`；硬限 `MIN_SHARE = 0.1` |
-| 4 | 四条以上分屏时每一条分界条的独立拖动 | 只有三条的实测 |
-| 5 | 窗口尺寸变化后旧比例是否仍然合理 | 未验证 |
-| 6 | 两级分屏下 xterm `fit()` 从 `display:none` 切回的尺寸 | 未肉眼确认 |
+| 3 | 真实鼠标拖动分界条的手感与最小宽度 | 已用 `Input.dispatchMouseEvent` 发 OS 级事件实测四条以上分屏（§11.6.8），硬限 `MIN_SHARE = 0.1`；手感仍需用户手测 |
+| 4 | 四条以上分屏时每一条分界条的独立拖动 | **已验证**：4 列 3 条逐条拖动 + 反向对照（39/39，diag889） |
+| 5 | 窗口尺寸变化后旧比例是否仍然合理 | **已验证**：1280×800 / 900×640 两档下占比形状漂移 ≤0.02、列宽和 ≤ 容器（同 39/39） |
+| 6 | 两级分屏下 xterm `fit()` 从 `display:none` 切回的尺寸 | **已验证**：隐藏列不 refit、切回后 cols 落回该宽度单列区间（同 39/39） |
 | 7 | 迁移后旧配置的实际恢复效果 | 需要真实旧版配置样本 |
 | 8 | 工作区级动作条在窄窗口下的换行表现 | 新增 UI 元素，未设计 |
 
 既有验证缺口（与本模型无关，但同样未解决）：
 
-- 任何多串口特性都没有做过真实的**双端口字节流端到端**验证。
+- 多串口的**双端口收发回环**：本机无互连串口对、无 `com0com`，**未做**；只验证了「单端口真实字节流 + 双端口同时打开下的隔离」
+  （21/21，diag913；环境限制与三处步骤前提见 §11.6.8）。原生右键菜单已实测弹出（Aura `Chrome_WidgetWin_2`，非 `#32768`；12/12，diag881）。
 - per-group 作用域下两组同时收数据时各自的日志前缀 / 回显，只有 `getPrefix()` 直接调用的证据。
 - 标签切换闪烁的修复（`0bf62ea`）只有 CDP 合成点击 + `getComputedStyle` 证据，未做真实用户手测。
 
@@ -1596,4 +1657,4 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 - `MULTI_SERIAL_DESIGN.md` §6A —— 多串口实现的背景描述（标签体系部分以本文为准）
 - `agent_notes.md` §13A.9–§13A.15 —— 标签相关的历次缺陷与教训
-- `ToDo.md` —— CDP 验证清单（15 个脚本 / 281 条断言）
+- `ToDo.md` —— CDP 验证清单（19 个脚本 / 382 条断言；新增的三支目前只定点跑过，未纳入 `run-all`）

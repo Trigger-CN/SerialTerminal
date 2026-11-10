@@ -2260,9 +2260,94 @@ function syncShellAddButtonVisibility() {
 
 这是 `TAB_ARCHITECTURE.md` 里“重命名/翻转后残留旧判据”的又一例：删语义时要搜**它的判据函数**，不能只删调用点。
 
-**验证证据**：单测 **564/564**；`verify-tab-plan-shapes` **29/29**（`diag862`）；
+**验证证据**：单测 **564/564**（随后补列级比例归一化 3 条，现为 **567/567**）；`verify-tab-plan-shapes` **29/29**（`diag862`）；
 回归 `verify-tab-plan-strict` **48/48**（`diag863`）、`verify-shell-drag` **24/24**（`diag864`）、
 全量 `run-all-865.txt` **15 个脚本全部 exit=0 + renderer-diag=clean**。
+
+---
+
+### 13A.17 四项真实用户路径缺口的闭环（本轮）
+
+`TAB_ARCHITECTURE.md` §11.6.7 列过四个“没有真实用户路径证据”的缺口。本轮逐项取证，
+**其中两项抽出真实产品缺陷**，另有三处是测试脚本自己的前提错（产品代码一行未动）。
+
+#### 13A.17.1 缺陷一：四级以上分屏时分界条根本拖不动
+
+**观测**（`probe-fourcol-defects.js`，4 容器 → 屏幕 4 列 3 条分界条）：
+三条分界条逐条拖动，列宽全程 `[171.75, 171.75, 171.75, 171.75]`，`groupWorkspaceSplit.sizes` 始终 `{}`。
+
+**根因**：拖动逻辑把 `groupWorkspaceSplit.groupIds` 当参与者表。它只记录“分屏是围绕哪两组打开的”
+（`setGroupWorkspaceSplit` 的默认分支 = 激活组 + 邻组，实测只有两项），而**列集合由容器数决定**
+（`layoutColumns` 每个容器一列 + 可选共享独立列）。于是 `participants.indexOf(dragLeftId) < 0` 直接 return。
+
+**对照取证**：仅在内存里把 `groupIds` 补到 4 项（不动产品文件），拖第 2 条立刻生效：
+`[171.75, 294.25, 49.23, 171.75]`、`widthSum 698.98 ≈ 699`、`overflowRight -0.02`、`sizes` 四键齐全。
+这是“根因锁定”，不是修法。
+
+**修法**（`bindGroupWorkspaceSplitter` 的 `flush`）：
+
+- 参与者改用 `getGroupWorkspaceVisibleColumnKeys()`（DOM 里真实可见的列，按顺序）；
+- 旧比例改用**当前实际列宽**归一（不用可能只覆盖部分列的 `sizes` 表）；
+- 写回时把每一列都写进 `sizes`，保证它是一份完整、和为 1 的快照。
+
+#### 13A.17.2 缺陷二：列比例表只覆盖部分列 → 最右列溢出
+
+**根因**：比例这份事实在两个地方各自补齐——模型原样转发 `ws.split.sizes`，渲染层对缺失列回落
+`1 / plan.columns.length`；两者相加超过 1。
+
+**修法**（`buildRenderPlan`）：新增 `domKeys` 与 `layoutSizes = normalizeSizes(ws.split.sizes, domKeys)`，
+`columns[].size` 与 `columnLayout.sizes` 同源于它；未分屏时不产生比例（`{}` / `size: null`）。
+`normalizeSizes` 是纯函数，不写回 `ws`。单测 +3 条（部分比例表 / 空比例表 / 关分屏不带比例），**567/567**。
+
+#### 13A.17.3 三处“测不下去”的前提错（不是产品缺陷）
+
+| # | 现象 | 真因 | 处置 |
+|---|---|---|---|
+| 1 | COM11 连上但终端没有任何 `Motor value reached` | UI 默认波特率 9600，设备侧是 **115200**。直开串口实测：115200 → 126 B / 5 s、3 条 Motor 行；9600 → 7 B 乱码、0 条 | 脚本先把侧栏波特率切到 115200（走真实 change 事件） |
+| 2 | `<logPath>/COM11/` 目录在但空 | tab 日志先写 `tabLogBuffers`，由 `flushTabLogEntrySync` 在 `flush-tab-logs` / 断开 / 定时才落盘；连接中读盘必然是空的 | 脚本读盘前先发产品自己的 IPC `flush-tab-logs`，断言一字未改 |
+| 3 | 字节已进渲染进程（`serial-output-bytes` 计数正常）但终端不显 | CDP 起的窗口 `document.visibilityState === 'hidden'` 时 **rAF 被完全节流**（500 ms 内 0 帧），字节压在 `serialOutputBuckets` 里（`pendingBytes` 持续增长、`flushScheduled=true`） | 脚本开头调 `Emulation.setFocusEmulationEnabled({ enabled: true })`：visibility 变 `visible`、rAF 恢复到约 52 帧 / 500 ms |
+
+第 3 条的完整证据链：`probe-raf-starvation.js` @ `diag909` 记录 `before-connect { pendingBytes: 0 }` →
+`after-6s { pendingBytes: 126, motor: 0, flushScheduled: true }` → 手动 `flushPendingSerialOutput()` 后
+`motor: 3`；`probe-bringtofront.js` / `probe-focus-visibility.js` 证明 `Page.bringToFront` 与 Win32
+`SetForegroundWindow`（`focus-app.ps1`）**都不能**让 visibility 变 `visible`；`probe-force-active.js` 证明只有
+`Emulation.setFocusEmulationEnabled` 有效（`raf= 0` → `raf= 52`）。
+
+这是**测试环境**问题：产品本来就设计成隐藏时缓冲、恢复可见时再分批上屏（与 `[Display output skipped ...]` 同源）。
+
+#### 13A.17.4 原生右键菜单：探针假设被证伪
+
+曾用 Win32 经典菜单窗口类 `#32768` 作判据，40 ms 采样恒为 0。这个 Electron（28.3.3 / Windows）的菜单
+走 Chromium Aura，不是 HMENU。真正判据是**新出现一个可见的 `Chrome_WidgetWin_2`**（+ `SysShadow` 装饰窗），
+Escape 后一起消失；`PrintWindow(hwnd, hdc, 2)` 能抓到菜单四项（Split Groups Left/Right、Top/Bottom、
+Close Group Split、Add Serial Port）。属**探针假设错误**，不是产品缺陷，也没给产品加任何诊断钩子。
+
+#### 13A.17.5 窗口尺寸：CDP 没有 setWindowBounds，innerWidth 会滞后
+
+- 这个 Electron 的 CDP **没有实现** `Browser.getWindowForTarget` / `Browser.setWindowBounds`（页面级与
+  browser 级 socket 都返回 -32601）→ 改用 Win32 `SetWindowPos`（`resize-app.ps1`），
+  走的正是用户拖窗口边框那条路（`WM_SIZE` → renderer `window.resize`）。
+- `window.innerWidth` **会滞后**：连续两次 resize 后仍报上一档。必须轮询到“等于目标值且连续两次一致”，
+  不能固定 sleep。
+- `probe-fit-gate.js` 确认 `workspaceFitFrame` 闸门不会卡死。
+
+#### 13A.17.6 验证结果与未做项
+
+| 项 | 结果 |
+|---|---|
+| `verify-four-column-drag-fit`（4 列真实拖拽 + 两档窗口 + fit 反向对照） | **39/39 PASS**（`diag889`） |
+| `verify-native-context-menu`（可见 popup 窗口计数 + PrintWindow 内容） | **12/12 PASS**（`diag881`） |
+| `verify-two-port-isolation`（单端口真实流 + 双端口同开隔离） | **21/21 PASS**（`diag913`） |
+| 全量单测 | **567/567** |
+| `run-all -Start 890` | 14 个 `exit=0` + `renderer-diag=clean`；`verify-same-port-guard` `exit=2` 为环境性 SKIP（幽灵 COM6） |
+
+**未做：双端口收发回环**。本机 `SerialPort.list()` 只有 COM17 / COM1 / COM18 / COM11（另有幽灵 COM6），
+12 个有序端口对全部试过均无回环，也没装 `com0com`；安装 `com0com` 或换到有互连串口对的机器才能补做。
+文档与汇报一律不得把它说成“双端口端到端已验证”。
+
+**另一个易踩的坑**：`verify-two-port-isolation` 的日志断言必须在 `flush-tab-logs` **之后**读盘；
+连接中读端口目录必然是空的，别把它记成产品缺陷。
+
 
 ---
 
