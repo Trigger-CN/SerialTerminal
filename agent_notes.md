@@ -2632,6 +2632,69 @@ Windows PowerShell 5.1 读取**无 BOM** 的 `.ps1` 时按 ANSI 解析；写进 
 
 ---
 
+### 13A.22 左边栏滚动条贴住控件（本轮）
+
+用户实测报告（逐字）：
+
+> `左边栏的滚动条太靠左边，导致会轻微到挡住其他元素，往右移一下`
+
+#### 13A.22.1 取证：它不在左侧，问题是没有间隙
+
+先量再改（`sbsb-1221.txt`，diag1221）：
+
+| 容器 | 滚动条 X 区间 | 控件最右边界 | 两者间距 | 容器右边界 |
+|---|---|---|---|---|
+| `.sidebar-tab-pane#tab-settings` | 182..190 | 182 | **0** | 200 |
+| `.sidebar-tab-pane#tab-search` | 182..190 | 182 | **0** | 200 |
+| `.shell-sidebar-content`（对照） | — | 1190 | **10** | 1200 |
+
+全局 `::-webkit-scrollbar` 是 `width:8px`，正常走容器右边缘——所以“太靠左”并不是它跑到了左边，
+而是**右侧留白留在了滚动条外面**：`.sidebar-content { padding: 10px }` 把整个滚动容器往里推，
+于是滚动条紧贴着控件（间距 0），而它右侧到边框又空出 10px。视觉印象就是“滚动条往左靠、压住了控件”。
+
+佐证截图：`sb-before.png`（修前）、`sb-after2.png`（修后）。
+
+#### 13A.22.2 修法：把右侧留白下放到滚动容器内部
+
+```css
+/* 修前：.sidebar-content { padding: 10px } .sidebar-tab-pane { /* 无 padding */ } */
+.sidebar-content {
+    padding: 10px 0 10px 10px;   /* 右侧不再在滚动器外面留白 */
+}
+.sidebar-tab-pane {
+    overflow-y: auto;
+    padding-right: 10px;          /* 留白进到滚动器内部，滚动条随之落到外缘 */
+}
+```
+
+效果：滚动条由 `182..190` 移到 `192..200`（真正的外缘），控件与滚动条间距由 **0 → 10px**，
+与 `.shell-sidebar-content` 的观感一致；控件左边界不变（仍为 10），没有把内容挤歪。
+
+#### 13A.22.3 验证与反向对照
+
+| 项 | 结果 |
+|---|---|
+| `verify-sidebar-scrollbar`（新增，11 项） | **11/11 PASS**，exit=0（diag1223） |
+| 全量回归 `run-all -Start 1240`（21 支） | **21/21 `exit=0`**，21 个 `renderer-diag=clean`（`run-all-1240.txt`） |
+| 全量单测 | **570/570 / 0 fail** |
+
+11 项构成：设置页 5 条 + 搜索页 5 条（容器找到了 / 滚动条确实存在 8px / 滚动条贴容器外缘 /
+控件与滚动条间距 ≥ 10px / 控件未被向左挤），加 Shell 侧栏 1 条不回归。
+
+**反向对照（判据有区分力）**：`probe-negate-padding.js` 把旧内边距用 `!important` 注入回去后，
+同一测量立刻回到 `contentGapToScrollbar=0`、`scrollbarLeft=182`。⇒ 判据不是恒真。
+
+#### 13A.22.4 两条可复用的经验
+
+1. **“滚动条位置不对”要先分清是「在左/在右」还是「有没有间隙」**。只想“往右移”很容易误改
+   `::-webkit-scrollbar` 或 `direction`，而真正的原因是 padding 留错了层（在滚动器外面 vs 里面）。
+2. **两个侧栏的滚动容器结构不一样**：`.shell-sidebar-content` 自己就是滚动容器（padding 天然在里面），
+   `.sidebar-content` 是外层 + `.sidebar-tab-pane` 才是滚动容器（padding 落在了外面）。
+   跨组件比对“同一指标的实际值”（这里是 10px vs 0）能一句话定位差别，比读十行 CSS 更快。
+
+
+---
+
 ## 14. AI 接手时建议的工作流程
 
 
