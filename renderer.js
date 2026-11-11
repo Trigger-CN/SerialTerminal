@@ -2320,7 +2320,9 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
 
     paneEl.appendChild(header);
     paneEl.appendChild(content);
-    paneEl.addEventListener('mousedown', () => setActivePane(paneId));
+    // 只选 pane，不切分组：切分组必须在 click 阶段做（在 mousedown 里重渲染会把
+    // 被点的按钮或其祖先换掉，浏览器判定按下/抬起不在同一节点，直接不合成 click）。
+    paneEl.addEventListener('click', () => setActivePane(paneId));
 
     // 追加到最后一个已有 pane 之后，保证 splitter 仍然落在中间。
     // 若直接 appendChild 到 root，新 pane 会跑到 splitter 后面。
@@ -2747,12 +2749,48 @@ function setActivePane(paneId, options = {}) {
 // **必须同时写焦点**：布局层的 switchPaneTab 只写 panes[].activeTabId，而模型的
 // visiblePanelIdsOfColumn 在未分屏形态下跟的是 focusedTabId。只写前者会出现
 // 「pane 的 activeTabId 变了、屏幕还是旧那一页」——新建 Shell / 新建过滤页都踩过这个坑。
+//
+// **必须按标签所属分组写布局**，不能用模块级别名：
+// 模块级 `workspaceManager` 指向的是**当前激活分组**，而分组级分屏后每个可见列各是一个
+// 分组，用户点的那一列往往不是激活分组。用别名写会落到错的布局里，而 `focusedWorkspaceTabId`
+// 又是对的，于是模型算出的 `panelIds` 只看焦点对得上哪一列的面板——
+// 结果就是「焦点已经变了、那一列还是显示旧标签」（实测 diag1141：
+// 焦点 `tab-filter-1`、默认列 `activeTabId` 仍是 `tab-main`、DOM 面板仍只有 `tab-main`）。
+//
+// 所以这里先把 paneId 反解成它的归属分组，拿到那个分组的 manager 再写；
+// 反解不出来（合成 pane、未知 id）时才回落到别名。
+function resolveWorkspaceManagerForPane(paneId) {
+    const groupId = resolveGroupIdFromPaneId(paneId);
+    if (groupId && serialGroups.some(group => group.id === groupId)) {
+        return getGroupWorkspaceManager(groupId);
+    }
+    return workspaceManager;
+}
+
 function switchPaneTab(paneId, tabId, options = {}) {
-    const switched = workspaceManager.switchPaneTab(paneId, tabId, options);
+    // 先把别名切到目标所属分组，再写布局：
+    // manager.switchPaneTab 内部还会回头读别名（ensurePaneActiveTab / 尺寸收敛），
+    // 只传别的 manager 而不切别名，会一半写对一半写错。
+    const targetManager = resolveWorkspaceManagerForPane(paneId);
+    const previousGroupId = activeGroupId;
+    if (targetManager && targetManager !== workspaceManager) {
+        setActiveGroupWorkspace(resolveGroupIdFromPaneId(paneId));
+    }
+    let switched = false;
+    try {
+        switched = (targetManager || workspaceManager).switchPaneTab(paneId, tabId, options);
+    } finally {
+        // 别名只用于这一次写入，写完立刻回到原值：
+        // 否则「点一下另一列的标签」会静默把侧栏/连接按钮也切到另一个分组。
+        if (targetManager && targetManager !== workspaceManager) {
+            setActiveGroupWorkspace(previousGroupId);
+        }
+    }
     if (tabId) focusedWorkspaceTabId = tabId;
     renderWorkspaceNow();
     return switched;
 }
+
 
 window.__switchWorkspaceTab = switchPaneTab;
 
@@ -3854,12 +3892,22 @@ function createGroupPaneElement(groupId, paneId) {
     paneEl.appendChild(content);
     paneEl.addEventListener('mousedown', () => {
         // 外层面板被点击时把该分组切成激活分组，否则侧栏/标签栏会与可见内容错位。
+        //
+        // **不能在 mousedown 里切**：applyActiveSerialGroup 会重渲染整个分组（侧栏、
+        // 分组标签行、列可见性），按下时把被点的按钮或其祖先换掉，浏览器就判定
+        // 「按下与抬起不在同一节点」，**不合成 click**。实测 diag1157/1158/1163：
+        // 只有 pointerdown / mousedown / mouseup，没有 click；在 capture 阶段拦掉
+        // 这一次 mousedown 后 click 立刻恢复。改到 click 阶段，click 已经派发完毕，
+        // 重渲染不会再吞掉它。
+        //
+        // 只切分组，不动 pane：真正被点的那一栏会由标签自己的 click 处理链回到
+        // 这里的 setActivePane（或由 setFocusedTab 写），mousedown 没必要提前抢跑。
         if (activeGroupId !== id) {
             activeGroupId = id;
             applyActiveSerialGroup({ fit: false });
         }
-        setActivePane(paneId);
     });
+    paneEl.addEventListener('click', () => setActivePane(paneId));
     return paneEl;
 }
 

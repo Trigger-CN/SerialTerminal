@@ -223,7 +223,16 @@ function createWorkspaceManager(options = {}) {
     function setActivePane(paneId, { persist = true } = {}) {
         const layout = getLayoutState();
         const paneIds = getPaneIds();
-        layout.activePaneId = paneIds.includes(paneId) ? paneId : (paneIds[0] || 'pane-1');
+        const nextPaneId = paneIds.includes(paneId) ? paneId : (paneIds[0] || 'pane-1');
+        // **值没变就不要请求渲染**：本函数由 pane 的 mousedown 调用，而一次
+        // renderWorkspace 会重排标签按钮、搬动面板节点。按下时把被点的那个按钮
+        // 或它的祖先换掉，浏览器会判定「按下与抬起不在同一节点」，整次点击**不合成
+        // click**，表现为「标签点了没反应」。实测 diag1157/1158/1163：三角色事件
+        // 里只有 pointerdown / mousedown / mouseup，没有 click；在 capture 阶段
+        // 拦掉这一次 mousedown 后 click 立刻恢复。激活 pane 没变时渲染结果也不会变，
+        // 跳过是等价的。
+        if (layout.activePaneId === nextPaneId) return;
+        layout.activePaneId = nextPaneId;
         // 当前 pane 的视觉高亮（只影响边框）交给渲染层统一下发，这里不再自己 toggle。
         if (persist) {
             persistLayout();
