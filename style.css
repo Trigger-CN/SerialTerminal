@@ -1743,7 +1743,10 @@ html.custom-titlebar .window-titlebar {
     flex: 1;
     display: flex;
     flex-direction: column;
-    padding: 10px;
+    /* 只在上下与左侧留白：右侧留白改由 .sidebar-tab-pane 自己承担。
+       否则滚动条会紧贴着控件（实测滚动条 x=182..190、控件右边界也是 182），
+       而滚动条右侧到侧栏边框还空着 10px——看起来就是“滚动条压住控件”。*/
+    padding: 10px 0 10px 10px;
     background: var(--bg-secondary);
     overflow: hidden;
 }
@@ -1753,6 +1756,9 @@ html.custom-titlebar .window-titlebar {
     flex: 1;
     overflow-y: auto;
     min-height: 0;
+    /* 右侧留白放在滚动容器内部：滚动条位于 padding 之外，于是被推到自己那一侧的最右缘，
+       控件与滚动条之间保持 10px 间距（与 .shell-sidebar-content 一致）。*/
+    padding-right: 10px;
 }
 
 .sidebar-tab-pane.active {
