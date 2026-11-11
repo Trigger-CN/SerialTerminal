@@ -2422,6 +2422,100 @@ UI 缺陷只认 `getBoundingClientRect` / `offsetParent` / `term.cols`，plan �
 - 只有拖到**共享 Shell 独立列自身**或明确的独立成列动作才置 `ownColumn`；
 - 两个写入口仍两向互斥（`ownColumn ⇄ hostGroupId` 不能同时成立）。
 
+### 13A.19 四项多串口回归（Shell 按钮 / 第三个分屏 / 分组字体 / 发送路由）
+
+用户实测报告（逐字）：`有些情况，两层标签栏都不会显示shell新建按钮，用户无法新建shell；开启两个串口分组并分屏，无法右键第三个串口组或者shell标签建立第三个分屏；新建的串口组的日志终端的字体没有使用设置的字体；发送链路都没有适配多串口组`。
+
+#### 13A.19.1 五条代码缺陷 + 一条加载期崩溃
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| ① | 从多分组关回单分组后，两层标签栏都不显示「新建 Shell」 | `syncShellAddButtonVisibility` 在 `isMultiGroup` 为真时把 pane 行按钮置 `hidden = true`，然后 `if (!isMultiGroup) return;` **提前返回** | 删掉提前 return，改双向写（该双向写后来又因用户裁决改为恒显示，见 13A.20） |
+| ②-a | 右键某分组建分屏时它没进参与者表；已分屏时再右键第三个组会把前两组踢出去 | 三跳各丢一次：`sendAction` 不回传 `groupId`、渲染侧不带 `groupIds`、`setGroupWorkspaceSplit` 直接覆盖 | 回传 `groupId` + 参与者表改为**并集累积**（`[...requested, ...previous]` 去重） |
+| ②-b | 多分组时右键 Shell 标签拿不到「独立成列」 | ① `requestWorkspaceTabContextMenu` 在多分组时直接转分组菜单（`tabId` 丢）；② `bindGroupTabListEvents` 的 contextmenu 委托把行内非分组标签全交给分组菜单 | 按**标签自己的类型**分流：`isShellTabId` → `terminalType:'tab'` 带 `tabId`/`canDetach`/`shellOwnColumn`；`'tab'` 模板新增双向项 |
+| ③ | 新建分组的日志终端不用设置里的字体 | 模板 `buildSerialTerminalOptions` 不含字体；`applyConfig` 只写默认分组与模块级 `filterTabs`，**不遍历 `serialRuntimes`** | 模板补齐字体/主题；`applyConfig` 遍历注册表逐组下发 |
+| ③附带 | 模板补齐字体后 renderer 整个加载不起来 | 默认分组终端在模块加载期就建，`currentConfig` 还是 `null`，`getTerminalTheme` 读 `highlightColors.selection` 抛 `TypeError` | 模板先建基础 options，`if (!config) return options;` 才补字体与主题 |
+| ④ | 发送链路没适配多分组 | `resolveSerialGroupId` 未登记一律回落默认组，四个调用点都没传 `groupId`；另两个解码器/缓冲是全局单例 | 四个入口补组 ID（快捷指令触发取**该批字节所属分组**）；`quickTriggerDecoders` / `quickTriggerBuffers` 改 `Map` 按组分桶 |
+
+#### 13A.19.2 本轮教训
+
+- **大文件里插新 case 时，把邻接的 `case 'close-group-split'` 整段覆盖掉了**，导致「关闭分组分屏」完全失效，被 `run-all` 四支脚本同时抓到。`node --check` 看不出语义丢失，必须数相邻 `case` / 函数个数。
+- **一次假失败**：`verify-group-split @ diag1012` 报 4 条 FAIL（屏幕 3 列），根因是旧会话残留的后台循环让 **5 个 electron 进程争用 9222**，探针连到了别的实例。干净环境下 19/19。⇒ 出现「多列 / 多分组 / 按钮多出一个」这类不合常理的观测，**先查进程与端口**。
+- **环境限制**：④ 段是「伪造注册表 `connected` + 包住 `serial-write`」取证，量的是**发给主进程的真实 payload**；本机无互连串口对、无 `com0com`，**没做双端口端到端回环**。不得说成真实串口收发已验证。
+
+### 13A.20 两级添加图标永久显示、控件单一构造、右键新建入口（本轮）
+
+用户实测报告（逐字）：
+
+> `开启第二个串口组，点击第二串口组，再点击shell标签，一级标签栏的两个添加按钮都消失了，改了无数次还是有问题，你能力有限，还是做成一级二级都永久显示这些图标吧，并且在右键菜单页也加入新建各种标签；第一个串口组和第二个串口组的二级标签栏的两个添加标签页的按钮间距竟然不一样，说明两个明明可以复用的控件，还是单独实现，之前的工作都白做了；反思一下如何能做的更好`
+
+#### 13A.20.1 缺陷 A：按钮自身没隐，隐的是它的宿主列
+
+`probe-add-buttons2.js @ diag1051`（exit=0，renderer-diag=clean）按用户顺序逐步量：
+
+| 步骤 | 按钮 `hidden` | 宿主行 | **宿主列** | shown | blockedBy |
+|---|---|---|---|---|---|
+| 加第二组 / 点第二组 | false | `serial-group-tab-bar-g-1`（可见） | `serial-group-workspace-g-1`（可见） | true | — |
+| **点 Shell** | **false** | 同上（仍可见） | **`serial-group-workspace-g-1`（`hidden=true`）** | **false** | **`serial-group-workspace-g-1[hidden]`** |
+| 点回 g-1 | false | 同上 | g-1（可见） | true | — |
+
+根因：`placeShellAddButton()` / `placeGroupAddButton()` 都锚定 `getVisibleGroupRow(activeGroupId)`，而旧实现只判 `row.hidden`、**不判该行所在列**。点 Shell 后可见列切到 `default`，而 `activeGroupId` 仍是 `g-1`。
+
+修法：`getVisibleGroupRow()` 改为无参扇描，同时要求「行未 hidden + 所在列未 hidden + rect 宽高 > 0」，都没有才回落静态行。
+
+> **这条最值得记：`[hidden]` 是属性，可见性是祖先链的合成结果。只看按钮自身属性的断言，永远掍不到这类缺陷。**
+
+#### 13A.20.2 缺陷 B：两组间距 8.39px vs 4px，因为控件真的写了两份
+
+`probe-add-buttons3.js @ diag1052`（exit=0）：
+
+| 来源 | `display` | `gap` | 空白文本节点 | 每按钮 `margin-right` | 实测相邻间距 |
+|---|---|---|---|---|---|
+| 单分组 `#pane-1-tab-actions`（index.html 手写） | block | normal | **6 个** | 4px | **8.39 / 8.39 / 8.39 px** |
+| 多分组 `pane-1-g-1`（动态建） | block | normal | **0 个** | 4px | **4 / 4 px** |
+
+双重根因：① `index.html` 的 pane-1/pane-2 与两个 pane 构造器里各写一份按钮构造；② `.pane-tab-actions` **完全没有 CSS**，容器退化成 `display:block`/`gap:normal`，间距 = `margin-right 4px` + **HTML 换行缩进渲染出的一个空格宽（≈4.39px）**。**布局依赖源码里的空白**，是最脆弱的一种。
+
+#### 13A.20.3 修法：唯一构造路径 + 间距只由 CSS gap 决定
+
+- `PANE_ACTION_BUTTON_SPECS` + `createPaneActionButtons(paneId)` + `fillPaneActionButtons(actionsEl, paneId)`；两处动态 pane 与静态 pane-1/pane-2 加载期重建**全部**走它。
+- 按钮一律 DOM API 创建，**不插任何文本节点**；`.pane-tab-actions` 加 `display:flex; gap:4px; padding:0 8px`，`.pane-new-tab-btn` 删掉 `margin-right`。
+- 不能用 `replaceChildren`（模块加载门禁的 DOM stub 只实现 `removeChild`/`appendChild`）。
+- 新增按钮只改 `PANE_ACTION_BUTTON_SPECS`，不再改两处 DOM。
+
+#### 13A.20.4 本轮我自己造成的三个回归（必须记住）
+
+| # | 现象 | 根因 | 教训 |
+|---|---|---|---|
+| 1 | **一次点击创建两个标签**（`verify-user-paths` 报 4 个 shell） | `createPaneActionButtons` 已绑 click，文件末尾旧的 `pane-1-new-*-tab-btn` 手动绑定还在；静态按钮被重建后旧绑定落在新节点上再绑一次 | **把控件收敛成唯一构造路径时，必须同步删掉旧的手工事件绑定**，否则「复用」反而放大成双份副作用。`node --check` 与门禁都抓不到 |
+| 2 | `SyntaxError: Unexpected end of input` @11053 | 删那段时 `end_line` 覆盖到了后续 `forEach(…` 的收尾 `)});`，并残留一行重复的 `querySelectorAll` | 大文件删整段时 `end_line` 必须取到**整段最后一行**；改完立即 `node --check` |
+| 3 | 门禁报 `actionsEl.replaceChildren is not a function` | 门禁 DOM stub 没实现它 | **工具适配问题，不是产品缺陷** |
+
+#### 13A.20.5 结构性反思：为什么这里「改了无数次还是有问题」
+
+不是偶然失误，是三个结构问题叠加：
+
+1. **同一个控件写了三份**：`index.html` 静态 pane-1/pane-2 + `createPaneElement` + `createGroupPaneElement`。改一份另两份不跟着变，而这种不一致只能靠「仔细看间距」发现。
+2. **可见性判据散在三处**：`placeShellAddButton()` / `placeGroupAddButton()` 决定**放哪行**，`syncShellAddButtonVisibility()` 决定**自己是否 hidden**，`renderShellTabBar` 的调用顺序决定**什么时候算**。三者各自看起来都对，只在特定形态组合下出错——所以每次只修一处都会「看起来好了」。
+3. **断言只盯属性不盯合成结果**：历史上多条断言只查 `button.hidden`，于是本轮缺陷 A（按钮 `hidden=false` 但宿主列 `hidden=true`）能穿过整套测试。
+
+可执行的收敛做法（已落地）：删掉重复实现只留一条构造路径；把可见性判据收到「用户真正能看见的行」一处；用**反向对照**锁死（不只断言看得到，还断言「它没有 hidden 的祖先」、「两组几何逐项相等」）。
+
+#### 13A.20.6 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `verify-add-buttons`（新增，21 项） | **21/21 PASS**，renderer-diag=clean（diag1054 / diag1138） |
+| `verify-four-defects`（**45 → 47 项**） | **47/47 PASS**（diag1105 / diag1137）；A 段 6 条旧「恰好一个可见」改为 6 正向 + 6 反向对照 |
+| `verify-shell-buttons-split`（16 项） | **16/16 PASS**（diag1104 / diag1132），两条断言按新裁决改写 |
+| 全量回归 `run-all -Start 1120` | **19/19 `exit=0`**，19 个 `renderer-diag=clean` |
+| 全量单测 | **570/570 / 0 fail** |
+| 静态门禁 | `mod=0` / `checked=95 missing=none` / `blocks total=28 js=19 syntaxErrors=0 arityHints=0` |
+
+**旧基线永久失效**：`verify-four-defects` 的 45/45（diag987）不得再引用。
+
+**环境与手段限制（必须如实标注）**：CDP 合成输入 ≠ 真人手测；本机无互连串口对 / 无 `com0com`，**没做双端口回环**。
+
 ---
 
 ## 14. AI 接手时建议的工作流程

@@ -1398,7 +1398,7 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 
 §8.5 原本要把「新建分组」「新建 Shell」搬进工作区级动作条。实测三种形态的**真实可见入口数**：
 
-| 形态 | 可见「添加串口」 | 可见「新建 Shell」 |
+| 形态 | 可见「添加串口」 | 可见「新建 Shell」（S4 当时的规则，已被 §11.6.11 推翻） |
 |---|---|---|
 | 单分组 | 1（`#add-serial-group-inline-btn`） | 1（`#pane-1-new-shell-tab-btn`） |
 | 多分组 | 1（`#add-serial-group-btn`） | 1（`#add-shell-tab-btn`） |
@@ -1407,13 +1407,15 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 判据遍历自身与全部祖先的 `display` / `visibility` 并测量实际宽高，**不看 `hidden` 属性**
 （本项目有 `button { display:inline-flex }` 覆盖 `[hidden]` 的历史）。
 
-结论：`syncSerialGroupAddButtonLayer()` 与 `syncShellAddButtonVisibility()` 的互斥逻辑在工作，
-§8.5 描述的「两个添加串口按钮」是**历史缺陷**且已修复。搬结构要改 `index.html`（`#workspace-root` 祖先链敏感）、
-六处放置/回收函数，并同步约 15 个 CDP 脚本的点击入口，收益只是去掉一层判断——
-**用户可见行为不变且现有实现没有缺陷时，不做高风险重构**。
+结论：`syncSerialGroupAddButtonLayer()` 的「添加串口只在单分组时留 inline 入口」在工作，
+§8.5 描述的「两个添加串口按钮」是**历史缺陷**且已修复。
 
-因此改为把「各处恰好一个可见入口」固化为 `verify-add-entry`（8 条断言，含反向对照）。
-结构统一留待 S5 渲染翻转同批处理。
+**这一节的「新建 Shell 恰好一个可见」结论已于后续被用户裁决推翻**：用户明确要求一级与二级
+标签栏的新建 Shell 图标**永久同时显示**，并由此暴露了 `getVisibleGroupRow` 只看行、不看列的落位缺陷。
+完整取证与修法见 §11.6.11。搬结构（把两个入口并进工作区级动作条）这个方向仍然没有做，
+理由不变：`index.html` 的 `#workspace-root` 祖先链敏感、要改六处放置/回收函数、要同步约 15 个
+CDP 脚本的点击入口，而这并不能减少「按钮落在看不见的列里」这类缺陷——那类缺陷的根因是**判据散落**，
+不是结构位置。
 
 #### 11.5.4 S4 的验证证据
 
@@ -1645,8 +1647,245 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 `paneGutter` 必须在写 `hidden = false` **之后**读 rect（否则读到 0，`flex-basis` 少扣 10px）；箭头 IIFE 把长表达式链写成简写返回会抛
 `Unexpected end of input`（改块体即可）。
 
+**探针自身踩到的 5 处坑（不得记成产品缺陷）**：`window.ipcRenderer` 恒 `undefined`（必须 `require('electron').ipcRenderer`）；
+`setPaneSplit(ws, id, true)` 自带 `addPane`（测试里再手动加就变 3 个 pane）；非默认分组 runtime 惰性创建（测 fit 前先 `serialRuntimes.getOrCreate`）；
+`paneGutter` 必须在写 `hidden = false` **之后**读 rect（否则读到 0，`flex-basis` 少扣 10px）；箭头 IIFE 把长表达式链写成简写返回会抛
+`Unexpected end of input`（改块体即可）。
 
-## 12. 扩展点
+#### 11.6.10 四项多串口回归（Shell 按钮 / 第三个分屏 / 分组字体 / 发送路由）
+
+用户实测报告（逐字）：
+
+> `有些情况，两层标签栏都不会显示shell新建按钮，用户无法新建shell；开启两个串口分组并分屏，无法右键第三个串口组或者shell标签建立第三个分屏；新建的串口组的日志终端的字体没有使用设置的字体；发送链路都没有适配多串口组`
+
+四项都先复现取证再改，最终抽出 **5 条代码缺陷**（② 拆成 ②-a / ②-b）与 **1 条加载期崩溃**（③ 的修法第一版引入），没有一条是测试写错。
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| ① | 从多分组关回单分组后，两层标签栏都不显示「新建 Shell」 | `syncShellAddButtonVisibility` 在 `isMultiGroup` 为真时把 pane 行按钮置 `hidden = true`，然后 `if (!isMultiGroup) return;` **提前返回**；回单组时分组标签行整体 `hidden`（本就该隐），而 pane 行按钮**没有任何一行改回 `false`** | **已再次推翻**：当时改为 `button.hidden = isMultiGroup;`（双向写，即「多分组隐二级、单分组隐一级」），但用户实测点 Shell 后仍丢失，且明确裁决「一级二级都永久显示」⇒ 现行实现是 **恒 `hidden = false`**，完整取证与修法见 §11.6.11 |
+| ②-a | 右键某分组做「分屏」时，被右键那一组没进参与者表；已分屏时再右键第三个分组，会把前两组踢出去 | 三跳各丢一次：主进程 `sendAction` 不回传 `groupId`；渲染侧 `split-group-*` 调 `setGroupWorkspaceSplit` 不带 `groupIds`；后者在不足两项时回落为「激活组 + 邻居」并**直接覆盖** | `terminalContextMenuState` 存 `groupId` 且 `sendAction` 回传；`handleTerminalContextMenuAction` 先取 `contextGroupId` 并传入 `groupIds`；参与者表改为**并集累积**（`[...requested, ...previous]` 去重），不足两项才补邻居 |
+| ②-b | 多分组时右键 Shell 标签拿不到「让它独立成列」的入口 | 两层原因：`requestWorkspaceTabContextMenu` 在多分组时直接转给分组菜单（`tabId` 丢失）；即使不转，`bindGroupTabListEvents` 的 contextmenu 委托也会把「行里的非分组标签」全部交给分组菜单 —— 而分屏时 Shell 的按钮正住在该列列首行 | 两处都按**标签自己的类型**分流：`isShellTabId` → 发 `terminalType:'tab'` 并带 `tabId` / `canDetach` / `shellOwnColumn`；主进程 `'tab'` 模板新增**双向**项（`detach-to-own-column` / `join-group-column`），渲染侧新增两个 case 走 `setShellColumnModeInModel` + `persistShellTabs` |
+| ③ | 新建串口分组的日志终端不用设置里的字体 | 终端构造模板 `buildSerialTerminalOptions` 只返回 `cursorBlink` 四项，**没有任何字体/主题**；默认分组之所以「看起来对」是因为 `applyConfig` 事后单独写了 `serialTerm.options`，而它只遍历默认分组与模块级 `filterTabs` 别名，**不遍历 `serialRuntimes`** | 模板补齐 `fontSize` / `fontWeight` / `fontFamily` / `theme`；`applyConfig` 改为遍历运行时注册表逐组下发（filter tabs 改按 `filterTabsStore.getList(group.id)` 取） |
+| ③附带 | 模板补齐字体后 renderer **整个加载不起来** | 默认分组的终端在模块加载期就建，那时 `currentConfig` 还是 `null`，而 `getTerminalTheme` 要读 `highlightColors.selection` ⇒ `TypeError` | 模板先建四项基础 options，`if (!config) return options;` 才补字体与主题；设置到位后由 `applyConfig` 用同一个模板重写 |
+| ④ | 发送链路没有适配多串口组 | 唯一归组入口 `resolveSerialGroupId` 在未登记时**一律回落默认分组**，而四个调用点都没传 `groupId`：主输入框、快捷发送点击、自动发送、快捷指令触发 | 前三处补 `groupId`（主输入框/自动发送/快捷发送点击用激活分组）；**快捷指令触发不能只用激活分组**——触发源是收到的字节，改为取**该批字节所属分组**（`dispatchSerialBatch` 的 `id` 一路下传）；另把 `quickTriggerBuffer` / `quickTriggerDecoder` 两个**全局单例**改成按分组分桶，否则两组同时收数据会互相污染 |
+
+**已锁定的产品语义（未变，本轮只是让实现符合它）**：分屏只作用于被右键的那一个串口组；未归属的 Shell 维持原位置；单标签时 pane 分屏置灰；`ownColumn` 的显式入口是右键菜单（拖拽只停列首行，不新建列）。
+
+**验证证据（全部为真实 rect / 真实 term.options / 真实 IPC payload）**
+
+| 脚本 | 结果 | 关键数字 |
+|---|---|---|
+| `verify-four-defects`（45 项，新增） | **45/45 PASS**，renderer-diag=clean（diag987） | ①六形态均 `visibleCount === 1`，反向对照「多分组时 pane 行按钮全 `hidden`」成立；②-a `groupIds` 由 `['g-1','default']` → 加入 g-2 后 `['g-2','g-1','default']`（前两项未丢）+ 3 列各 264px；②-b 右键 Shell 得 `terminalType:'tab'` / `tabId:'tab-shell-1'` / `canDetach:true`，独立成列后 3 → 4 列（`__shell__` 197px），反向归入后 4 → 3 列；③ `g-1`/`g-2` 与 `default` 的 `fontFamily` 逐字相同，改设置为 `Courier New` 后三组全部跟随；④`targetGroup='g-1'` 而 `triggerGroup='g-2'`（两者不同）时，主输入框/自动发送/快捷发送点击写 `g-1`，**快捷指令触发写 `g-2`**，反向对照写 `default` |
+| 全量回归 `run-all -Start 1030`（**18** 脚本） | **18/18 `exit=0` + 每支 `renderer-diag=clean`** | 新增 `verify-four-defects` 已纳入 `run-all`；另含 `verify-split-regressions` 37/37、`verify-group-split` 19/19、`verify-group-columns` 37/37、`verify-split-resize-fit` 15/15 |
+| 全量单测 | **570/570 / 0 fail** | 断言数未增减；改写 4 处**过期断言**（见下） |
+
+**四处过期断言按新事实改写（不是改期望值凑绿）**：
+
+1. `buildSerialTerminalOptions` 的签名从空括号改为 `(config = currentConfig)`，并把「模板必须带字体」变成三条可回归断句（`fontFamily` / `theme` / `scrollback` 各自一条）；
+2. `applyTerminalWallpaper(config); serialTerm.options = options` 改为校验「遍历 `serialRuntimes.listGroupIds()` 逐组写 `runtime.term.options`」；
+3. 两条 quick-send 发送正则补上 `groupId`（`activeGroupId` 与 `groupId || activeGroupId` 各一条）；
+4. `invalidateTerminalSearch(serialTerm, 'options')` 改为 `invalidateTerminalSearch(runtime.term, 'options')`。
+
+**本轮最值得记住的一条教训**：重写 `handleTerminalContextMenuAction` 的 split-group 邻接代码时，把 `case 'close-group-split'` 整段覆盖掉了——
+后果是「关闭分组分屏」完全失效，被 `run-all` 的 4 个脚本同时抓到（`verify-group-split` / `verify-group-columns` / `verify-user-paths` / `verify-shell-drag`）。
+大文件里插新 case 时，**要么只做插入、要么改完立即用相邻 case 数量自检**；`node --check` 看不出这种语义丢失。
+
+**一次假失败（探针环境问题，不是产品缺陷）**：补回后 `verify-group-split @ diag1012` 仍报 4 条 FAIL（屏幕 3 列），
+但同一次运行里「只有两个分组」却 PASS。新建 profile 实测只有 2 列 / 2 分组，根因是**旧会话残留的后台循环**让 5 个 electron 进程争用 9222，探针连到了另一个实例。
+干净环境下同一支脚本 19/19。⇒ 出现「多列 / 多分组」这类不合常理的观测时，先查进程与端口。
+
+**环境限制（必须如实标注）**：④ 段是「伪造注册表 `connected` + 包住 `serial-write`」取证，量到的是**发给主进程的真实 payload**；
+本机无互连串口对、无 `com0com`，**没有做双端口端到端回环**，不得说成真实串口收发已验证。
+
+
+
+
+#### 11.6.11 两级添加图标永久显示、控件单一构造、右键新建入口
+
+用户实测报告（逐字）：
+
+> `开启第二个串口组，点击第二串口组，再点击shell标签，一级标签栏的两个添加按钮都消失了，改了无数次还是有问题，你能力有限，还是做成一级二级都永久显示这些图标吧，并且在右键菜单页也加入新建各种标签；第一个串口组和第二个串口组的二级标签栏的两个添加标签页的按钮间距竟然不一样，说明两个明明可以复用的控件，还是单独实现，之前的工作都白做了；反思一下如何能做的更好`
+
+### 11.6.11.1 产品裁决变更（旧裁决作废）
+
+§11.5.3 与上一版 §11.6.10 ① 的「全屏恰好一个可见的新建 Shell 入口」**已作废**。新裁决：
+
+| 项 | 新规则 |
+|---|---|
+| 新建 Shell | 一级标签栏的 `#add-shell-tab-btn` 与二级栏每个 pane 的 `*-new-shell-tab-btn` **永久同时显示**；可见性不再由分组数 / 分屏形态 / 焦点位置决定 |
+| 添加串口 | `#add-serial-group-btn` 常显；`#add-serial-group-inline-btn` 仍只在单分组时显示（理由见下） |
+| 右键菜单 | 除原有入口外，`'tab'` 与 `'group'` 两支都必须能新建 Shell / 过滤 / 图表 |
+| 控件实现 | 二级栏的动作按钮组必须由**同一条构造路径**生成，组间位置 / 尺寸 / 间距 / 顺序不得有差异 |
+
+两个入口的差别必须能解释清楚，否则会被误判成回归：
+
+- 新建 **Shell**：一级与二级是**同一功能在两级不同行**，用户要的就是两行都能直接新建；
+- 添加**串口** inline：它是「添加串口」的**等价重复入口**。单分组时一级栏整条 `#serial-group-tab-bar` 是 `hidden`，
+  没有它用户首次启动就开不了多串口；多分组时一级栏已常显，再留一个一模一样的 inline 就是用户此前报过的
+  「两个添加串口按钮」。**它不归「两级永久显示」管**，因为那一条约束的是「新建 Shell」。
+
+### 11.6.11.2 缺陷 A：点 Shell 后一级栏两个添加按钮同时消失
+
+先取证再定性（`probe-add-buttons2.js @ diag1051`，exit=0、renderer-diag=clean）。按用户顺序逐步量
+`hidden` / `offsetParent` / rect / **宿主行与宿主列**：
+
+| 步骤 | activeGroupId | 按钮 `hidden` | 宿主行 | 宿主列 | shown | blockedBy |
+|---|---|---|---|---|---|---|
+| 加第二组 | `g-1` | false | `serial-group-tab-bar-g-1` | `serial-group-workspace-g-1` | true | — |
+| 点第二组 | `g-1` | false | 同上 | 同上 | true | — |
+| **点 Shell** | `g-1` | **false** | 同上（仍可见） | **`serial-group-workspace-g-1`（`hidden=true`）** | **false** | **`serial-group-workspace-g-1[hidden]`** |
+| 点回 g-1 | `g-1` | false | 同上 | g-1（可见） | true | — |
+
+**结论（观测，非推断）**：两个按钮自身的 `hidden` 从未为真；消失的唯一原因是**它们所在的列被隐藏**。
+点 Shell 后可见列切到 `default`（同批数据里 `pane-1-new-filter-tab-btn` / `-chart-tab-btn` 的 `colHidden=false`、
+`shown=true` 可证），而 `activeGroupId` 仍是 `g-1`。
+
+根因链：`placeShellAddButton()` / `placeGroupAddButton()` 都锚定 `getVisibleGroupRow(activeGroupId)`，
+而旧实现只判 `row.hidden`、**不判该行所在列**。
+
+⇒ **教训：`[hidden]` 是属性，可见性是祖先链上的合成结果。** 只看属性不看宿主容器的断言，永远掍不到这种缺陷。
+
+修法（`getVisibleGroupRow()` 改为无参扇描）：
+
+```js
+function getVisibleGroupRow() {
+    const rows = Array.from(document.querySelectorAll('.group-tab-row'));
+    const visible = rows.find(row => {
+        if (!row || row.hidden === true) return false;
+        const column = row.closest('.group-column');
+        if (!column || column.hidden === true) return false;
+        const rect = row.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    });
+    if (visible) return visible;
+    return document.getElementById(GROUP_TAB_BAR_ID);
+}
+```
+
+三个判据缺一不可：行未 hidden、**所在列未 hidden**、**真的有尺寸**（列也可能是 CSS 而非属性驱动）。
+不再按「某个 groupId 对应的行」取，而是扇「用户能看见的那一行」——调用方要的是后者。
+
+### 11.6.11.3 缺陷 B：两组二级栏按钮间距不一致
+
+`probe-add-buttons3.js @ diag1052`（exit=0）——两组不能同时可见，分两次在各自可见时测同一判据：
+
+| 来源 | 容器 `display` | `gap` | 空白文本节点 | 每按钮 `margin-right` | 实测相邻间距 |
+|---|---|---|---|---|---|
+| 单分组 `#pane-1-tab-actions`（**index.html 静态标记**） | block | normal | **6 个** | 4px | **8.39 / 8.39 / 8.39 px** |
+| 多分组 `pane-1-g-1`（**createGroupPaneElement() 动态建**） | block | normal | **0 个** | 4px | **4 / 4 px** |
+
+**双重根因（观测）**：
+
+1. 两处**确实是两份独立实现**（`index.html` 手写的 pane-1/pane-2 vs 两个 pane 构造器里的 `buttonSpecs`）；
+2. `.pane-tab-actions` **完全没有 CSS 规则**，容器退化为 `display:block` / `gap:normal`，按钮是 `inline-flex`，
+   于是间距 = `margin-right 4px` + **HTML 换行缩进渲染出的一个空格宽 ≈ 4.39px**。
+
+⇒ 布局依赖**源码里的空白**，是最脆弱的一种。这也直接解释了用户说的「两个明明可以复用的控件，还是单独实现」。
+
+### 11.6.11.4 修法：唯一构造路径
+
+```js
+const PANE_ACTION_BUTTON_SPECS = Object.freeze([
+    { kind: 'shell', icon: 'terminal', titleKey: 'main.newShellTab' },
+    { kind: 'filter', icon: 'filter_alt', titleKey: 'main.newFilterTab' },
+    { kind: 'chart', icon: 'show_chart', titleKey: 'main.newChartTab' }
+]);
+
+function createPaneActionButtons(paneId) { /* 返回 button 数组，并在此绑定 click */ }
+
+function fillPaneActionButtons(actionsEl, paneId) {
+    if (!actionsEl) return;
+    while (actionsEl.firstChild) actionsEl.removeChild(actionsEl.firstChild);
+    createPaneActionButtons(paneId).forEach(button => actionsEl.appendChild(button));
+}
+```
+
+四条不变量（改这带代码时必须遵守）：
+
+1. 按钮一律用 DOM API 创建，**不插入任何文本节点**；间距只由 CSS `gap` 决定。
+2. `createPaneActionButtons` 是**唯一**绑定 click 的地方；其他地方不得再对同名 id 调 `addEventListener`。
+3. 静态 `pane-1`/`pane-2` 在加载期用同一函数重建，随后把 `#add-serial-group-inline-btn` **按节点引用**重新 append
+   （节点不重建，其文件末尾绑定的监听器才不会丢）。
+4. 不得用 `replaceChildren`：模块加载门禁的 DOM stub 只实现 `removeChild` / `appendChild`。
+
+`style.css` 配套：
+
+```css
+.pane-tab-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 0 8px;
+}
+```
+
+同时删掉 `.pane-new-tab-btn` 原来的 `margin-right: 4px`（间距统一交给 `gap`）。
+`.serial-group-tab-actions` 本来就是这个形状，两处现在同构。
+
+### 11.6.11.5 右键新建入口
+
+调查结论（读源码确认）：默认支（`terminalType` 为 `main`/`filter`/`shell`）**原本就有** `new-shell-tab` + `new-filter-tab`；
+缺的是 ① 没有 `new-chart-tab` case；② `'tab'` 支与 `'group'` 支里完全没有新建类入口。
+
+修法：
+
+- `main.js` 新增 `paneNewTabItems(labels_, send)` 返回三项；`'tab'` 支置首、`'group'` 支插在 `addSerialPort` 之前；
+- `renderer.js` 新增 `case 'new-chart-tab'`，与按钮走同一个 `createChartTab({}, resolvePaneId(paneId, tabId))`；
+- `getContextMenuLabels()` 增 `newChartTab`；`i18n.js` 六语言 `main` 各补 `newChartTab`。
+
+**动作链路不另开一条**：菜单项 → 主进程 `send('new-*')` → 渲染侧 `handleTerminalContextMenuAction`
+→ `createShellTab` / `createFilterTab` / `createChartTab`，与按钮点击完全同一条创建入口。
+
+**验证限制**：原生菜单是 Chromium Aura，**菜单项无法通过 CDP 读出**。因此分两步验：
+断言 `getContextMenuLabels()` 三个键都存在；再真实发一次菜单动作，数标签数量变化。
+
+**图标真实性**：`menuIcon(name)` 只认 `assets/menu-icons/<name>.png`，不存在则返回 `{}`（静默无图标）。
+`show_chart` / `add` / `pause` 等 png **不存在** ⇒ 对应菜单项无图标。这是既有行为，不得声称它们带了图标。
+
+### 11.6.11.6 验证证据（全部为真实 rect / 真实 IPC payload）
+
+| 脚本 | 结果 | 关键数字 |
+|---|---|---|
+| `verify-add-buttons`（21 项，新增） | **21/21 PASS**，renderer-diag=clean（diag1054） | 用户路径点 Shell 后 `add-shell-tab-btn` `shown:true` / `columnHidden:false`；两组容器均 `flex / gap:4px / pl:8px`、`textNodeCount` 均为 0、`gaps:[4,4]`；菜单动作后 `filters 0→1` / `charts 0→1` / `shells 2→3` |
+| `verify-four-defects`（**47 项**，A 段改写） | **47/47 PASS**，renderer-diag=clean（diag1105） | 单分组 `topCount:0/paneCount:1`；多分组 `topCount:1/paneCount:1/visibleCount:2`；分屏 `visibleCount:3`；6 条反向对照 `columnHidden:false`。B/C/D 段沿用旧判据全绿 |
+| `verify-shell-buttons-split`（16 项，两条改写） | **16/16 PASS**，renderer-diag=clean（diag1104 / diag1132） | `multi-group-both-levels-offer-shell-entry` / `split-both-levels-offer-shell-entry` 均 PASS |
+| 全量回归 `run-all -Start 1120`（**19** 脚本） | **19/19 `exit=0`**，19 个 `renderer-diag=clean` | 新增 `verify-add-buttons` 已纳入 |
+| 全量单测 | **570/570 / 0 fail** | 断言数未增减 |
+
+`verify-four-defects` 的项数由 **45 → 47**：A 段 6 条旧的「恰好一个可见」改写为 12 条（6 正向 + 6 反向对照）。
+**旧 45/45 记录永久失效**，不得再引用。同理，`verify-shell-buttons-split` 旧的两条
+`*-pane-row-shell-buttons-hidden` 是旧裁决的直接推论，已改写为「两级都提供入口」。
+
+### 11.6.11.7 本轮我自己造成的三个回归（必须记住）
+
+| # | 现象 | 根因 | 教训 |
+|---|---|---|---|
+| 1 | 一次点击创建**两个**标签（`verify-user-paths` 报 4 个 shell） | `createPaneActionButtons` 已绑 click，`renderer.js` 文件末尾还保留着旧的 `pane-1-new-*-tab-btn` 手动绑定，静态按钮被重建后旧绑定落在新节点上再绑一次 ⇒ 监听器叠加 | **把控件收敛成唯一构造路径时，必须同步删掉旧的手工事件绑定**，否则「复用」反而放大成双份副作用。`node --check` 与门禁都抓不到这类语义重复 |
+| 2 | `renderer.js` 语法错：`SyntaxError: Unexpected end of input` @11053 | 删那段重复绑定时，`end_line` 覆盖到了`document.querySelectorAll('.workspace-pane').forEach(…` 的收尾 `)});`，并残留了一行重复的 `querySelectorAll` | 大文件删整段时 `end_line` 必须取到**整段最后一行**；改完立即 `node --check` |
+| 3 | `check-renderer-module-load` 报 `actionsEl.replaceChildren is not a function` | 门禁 DOM stub 只实现 `removeChild` / `appendChild` | **工具适配问题，不是产品缺陷**；改成 `removeChild` 循环即可 |
+
+### 11.6.11.8 结构性反思（为什么这个位置「改了无数次还是有问题」）
+
+这不是一次偶然失误，而是三个结构性问题的叠加：
+
+1. **同一个控件被写了三份。** 默认分组的 `pane-1` / `pane-2` 动作按钮在 `index.html` 里手写一遍，
+   `createPaneElement` 与 `createGroupPaneElement` 各再写一遍，共三份。改一份另两份不跟着变，
+   而且这种不一致只能通过「仔细看间距」发现——正是用户指出的现象。
+2. **可见性判据散在三处。** `placeShellAddButton()` / `placeGroupAddButton()` 决定按钮**放哪行**，
+   `syncShellAddButtonVisibility()` 决定按钮**自己是否 hidden**，`renderShellTabBar` 的调用顺序决定
+   **什么时候算**。三者各自看起来都对，但只有在特定形态组合下才出错——所以每次只修一处都会「看起来好了」。
+3. **断言只盯属性，不盯合成结果。** 历史上多条断言只查 `button.hidden`，于是本轮缺陷 A（按钮 `hidden=false`
+   但宿主列 `hidden=true`）能穿过整套测试。
+
+可执行的收敛做法（已落地）：
+
+- **删掉重复实现**，只留 `createPaneActionButtons` 一条构造路径，并**同步删掉旧的事件绑定**；
+- **把可见性判据收到一处**（`getVisibleGroupRow` 只看「用户真正能看见的行」），不再用模态推导；
+- **用反向对照锁死**：不只断言「看得到」，而是断言「它**没有**被隐藏的祖先」、「两组几何逐项相等」。
+  反向对照才是能抓到回退的那一半。
+
+
 ## 12. 扩展点
 
 「通用」不能自证，只能用「新增东西要改几处」量化。目标：**零改动**。
@@ -1696,6 +1935,9 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 - 标签切换闪烁的修复（`0bf62ea`）只有 CDP 合成点击 + `getComputedStyle` 证据，未做真实用户手测。
 - **单标签时的组内 pane 分屏**：已裁决不做（菜单项置灰、动作入口拒绝），理由是移走唯一标签必被 `reconcileEmptyPanes` 折叠回一个 pane，而空 pane 又被用户明确视为缺陷。这不是未实现，是**有意的产品边界**。
 - **Shell 拖到分组标签行的语义已由用户裁决修正**（§8.2 的落点表）：旧「拖到分组标签栏 = `ownColumn` 独立列」已作废；现在拖到普通分组列的列首行只是停在那列，不新建列。
+  `ownColumn` 的**显式入口**是「多分组下右键 Shell 标签 → 独立成列 / 归入分组列」（§11.6.10 ②-b），与拖拽互不冲突。
+- **快捷指令自动触发的解码与滚动匹配缓冲已改成按分组各一份**（§11.6.10 ④）。此前它们是全局单例，两组同时收数据会把多字节字符拆到两组字节里各解一半、也会把两组的尾巴拼在一起误匹配。
+  该项只有「按分组分桶后四个发送入口分别路由正确」的证据（45/45，diag987），**没有**双端口同时收数据时的端到端触发证据（硬件限制同上）。
 
 ## 14. 需求覆盖核对
 
@@ -1706,7 +1948,7 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 | subRow 可以被收起 | §8.3（含「按钮必须挂在 TabRow」的可恢复性约束） | ✅ |
 | tabPanel 对应一个 Tab | §1.5 + I3 | ✅ |
 | 串口组、main、filter、chart、shell 都是 Tab | §1.1 / §1.2 | ✅ 用 `isContainer()` 而非 `kind` 区分容器与叶 |
-| 组内 pane 分屏保留 | §4.2 + §5.5 | ⚠️ 与「单组时 subRow 不可见」组合时需裁决，见 §5.5 |
+| 组内 pane 分屏保留 | §4.2 + §5.5 | ✅（单标签时置灰，见 §11.6.9 的产品裁决） |
 | 分屏分为 TabRow 级与 subRow 级 | §3.3–§3.4 + §4 | ✅ 二维分离，互不引用 |
 | 只有一个串口组时 subRow 不可见，main/filter/chart/shell 都在 TabRow | §3.3 族列 + §5.2 | ✅（附两条针对性回归用例，§11.1） |
 | 新建架构设计文档 | 本文件 | ✅ |
@@ -1720,5 +1962,5 @@ AFTER-DRAG  layout=[chart,main,filter]  dom=[main,filter,chart]   ← 分叉
 **相关文档**
 
 - `MULTI_SERIAL_DESIGN.md` §6A —— 多串口实现的背景描述（标签体系部分以本文为准）
-- `agent_notes.md` §13A.9–§13A.18 —— 标签相关的历次缺陷与教训
-- `ToDo.md` —— CDP 验证清单（**21 个脚本**；其中 `run-all` 17 个脚本新近一次全量回归 17/17 `exit=0` + `renderer-diag=clean`，`verify-native-context-menu` / `verify-four-column-drag-fit` / `verify-two-port-isolation` 为定点跑过）
+- `agent_notes.md` §13A.9–§13A.20 —— 标签与多串口相关的历次缺陷与教训
+- `ToDo.md` —— CDP 验证清单（**23 个脚本**；其中 `run-all` **19** 个脚本新近一次全量回归 19/19 `exit=0` + 每支 `renderer-diag=clean`，`verify-native-context-menu` / `verify-four-column-drag-fit` / `verify-two-port-isolation` 为定点跑过）
