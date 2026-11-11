@@ -394,7 +394,14 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   // 主串口终端的构造已收进 `buildSerialTerminalOptions()` 模板，默认与后续分组共用同一份。
   // 断言目标从「某一行字面量」改成「模板本身」：因为模板才是唯一的真相源，
   // 若只看某次 new，后续分组用的模板未被约束时就会漏掉。
-  assert.match(renderer, /function buildSerialTerminalOptions\(\) \{[\s\S]*?scrollback:\s*20000/);
+  //
+  // 模板签名从空括号改成 `(config = currentConfig)`：新建分组的终端必须拿到设置里的
+  // 字体/主题，而默认分组是模块加载期建的（那时 config 还是 null），所以模板必须能
+  // 接受一个可缺省的 config。这两条一起把「模板必须带字体」变成可回归的事实——
+  // 只约束 scrollback 的话，把字体字段删掉测试也不会红。
+  assert.match(renderer, /function buildSerialTerminalOptions\(config = currentConfig\) \{[\s\S]*?scrollback:\s*config\.scrollbackLimit \|\| 20000/);
+  assert.match(renderer, /function buildSerialTerminalOptions\(config = currentConfig\) \{[\s\S]*?fontFamily:\s*TERMINAL_FONT_FAMILY\(config\)/);
+  assert.match(renderer, /function buildSerialTerminalOptions\(config = currentConfig\) \{[\s\S]*?theme:\s*getTerminalTheme\(config\)/);
   assert.match(renderer, /function createSerialRuntime\(groupId\)[\s\S]*?new Terminal\(buildSerialTerminalOptions\(\)\)/);
   // 清空必须清到“该 tabId 对应分组”的终端上：改造后终端不再是一个模块级常量，
   // 而是按 groupId 从运行时注册表取。
@@ -705,7 +712,11 @@ test('terminal wallpaper applies to log and shell terminals with a solid fallbac
   assert.equal((renderer.match(/allowTransparency: true/g) || []).length, 3);
   assert.match(renderer, /function getTerminalWallpaperPath\(config\)[\s\S]*fs\.existsSync\(wallpaperPath\)/);
   assert.match(renderer, /image\.onload = \(\) => \{[\s\S]*--terminal-wallpaper-image[\s\S]*--terminal-wallpaper-overlay/);
-  assert.match(renderer, /applyTerminalWallpaper\(config\);\s*serialTerm\.options = options/);
+  // 设置变更必须下发到**每个分组**的串口终端，不能只写默认分组：
+  // 旧实现是 `applyTerminalWallpaper(config); serialTerm.options = options`（只管默认分组），
+  // 新建分组与已建好的其他分组都会停在旧字体上（实测 diag981：g-1 的 fontFamily 与设置不一致）。
+  // 断言改成校验「按运行时注册表遍历」这个新事实，而不是某一行字面量。
+  assert.match(renderer, /applyTerminalWallpaper\(config\);[\s\S]*?serialRuntimes\.listGroupIds\(\)\.forEach\(groupId => \{[\s\S]*?runtime\.term\.options = options;[\s\S]*?invalidateTerminalSearch\(runtime\.term, 'options'\);/);
   assert.match(styles, /\.terminal-wrapper\s*\{[^}]*background-image:\s*var\(--terminal-wallpaper-image, none\);/s);
   assert.match(styles, /\.terminal-wrapper::before\s*\{[^}]*background:\s*rgba\(0, 0, 0, var\(--terminal-wallpaper-overlay, 0\)\);/s);
   assert.match(styles, /\.terminal-wrapper \.xterm-viewport\s*\{[^}]*background-color:\s*transparent !important;/s);
@@ -849,8 +860,11 @@ test('each quick-send item persists its own mode and CRLF setting', () => {
   assert.match(renderer, /mode: item\.mode === 'hex' \? 'hex' : 'text'/);
   assert.match(renderer, /appendCrLf: item\.appendCrLf === true/);
   assert.match(renderer, /appendCrLf: quickSendAppendCrlfInput\.checked/);
-  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send' \}/);
-  assert.match(renderer, /sendSerialRequest\(\{ mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send-trigger' \}/);
+  // 两个发送入口都必须显式带 groupId：不带的后果是 `resolveSerialGroupId(undefined)` 回落
+  // 默认分组，于是切到串口 2 组后点快捷发送仍会写到串口 1（实测 diag981：groupId 为 'default'）。
+  // 点击用 activeGroupId；自动触发用**收到字节所属分组**（groupId 参数），取不到才回落。
+  assert.match(renderer, /sendSerialRequest\(\{ groupId: activeGroupId, mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send' \}/);
+  assert.match(renderer, /sendSerialRequest\(\{ groupId: groupId \|\| activeGroupId, mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send-trigger' \}/);
   assert.match(renderer, /validateSendContent\(item\.mode, item\.content, sendEncoding/);
   assert.match(renderer, /if \(!compact && item\.mode === 'hex'\) \{[\s\S]*modeBadge\.textContent = 'HEX'/);
   assert.match(renderer, /mode-badge hex quick-send-mode-badge/);
@@ -903,7 +917,9 @@ test('terminal search invalidates cached coordinates and re-anchors active resul
   assert.match(renderer, /searchState\.current = anchoredIndex >= 0 \? anchoredIndex \+ 1 : 0/);
   assert.match(renderer, /invalidateTerminalSearch\(term, 'reset', \{ clearAnchor: true \}\)/);
   assert.match(renderer, /invalidateTerminalSearch\(shellTab\.term, 'clear', \{ clearAnchor: true \}\)/);
-  assert.match(renderer, /invalidateTerminalSearch\(serialTerm, 'options'\)/);
+  // 字体/主题变更后必须作废每个终端的搜索缓存：原来只写 `serialTerm`（默认分组），
+  // 现在改成遍历运行时注册表，所以断言从「写 serialTerm」改成「写每个 runtime.term」。
+  assert.match(renderer, /invalidateTerminalSearch\(runtime\.term, 'options'\)/);
   assert.doesNotMatch(renderer, /function getSearchBufferVersion/);
 });
 

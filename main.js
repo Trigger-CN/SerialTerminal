@@ -2291,7 +2291,11 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   terminalContextMenuState = {
     tabId: payload.tabId || '',
     terminalType: payload.terminalType || 'main',
-    paneId: payload.paneId || 'pane-1'
+    paneId: payload.paneId || 'pane-1',
+    // 分组级动作（split-group-*）必须知道「用户右键的是哪一个分组」。
+    // 不回传它，渲染侧就只能拿激活分组凑数：实测在两个分组已分屏、激活的是 g-1 时
+    // 右键 g-2 选分屏，被记进参与者表的仍是 g-1，g-2 永远进不来。
+    groupId: payload.groupId || ''
   };
 
   const hasSelection = Boolean(payload.hasSelection);
@@ -2311,7 +2315,8 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       action,
       tabId: terminalContextMenuState?.tabId || '',
       terminalType,
-      paneId: terminalContextMenuState?.paneId || 'pane-1'
+      paneId: terminalContextMenuState?.paneId || 'pane-1',
+      groupId: terminalContextMenuState?.groupId || ''
     });
   };
 
@@ -2319,10 +2324,34 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   // 它与下面的组内 pane 分屏（split-horizontal / split-vertical）是两件事，
   // 后者把单个标签移动另一个 pane，前者决定哪些分组并排显示。
   //
+  //
   // 'tab' 是单分组专用：此时分组级分屏无对象（candidates < 2），直接给组内 pane 分屏。
   // canSplit 为假（该组 pane 里只有一个标签）时置灰而不是隐藏：移走唯一标签会被
   // reconcileEmptyPanes 立即折叠回一个 pane，用户看到的是「点了没反应」。
+  //
+  // 三种「新建」项与二级标签行上的按钮**走同一个创建入口**：按钮 click 里调的是
+  // createShellTab / createFilterTab / createChartTab，这里只是把它发出去，
+  // 由渲染侧同一个 handleTerminalContextMenuAction 转发，避免两条创建路径。
+  const paneNewTabItems = (labels_, send) => [
+    {
+      label: labels_.newShellTab || 'New Shell Tab',
+      ...menuIcon('terminal'),
+      click: () => send('new-shell-tab')
+    },
+    {
+      label: labels_.newFilterTab || 'New Filter Tab',
+      ...menuIcon('filter_alt'),
+      click: () => send('new-filter-tab')
+    },
+    {
+      label: labels_.newChartTab || 'New Chart Tab',
+      ...menuIcon('show_chart'),
+      click: () => send('new-chart-tab')
+    }
+  ];
   const template = terminalType === 'tab' ? [
+    ...paneNewTabItems(labels, sendAction),
+    { type: 'separator' },
     {
       label: labels.splitHorizontal || 'Move Tab to Right Split',
       ...menuIcon('vertical_split'),
@@ -2340,6 +2369,18 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       ...menuIcon('close_fullscreen'),
       enabled: Boolean(payload.splitEnabled),
       click: () => sendAction('close-split')
+    },
+    { type: 'separator' },
+    {
+      // Shell 独立成列的**唯一显式入口**：拖拽只能把它停到某列列首行，
+      // 想让它自占一列（用户原话「右键 shell 标签建立第三个分屏」）必须走这里。
+      // 已经在独立列里时换成反向项，否则用户点进去就出不来了。
+      label: payload.shellOwnColumn
+        ? (labels.joinGroupColumn || 'Move into Group Column')
+        : (labels.detachToOwnColumn || 'Detach to Own Column'),
+      ...menuIcon('vertical_split'),
+      enabled: Boolean(payload.canDetach),
+      click: () => sendAction(payload.shellOwnColumn ? 'join-group-column' : 'detach-to-own-column')
     }
   ] : terminalType === 'group' ? [
     {
@@ -2360,6 +2401,8 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       enabled: Boolean(payload.groupSplitEnabled),
       click: () => sendAction('close-group-split')
     },
+    { type: 'separator' },
+    ...paneNewTabItems(labels, sendAction),
     { type: 'separator' },
     {
       label: labels.addSerialPort || 'Add Serial Port',

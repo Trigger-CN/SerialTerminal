@@ -2110,11 +2110,23 @@ html.custom-titlebar .window-titlebar {
     height: 32px;
 }
 
+/* 二级标签行的动作按钮组：间距**只由 gap 决定**，不靠 HTML 源码里的换行缩进。
+   以前这里没有任何规则，容器退化成 display:block，按钮之间靠 index.html 里的空白
+   文本节点隔开（实测 8.39px），而 JS createElement 建的按钮组没有文本节点（实测
+   4px）——第一组与第二组的「添加标签页」按钮间距因此不一样（diag1052）。
+   改成 flex + gap 后，静态标记与动态创建、第一组与第二组完全一致。 */
+.pane-tab-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 0 8px;
+}
+
 .pane-new-tab-btn {
     width: 28px;
     min-width: 28px;
     height: 24px;
-    margin-right: 4px;
     padding: 0;
     font-size: 13px;
     align-self: center;

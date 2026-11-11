@@ -122,8 +122,11 @@ let receiveEncoding = 'utf8';
 let sendEncoding = 'utf8';
 let newlineMode = 'crlf';
 let textDecoder = null;
-let quickTriggerDecoder = null;
-let quickTriggerBuffer = '';
+// 快捷指令的作用域是全局共享（同一条指令在任何分组都参与匹配），但**解码器与滚动匹配缓冲区
+// 必须按分组各一份**：共用一个解码器时，两个分组同时收的多字节字符会被拆到两组字节里各解一半
+// （乱码）；共用一个缓冲区时，A 组的触发文本会和 B 组的尾巴拼在一起误匹配。
+const quickTriggerDecoders = new Map();
+const quickTriggerBuffers = new Map();
 let appliedHexSettingsKey = '';
 let serialWriteChain = Promise.resolve();
 let serialSessionId = 0;
@@ -970,7 +973,8 @@ function dispatchSerialBatch(groupId, bytes) {
     if (!runtime || !bytes || !bytes.length) return;
     currentBatchTimestamp = formatTimestamp();
     try {
-        processQuickSendAutoTriggers(bytes);
+        // 触发源是**本批字节**，触发后的回发也必须回到这个分组，不能回 activeGroupId。
+        processQuickSendAutoTriggers(bytes, id);
         // 显示模式必须按**本批字节所属分组**读：否则两个分组只能是同一种显示模式，
         // A 组设成 HEX 会把 B 组的文本输出也变成 HEX。
         if (getGroupDisplay(id).receiveDisplayMode === 'hex') {
@@ -1122,16 +1126,24 @@ function createTextDecoder(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     setTextDecoder(id, iconv.getDecoder(SUPPORTED_ENCODINGS.has(encoding) ? encoding : 'utf8'));
 }
 
-// 快捷指令的自动触发解码器是全局的（快捷指令作用域本身就是全局共享），
-// 因此这里继续用默认分组的接收编码，与改造前一致。
-function createQuickTriggerDecoder() {
-    const encoding = getGroupDisplay(REGISTRY_DEFAULT_GROUP_ID).receiveEncoding;
-    quickTriggerDecoder = iconv.getDecoder(SUPPORTED_ENCODINGS.has(encoding) ? encoding : 'utf8');
+// 编码按**本分组**取：接收编码本来就是一个分组一份，用默认分组的编码去解别的分组的字节
+// 会在 GBK/UTF-8 混用时报错或出乱码。
+function createQuickTriggerDecoder(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const id = resolveSerialGroupId(groupId);
+    const encoding = getGroupDisplay(id).receiveEncoding;
+    quickTriggerDecoders.set(id, iconv.getDecoder(SUPPORTED_ENCODINGS.has(encoding) ? encoding : 'utf8'));
 }
 
-function resetQuickTriggerReceive() {
-    quickTriggerDecoder = null;
-    quickTriggerBuffer = '';
+// 不传 groupId 表示「全部清空」（关闭自动触发时用）；传了就只清该分组。
+function resetQuickTriggerReceive(groupId = null) {
+    if (groupId === null) {
+        quickTriggerDecoders.clear();
+        quickTriggerBuffers.clear();
+        return;
+    }
+    const id = resolveSerialGroupId(groupId);
+    quickTriggerDecoders.delete(id);
+    quickTriggerBuffers.delete(id);
 }
 
 function flushTextReceive(groupId = REGISTRY_DEFAULT_GROUP_ID) {
@@ -1203,7 +1215,7 @@ function switchReceiveEncoding(nextEncoding, { persist = true, groupId = REGISTR
         if (previous) flushTextReceive(id);
         setGroupDisplay(id, { receiveEncoding: normalized });
         if (previous) createTextDecoder(id);
-        resetQuickTriggerReceive();
+        resetQuickTriggerReceive(id);
     }
     if (id === activeGroupId && receiveEncodingSelect) receiveEncodingSelect.value = normalized;
     if (persist && !isApplyingConfig) saveSerialModeConfig();
@@ -1273,6 +1285,11 @@ function getContextMenuLabels() {
         groupSplitHorizontal: trFallback('main.groupSplitHorizontal', 'Split Groups Left/Right'),
         groupSplitVertical: trFallback('main.groupSplitVertical', 'Split Groups Top/Bottom'),
         groupSplitClose: trFallback('main.groupSplitClose', 'Close Group Split'),
+        detachToOwnColumn: trFallback('main.detachToOwnColumn', 'Detach to Own Column'),
+        joinGroupColumn: trFallback('main.joinGroupColumn', 'Move into Group Column'),
+        // 右键菜单里的「新建图表」。与 newShellTab / newFilterTab 并列，
+        // 菜单模板里三项共用同一段构造（见 main.js 的 paneNewTabItems）。
+        newChartTab: trFallback('main.newChartTab', 'New Chart Tab'),
         addSerialPort: tr('main.addSerialPort')
     };
 }
@@ -1355,33 +1372,42 @@ function requestSerialGroupContextMenu(groupId) {
 
 // 普通标签（main / filter / chart / shell）的右键菜单。
 //
-// 多分组时必须给**分组级**菜单：用户右键某个标签的意图是「把我现在待的这个串口组
-// 移走」，作用面是分组而不是该标签（见 requestSerialGroupContextMenu 的注释）。
+// **总是发 terminalType='tab'**，不分成单/多分组两套：
 //
-// 只有一个分组时分组级分屏无处可去（candidates < 2 直接 return），而组内 pane 分屏
-// 仍然是有意义的——实测用户就是这样报的：「只有一个分组的时候，右键点击标签分屏
-// 无反应」。所以单分组改发 terminalType='tab'，只给「移到右/下分屏、关闭分屏」三项。
+// 旧实现在多分组时直接转给 requestSerialGroupContextMenu，代价是 `tabId` 被丢掉——
+// 用户右键一个 Shell 只能拿到分组菜单，里面没有任何与这个 Shell 有关的项，「让 Shell
+// 独立成列」因此完全没有入口（实测 diag985 step6：payload 的 tabId 是空串）。
+//
+// 分组级分屏项现在都在 `'tab'` 菜单里（主进程模板自己按 isMultiGroup 置灰），
+// 因此一条分支就能同时满足单分组与多分组两个形态。
 //
 // canSplit 只在「本组 pane 里真的有第二个可移动标签」时为真：只移动唯一那个标签，
 // reconcileEmptyPanes 会发现只剩一个非空 pane 并立刻折叠回去，用户看到的就是「点了
 // 没反应」。与其给一个必然无效的菜单项，不如明确置灰。
+//
+// canDetach 只给 Shell：`ownColumn` 是根级叶的显示形态，串口主/过滤/图表标签是容器的
+// 子项（parentId !== null），模型里 `leafColumnMode` 对它们恒返 'row'，给了也无效。
 function requestWorkspaceTabContextMenu({ tabId, paneId, groupId }) {
     if (!tabId) return;
     const id = resolveSerialGroupId(groupId || activeGroupId);
-    if (isMultiGroupLayer()) {
-        requestSerialGroupContextMenu(id);
-        return;
-    }
     const layout = getGroupWorkspaceLayout(id);
     const totalTabs = layout.panes.reduce((sum, pane) => sum + pane.tabIds.length, 0);
+    const shellTab = isShellTabId(tabId) ? getShellTabState(tabId) : null;
+    const multiGroup = isMultiGroupLayer();
     ipcRenderer.send('show-terminal-context-menu', {
         terminalType: 'tab',
         tabId,
         paneId: paneId || '',
         groupId: id,
-        isMultiGroup: false,
+        isMultiGroup: multiGroup,
+        groupSplitEnabled: groupWorkspaceSplit.enabled,
         splitEnabled: layout.splitEnabled === true,
         canSplit: totalTabs >= 2,
+        // 只要是 Shell 就给入口：它在模型里恒为根级叶，两种形态互切都合法。
+        // 串口主/过滤/图表标签是容器的子项（parentId !== null），`leafColumnMode` 对它们
+        // 恒返 'row'，给了也无效，所以不给。
+        canDetach: Boolean(shellTab),
+        shellOwnColumn: Boolean(shellTab) && getShellTabOwner(shellTab) === null && shellTab.columnMode === 'ownColumn',
         labels: getContextMenuLabels()
     });
 }
@@ -1582,6 +1608,10 @@ function restartShellTab(tabId) {
 
 async function handleTerminalContextMenuAction(payload = {}) {
     const { action, tabId, terminalType, paneId } = payload;
+    // 被右键的那一个分组（主进程回传）。分组级动作必须作用于它而不是激活分组：
+    // 用户右键的是「这一个组」，而激活组可能是旁边那个（实测 diag985：三列共存时
+    // 右键 g-2 选分屏，参与表里记的却是 g-1）。
+    const contextGroupId = payload.groupId ? resolveSerialGroupId(payload.groupId) : activeGroupId;
     const isFilter = terminalType === 'filter';
     const isShell = terminalType === 'shell';
     const isChart = terminalType === 'chart';
@@ -1655,21 +1685,32 @@ async function handleTerminalContextMenuAction(payload = {}) {
             setActionStatus('已新建过滤标签页');
             break;
         }
+        // 右键菜单里的「新建图表」：与二级栏那个按钮走同一个 createChartTab，
+        // 不另写一条创建逻辑（否则两条路的默认参数、落 pane 规则会各自漂移）。
+        case 'new-chart-tab': {
+            createChartTab({}, resolvePaneId(paneId, tabId));
+            setActionStatus('已新建图表标签页');
+            break;
+        }
         // ---- 分组级分屏 -------------------------------------------------
         //
         // 与下面的 split-horizontal / split-vertical 区别：那两个把**单个标签**搬到另一个
         // pane（组内分屏），这三个决定**哪些分组**并排显示（分组级分屏）。
         // 两者名称相近但作用面完全不同，不要合并。
         case 'split-group-horizontal': {
-            setGroupWorkspaceSplit(true, { orientation: 'horizontal' });
+            setGroupWorkspaceSplit(true, { orientation: 'horizontal', groupIds: [contextGroupId] });
             setActionStatus('已启用左右分屏（分组级）');
             break;
         }
         case 'split-group-vertical': {
-            setGroupWorkspaceSplit(true, { orientation: 'vertical' });
+            setGroupWorkspaceSplit(true, { orientation: 'vertical', groupIds: [contextGroupId] });
             setActionStatus('已启用上下分屏（分组级）');
             break;
         }
+        // 这个分支不能因重构而丢：它之前就在这两个 split 分支后面，为了插入
+        // Shell 列形态的两个 case 而重写邻接代码时被一并抹掉过，结果是「关闭分组分屏」
+        // 完全失效（实测 run-all-990：verify-group-split 4 条 FAIL、verify-group-columns 2 条、
+        // verify-user-paths / verify-shell-drag 各 1 条，全都停在「关不掉分屏」）。
         case 'close-group-split': {
             setGroupWorkspaceSplit(false);
             setActionStatus('已关闭分组级分屏');
@@ -1677,6 +1718,31 @@ async function handleTerminalContextMenuAction(payload = {}) {
         }
         case 'add-serial-group': {
             addSerialGroupFromUi();
+            break;
+        }
+        // ---- Shell 的列形态（ownColumn 的显式入口） ---------------------
+        //
+        // 拖拽只能把它停到某列列首行（已锁定的裁决：拖到分组标签行不新建列），
+        // 所以「开始一个独立分屏」只能是菜单里的显式动作。两个方向必须成对存在，
+        // 否则进了独立列就回不去（那一列没有分组，右键只能拿到 Shell 自己的菜单）。
+        case 'detach-to-own-column': {
+            if (!tabId || !isShellTabId(tabId)) break;
+            if (!setShellColumnModeInModel(tabId, 'ownColumn')) break;
+            renderWorkspaceNow();
+            persistShellTabs();
+            setActionStatus('已让 Shell 独立成列');
+            break;
+        }
+        case 'join-group-column': {
+            if (!tabId || !isShellTabId(tabId)) break;
+            // 回到启动格的列：先回到 row 形态，再把列记忆指到被右键的那一组。
+            // 两步都写而不是只写一个：`setShellColumnModeInModel('row')` 不会自动
+            // 补 columnId，两者不一致时落列会回落到第一列。
+            if (!setShellColumnModeInModel(tabId, 'row')) break;
+            setShellColumnInModel(tabId, contextGroupId);
+            renderWorkspaceNow();
+            persistShellTabs();
+            setActionStatus('已让 Shell 归入分组列');
             break;
         }
         case 'split-horizontal': {
@@ -1847,12 +1913,31 @@ term.open(document.getElementById('terminal-container'));
 // 为什么做成模板而不是直接 new 一个：多分组需要「一个分组一个终端」，若每个分组
 // 各写一段构造代码，壁纸、Unicode 11 宽度、字体回退这些跨终端一致性就会逐份漂移。
 // 只保留一份模板，`createSerialRuntime(groupId)` 对任意分组都走它。
-function buildSerialTerminalOptions() {
-    return {
+//
+// **必须带上设置里的显示参数（字体/字号/主题）**：这里曾经只返回 cursorBlink 四项，
+// 于是后建的分组拿到 xterm 默认字体，而默认分组的字体是 `applyConfig` 事后单独写进去的
+// —— 用户看到的就是「新建的串口组日志终端字体没跟着设置走」。模板才是唯一真相源，
+// 不能让「默认分组额外被赋一次值」成为它和后续分组的差别。
+//
+// **config 为空时必须提前返回不带显示参数的版本**：默认分组的终端在模块加载期就建，
+// 那时 `currentConfig` 还是 null，而 `getTerminalTheme` 要读 `highlightColors.selection`，
+// 直接传进去会抛 TypeError 把整个 renderer 加载搞挂（实测：
+// `renderer.js failed at module init: Cannot read properties of undefined (reading 'selection')`）。
+// 设置到位后 `applyConfig` 会用同一个模板重写一次，所以这里不需要猜任何默认值。
+function buildSerialTerminalOptions(config = currentConfig) {
+    const options = {
         cursorBlink: true,
         allowProposedApi: true,
-        allowTransparency: true,
-        scrollback: 20000
+        allowTransparency: true
+    };
+    if (!config) return options;
+    return {
+        ...options,
+        fontSize: config.fontSize,
+        fontWeight: config.fontWeight,
+        fontFamily: TERMINAL_FONT_FAMILY(config),
+        scrollback: config.scrollbackLimit || 20000,
+        theme: getTerminalTheme(config)
     };
 }
 
@@ -2140,6 +2225,57 @@ function splitWorkspaceTabIntoPane({ tabId, groupId, orientation }) {
     return true;
 }
 
+
+// 二级标签行的动作按钮组（新建 Shell / 过滤 / 图表）——**唯一构造路径**。
+//
+// 为什么必须只留这一条：默认分组的 pane-1/pane-2 在 index.html 里有静态标记，
+// 非默认分组的 pane 由 createGroupPaneElement 现建。两处各写一份的代价是实测过的：
+// 静态标记里按钮之间的换行缩进会渲染成空白文本节点（实测 6 个，每个约一个空格宽），
+// 动态创建的没有，于是第一组与第二组的相邻间距分别是 8.39px 与 4px（diag1052）。
+// 用户报的「两个明明可以复用的控件，还是单独实现」指的就是这个。
+//
+// 因此：
+//   • 按钮一律用 DOM API 建，**不插入任何文本节点**，间距只由 CSS 的 gap 决定；
+//   • 静态 pane 的动作组在加载期用同一函数重建；
+//   • 新增按钮只改 PANE_ACTION_BUTTON_SPECS，不再改两处 DOM。
+const PANE_ACTION_BUTTON_SPECS = Object.freeze([
+    { kind: 'shell', icon: 'terminal', titleKey: 'main.newShellTab' },
+    { kind: 'filter', icon: 'filter_alt', titleKey: 'main.newFilterTab' },
+    { kind: 'chart', icon: 'show_chart', titleKey: 'main.newChartTab' }
+]);
+
+// create 闭包必须拿**按钮所在的 pane**，否则在第二分屏那一行点「新建过滤」会建到第一个 pane 里。
+function createPaneActionButtons(paneId) {
+    const elements = [];
+    PANE_ACTION_BUTTON_SPECS.forEach(spec => {
+        const button = document.createElement('button');
+        button.id = `${paneId}-new-${spec.kind}-tab-btn`;
+        button.className = 'secondary pane-new-tab-btn';
+        button.type = 'button';
+        button.title = tr(spec.titleKey);
+        button.appendChild(createMaterialIcon(spec.icon, 'material-icon'));
+        button.addEventListener('click', () => {
+            if (spec.kind === 'shell') createShellTab({ profileId: getDefaultShellProfileId() }, paneId);
+            else if (spec.kind === 'filter') createFilterTab({}, paneId);
+            else createChartTab({}, paneId);
+        });
+        elements.push(button);
+    });
+    return elements;
+}
+
+// 把一个动作组容器填成标准形态。静态标记里的空白文本节点也一并消失，
+// 于是「间距不一致」不可能再因源码排版而复发。
+//
+// 不用 replaceChildren：模块加载期的 DOM 门禁用的是最小 stub，
+// 只实现了 removeChild / appendChild，用交集写法才能让两者都跑得起来。
+function fillPaneActionButtons(actionsEl, paneId) {
+    if (!actionsEl) return;
+    // 先把旧节点（含空白文本节点）清干净：只持元素而不持文本，是保证间距只由 CSS 决定的前提。
+    while (actionsEl.firstChild) actionsEl.removeChild(actionsEl.firstChild);
+    createPaneActionButtons(paneId).forEach(button => actionsEl.appendChild(button));
+}
+
 // 按需创建第 3 个及以后的 pane 节点。
 //
 // index.html 里 pane-1 / pane-2 是静态写死的，行为与改造前完全一致；
@@ -2166,31 +2302,12 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
     tabsList.className = 'main-tabs-list pane-tabs-list';
     tabsList.id = `${paneId}-tabs-list`;
     tabsList.setAttribute('role', 'tablist');
+    // 二级栏的动作按钮组只走 createPaneActionButtons 这一条路径（见其函数头）。
+    // 这里不能再写一份 buttonSpecs：静态标记与动态 pane 各写一份，正是两组间距
+    // 不一致（8.39px vs 4px）的根因。
     const actions = document.createElement('div');
     actions.className = 'pane-tab-actions';
-
-    // 动态 pane 提供 Shell/过滤/图表三个新建入口。「添加串口」是全局动作，
-    // 入口只在两处且互斥（单分组用 pane-1 标签行那个，多分组用分组栏那个），
-    // 放进每个分屏 pane 会让同一行里出现多个相同按钮。
-    //
-    // 「新建 Shell」要保留：单分组时组内分屏仍然没有分组标签行可挂，这一行就是入口。
-    // 多分组时由 syncShellAddButtonVisibility() 把这些按钮整体隐掉。
-    const buttonSpecs = [
-        { kind: 'shell', icon: 'terminal', title: tr('main.newShellTab'), create: () => createShellTab({ profileId: getDefaultShellProfileId() }, paneId) },
-        { kind: 'filter', icon: 'filter_alt', title: tr('main.newFilterTab'), create: () => createFilterTab({}, paneId) },
-        { kind: 'chart', icon: 'show_chart', title: tr('main.newChartTab'), create: () => createChartTab({}, paneId) }
-    ];
-    buttonSpecs.forEach(spec => {
-        const button = document.createElement('button');
-        button.id = `${paneId}-new-${spec.kind}-tab-btn`;
-        button.className = 'secondary pane-new-tab-btn';
-        button.type = 'button';
-        button.title = spec.title;
-        button.appendChild(createMaterialIcon(spec.icon, 'material-icon'));
-        button.addEventListener('click', spec.create);
-        actions.appendChild(button);
-    });
-
+    actions.append(...createPaneActionButtons(paneId));
     header.appendChild(tabsList);
     header.appendChild(actions);
     // 右键菜单委托必须在列表建好时就挂上：标签按钮是后来 appendChild 进来的，
@@ -2214,9 +2331,6 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
     } else {
         root.appendChild(paneEl);
     }
-    // 新造的按钮不受任何可见性规则管，必须立即对齐一次：
-    // 否则多分组下新分屏的那一列会凭空多出一个「新建 Shell」。
-    syncShellAddButtonVisibility();
     return paneEl;
 }
 
@@ -3411,10 +3525,16 @@ function pruneGroupWorkspaceSplit() {
     return changed;
 }
 
-// 把一个分组加入/移出分组级分屏。
+// 分组加入/退出分组级分屏。
 //
-// 开启分屏时必须保证至少两个分组参与，否则用户完全看不到任何变化；
-// 因此第二次参与的默认候选是「激活分组 + 相邻分组」。
+// **参与者表只增不减**：旧实现直接 `groupWorkspaceSplit.groupIds = participants`，于是
+// 在已分屏状态下右键第三个分组选分屏，前两个分组会被整个踢出去（实测 diag982 S3：
+// 原本 ['g-1','default']，点完变成 ['g-1','g-2']，default 消失）。用户裁决是「分屏只
+// 作用于被右键移动的那一个分组」——那一个要加进来，而不是把别的挤出去。
+//
+// `requested` 里的分组（被右键的那一个）排在前面，保证它自己的列不会因为旧集合顺序
+// 被排到末尾；新分组本来就按 `serialGroups` 的顺序保证位置，这里只是在排序上更符合
+// 「我刚点的是它」的直觉。
 function setGroupWorkspaceSplit(enabled, options = {}) {
     if (!enabled) {
         resetGroupWorkspaceSplit();
@@ -3429,13 +3549,17 @@ function setGroupWorkspaceSplit(enabled, options = {}) {
     }
     const candidates = getGroupSplitCandidates();
     if (candidates.length < 2) return;
-    const requested = Array.isArray(options.groupIds) ? options.groupIds.filter(Boolean) : [];
-    let participants = requested.filter(id => candidates.includes(id));
+    const requested = (Array.isArray(options.groupIds) ? options.groupIds : []).filter(Boolean);
+    const previous = groupWorkspaceSplit.enabled ? groupWorkspaceSplit.groupIds : [];
+    let participants = [...requested, ...previous]
+        .filter(id => candidates.includes(id))
+        .filter((id, index, arr) => arr.indexOf(id) === index);
     if (participants.length < 2) {
         // 默认：激活分组 + 它在 serialGroups 里的下一个（到末尾则取上一个）。
         const index = candidates.indexOf(activeGroupId);
         const neighbour = candidates[index + 1] || candidates[index - 1] || candidates[0];
-        participants = [activeGroupId, neighbour].filter((id, i, arr) => id && arr.indexOf(id) === i);
+        participants = [activeGroupId, neighbour, ...participants]
+            .filter((id, i, arr) => id && arr.indexOf(id) === i);
     }
     groupWorkspaceSplit.enabled = true;
     groupWorkspaceSplit.groupIds = participants;
@@ -3711,27 +3835,10 @@ function createGroupPaneElement(groupId, paneId) {
     tabsList.className = 'main-tabs-list pane-tabs-list';
     tabsList.id = `${paneId}-tabs-list`;
     tabsList.setAttribute('role', 'tablist');
+    // 二级栏的动作按钮组同样只走 createPaneActionButtons（唯一构造路径）。
     const actions = document.createElement('div');
     actions.className = 'pane-tab-actions';
-
-    // 「新建 Shell」在这里也建一份（多分组时由 syncShellAddButtonVisibility 隐掉）。
-    // 与 createPaneElement 保持一致：两处 DOM 结构必须一样，否则布局层按 id 找容器时会差别对待。
-    const buttonSpecs = [
-        { kind: 'shell', icon: 'terminal', title: tr('main.newShellTab'), create: () => createShellTab({ profileId: getDefaultShellProfileId() }, paneId) },
-        { kind: 'filter', icon: 'filter_alt', title: tr('main.newFilterTab'), create: () => createFilterTab({}, paneId) },
-        { kind: 'chart', icon: 'show_chart', title: tr('main.newChartTab'), create: () => createChartTab({}, paneId) }
-    ];
-    buttonSpecs.forEach(spec => {
-        const button = document.createElement('button');
-        button.id = `${paneId}-new-${spec.kind}-tab-btn`;
-        button.className = 'secondary pane-new-tab-btn';
-        button.type = 'button';
-        button.title = spec.title;
-        button.appendChild(createMaterialIcon(spec.icon, 'material-icon'));
-        button.addEventListener('click', spec.create);
-        actions.appendChild(button);
-    });
-
+    actions.append(...createPaneActionButtons(paneId));
     header.appendChild(tabsList);
     header.appendChild(actions);
     // 非默认分组列里的主/过滤/图表标签也在这个列表里，右键分屏菜单同样要能用。
@@ -4914,27 +5021,41 @@ bindGroupTabListEvents(document.getElementById(GROUP_TAB_LIST_ID));
 // 由 ensureShellColumnDom 挂（它不走 createPaneElement）。
 bindPaneTabListEvents(document.getElementById('pane-1-tabs-list'));
 
-// 新建 Shell 按钮**永久只在上层标签栏**：只要有分组标签行，pane 行就不再提供入口。
+bindPaneTabListEvents(document.getElementById('pane-1-tabs-list'));
+
+// 静态 pane-1 / pane-2 的动作按钮组用**同一条构造路径**重建。
 //
-// 早期 pane 行与分组行各有一个：多分组时两层会同时出现两个一模一样的按钮，
-// 用户报告为「二层标签栏不要再显示打开 shell 按钮」。现在：
+// index.html 里那两份是手写的：按钮之间还有换行缩进产生的空白文本节点，
+// 渲染出的间距（实测 8.39px）与非默认分组动态建的（4px）不一样。
+// 重建一次就把两者拉到同一起点：同样的元素、同样的顺序、没有文本节点，
+// 间距完全由 CSS 的 gap 决定。
 //
-//   多分组  #add-shell-tab-btn 是唯一入口。它住在分组标签行，未分屏时跟着激活列走，
-//           分屏时由 placeShellAddButton 搬到激活列的列首行；pane 行的全部隐掉。
-//   单分组  两层不存在（describeGroupTabBar 把整条分组标签行置为 hidden），
-//           pane 行仍是原样——不隐，否则用户永远开不出第一个 Shell。
+// `#add-serial-group-inline-btn` 不属于这组按钮（它是全局动作、常任在 pane-1 行），
+// 必须在重建后重新插回去，且它的事件监听是在文件末尾对模块级 const 绑的，
+// 节点本身不重建就不会丢。
+['pane-1', 'pane-2'].forEach(paneId => {
+    const actions = document.querySelector(`#${paneId} .pane-tab-actions`);
+    if (!actions) return;
+    const inlineBtn = actions.querySelector('#add-serial-group-inline-btn');
+    fillPaneActionButtons(actions, paneId);
+    if (inlineBtn) actions.appendChild(inlineBtn);
+});
+
+// 新建 Shell 图标：一级栏与二级栏**永久同时显示**（用户裁决，见 memory-ede39045）。
 //
-// 所以「两层同时存在时 pane 行一个都不给」与「只有一层时那一层给」不会同时成立，
-// 任意时刻屏幕上恰好一个入口。
+// 历史：这里曾经为了「屏幕上恰好一个入口」而双向写 `button.hidden = isMultiGroup`，
+// 但那套互斥判据在「点第二组、再点 Shell」时把两个一级入口一起藏掉（实测 diag1051：
+// 按钮自身 hidden 都是 false，真正的封因是它们所在的列被隐藏，见 getVisibleGroupRow）。
+// 现在改为：两级的图标都恒显示，可见性不再由形态决定，而是由它们**落在哪一行**保证。
+//
+// 这里仍然要把历史上写过的 `hidden = true` 洗干净：多分组→单分组、或建过新 pane 之后，
+// 旧值会留在 DOM 上，不重写就会「看起来又没显示」。
 function syncShellAddButtonVisibility() {
-    const isMultiGroup = isMultiGroupLayer();
-    if (addShellTabBtn) addShellTabBtn.hidden = !isMultiGroup;
-    if (!isMultiGroup) return;
-    // 按 id 后缀扫而不是逐个记引用：组内分屏与新建分组都会现造新 pane，
-    // 一次性写死的清单会漏掉后来创建的那个（表现为「新分屏那列突然多出一个按钮」）。
+    if (addShellTabBtn) addShellTabBtn.hidden = false;
+    // 按 id 后缀扫而不是逐个记引用：组内分屏与新建分组都会现造新 pane。
     document.querySelectorAll('.pane-tab-actions > button').forEach(button => {
         if (!/-new-shell-tab-btn$/.test(button.id || '')) return;
-        button.hidden = true;
+        button.hidden = false;
     });
 }
 
@@ -5033,9 +5154,14 @@ function bindGroupTabListEvents(listEl) {
     // 分组级分屏的唯一入口。不用工具栏按钮：分屏是低频且带方向的开关（左右 / 上下 /
     // 关闭三选一），排成按钮会占满标签栏——用户在布局图里明确要求分组标签不挤在一起。
     //
+    //
     // 这一行里除了分组标签，还可能住着未归属的 Shell（分屏时它的按钮被搬到该列的列首行）。
-    // Shell 不是 .serial-group-tab，早先这里直接 return，于是它右键毫无反应。现在把它
-    // 归到「普通标签」那一支，用同一个分组菜单——用户右键 Shell 时想移走的也是这个组。
+    // 早先这里直接把「行里的非分组标签」全部归到分组菜单，于是右键 Shell 只能拿到分组级
+    // 菜单，`tabId` 为空，「让这个 Shell 独立成列」完全没有入口（实测 diag986 b4：payload
+    // 仍是 `{terminalType:'group', tabId:''}`）。现在按**标签自己的类型**分流：
+    // Shell 是根级叶、它的列形态是它自己的属性，必须走 `requestWorkspaceTabContextMenu`
+    // （那条路会给 `terminalType:'tab'` 并带上 `tabId` / `canDetach`）；
+    // 串口主/过滤/图表标签是容器的子项，右键它们的意图才是「移走这个分组」。
     listEl.addEventListener('contextmenu', event => {
         const groupTab = event.target.closest('.serial-group-tab');
         if (groupTab) {
@@ -5048,14 +5174,26 @@ function bindGroupTabListEvents(listEl) {
         }
         const tabBtn = event.target.closest('.main-tab');
         if (!tabBtn) return;
-        // 该行属于哪个分组，就用那个分组的菜单。行 id 形如 serial-group-tab-bar-<groupId>，
+        const tabId = tabBtn.dataset.target || '';
+        // 该行属于哪个分组。行 id 形如 serial-group-tab-bar-<groupId>，
         // 但默认分组用的是静态 id serial-group-tab-bar，所以改从 column 上读 dataset。
         const column = listEl.closest('.group-column');
-        const groupId = column?.dataset.groupId;
-        if (!groupId || groupId === SHELL_COLUMN_GROUP_ID) return;
+        const columnGroupId = column?.dataset.groupId;
+        const owningGroupId = columnGroupId && columnGroupId !== SHELL_COLUMN_GROUP_ID
+            ? columnGroupId
+            : activeGroupId;
         event.preventDefault();
         event.stopPropagation();
-        requestSerialGroupContextMenu(groupId);
+        if (isShellTabId(tabId)) {
+            requestWorkspaceTabContextMenu({
+                tabId,
+                paneId: resolvePaneId(tabBtn.dataset.paneId, tabId),
+                groupId: owningGroupId
+            });
+            return;
+        }
+        if (!columnGroupId || columnGroupId === SHELL_COLUMN_GROUP_ID) return;
+        requestSerialGroupContextMenu(columnGroupId);
     });
 }
 
@@ -5064,13 +5202,17 @@ function bindGroupTabListEvents(listEl) {
 
 // 决定「添加串口」按钮显示在哪一层。
 //
-// 两层各有一个入口，必须互斥，否则多分组时分组栏里会出现两个同样的按钮：
+// 两层各有一个入口：
 //
-// - 分组栏自己那个静态按钮（#add-serial-group-btn）属于分组层。
-// - pane 标签行那个（#add-serial-group-inline-btn）属于单层。
+// - 分组栏自己那个静态按钮（#add-serial-group-btn）属于分组层，**永久显示**；
+//   单分组时整条分组栏是 hidden，它自然不可见（不是被逐个 hidden 掉的）。
+// - pane 标签行那个（#add-serial-group-inline-btn）属于单层，**只在单分组时提供**。
 //
-// 单分组时分组栏是 hidden，所以静态按钮本来就看不见，只需亮出 inline 那个；
-// 多分组时两者都能显示，则必须把 inline 那个藏起来。
+// 为什么 inline 仍然要隐：它是「添加串口」的**等价入口**，不是「图标随形态消失」。
+// 单分组时一级栏整条不存在，没有它用户首次启动就开不了多串口；
+// 多分组时一级栏已经常显，再留一个一模一样的 inline 就是用户报过的「两个添加串口按钮」。
+// 这跟「两级都永久显示新建 Shell 图标」不矛盾：后者是同一功能在**两级不同行**都要能直接
+// 新建，用户要的就是这个；前者是同一功能在相邻两处的重复按钮。
 //
 // 注意：这里的 hidden 是否真能隐藏，取决于 CSS 里 [hidden] { display:none !important }，
 // 因为全局 button { display: inline-flex } 会覆盖浏览器默认的 [hidden] 样式。
@@ -5080,26 +5222,33 @@ function syncSerialGroupAddButtonLayer() {
         addSerialGroupInlineBtn.hidden = isMultiGroup;
     }
     if (addSerialGroupBtn) {
-        addSerialGroupBtn.hidden = !isMultiGroup;
+        addSerialGroupBtn.hidden = false;
     }
 }
 
 
-// 当前屏幕上**真正可见**的那一条一级标签行。
+// 「当前屏幕上**真正可见**的那一条一级标签行」。
 //
-// 两种形态：
-//   已分屏  每列各自有一条，取`columnGroupId`那一列的行；
-//   未分屏  只有一列可见。**不能一律返回静态行**：静态行属于 default 列，
-//           切到 g-1 后它跟着 default 列一起 hidden，把按钮放进去用户就看不见了。
-//           需要的是「激活列自己的行」——default 列的就是静态行，其它列的是自己那条。
+// 判据必须同时满足三件事，缺一就会在某个形态下把按钮放进看不见的容器里：
+//   1. 行自己没被 hidden；
+//   2. **行所在的列没被 hidden** —— 只判行是历史缺陷：点 Shell 后焦点落在未归属叶上，
+//      可见列切到 default，而 activeGroupId 仍是 g-1，于是按钮停在已隐藏的 g-1 列里，
+//      用户看到的是「一级标签栏的两个添加按钮都消失了」（实测 diag1051 step3：
+//      两个按钮自身 hidden 都是 false，blockedBy 是 `serial-group-workspace-g-1[hidden]`）；
+//   3. 真的渲染出了尺寸（column 的 hidden 也可能由 CSS 而非属性驱动）。
 //
-// 早期 placeGroupAddButton 直接取 getGroupTabRow(activeGroupId)，未分屏且激活组非默认时
-// 拿到的是隐藏行 —— 用户实测报告为「选到第二个分组发现没有新建串口按钮」。
-// 翻转后每列都有自己的一级行，这条判据统一成「取该列的行，它没隐藏就用它」。
-function getVisibleGroupRow(columnGroupId) {
-    const id = resolveSerialGroupId(columnGroupId);
-    const ownRow = getGroupTabRow(id);
-    if (ownRow && !ownRow.hidden) return ownRow;
+// 因此不再按 `columnGroupId` 取「那一条」，而是**扫描所有真实可见的行**：调用方要的是
+// 「按钮放哪用户看得见」，而不是「某个 id 对应的行在哪」。都没有时才回落到静态行。
+function getVisibleGroupRow() {
+    const rows = Array.from(document.querySelectorAll('.group-tab-row'));
+    const visible = rows.find(row => {
+        if (!row || row.hidden === true) return false;
+        const column = row.closest('.group-column');
+        if (!column || column.hidden === true) return false;
+        const rect = row.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    });
+    if (visible) return visible;
     return document.getElementById(GROUP_TAB_BAR_ID);
 }
 
@@ -6733,12 +6882,9 @@ renameTabInput.addEventListener('keydown', event => {
     if (event.key === 'Escape') closeRenameTabDialog();
 });
 
-document.getElementById('pane-1-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-1'));
-document.getElementById('pane-2-new-filter-tab-btn')?.addEventListener('click', () => createFilterTab({}, 'pane-2'));
-document.getElementById('pane-1-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ profileId: getDefaultShellProfileId() }, 'pane-1'));
-document.getElementById('pane-2-new-shell-tab-btn')?.addEventListener('click', () => createShellTab({ profileId: getDefaultShellProfileId() }, 'pane-2'));
-document.getElementById('pane-1-new-chart-tab-btn')?.addEventListener('click', () => createChartTab({}, 'pane-1'));
-document.getElementById('pane-2-new-chart-tab-btn')?.addEventListener('click', () => createChartTab({}, 'pane-2'));
+// pane-1 / pane-2 的动作按钮的 click **不再在这里绑**：它们由 createPaneActionButtons 在
+// 构造时绑好，静态那两份在加载期也会被同一函数重建。这里再绑一次会让一次点击创建
+// 两个标签（监听器叠加），是真实回归而不是测试问题。
 
 document.querySelectorAll('.workspace-pane').forEach(paneEl => {
     paneEl.addEventListener('mousedown', () => {
@@ -7466,6 +7612,10 @@ function getMainInputRequest() {
     // 发送输入框发送的是**激活分组**的端口，所以编码与换行模式取激活分组的值。
     const display = getGroupDisplay(activeGroupId);
     return {
+        // **必须显式带上 groupId。** `sendSerialRequest` 缺省会回落默认分组，
+        // 于是「切到串口 2 组后按发送」会把数据写到串口 1 组（实测 diag981：
+        // activeGroupId 已是 g-2，`serial-write` payload 的 groupId 仍是 'default'）。
+        groupId: activeGroupId,
         mode: mainInputMode,
         content: mainSendInput.value,
         encoding: display.sendEncoding,
@@ -7778,22 +7928,26 @@ function applyConfig(config) {
     logIncludeTimestamp = config.logIncludeTimestamp === true;
     logIncludeLineNumbers = config.logIncludeLineNumbers === true;
 
-    const options = {
-        fontSize: config.fontSize,
-        fontWeight: config.fontWeight,
-        fontFamily: TERMINAL_FONT_FAMILY(config),
-        scrollback: config.scrollbackLimit || 20000,
-        theme: getTerminalTheme(config)
-    };
+    const options = buildSerialTerminalOptions(config);
     applyTerminalWallpaper(config);
-    serialTerm.options = options;
-    invalidateTerminalSearch(serialTerm, 'options');
+    // 字体/字号/主题要下发到**每个分组的**串口终端，不能只改默认分组：
+    // 非默认分组的 runtime 是惰性建的，建的时候走 buildSerialTerminalOptions(currentConfig)，
+    // 而此后用户改设置时若只写 serialTerm，已建好的其他分组会停在旧字体上。
+    // 实测（diag981）：新建分组日志终端的 fontFamily 与设置不一致。
+    serialRuntimes.listGroupIds().forEach(groupId => {
+        const runtime = serialRuntimes.get(groupId);
+        if (!runtime || !runtime.term) return;
+        runtime.term.options = options;
+        invalidateTerminalSearch(runtime.term, 'options');
+    });
     
-    // Apply options to all filter tabs
-    filterTabs.forEach(tab => {
-        tab.term.options = options;
-        invalidateTerminalSearch(tab.term, 'options');
-        tab.fitAddon.fit();
+    // Apply options to all filter tabs（按分组取存储，不能用模块级别名）
+    serialGroups.forEach(group => {
+        filterTabsStore.getList(group.id).forEach(tab => {
+            tab.term.options = options;
+            invalidateTerminalSearch(tab.term, 'options');
+            tab.fitAddon.fit();
+        });
     });
     shellTabs.forEach(tab => {
         tab.term.options = options;
@@ -8307,7 +8461,7 @@ function disconnectSerial(groupId = REGISTRY_DEFAULT_GROUP_ID) {
         serialSessionId = nextSessionId;
         serialWriteChain = Promise.resolve();
         stopAutoSendRuntime();
-        resetQuickTriggerReceive();
+        resetQuickTriggerReceive(targetGroupId);
         chartTabs.forEach(tab => {
             tab.stream?.flush();
             tab.stream?.reset();
@@ -8353,7 +8507,7 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
         serialSessionId = getGroupSessionId(groupId);
         serialWriteChain = Promise.resolve();
         stopAutoSendRuntime();
-        resetQuickTriggerReceive();
+        resetQuickTriggerReceive(groupId);
         chartTabs.forEach(tab => {
             tab.stream?.flush();
             tab.stream?.reset();
@@ -8731,7 +8885,7 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
     if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) {
         // 只作废默认分组的写入链；其它分组的旧写入由会话号比对拦下。
         serialWriteChain = Promise.resolve();
-        resetQuickTriggerReceive();
+        resetQuickTriggerReceive(targetGroupId);
     }
     if (reconnecting) setActionStatus(`正在应用新的波特率 ${settings.baudRate}...`);
     try {
@@ -9471,8 +9625,12 @@ function stopAutoSendRuntime() {
 
 function getAutoSendRequest() {
     return {
+        // 自动发送同样必须按**激活分组**路由：缺省会落到默认分组，于是「切到串口 2 组
+        // 开自动发送」实际一直在往串口 1 写（实测 diag981：groupId 为 `<absent>`）。
+        // 编码也取激活分组的值，与主输入框保持一致。
+        groupId: activeGroupId,
         mode: 'text', content: autoSendTextInput.value,
-        encoding: sendEncoding, appendCrLf: false,
+        encoding: getGroupDisplay(activeGroupId).sendEncoding, appendCrLf: false,
         source: 'auto-send'
     };
 }
@@ -9496,7 +9654,9 @@ async function runAutoSendTick() {
     if (!autoSendEnableCb.checked || autoSendInFlight) return;
     const generation = autoSendGeneration;
     const interval = Math.max(10, Number.parseInt(autoSendIntervalInput.value, 10) || 1000);
-    if (!isConnected) {
+    // 连接判据也必须按激活分组：全局 `isConnected` 只代表默认分组，于是
+    // 「串口 2 组已连、串口 1 组未连」时自动发送会一直停在等连接。
+    if (!isGroupConnected(activeGroupId)) {
         autoSendValidation.textContent = trFallback('main.autoSendWaiting', 'Waiting for serial connection');
         autoSendTimer = setTimeout(() => {
             if (generation === autoSendGeneration) runAutoSendTick();
@@ -10203,12 +10363,14 @@ function updateQuickSendValidation() {
     return { ...result, ok: result.ok && triggerResult.ok && groupResult.ok };
 }
 
-async function triggerQuickSendItem(item) {
+// groupId 是**触发字节所属的分组**，不是 activeGroupId：A 组收到的字节触发出来的指令
+// 必须发回 A 组；用 activeGroupId 会在用户切到别的分组后把回复发错端口。
+async function triggerQuickSendItem(item, groupId) {
     if (quickSendTriggerInFlight.has(item.id)) return;
     quickSendTriggerInFlight.add(item.id);
     try {
         flashQuickSendItem(item.id);
-        const result = await sendSerialRequest({ mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
+        const result = await sendSerialRequest({ groupId: groupId || activeGroupId, mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
         const label = item.label || item.content;
         setActionStatus(result.ok
             ? trFallback('main.quickTriggerSent', 'Auto-trigger sent: {label}', { label })
@@ -10305,24 +10467,31 @@ function flashQuickSendItem(itemId, className = 'auto-trigger-flash', duration =
     });
 }
 
-function processQuickSendAutoTriggers(bytes) {
+function processQuickSendAutoTriggers(bytes, groupId = REGISTRY_DEFAULT_GROUP_ID) {
     if (!quickSendAutoTriggerEnabled) return;
     const triggerItems = quickSendList.filter(item => item.autoTrigger?.enabled === true && item.autoTrigger.text);
     if (!triggerItems.length) return;
-    if (!quickTriggerDecoder) createQuickTriggerDecoder();
-    const text = quickTriggerDecoder.write(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    // 解码器与缓冲区按分组取：见 quickTriggerDecoders 声明处的注释。
+    const id = resolveSerialGroupId(groupId);
+    if (!quickTriggerDecoders.has(id)) createQuickTriggerDecoder(id);
+    const decoder = quickTriggerDecoders.get(id);
+    if (!decoder) return;
+    const text = decoder.write(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
     if (!text) return;
-    quickTriggerBuffer = (quickTriggerBuffer + text).slice(-4096);
+    const buffer = ((quickTriggerBuffers.get(id) || '') + text).slice(-4096);
     const matchedItems = [];
     triggerItems.forEach(item => {
         const triggerResult = buildQuickTriggerRegex(item.autoTrigger);
-        if (triggerResult.ok && triggerResult.regex?.test(quickTriggerBuffer)) {
+        if (triggerResult.ok && triggerResult.regex?.test(buffer)) {
             matchedItems.push(item);
         }
     });
-    if (!matchedItems.length) return;
-    quickTriggerBuffer = '';
-    matchedItems.forEach(triggerQuickSendItem);
+    if (!matchedItems.length) {
+        quickTriggerBuffers.set(id, buffer);
+        return;
+    }
+    quickTriggerBuffers.set(id, '');
+    matchedItems.forEach(item => triggerQuickSendItem(item, id));
 }
 
 function normalizeSidebarQuickSendOrder() {
@@ -10658,7 +10827,8 @@ function renderQuickSendContainer(container, compact = false) {
                 event.stopPropagation();
                 return;
             }
-            const result = await sendSerialRequest({ mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send' }, SEND_LIMITS.quick);
+            // 点的是左侧栏里的一条指令，发往**当前激活分组**的端口。
+            const result = await sendSerialRequest({ groupId: activeGroupId, mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send' }, SEND_LIMITS.quick);
             showQuickSendClickResult(btn, result?.ok === true);
             if (result?.code === 'SERIAL_NOT_OPEN') recordQuickSendDisconnectedClick(btn);
         });

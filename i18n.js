@@ -637,7 +637,26 @@ Object.assign(translations['zh-TW'].main, { controllingGroup: '目前控制' });
 Object.assign(translations.fr.main, { controllingGroup: 'CONTRÔLE' });
 Object.assign(translations.ru.main, { controllingGroup: 'УПРАВЛЕНИЕ' });
 Object.assign(translations.de.main, { controllingGroup: 'AKTIV' });
+// 标签右键菜单里的「独立成列 / 归入分组列」。这是 `ownColumn` 唯一的显式入口：
+// 拖拽只能把 Shell 停到某列的列首行（用户裁决），想让它自占一列只能走这里。
+// test/i18n.test.js 要求六种语言键集完全一致，必须齐备。
+Object.assign(translations.en.main, { detachToOwnColumn: 'Detach to Own Column', joinGroupColumn: 'Move into Group Column' });
+Object.assign(translations['zh-CN'].main, { detachToOwnColumn: '独立成列', joinGroupColumn: '归入分组列' });
+Object.assign(translations['zh-TW'].main, { detachToOwnColumn: '獨立成列', joinGroupColumn: '歸入分組列' });
+Object.assign(translations.fr.main, { detachToOwnColumn: 'Détacher dans sa propre colonne', joinGroupColumn: 'Replacer dans la colonne du groupe' });
+Object.assign(translations.ru.main, { detachToOwnColumn: 'Вынести в отдельный столбец', joinGroupColumn: 'Вернуть в столбец группы' });
+Object.assign(translations.de.main, { detachToOwnColumn: 'In eigene Spalte lösen', joinGroupColumn: 'In Gruppenspalte zurückführen' });
 
+// 右键菜单里的「新建图表标签页」：右键分组标签行 + 右键任意标签都提供同一批新建项。
+// 英文与简体中文原本只有 en / zh-CN 两处有 newChartTab（在 chart 段），
+// 菜单要的是 main 段的同名键，六种语言必须齐备，否则 i18n 键集一致性与
+// 「只引用已定义键」两条测试会红。
+Object.assign(translations.en.main, { newChartTab: 'New Chart Tab' });
+Object.assign(translations['zh-CN'].main, { newChartTab: '新建图表标签页' });
+Object.assign(translations['zh-TW'].main, { newChartTab: '新增圖表分頁' });
+Object.assign(translations.fr.main, { newChartTab: 'Nouvel onglet de graphique' });
+Object.assign(translations.ru.main, { newChartTab: 'Новая вкладка графика' });
+Object.assign(translations.de.main, { newChartTab: 'Neuer Diagramm-Tab' });
 Object.assign(translations.en.prefs, {
   shortcuts: 'Shortcuts', shortcutsSettings: 'Shortcut Settings', shortcutsHelp: 'Click a shortcut field and press a key combination. Backspace clears a shortcut.', resetShortcutDefaults: 'Reset Shortcut Defaults', shortcutDisabled: 'Disabled',
   shortcutSendMainInput: 'Send bottom input', shortcutToggleSendHistory: 'Open send history', shortcutHistoryPrevious: 'Previous send history', shortcutHistoryNext: 'Next send history', shortcutFocusSearch: 'Focus search', shortcutClearActiveTerminal: 'Clear active terminal', shortcutRefreshPorts: 'Refresh serial ports', shortcutToggleSerialConnection: 'Connect / disconnect serial'
