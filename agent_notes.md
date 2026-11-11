@@ -2518,6 +2518,120 @@ UI 缺陷只认 `getBoundingClientRect` / `offsetParent` / `term.cols`，plan �
 
 ---
 
+### 13A.21 分组分屏后原组标签点不动（click 根本没被合成）+ CDP 启动等待收敛（本轮）
+
+用户实测报告（逐字）：
+
+> `新建串口组分屏之后，原来的串口的主页面标签和过滤标签都点击不了了；另外run-all.ps1测试每次开启应用窗口后要等很久才开始测试操作，效率很低，能否在应用开启准备好后立即触发开始测试`
+
+#### 13A.21.1 第一轮方向错了：以为是「写错分组」
+
+第一轮沿用上一轮的模型（`switchPaneTab` 用模块级别名 `workspaceManager` = 当前激活分组的布局），
+确实修对了一处真缺陷：未分屏/单列时焦点变了但布局 `activeTabId` 没变。但用户报告的是**分屏后点不动**，
+而这个修法**不够**——因为真实鼠标点击根本没有产生 `click`。
+
+教训：**「点了没反应」有四种完全不同的成因**——被遮挡 / 命中错 / 状态没写 / **事件没产生**。
+前三种都能靠「直接 `element.click()` 好不好使」快速二分；本轮就是靠这条对照在 3 分钟内把方向纠正过来。
+
+#### 13A.21.2 取证：一级行有 click，进入工作区就没有
+
+| 文件 | 观测 |
+|---|---|
+| `geo-1157.txt` | 补齐 `buttons` 位后点二级标签，只有 `pointerdown` / `mousedown` / `mouseup`，**无 `click`**；同一次运行里 `dispatchEvent(new MouseEvent('click'))` 立刻生效 |
+| `node-1158.txt` | 点静态「新建过滤页」按钮**同样无 `click`**，而点一级标签行（y≈40）有 `click` ⇒ 与标签类型无关，与**区域**有关 |
+| `drag-1159.txt` | y=40 / 50（一级行）有 `click`；y=70~120（`#group-workspace` 内）没有 |
+| `sweep-1160.txt` | 一级行 y=34~62 全部有 `click`；进入 `#group-workspace` 后全部没有 |
+| **`blk-1163.txt`** | **决定性**：只在 capture 阶段 `stopPropagation` 拦掉 `.workspace-pane` 的 `mousedown`，同一坐标的 `click` **立刻恢复** |
+
+#### 13A.21.3 根因与修法
+
+两个 pane 构造器（`createPaneElement` / `createGroupPaneElement`）都在 `mousedown` 里做会重建 DOM 的事：
+`setActivePane()` → `onLayoutChanged()` → `renderWorkspace()` 重排按钮、搬动面板；非激活分组还会走
+`applyActiveSerialGroup()` 整组重渲染。**按下时把被点的按钮或其祖先换掉**，浏览器判定「按下与抬起不在同一节点」，
+**不合成 `click`**。
+
+```js
+// ① workspace-manager.js：值没变就不请求渲染
+function setActivePane(paneId, { persist = true } = {}) {
+    const layout = getLayoutState();
+    const paneIds = getPaneIds();
+    const nextPaneId = paneIds.includes(paneId) ? paneId : (paneIds[0] || 'pane-1');
+    if (layout.activePaneId === nextPaneId) return;
+    layout.activePaneId = nextPaneId;
+    if (persist) persistLayout();
+    onLayoutChanged?.();
+}
+
+// ② renderer.js：两个构造器的时机从 mousedown 改到 click
+paneEl.addEventListener('click', () => setActivePane(paneId, { persist: true }));
+```
+
+**必须两个构造器都改**——只改一处就会剩下一半区域继续吞 click。这与 §13A.20.5 第 1 条（同一控件写三份）完全同源。
+
+#### 13A.21.4 四层判据 + 反向对照
+
+| 层 | 读什么 | 修前 diag1141 | 修后 |
+|---|---|---|---|
+| L1 布局 | `plan.plan.columns[].rows[0].activeTabId` | `tab-main`（点过滤页后仍是） | 与目标一致 |
+| L2 焦点 | `plan.sections.focusedTabId` | `tab-filter-1` | 与 L1 同步 |
+| L3 模型 | `columns[].panelIds` | `["tab-main"]` | 与 L1 同步 |
+| L4 DOM | `.main-tab-pane.active` | `["tab-main"]` | 与 L3 一致 |
+
+反向对照：**R1** 点之前该列确实显示另一个标签；**R2** 另一列不受影响；**R3** 激活分组不被悄悄改掉。
+
+#### 13A.21.5 本轮我自己造成的五个脚本级坑（全部不是产品缺陷）
+
+| # | 现象 | 真因 | 处置 |
+|---|---|---|---|
+| 1 | `verify-split-tab-click` 报 10 条整齐假失败 | `realClick()` 漏传 **`buttons` 位**，Chrome 不合成 `click`（只有 pointerdown/mousedown/mouseup） | 补 `buttons:0/1/0` 三步序列 |
+| 2 | `probe-click-path` 只输出 `STATE` + `no filter tab` | 夹具前提不满足，脚本静默跳过 | 废弃，重写为自包含夹具 |
+| 3 | `probe-click-why` 报 `window is not defined` | Node 侧直接写 `window.__mark`（`window` 只在渲染进程） | 改为 `ev('(window.__mark = 1, true)')` |
+| 4 | `probe-split-click` 报 `a-two-groups-exist :: ["default"]` | `.serial-group-tab` 上没 `dataset.groupId` | 改按按钮 id 解析 |
+| 5 | `probe-which-move` 报 `POINT=null` | 夹具前提不满足（未加过滤页，取不到 `tab-filter-1-button`） | 脚本作废，改用 `blk-1163` 的阻断实验 |
+
+**纪律**：以上一律只改探针，**不得记为产品缺陷**，也不得据此改产品代码。
+
+#### 13A.21.6 一条旧判据失效（不是产品回归）
+
+`verify-split-tab-click` 关分屏那一项原断言「默认列 `l4` 非空」。而此时激活分组是 `g-1`、默认列按设计 hidden
+（未分屏时只显示激活分组那一列），`l4` 为空是**正确行为**。已改写为「可见列恰好 1 个且等于激活分组」+
+「该可见列 `l4` 非空」。**不是为了让测试变绿而放宽期望。**
+
+#### 13A.21.7 启动等待：先量后改，并如实报告瓶颈
+
+```text
+MEASURE: port=893ms ready=2018ms total=2753ms stableSamplesChanged=0/10
+```
+
+- `ready` 之后再观察 600 ms，列/按钮/pane/计划列数 **10 次采样 0 次变化** ⇒ 原来那 350 ms「稳定余量」没有依据；
+- 三处收敛（均为测试基础设施，**五条就绪判据一条未动**）：`wait-ready.js` 的 `STABLE_MS` 350 → 0；
+  `run-cdp.ps1` 新增 `Invoke-NodePiped`（`& node ... \| Out-File`，去掉 `Start-Process`）；`run-all` 19 → 20 支；
+- 实测：每支 `wait-ready` 由 `2551–2619ms` 降到 `2051–2149ms`（**省 400–500ms/支**）。
+
+**必须同时说清的边界**：启动等待本身只占每支约 2.0–2.2 秒（20 支约 45 秒），`run-all` 整体 14–16 分钟的
+**主因是每支脚本内部的固定 `sleep`**（单支 25–136 s）。本轮**没有**把那些 `sleep` 改写成 `waitFor(条件)`。
+
+#### 13A.21.8 一条 PowerShell 环境事实（新增）
+
+Windows PowerShell 5.1 读取**无 BOM** 的 `.ps1` 时按 ANSI 解析；写进 UTF-8 中文注释会让解析器报
+`意外的标记"}"`。⇒ **`.me/tmp` 下的 `.ps1` 必须纯 ASCII**。判据：
+`[System.Management.Automation.Language.Parser]::ParseFile(...)` 的 `errors=0`。
+
+#### 13A.21.9 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `verify-split-tab-click`（新增，19 项） | **19/19 PASS**，exit=0（diag1166 / diag1167 / diag1219） |
+| 全量回归 `run-all -Start 1200`（20 支） | **20/20 `exit=0`**，20 个 `renderer-diag=clean`（`run-all-1200.txt`） |
+| 全量单测 | **570/570 / 0 fail** |
+| 静态门禁 | `mod=0` / `checked=95 missing=none` / `blocks total=32 js=22 syntaxErrors=0 arityHints=0` |
+| 启动等待 | `wait-ready` 每支省 400–500 ms（前后对比已记录） |
+
+**环境与手段限制（必须如实标注）**：CDP 合成输入 ≠ 真人手测；本机无互连串口对 / 无 `com0com`，
+**没做双端口回环**。
+
+---
+
 ## 14. AI 接手时建议的工作流程
 
 

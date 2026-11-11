@@ -1886,6 +1886,184 @@ function fillPaneActionButtons(actionsEl, paneId) {
   反向对照才是能抓到回退的那一半。
 
 
+
+### 11.6.12 分组分屏后原组标签点不动（mousedown 重渲染吞掉 click）
+
+用户实测报告（逐字）：
+
+> 「新建串口组分屏之后，原来的串口的主页面标签和过滤标签都点击不了了」
+
+同一个诉求里还有第二条：
+
+> 「run-all.ps1 测试每次开启应用窗口后要等很久才开始测试操作，效率很低，能否在应用开启准备好后
+> 立即触发开始测试」——见 §11.6.12.6。
+
+#### 11.6.12.1 先排除的三个假设
+
+| 假设 | 取证 | 结论 |
+|---|---|---|
+| 被别的元素遮住 / `pointer-events: none` | `elementFromPoint` 命中的就是 `tab-main-button` 本身；祖先链 `pointer-events` 全 `auto`、`z-index` 全 `auto` | **否** |
+| click 监听没绑上 | 绕过命中测试直接 `element.click()` 立刻切换 | **否** |
+| 分屏后写错了分组（历史结论） | 见下一段：`switchPaneTab` 的分组修复**是真缺陷但不足以解释症状** | **部分** |
+
+第二轮取证把话说清了：真实鼠标点击**根本没有产生 `click` 事件**。
+
+证据链（全部为真实 Electron + CDP）：
+
+| 文件 | 观测 |
+|---|---|
+| `geo-1157.txt` | 补齐 `buttons` 位后点二级标签，只有 `pointerdown` / `mousedown` / `mouseup`，**无 `click`**；同一次运行里 `dispatchEvent(new MouseEvent('click'))` 立刻生效 |
+| `node-1158.txt` | 点静态「新建过滤页」按钮**同样无 `click`**，而点一级标签行（y≈40）有 `click` ⇒ 与标签类型无关，与**区域**有关 |
+| `drag-1159.txt` | y=40 / 50（一级标签行）有 `click`；y=70~120（`#group-workspace` 内）没有 |
+| `sweep-1160.txt` | 一级标签行 y=34~62 全部有 `click`；进入 `#group-workspace` 后全部没有 |
+
+#### 11.6.12.2 根因：mousedown 阶段重渲染导致浏览器不合成 click
+
+`#group-workspace` 内的每一个 `.workspace-pane` 都挂着 `mousedown` 处理器，两个 pane 构造器
+（`createPaneElement` 与 `createGroupPaneElement`）各一份。它在**按下瞬间**做两件事：
+
+1. `setActivePane(paneId)` → `onLayoutChanged?.()` → `renderWorkspace()` 整棵标签树重新收敛；
+2. 若该 pane 所属分组不是激活分组，还会走 `applyActiveSerialGroup()`（侧栏 + 分组标签行 + 列可见性全量重渲染）。
+
+`renderWorkspace` 会重排标签按钮（`reconcileButtons` → `orderButtons`）并搬动面板（`applyVisibility`）。
+**被点的那个按钮或其祖先在按下与抬起之间被换掉**，浏览器于是判定「不是同一次点击」，
+**不合成 `click`**。产品里所有标签切换都绑在 `click` 上，所以表现就是「点了没反应」。
+
+决定性实验（`blk-1163.txt`）：
+
+```js
+// 只在 capture 阶段拦住 .workspace-pane 的 mousedown，不改产品代码
+document.addEventListener('mousedown', evt => {
+    if (evt.target.closest && evt.target.closest('.workspace-pane')) evt.stopPropagation();
+}, true);
+```
+
+结果：**同一个坐标、同一个标签，`click` 立刻出现**。⇒ 因果链闭合。
+
+这也解释了为什么该缺陷「只在分屏后出现」：未分屏时只有激活分组那一列可见，`activeGroupId` 与
+被点列一致，`setActivePane` 与 `switchPaneTab` 往往是幂等的，重渲染不发生（或发生也不会换掉按钮）；
+分屏后用户点的列**经常不是激活分组**，于是每次 mousedown 都触发一次整组重渲染。
+
+#### 11.6.12.3 修法（两处，均为最小改动）
+
+**① `workspace-manager.js` 的 `setActivePane()`：值没变就不请求渲染。**
+
+```js
+function setActivePane(paneId, { persist = true } = {}) {
+    const layout = getLayoutState();
+    const paneIds = getPaneIds();
+    const nextPaneId = paneIds.includes(paneId) ? paneId : (paneIds[0] || 'pane-1');
+    // 值没变就不要请求渲染：本函数由 pane 的 mousedown 调用，
+    // 一次 renderWorkspace 会重排按钮、搬动面板，按下时换掉被点的节点，
+    // 浏览器就不合成 click。激活 pane 没变时渲染结果也不会变，跳过是等价的。
+    if (layout.activePaneId === nextPaneId) return;
+    layout.activePaneId = nextPaneId;
+    if (persist) persistLayout();
+    onLayoutChanged?.();
+}
+```
+
+**② `renderer.js` 的两个 pane 构造器：选 pane / 切分组的时机从 `mousedown` 改到 `click`。**
+
+```js
+// createPaneElement（组内 pane）
+paneEl.addEventListener('click', () => setActivePane(paneId, { persist: true }));
+
+// createGroupPaneElement（分组列）
+paneEl.addEventListener('click', () => {
+    if (activeGroupId !== id) {
+        activeGroupId = id;
+        applyActiveSerialGroup({ fit: false });
+    }
+});
+paneEl.addEventListener('click', () => setActivePane(paneId, { persist: true }));
+```
+
+为什么必须两个构造器都改：`createPaneElement` 与 `createGroupPaneElement` 是两套并行的 pane 构造器，
+**只改一处就会有一半区域继续吞 click**——与 §11.6.11.8 第 1 条（同一控件写三份）完全同源。
+
+为什么改到 `click` 阶段是安全的：`click` 已经派发完毕，此后的重渲染不会撤销这次事件；
+而「选 pane / 切分组」本来就是**点击的结果**，不是点击的前置条件。
+
+#### 11.6.12.4 四层判据（缺一层就会漏掉这类缺陷）
+
+| 层 | 读什么 | 修前（diag1141） | 修后（diag1166 / diag1167） |
+|---|---|---|---|
+| L1 布局 | `plan.plan.columns[].rows[0].activeTabId` | `tab-main`（点过滤页后仍是） | 点过滤页 → `tab-filter-1`；点主标签 → `tab-main` |
+| L2 焦点 | `plan.sections.focusedTabId` | `tab-filter-1` | 与 L1 同步 |
+| L3 模型 | `columns[].panelIds` | `["tab-main"]` | `["tab-filter-1"]` ↔ `["tab-main"]` |
+| L4 DOM | 内容区里带 `.active` 的面板 | `["tab-main"]` | 与 L3 一致 |
+
+反向对照三项（防「假绿」）：
+
+- **R1**：点之前该列确实显示**另一个**标签（`l1 === tab-filter-2` 且 `l4 === [tab-filter-2]`）；
+- **R2**：另一列（g-1）的 active 面板**不受影响**（`["tab-main-g-1"]` 前后一致）；
+- **R3**：激活分组不被「点别列标签」悄悄改掉（`activeGroupId` 前后都是 `g-1`）。
+
+#### 11.6.12.5 验证
+
+| 脚本 | profile | 结果 |
+|---|---|---|
+| `verify-split-tab-click.js`（新增，19 项） | diag1166 | **19/19 PASS，exit=0** |
+| 同上（纳入 `run-all` 后的复跑） | diag1167 | **19/19 PASS，exit=0** |
+| `verify-add-buttons.js`（21 项，上一轮基线） | diag1168 | **21/21 PASS，exit=0** |
+| `node scripts/run-tests.js` | — | **570/570，fail=0** |
+
+19 项构成：夹具 5 + 四层正向 8 + 可逆 1 + 反向对照 3 + 关分屏 2。
+
+> **一条旧判据失效的说明**：关分屏那一项最初断言「默认列的 `l4` 非空」。实际上此时激活分组是
+> `g-1`，默认列按设计就是 `hidden` 的（§2.6：未分屏时只显示激活分组那一列），`l4` 为空是**正确行为**。
+> 已改写为「可见列恰好 1 个且等于激活分组」+「该可见列 `l4` 非空」。这是**判据错**，不是产品回归，
+> 也不是为了让测试变绿而放宽期望。
+
+#### 11.6.12.6 顺带：测试启动等待的实测与收敛
+
+用户第二条诉求是「应用准备好后立即触发」。先量后改：
+
+```text
+MEASURE: port=893ms ready=2018ms total=2753ms stableSamplesChanged=0/10
+```
+
+- `port` ≈ 0.9 s：调试端口出现 page target（进程起来）；
+- `ready` ≈ 2.0 s：五条就绪判据全部通过；
+- **`ready` 之后再观察 600 ms，列/按钮/pane/计划列数 10 次采样 0 次变化** ⇒ 原来那 350 ms
+  「稳定余量」没有依据。
+
+三处收敛（都属于测试基础设施，不是产品代码）：
+
+| 改动 | 位置 | 依据 |
+|---|---|---|
+| `STABLE_MS` 默认 350 → **0** | `wait-ready.js` | 上面 0/10 次变化的实测 |
+| 去掉 `Start-Process` 的额外进程 | `run-cdp.ps1` 的 `Invoke-NodePiped` | `& node ... \| Out-File` 即可拿到真实 `$LASTEXITCODE` |
+| `run-all` 19 → **20 支** | `run-all.ps1` | 纳入 `verify-split-tab-click` |
+
+**就绪判据的五条一条都没有动**——那是防「骨架没建好就开始操作」的护栏，不是可优化项。
+
+| profile | 脚本 | `wait-ready` | 结果 |
+|---|---|---|---|
+| diag1165（改前对照） | verify-split-tab-click | `total=2551ms` | exit=1（旧判据错） |
+| diag1167 | verify-split-tab-click | `total=2149ms` | exit=0 |
+| diag1168 | verify-add-buttons | `total=2051ms` | exit=0 |
+
+⇒ 每支省 **400–500 ms**，20 支合计约 **8–10 秒**。**必须同时说清的边界**：启动等待本身只占每支
+约 **2.0–2.2 秒**（20 支约 45 秒），`run-all` 整体 14–16 分钟的**主因是每支脚本内部的固定 `sleep`**
+（单支 25–136 s）。本轮**没有**把那些 `sleep` 改写成 `waitFor(条件)`，那是 14 支脚本的批量重构，
+风险与工作量都超出本轮范围。
+
+#### 11.6.12.7 结构性反思（与 §11.6.11.8 同源，但这次在事件时序上）
+
+1. **「点不动」有四种完全不同的成因，必须先分清再动手。** 被遮挡 / 命中错 / 状态没写 / **事件没产生**。
+   前三种都能靠「直接 `element.click()` 好不好使」快速二分；本轮就是靠这条对照在 3 分钟内把方向
+   从「布局写错」纠正到「click 根本没来」。
+2. **同一逻辑两个入口，只修一个等于没修。** 上一轮的 `switchPaneTab` 只修了「按分组取 manager」，
+   这一轮如果只改 `createPaneElement` 不动 `createGroupPaneElement`，就会剩下一半区域继续坏。
+   凡是「两个构造器 / 两个入口」的地方，改动都要成对。
+3. **副作用要放在事件语义允许的阶段。** `mousedown` 是「准备」，`click` 才是「完成」。在 `mousedown` 里做
+   会重建 DOM 的事，等于主动破坏浏览器对 click 的合成前提——这类缺陷不会报错，只会「没反应」。
+4. **不要为了让它「看起来更稳」而叠加无依据的等待。** 350 ms 稳定余量当初没有任何测量背书；
+   本轮量出 0/10 次变化后直接归零。反过来，就绪判据那五条**有**明确依据（防止骨架没建好），
+   所以一条都不动——**有依据的等待保留，无依据的等待删除**。
+
 ## 12. 扩展点
 
 「通用」不能自证，只能用「新增东西要改几处」量化。目标：**零改动**。
