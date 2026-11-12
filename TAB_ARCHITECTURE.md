@@ -913,6 +913,45 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 
 
 
+### 6.1.2 pane 标签行的 contextmenu 委托必须「按容器绑」，不要逐个 id 补
+
+右键菜单的机制本身是**事件委托**，不是给每个标签按钮挂监听。`bindPaneTabListEvents(listEl)`
+对一个 `.pane-tabs-list` 容器挂一次 `contextmenu`，靠 `event.target.closest('.main-tab')`
+反查被点的按钮，所以标签按钮后来被 `appendChild` 进来也能正常响应；它自带幂等保护
+（`listEl.dataset.paneTabEvents === '1'` 就直接 return），重复调用不会挂两遍。
+
+**出过的事故**：`index.html` 里静态写死了两个 pane（`#pane-1` 与初始 `hidden` 的 `#pane-2`），
+而绑定入口散在四处：
+
+| 入口 | 覆盖范围 |
+|---|---|
+| `createPaneElement` 内 | **只覆盖新建的 pane** —— 首行 `if (!paneId || getPaneDom(paneId)) return null;` 使静态 `pane-2` 直接早退，走不到那里的绑定 |
+| `createGroupPaneElement` 内 | 非默认分组的动态 pane |
+| `ensureShellColumnDom` 内 | Shell 独立列 |
+| 模块加载期手写 | 只硬写了 `pane-1`（还重复了一行） |
+
+于是主终端与过滤页上下分屏后，下方 pane 的标签行上**一个 `contextmenu` 监听都没有**，
+右键完全无反应（实测 `pcm-1600.txt`：`pane-1` 发出 1 次 `show-terminal-context-menu`，
+`pane-2` 发出 **0** 次）。这是一处「覆盖漏了」的缺陷，不是委托机制本身的问题。
+
+因此现行规则是：
+
+1. **静态 pane 由模块加载期一次性扇描覆盖**：
+   `document.querySelectorAll('#group-workspace .pane-tabs-list').forEach(...)`。
+   `#group-workspace` 是所有分组列的公共父容器（含非默认分组的静态列），所以这一扇扫
+   同时覆盖默认分组的 `pane-1` / `pane-2` 与其它分组列里已存在的静态列表。
+2. **不要逐个写 id**。以后再往 `index.html` 里加静态 pane，或者哪个构造路径忘了自己绑，
+   扇扫都能补上；逐个写 id 必然再漏。
+3. **动态新建的 pane 与 Shell 独立列仍由各自构造器在建节点时绑**。那不是「重复」，
+   而是新节点产生时必须有个绑定点；幂等保护保证扇扫与构造器叠加调用也不会挂两遍。
+4. **不要维护「哪些已经绑过」的名单**。幂等判据已经在 DOM 的 `data-pane-tab-events` 上，
+   再维护一份名单只会多出一处会与实际状态分叉的数据。
+
+> 判读提醒：**冗余代码 ≠ 行为缺陷**。事故初期读到这里是「两次相同调用」就判为「右键会弹两次
+> 菜单」，实测 `pane-1` 恰好 1 次才纠正过来 —— 幂等保护让重复调用完全无害。定性必须靠实测行为，
+> 不能靠「看起来重复」。
+
+
 ### 6.2 状态自愈
 
 不变式不能只在迁移时检查一次。运行期有四类污染来源：手改配置、写入过程中崩溃、旧版本回退后重新保存、程序缺陷。

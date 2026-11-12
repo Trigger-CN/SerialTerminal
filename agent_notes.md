@@ -3576,3 +3576,149 @@ assert.deepEqual(layout.panes[1].tabIds, ['tab-shell-1']);   // ← 把 I2 违�
   （pane-2 消失）**之后**才测拖拽，`#pane-2` 的量已经为 0，那条 `PASS` 是无效结果；
   重写为只测拖拽的 `probe-restore-drag.js` 才拿到真正结论。**操作顺序会影响前提是否成立，
   必须把相互影响的步骤拆到不同 profile 上。**
+
+
+## 15. 上下分屏后下方 pane 的标签不能右键（含「到底有没有复用」的正面回答）
+
+### 15.1 用户原话
+
+> 串口过滤页和主终端页上下分屏后，下面的标签不能右键点击，到底有没有复用啊，事件还是一个一个加的吗？
+
+这句话里有两个必须同时回答的问题：一是「下方标签为什么不能右键」，二是「事件到底有没有复用」，
+后者是对代码质量的直接质疑，不能只报「已修好」。
+
+### 15.2 正面回答：机制复用了，「绑定这件事」没有复用
+
+**右键机制本身是事件委托，确实是一个函数复用到底的。** `bindPaneTabListEvents(listEl)`
+（`renderer.js:2199`）对一个 `.pane-tabs-list` 容器挂**一次** `contextmenu`，靠
+`event.target.closest('.main-tab')` 反查被点的按钮。所以：
+
+- 标签按钮后来被 `appendChild` 进来也能响应（不依赖按钮那时是否存在）；
+- 不是给每个标签按钮逐个 `addEventListener`；
+- 函数自带幂等保护：`if (listEl.dataset.paneTabEvents === '1') return;`。
+
+**但把「哪些列表需要绑」这件事是一件一件补的。** 绑定入口原本散在四处：
+
+| 位置 | 覆盖范围 |
+|---|---|
+| `createPaneElement` 内（2359 行） | **只覆盖新建 pane** —— 首行 `if (!paneId || getPaneDom(paneId)) return null;` |
+| `createGroupPaneElement` 内（3989 行） | 非默认分组的动态 pane |
+| `ensureShellColumnDom` 内（3827 行） | Shell 独立列 |
+| 模块加载期手写（5206 / 5208 行） | **只有 `pane-1`**，而且写了两次 |
+
+`index.html:327` 的 `<div class="workspace-pane" id="pane-2" hidden>` 是**静态写死**的，于是它恰好
+落在四个入口的缝隙里：静态（不走 `createPaneElement`）、不是 `pane-1`（没被手写补）、不是分组/Shell 列。
+**这就是「事件还是一个一个加的吗」的诚实答案：委托不是逐个加，但绑定点确实是一处一处补的，所以漏了一个。**
+
+### 15.3 实测复现
+
+用产品真实动作 `__handleContextMenuAction({ action: 'split-vertical', tabId: 'tab-filter-1' })`
+把过滤页移入第二个 pane（`probe-pane-context-menu @ diag1600` → `pcm-1600.txt`）：
+
+```
+split: true   orientation: "vertical"
+pane-1  rect {w:799, h:288, left:201, top:32}   tabs ["tab-main"]
+pane-2  rect {w:799, h:288, left:201, top:330}  tabs ["tab-filter-1"]   p2List: true
+```
+
+确实是「主终端在上、过滤页在下」，`#pane-2-tabs-list` 元素也存在。右键结果：
+
+| pane | `show-terminal-context-menu` 次数 | payload |
+|---|---|---|
+| `pane-1` | **1** | `{tabId:"tab-main", paneId:"pane-1", canSplit:true}` |
+| `pane-2` | **0** | `[]` |
+
+⇒ 用户症状精确复现：下方 pane 的标签行在整个生命周期里没有收到过任何 `contextmenu` 监听。
+
+### 15.4 一处我自己的静态误判（必须记下来）
+
+一开始读到 `renderer.js:5206` 与 `5208` 是两次逐字相同的调用，就判为「`pane-1` 的 contextmenu
+被挂了两遍 ⇒ 右键会发两次 `show-terminal-context-menu`」。**这个判断是错的。**
+
+核对第 2200–2201 行：
+
+```js
+if (!listEl || listEl.dataset.paneTabEvents === '1') return;
+listEl.dataset.paneTabEvents = '1';
+```
+
+第二次调用直接 `return`。实测 `pane-1` 右键恰好 **1** 次也印证了这一点。
+
+⇒ 那两行是**冗余但无害的死调用**，**不是**行为缺陷。定性必须靠实测行为，不能靠「看起来重复」。
+**冗余代码 ≠ 行为缺陷** —— 这条现在写进 `TAB_ARCHITECTURE.md` §6.1.2 的判读提醒里。
+
+### 15.5 修复
+
+只改 `renderer.js` 一处（模块加载期）：
+
+```js
+// 旧：只硬写 pane-1，且重复了一行
+bindPaneTabListEvents(document.getElementById('pane-1-tabs-list'));
+bindPaneTabListEvents(document.getElementById('pane-1-tabs-list'));
+
+// 新：覆盖所有已存在的 pane 标签行
+document.querySelectorAll('#group-workspace .pane-tabs-list').forEach(listEl => {
+    bindPaneTabListEvents(listEl);
+});
+```
+
+为什么选扇描而不是再补一行 `pane-2`：
+
+1. `#group-workspace` 是所有分组列的公共父容器（含非默认分组的静态列），一次扇扫同时覆盖
+   默认分组的 `pane-1` / `pane-2` 与其它分组列里已存在的静态列表；
+2. 以后再往 `index.html` 里加静态 pane、或者哪个构造路径忘了自己绑，扇扫都能补上；
+   再补一行 `pane-2` 只是把眼前的缝填了，下一条缝依旧。
+3. 函数幂等，所以扇扫与构造器重复调用**安全**，不需要也不应该维护「哪些已经绑过」的名单。
+
+动态新建的 pane（`createPaneElement` / `createGroupPaneElement`）与 Shell 独立列
+（`ensureShellColumnDom`）**保留**各自的绑定——新节点产生时必须有个绑定点，那不是重复。
+
+### 15.6 修前后对比
+
+| | 修前 `pcm-1600` | 修后 `pcm-1601` |
+|---|---|---|
+| 场景 | `split:true` / `vertical` / pane-2 @top330 装 `tab-filter-1` | 逐字相同 |
+| `pane-1` 右键 | 1 次 | 1 次（没因扇描而重复） |
+| `pane-2` 右键 | **0 次** | **1 次** |
+| payload | `[]` | `{tabId:"tab-filter-1", paneId:"pane-2", canSplit:true}` |
+| 结果 | `total=3 pass=2 fail=1` | **`total=3 pass=3 fail=0`** |
+
+### 15.7 新回归 `verify-pane-context-menu`（7/7，`vpcm-1602` / `diag1602`）
+
+| # | 断言 | 关键值 |
+|---|---|---|
+| 1 | `nonexistent-pane-yields-zero`（**反向对照**） | `{count:0, error:"no-pane"}` ⇒ 证明 `count===1` 不是恒真 |
+| 2 | `pane-1-context-menu-exactly-once` | count 1 |
+| 3 | `fixture-vertical-split-with-filter-below` | `split:true`、`orientation:"vertical"`、pane-2 的 `rect.top` > pane-1 的、pane-2 含 `tab-filter-1` |
+| 4 | `lower-pane-context-menu-exactly-once` | count 1 |
+| 5 | `lower-pane-payload-carries-its-own-tab` | `{tabId:"tab-filter-1", paneId:"pane-2", terminalType:"tab"}` |
+| 6 | `upper-pane-still-exactly-once` | count 1（未因扇描而重复） |
+| 7 | `lower-pane-context-menu-works-horizontally-too` | `close-split` 后再 `split-horizontal`，下方 pane 仍 count 1 |
+
+已纳入批跑（`run-all.ps1` 23 → 24 支）。
+
+### 15.8 验证
+
+| 项 | 结果 |
+|---|---|
+| 全量回归 `run-all -Start 1620`（24 支） | **24/24 `exit=0` + 24 个 `renderer-diag=clean`**，`seeded=1` |
+| 单测 | **572/572 / 0 fail** |
+| 静态门禁 | `mod=0` / `checked=95 missing=none` / `blocks total=32 js=22` / `syntaxErrors=0` / `arityHints=0` |
+
+### 15.9 环境边界（如实标注）
+
+- 右键菜单是 Chromium Aura 原生窗口（`Chrome_WidgetWin_2`），CDP **读不到菜单项**。验证的是真实
+  `contextmenu` 派发后捕获的 IPC payload（旁路 patch `ipcRenderer.send`），**不是**菜单渲染本身。
+- CDP 合成 `contextmenu` **不等于**真人手测；本轮未做人工右键验证。
+- 本机无互连串口对，未验证串口数据链路；本缺陷不涉及数据链路。
+- `git push`、发版、打 tag 仍未获授权，本轮只做本地提交。
+
+### 15.10 可复用的判读纪律
+
+1. **「点了没反应」有四种成因**：被遮挡 / 命中错 / 状态没写 / **事件没产生**。这次是第四种——
+   `pane-2` 上压根没有监听。先去数事件个数，比读代码猜快得多。
+2. **冗余代码 ≠ 行为缺陷**。幂等保护、去重逻辑能让一份看起来错的代码完全无害。
+3. **「按容器扇描」优于「逐个写 id」**：只要控件是同一类，就应当一次扇扫覆盖；逐个点名必然补漏。
+4. **幂等保护与扇扫是配套的**：有了幂等，扇扫可以与构造器叠加而无需维护「已绑名单」。
+5. **静态标记里的控件必须单独想到**。`index.html` 里已经存在、而构造器又因 `getPaneDom` 早退的节点，
+   是「入口缝隙」的高发区。
