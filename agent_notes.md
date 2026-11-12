@@ -3311,4 +3311,120 @@ workspaceLayout = {
   - 已在过滤终端右键菜单中加入“在主终端中定位”动作
   - 已修正过滤终端定位主终端时的 1 行偏移问题，改为读取右键命中 buffer 行文本并解析显示行号
   - 已收敛为“搜索行号并高亮行号文本”的稳定方案，未继续保留 Decoration 整行高亮尝试
+  - 已收敛为“搜索行号并高亮行号文本”的稳定方案，未继续保留 Decoration 整行高亮尝试
   - 已移除未使用的源日志映射逻辑，降低状态维护复杂度
+
+## 14A. 单串口组下 Shell 不能分屏（2026）
+
+### 14A.1 症状与先取证的价值
+
+用户原话：`在只有一个串口组情况下，shell不能分屏`。
+
+这句描述很容易被当成「菜单项被置灰」或「分屏后 Shell 不在任何一行」，两种推测都错了一半。
+真实情况是**两层叠加**，只有分开量才能看清：
+
+| 层 | 实测值 | 证据 |
+|---|---|---|
+| 菜单准入 | `canSplit: true`（**可点，不是置灰**） | `sgs-1261.txt` 第 10 行 |
+| 动作执行 | 调 `split-horizontal` / `split-vertical` 后 `rowCount` 仍 0、`splitEnabled` 仍 false | `sgs-1261.txt` 第 15、17 行 |
+| 根因 | `pane-1.tabIds = ["tab-main","tab-shell-1"]` —— Shell 被登记进了 pane | `sgsint-1262.txt` 第 86–90 行 |
+| 拒绝点 | `splitWorkspaceTabIntoPane` 首行 `if (!tabId || isShellTabId(tabId)) return false;` | `renderer.js` |
+
+⇒ 用户看到的「不能分屏」= **菜单能点、点了没反应**。若不做这一步取证就直接改 `canSplit`，
+只会把「能点但无效」改成「置灰」，用户的诉求（真的能分屏）依然没实现。
+
+### 14A.2 根因：一条注释与实现相反的 I2 违规
+
+`createShellTab` 里原本写着：
+
+```js
+addTabToOwningGroupPane(tabId, resolvedPaneId, { activate: false, persist: false });
+```
+
+紧邻的注释却是「Shell 不在任何分组的 panes[].tabIds 里（I2）」「新 Shell 默认不归属任何分组」。
+**注释是设计意图，实现是反的。**
+
+为什么它能活很久：`tabs-workspace-projection.js` 的 `projectWorkspace` 会把 shell 重新提到根级
+（那里明确写着「shell 不进 pane（I1/I2），无论真实 tabIds 里有没有它」）。于是：
+
+- **模型投影后的 plan 是干净的**（`columns[].tabIds` 不含 shell）；
+- **渲染层自己维护的 `groupWorkspaceLayouts` 是脏的**（`pane-1.tabIds` 含 shell）。
+
+而右键菜单的 `canSplit` 数的正是渲染层那份布局 ⇒ 两份数据分叉的地方就是缺陷藏身之处。
+
+**可复用经验**：投影层的容错不能当作「脏数据无害」的依据。凡是在渲染层私有布局对象上写东西，
+必须同时满足 I1/I2，而不是指望投影把它洗干净。
+
+### 14A.3 为什么最终没有放宽 I1/I2
+
+要让 Shell「被搬到另一个 pane」，它必须成为那个 pane 的成员，也就必须进 `panes[].tabIds`——
+而这正是 I1/I2 禁止的，且 `TAB_ARCHITECTURE.md` §5.5 语义 2 逐字写着「Shell 仍不进入任何
+subRow」。这不是实现细节，而是已经写入架构、并带 11 条反向对照用例的硬约束。
+
+因此停下来向用户确认，得到明确选择：**方案 1 —— 不改 I1/I2，Shell 自成第二列**。
+这条路径不新造能力：`columnMode === 'ownColumn'` 早就存在，只是被列级分屏的总闸挡住了。
+
+### 14A.4 修复要点（6 处）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `buildLiveWorkspaceSections` | `split.enabled` 从 `groupIds.length > 1` 改为 `isColumnSplitActive()` |
+| 2 | `detach-to-own-column` | 补调 `ensureColumnSplitForShellColumn` |
+| 3 | `join-group-column` | 补调 `collapseColumnSplitIfSingleColumn` |
+| 4 | `pruneGroupWorkspaceSplit` | 退出条件从「存活分组 < 2」改为「真实列 key < 2」 |
+| 5 | `close-group-split` | 复位前只收回 `ownColumn && !hostGroupId` 的 Shell |
+| 6 | `createShellTab` | 删掉 I2 违规登记；`switchPaneTab` 换成 `setFocusedTab` |
+
+第 1 条是关键：`layoutColumns` 在 `ws.split.enabled === false` 时**只能返回一列**，
+所以不论 `columnMode` 写得多对，单分组下都看不出任何变化。
+
+第 6 条里 `switchPaneTab` → `setFocusedTab` 不是风格选择：前者一进门就
+`if (!pane.tabIds.includes(tabId)) return;`，Shell 不再进 pane 后它会直接返回，
+新 Shell 不会变成当前显示的那个。
+
+### 14A.5 自己引入的两处回归（必须记住的模式）
+
+| # | 症状 | 我写错的地方 | 正确做法 |
+|---|---|---|---|
+| 1 | `verify-four-defects` 的 `b6-column-count-restored`：`beforeJoin:4 → afterJoin:1` | `ensureColumnSplitForShellColumn` 把 `groupIds` **覆写**成 `[id]` | 必须**并入**：`[...previous, id]` 去重；且 `enabled` 要在读旧表之后写 |
+| 2 | `verify-shell-drag` 3 条 `group-row-drop-*` FAIL | `close-group-split` 无条件对所有 Shell 回退 `row`，连带已停靠列的 Shell 也写一遍并重渲染，把紧接的拖拽落点测量打偏 | 只收 `columnMode === 'ownColumn' && !hostGroupId`，且必须在 `resetGroupWorkspaceSplit()` **之前** |
+
+共同模式：**「把某个开关整体复位」的代码，在多参与者场景下几乎总是错。**
+参与者不止一种（分组列 / 独立列），复位时只应该动自己那一种，并且要在清空状态**之前**判断。
+
+### 14A.6 一处假失败（不是产品缺陷）
+
+`verify-shell-drag @ diag1314` 报了 8 条 FAIL，包括 `single-group-shell-stays-in-pane-row`
+这种在脚本第 2 步就该成立的项。原因是前一次 `diag1313` 的命令因**终端会话静默失效**
+从未真正执行，profile 目录处于半初始化状态。换全新 `diag1320` 复跑 → `exit=0`。
+
+**已固化的纪律：单脚本失败先换全新 profile 复跑，再定性是产品缺陷还是环境/脚本问题。**
+
+### 14A.7 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `verify-single-group-shell-split`（新增 26 项） | **26/26**（`diag1267` / `diag1312` / `diag1421`） |
+| 全量回归 `run-all -Start 1400`（22 支） | **22/22 `exit=0` + 22 个 `renderer-diag=clean`** |
+| 单测 | **570/570 / 0 fail** |
+| `check-renderer-module-load` | `mod=0` |
+| `scan-undefined` | `checked=95 / missing=none` |
+| `check-arch-doc` | `blocks total=32 js=22 / syntaxErrors=0 / arityHints=0` |
+
+新脚本的 26 项覆盖：I2 恢复（新建 Shell 后 `paneTabIds` 仍只有 `tab-main`）、菜单 `canSplit:false`、
+detach 后 `columnCount=2`、两列真实几何（`left=201/603`、`width=398`、`top=32` 并排无重叠）、
+Shell 落在 `__shell__` 列且串口列 `rows[0]=["tab-main"]`、两列 `panelIds` 互不干扰、
+以及 join 后可逆回一列。
+
+### 14A.8 探针自身写错的两处（不是产品缺陷）
+
+1. `d-serial-column-keeps-main` 拿 `column.tabIds` 断言主标签 —— 分屏后列的 `tabIds` 装的是
+   **容器 id**（`["default"]`），主标签在 `rows[0].tabIds`。断言必须按 `rows[0]` 写。
+2. `STATE` 快照的 `columns` 映射漏了 `rows` 字段，导致 `serialCol.rows.some(...)` 抛 TypeError、
+   脚本 `exit=2`。补 `rows: c.rows || []` 后恢复。
+
+### 14A.9 环境边界（如实标注）
+
+- 本机无互连串口对、无 `com0com`，**没有做双端口收发回环**。
+- 全部结论来自真实 Electron + CDP 合成输入，**不是真人手测**。
+- `git push`、发版、打 tag 均未获授权，本轮只做本地提交。

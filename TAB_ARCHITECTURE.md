@@ -801,6 +801,36 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 
 语义 1 / 2 就是 §3.4 `layoutRowsOf()` 的 `isFamily` 分支与 §6 的 I9，**本次裁决未改动它们的实现**，只把「暂按」升级为「已定」。方案若再变，只需改这两处——这是行/列分离的直接收益。
 
+### 5.5.1 Shell 的分屏形态：自成第二列（方案 1，已实现）
+
+上面语义 1 / 2 回答的是「subRow」维度的形态，Shell 在那一维里**永远不存在**（I1 / I2）。
+但「Shell 能不能分屏」是另一个问题：Shell 的按钮住在一级 TabRow，它不能进 pane，
+所以它无法与串口标签上下分行。在不放宽 I1 / I2 的前提下，Shell 唯一可用的分屏形态是
+**同列旁边自成第二列**（`columnMode === 'ownColumn'`）。
+
+单串口组下这条路径原先不可用，原因不在 `ownColumn` 本身，而在列级分屏的总闸：
+`buildLiveWorkspaceSections` 写的是 `groupIds.length > 1`，而 `setGroupWorkspaceSplit`
+开头就 `if (candidates.length < 2) return;`。单分组下 `groupIds` 永远只有一项，
+`layoutColumns` 走非分屏分支只返回一列，`ownColumn` 写了也看不出变化
+（实测 `doc-1263.txt`：`columnMode` 已是 `ownColumn`，`columnCount` 仍是 1）。
+
+现行规则：
+
+1. `detach-to-own-column` 在写 `columnMode` 之外，还会调 `ensureColumnSplitForShellColumn`
+   把「该分组」**并入** `groupWorkspaceSplit.groupIds` 并打开开关。**并入而不是覆写**：
+   多分组已分屏时覆写会把其它分组踢出参与者表（实测 `verify-four-defects` 的
+   `b6-column-count-restored`：`beforeJoin:4 → afterJoin:1`）。
+2. 列级分屏是否生效的唯一判据是 `isColumnSplitActive()`：开关已开、且
+   `columnSplitKeys()`（存活的 `groupIds` + 是否存在独立列）去重后 ≥ 2。
+   `buildLiveWorkspaceSections` 的 `split.enabled` 与 `pruneGroupWorkspaceSplit` 的退出条件
+   都改用它，否则「只有 1 个分组 + 1 个独立列」会被旧判据当成「没分屏」或「该复位」。
+3. `close-group-split` 先把所有 Shell 的 `columnMode` 收回 `row` 再复位分屏；
+   `join-group-column` 收回后调 `collapseColumnSplitIfSingleColumn()`。
+   不写这两处就会出现「菜单说已关分屏、屏幕仍两列」。
+
+**这一条不影响 §5.5 语义 1 的「默认不渲染 subRow」**：`ownColumn` 是**列**，不是 subRow。
+单分组下不开 pane 分屏时仍然一条 subRow 都没有。
+
 ## 6. 不变式
 
 以下十条必须始终成立，可（且应该）写成断言。
@@ -831,6 +861,23 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 3. 分屏时 Shell 自然独立成一列（它是根级 Tab），不需要 `detachedColumn` 之类的字段来「模拟独立成列」。
 
 这三条替代了 `resolveShellTabHost()` 三分支、`setShellDetachedColumn()`、`isShellColumnActive()` 等约 10 个函数。
+
+**一条实际事故（已在 2026 修复）**：推论 1 / 2 是推论，不是自动护栏。
+`createShellTab` 曾经在创建时调 `addTabToOwningGroupPane(tabId, resolvedPaneId, ...)`，
+把新 Shell 写进了 `panes[].tabIds`（实测 `sgsint-1262.txt`：
+`pane-1.tabIds = ["tab-main","tab-shell-1"]`），违反 I2。它可以一直不被发现，因为
+模型层的 `projectWorkspace` 会把 shell 重新提到根级（`tabs-workspace-projection.js` 里
+写着「shell 不进 pane（I1/I2），无论真实 tabIds 里有没有它」）——于是**投影后的
+计划是干净的，而渲染层那份布局对象是脏的**。两个可观测后果：
+
+- 右键菜单的 `canSplit` 数的是渲染层布局的 `panes[].tabIds.length`，被这条脏数据
+  喂成 `true`，菜单项看起来可点；
+- 真正执行时 `splitWorkspaceTabIntoPane` 遇到 Shell 直接返回 `false`，于是
+  「菜单能点、点了没反应」。
+
+教训：`projectWorkspace` 的容错不能当成「脏数据无害」的依据。凡是在渲染层自己
+维护的布局对象上写东西，必须同时满足 I1 / I2，而不是指望投影把它洗干净。
+
 
 ### 6.2 状态自愈
 
