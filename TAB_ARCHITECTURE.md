@@ -878,6 +878,40 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 教训：`projectWorkspace` 的容错不能当成「脏数据无害」的依据。凡是在渲染层自己
 维护的布局对象上写东西，必须同时满足 I1 / I2，而不是指望投影把它洗干净。
 
+### 6.1.1 I2 必须在**归一化**处强制，不能只在投影层容错
+
+上一条的根因是「写入端违反 I2」，但同类缺陷还有第二个入口：**旧配置把 shell id 写进了
+`panes[].tabIds`**。如果归一化只校验「非空字符串 + 未重复」，脏数据就会被原样接受，
+于是 I2 在数据层长期不成立，只是被投影层掩盖。**实测事故**（`rcd-1500.txt` /
+`rca-1501.txt` / `rcdrag-1502.txt`）就发生在用户真实配置里：顶层
+`workspaceLayout.pane-2.tabIds = ["tab-shell-3"]`。
+
+它一次造成四个症状，且都不在渲染层：
+
+| 症状 | 机制 |
+|---|---|
+| 空右分屏 | `reconcileEmptyPanes` 见 `filled.length > 1` 就不折叠；投影层把 shell 提到根级后该 pane 实际为空，屏幕留下一个零标签 pane |
+| Shell 点不开 | `visiblePanelIdsOfColumn` 在 `rows.length > 1` 分支只看各行的 `activeTabId`，从不看**列首行的根级叶**；焦点写对了，`panelIds` 却不变 |
+| 拖不进去 | 空 pane 的标签行 `height === 0`，落点命中不到行，只写成了 `hostGroupId` |
+| 右键无反应 | `canSplit` 数到了 pane 里的脏 shell id，菜单项可点；`splitWorkspaceTabIntoPane` 对 shell 硬拒 |
+
+因此现行规则是：
+
+1. **`normalizeLayoutShape` 必须剔除 `panes[].tabIds` 里的 shell id**（`isShellTabId`）。
+   剔除后该 pane 若变空，交给 `reconcileEmptyPanes` 按既有规则收敛 —— 于是「旧配置
+   带脏数据」启动后自然回到单 pane，而不是渲染出一个空分屏。
+2. **任何合并 pane 的地方都不得搬 shell id**（`collapseSplit()`）。合并是无条件的，
+   不拦就是在每次「关闭分屏」时批量制造新的 I2 违规。
+3. **`canSplit` 必须同时满足「有 ≥ 2 个非 shell 标签」且「被右键的标签自己可移动」**。
+   Shell 的分屏形态是独立成列（§5.5.1），不是进 pane；菜单要对它如实置灰。
+4. **`visiblePanelIdsOfColumn` 的 `rows.length > 1` 分支要能给列首行的根级叶点亮面板**，
+   判据限定「焦点确实是本列根级叶」，否则 Shell 会同时出现在每一列。
+
+这四条把 I1 / I2 从「投影层的容错假设」变成「数据层的硬前置」，与 §6.2 的状态自愈
+配合：归一化是每一条读入路径（`restoreWorkspaceLayout` / `createLayoutFromGroupConfig` /
+`getGroupWorkspaceLayout`）的共用入口，脏数据在那里就被清掉。
+
+
 
 ### 6.2 状态自愈
 

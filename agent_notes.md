@@ -3428,3 +3428,151 @@ Shell 落在 `__shell__` 列且串口列 `rows[0]=["tab-main"]`、两列 `panelI
 - 本机无互连串口对、无 `com0com`，**没有做双端口收发回环**。
 - 全部结论来自真实 Electron + CDP 合成输入，**不是真人手测**。
 - `git push`、发版、打 tag 均未获授权，本轮只做本地提交。
+
+---
+
+## 14B. 从旧配置启动后空右分屏 + Shell 点不开 / 拖不进 / 右键无反应（2026）
+
+### 14B.1 症状与用户命令
+
+用户原话（逐字）：
+
+> 从已有配置文件启动应用，启动后有一个串口组的主窗口和过滤窗口以及一个shell标签，
+> 并且出现空右分屏，shell标签点击无法打开，无法拖动到空的分屏，右键分屏也无反应；
+> `C:\Users\cuijingbo\AppData\Roaming\serialterminal\config.json`
+
+四条症状：① 空右分屏；② Shell 标签点不开；③ Shell 拖不进那个空分屏；④ 右键分屏无反应。
+
+**这份 `config.json` 是复现的唯一入口。** 用干净 profile 复现不出来不代表没有缺陷——
+前一轮就踩过「用空 profile 跑测试恒真」的坑。因此新写 `run-cdp-seeded.ps1`（后来也
+给 `run-cdp.ps1` 补了可选 `-SeedConfig`），把用户真实 config 复制进新 profile 再启动。
+
+> 安全前提：`--user-data-dir` 确实重定向 `app.getPath('userData')`（`main.js:143` 读的就是
+> 它；profile 目录里生成了自己的 `config.json` 与 `logs`）。用户真实 config 只被**读取并
+> 复制**，未修改、未删除。
+
+### 14B.2 上一轮的假设被实测推翻（本文档最值得记的一条）
+
+上一轮结尾留下三条推断，全部指向「配置里有孤儿 shell id」：
+
+```
+推断 1  顶层 workspaceLayout.splitEnabled=true + pane-2 只有 tab-shell-3
+        ⇒ 建两列，Shell 又按 I1 被提到根级 ⇒ 第二列为空
+推断 2  serialGroups[0].pane-1.tabIds 里有 8 个 shell id，shellTabs 只有 1 条
+        ⇒ 脏 id 留在布局里，让 activeTabId 指向不存在的标签
+推断 3  pane-2 的 tabIds 为空 + 两份 paneSplit.enabled 不一致 ⇒ rows 里出现空行
+```
+
+实测结果（`rcd-1500.txt`）：
+
+```
+paneTabIds = ["tab-main", "tab-filter-2", "tab-shell-3"]
+⇒ 没有孤儿 id。推断 2 / 3 的前提不存在。
+```
+
+真正的事实是：**顶层 `workspaceLayout.pane-2.tabIds` 里就直接写着 `tab-shell-3`**——
+不需要孤儿、不需要不一致，一份脏数据就够了。
+
+教训：**推断写得再自洽，只要没量过就是假设。** 这次三条假设里只有第一条的一半对
+（确实读了顶层那份、确实建了两列），但「为什么第二列为空」的解释完全错了。
+
+### 14B.3 根因：I2 只在投影层容错，没在归一化层强制
+
+完整链路：
+
+```
+config.json 顶层 workspaceLayout.pane-2.tabIds = ["tab-shell-3"]      ← 违反 I2 的脏数据
+  ↓ applyConfig 8082/8305 行（早于 8312 行的 syncSerialGroupsFromConfig）
+normalizeWorkspaceLayout → normalizeWorkspaceLayoutShape → normalizeLayoutShape
+  ↓ tabIds 过滤只校验「非空字符串 + 未重复」，不校验是不是合法 pane 成员
+pane-2.tabIds = ["tab-shell-3"] 被原样接受
+  ↓ reconcileEmptyPanes 看到 filled.length === 2 ⇒ 直接 return，不折叠
+splitEnabled 保持 true、两个 pane 都在
+  ↓ projectWorkspace 按 I1 把 shell 提到根级
+rows[1].tabIds = []、activeTabId = null，但容器 paneSplit.enabled 仍为 true
+  ⇒ layoutRowsOf 返回 2 行 ⇒ 渲染层画出 941px 的空 pane
+```
+
+四个症状各自的分叉点：
+
+| 症状 | 具体断点 |
+|---|---|
+| ① 空右分屏 | `reconcileEmptyPanes` 的 `filled.length > 1` 分支把「pane 里有东西」当成「这个 pane 该留着」，但那个东西按 I1 根本不属于它 |
+| ② 点不开 | `visiblePanelIdsOfColumn` 首行 `if (rows.length > 1) return rows.map(r => r.activeTabId)`——**完全不看列首行的根级叶**，Shell 在 `columns[0].tabIds` 里却永远进不了 `panelIds` |
+| ③ 拖不进 | 空 pane 的 `#pane-2-tabs-list` 的 `rect.height === 0`，落点命中判定框不住它，只写成了 `hostGroupId` |
+| ④ 右键无反应 | `canSplit` 数 `panes[].tabIds.length` 时把脏 shell id 也数了进去（2 + 1 = 3 ≥ 2），菜单可点；而 `splitWorkspaceTabIntoPane` 对 Shell 是无条件硬拒 |
+
+**关键认知：这四条不是四个 bug，是一条数据缺陷的四个投影。** 如果分别去修 `canSplit`、
+去修拖拽落点、去修 `visiblePanelIdsOfColumn`，就会得到四个补丁而脏数据依然存在，下一份
+旧配置又会重新长出这四个症状。
+
+### 14B.4 修复（4 处，全部在模型/归一化层）
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `workspace-layout-shape.js` | 新增并导出 `isShellTabId(tabId)`；`normalizeLayoutShape` 的 `tabIds` 过滤里剔除 shell id |
+| 2 | `workspace-manager.js` | `collapseSplit()` 合并 pane 时不搬 shell id（`movedTabIds` 与 `hostPane.tabIds` 都过滤） |
+| 3 | `tab-model.js` | `visiblePanelIdsOfColumn` 的 `rows.length > 1` 分支：焦点是本列根级叶时显示它 |
+| 4 | `renderer.js` | `totalTabs` 只数非 shell 标签；`canSplit` 追加 `!isShellTabId(tabId)`；删重复的 `renderWorkspaceNow()` |
+
+第 2 条为什么必需：`collapseSplit()` 的合并是**无条件**的，不拦就每点一次「关闭分屏」往
+`pane-1.tabIds` 里批量塞 shell id——实测 `rca-1501.txt` 量到 `[tab-main,tab-filter-2,tab-shell-3]`。
+也就是说这个功能本身在**持续制造**下一次启动的空分屏。
+
+第 3 条的判据必须限定在本列：只判「`parentId === null`」会对每一列都成立，Shell 的面板就
+会同时出现在所有列上。正确判据是 `column.tabItems` 里确实有这个叶。
+
+### 14B.5 一处「修了一半」的教训
+
+第 4 项第一次只改了 `totalTabs` 的过滤，就以为 `canSplit` 会自动变 false。实测 `diag1503`：
+
+```
+totalTabs = 2（tab-main + tab-filter-2）≥ 2  ⇒ canSplit 仍为 true
+```
+
+因为过滤掉 shell 之后**还剩两个合法标签**，条件依旧成立；而对**Shell** 右键时那两项分屏
+永远被硬拒。所以必须再补一条「被右键的标签自己可移动」。补后 `diag1504` 才 `canSplit:false`。
+
+教训：**过滤脏数据只能修好「计数」，不能修好「对被过滤对象本人的准入」。** 两者是两件事。
+
+### 14B.6 一条把 I2 违规当预期的过期单测（必须改）
+
+`test/workspace-manager.test.js` 里原本：
+
+```js
+// 输入 pane-2.tabIds = ['tab-main', 'tab-filter-1', 'tab-shell-1', 'tab-shell-1']
+assert.deepEqual(layout.panes[1].tabIds, ['tab-shell-1']);   // ← 把 I2 违规当预期
+```
+
+这条断言的字面含义是「pane 里可以住 shell」，与 I1/I2 直接冲突。改为去重语义用例，并新增
+两条：`drops shell ids from panes and collapses the pane left empty`（本次缺陷的精确回归）、
+`keeps a legitimate split while still dropping shell ids`（正向对照：只剔 shell，合法分屏不受影响）。
+
+单测 570 → **572/572**。**没有为了让测试变绿而放宽任何断言**：唯一被删的是那条本身就错的。
+
+### 14B.7 验证
+
+| 项 | 结果 |
+|---|---|
+| `probe-restore-config-defect`（修后，同 config） | `pane-2` `hidden:true` / 0×0；`paneSplit.enabled:false`；`rows:[]`；`subRowCount` 2 → 1；点 Shell 后 `activePanels` 与 `panelIds` 都变成 `["tab-shell-3"]`；`paneTabIds` 无 shell id；`canSplit:false` |
+| 新 `verify-restore-from-config`（11 项） | **11/11**（`vrfc-1504` / `diag1542`） |
+| 全量回归 `run-all -Start 1520`（23 支） | **23/23 `exit=0` + 23 个 `renderer-diag=clean`**，`seeded=1` |
+| 单测 | **572/572 / 0 fail** |
+| 静态门禁 | `mod=0` / `checked=95 missing=none` / `blocks total=32 js=22` / `syntaxErrors=0` / `arityHints=0` |
+
+新回归脚本的 11 项里，第 9–11 项（`shell-own-column-actually-splits` / `-is-visible-and-lit` /
+`shell-returns-to-group-column`）同时证明了一件事：**用户抱怨「右键分屏无反应」的那个诉求，
+在不动 I1/I2 的前提下依然有可用且可逆的入口**（独立成列）。所以这次不是「把菜单置灰了事」。
+
+### 14B.8 环境边界（如实标注）
+
+- 四条症状均由 CDP 合成输入 + 真实 `getBoundingClientRect` / `offsetParent` 量得，**不是真人手测**。
+- 本机无互连串口对，未验证串口数据链路；本轮缺陷不涉及数据链路。
+- 拖拽探针用的是合成 `PointerEvent` 序列，不是 OS 级拖放；它能改变模型状态说明事件确实到达，
+  但不等同于真人手感。
+- 用户真实 config 未被修改；测试写入全部落在 `.me/tmp/.../userdata-<Profile>/` 内。
+- `git push`、发版、打 tag 仍未获授权，本轮只做本地提交。
+- **一处探针自身缺陷不得记成产品缺陷**：`probe-restore-actions.js` 先执行 `close-split`
+  （pane-2 消失）**之后**才测拖拽，`#pane-2` 的量已经为 0，那条 `PASS` 是无效结果；
+  重写为只测拖拽的 `probe-restore-drag.js` 才拿到真正结论。**操作顺序会影响前提是否成立，
+  必须把相互影响的步骤拆到不同 profile 上。**
