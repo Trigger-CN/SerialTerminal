@@ -1402,10 +1402,16 @@ function requestWorkspaceTabContextMenu({ tabId, paneId, groupId }) {
         isMultiGroup: multiGroup,
         groupSplitEnabled: groupWorkspaceSplit.enabled,
         splitEnabled: layout.splitEnabled === true,
+        // `totalTabs` 现在只数 `panes[].tabIds`，这是对的：Shell 不再混进去，所以
+        // 「组内 pane 分屏」的准入（≥2 个可移动的串口标签）如实反映在菜单项上。
         canSplit: totalTabs >= 2,
         // 只要是 Shell 就给入口：它在模型里恒为根级叶，两种形态互切都合法。
         // 串口主/过滤/图表标签是容器的子项（parentId !== null），`leafColumnMode` 对它们
         // 恒返 'row'，给了也无效，所以不给。
+        //
+        // 这是单分组下「让 Shell 分屏」的**唯一可用入口**：Shell 不进 pane（I1/I2），
+        // 所以它不能与串口标签上下分行；它的分屏形态是「自成第二列」，由下面的
+        // `detach-to-own-column` 动作走到。已经在独立列时这一项变成反向的「归入分组列」。
         canDetach: Boolean(shellTab),
         shellOwnColumn: Boolean(shellTab) && getShellTabOwner(shellTab) === null && shellTab.columnMode === 'ownColumn',
         labels: getContextMenuLabels()
@@ -1712,6 +1718,20 @@ async function handleTerminalContextMenuAction(payload = {}) {
         // 完全失效（实测 run-all-990：verify-group-split 4 条 FAIL、verify-group-columns 2 条、
         // verify-user-paths / verify-shell-drag 各 1 条，全都停在「关不掉分屏」）。
         case 'close-group-split': {
+            // 收回独立 Shell 列：`setGroupWorkspaceSplit(false)` 只复位列级分屏开关，
+            // 而 `columnMode === 'ownColumn'` 是叶自己的事实。不收回就会变成
+            // 「菜单说已关闭分屏，屏幕上仍并排两列」（单分组下尤其明显）。
+            //
+            // **只收回「靠自己那一列站着」的叶，且必须在 `setGroupWorkspaceSplit(false)`
+            // 之前**：`resetGroupWorkspaceSplit()` 会把 `groupIds` 清空，之后就再也判断不出
+            // 哪些分组本来就在分屏。早期实现无条件把所有 Shell 都回退成 `row`，包括
+            // 那些本来就已经停靠在某列的（`hostGroupId` 有值、`ownColumn` 与它互斥），
+            // 也会被连带写一次模型并触发重渲染，把紧随其后的拖拽落点测量打偏
+            // （实测 `verify-shell-drag` 的 `group-row-drop-keeps-row-mode` 三条）。
+            const ownColumnShellIds = shellTabs
+                .filter(tab => tab.columnMode === 'ownColumn' && !tab.hostGroupId)
+                .map(tab => tab.id);
+            ownColumnShellIds.forEach(id => setShellColumnModeInModel(id, 'row'));
             setGroupWorkspaceSplit(false);
             setActionStatus('已关闭分组级分屏');
             break;
@@ -1728,6 +1748,12 @@ async function handleTerminalContextMenuAction(payload = {}) {
         case 'detach-to-own-column': {
             if (!tabId || !isShellTabId(tabId)) break;
             if (!setShellColumnModeInModel(tabId, 'ownColumn')) break;
+            // 方案 1：独立列必须同时把列级分屏打开，否则 plan 里根本不会多出一列。
+            // 旧实现只写 `columnMode`，而 `split.enabled` 的总闸要求 ≥ 2 个分组，
+            // 单分组下写了也是零效果（实测 `doc-1263.txt`：columnMode=ownColumn 但
+            // columnCount 仍为 1）。这里补齐两个键：「该分组」+「Shell 独立列」，
+            // 两个真实存在的列 key 就是分屏的最小前提。
+            ensureColumnSplitForShellColumn(activeGroupId);
             renderWorkspaceNow();
             persistShellTabs();
             setActionStatus('已让 Shell 独立成列');
@@ -1740,6 +1766,10 @@ async function handleTerminalContextMenuAction(payload = {}) {
             // 补 columnId，两者不一致时落列会回落到第一列。
             if (!setShellColumnModeInModel(tabId, 'row')) break;
             setShellColumnInModel(tabId, contextGroupId);
+            // 收尾：若屏幕上已没有独立列，列级分屏就失去了第二个参与者，必须复位。
+            // 不写这一句时，`split.enabled` 会停在 true 而只剩一列，之后打开
+            // 任何 Shell 的独立列都会直接生效——用户没有新做过动作，列却自己分开了。
+            collapseColumnSplitIfSingleColumn();
             renderWorkspaceNow();
             persistShellTabs();
             setActionStatus('已让 Shell 归入分组列');
@@ -3550,17 +3580,77 @@ function getGroupSplitCandidates() {
 }
 
 // 把当前分屏状态里已经不存在的分组清掉（关闭分组后必调）。
-// 剩余不足两个时自动退出分屏，否则会留下一条没有分屏意义的拖动条。
+//
+// 「剩余不足两个就退出分屏」这条**不能只看分组数**：单分组 + Shell 独立列时
+// 分组本来就只有 1 个，但屏幕上确实有两列（分组列 + Shell 列），此时复位会把
+// Shell 列一并撤掉。所以退出条件改用完整列 key 集合（含独立列），
+// 与 `isColumnSplitActive` 保持同一口径。
 function pruneGroupWorkspaceSplit() {
     if (!groupWorkspaceSplit.enabled) return false;
     const alive = groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id));
     const changed = alive.length !== groupWorkspaceSplit.groupIds.length;
     groupWorkspaceSplit.groupIds = alive;
-    if (alive.length < 2) {
+    if (new Set(columnSplitKeys()).size < 2) {
         resetGroupWorkspaceSplit();
         return true;
     }
     return changed;
+}
+
+// Shell 独立成列时，把列级分屏补到「刚好能显示两列」的最小状态。
+//
+// 为什么不复用 `setGroupWorkspaceSplit`：那个函数是给「分组与分组」用的，开头就
+// `if (candidates.length < 2) return;`，单分组下没有任何可并排的第二个分组，
+// 调了也是直接返回。而 Shell 独立列是另一种参与者——它不是分组，是 OWN_COLUMN_ID
+// 那一列。方案 1 需要的正是「一个分组列 + 一个 Shell 列」。
+//
+// 只写两个字段，不碰 orientation / sizes：方向沿用用户上次选择，比例留空由
+// `normalizeSizes` 在构建 plan 时按列数均分。
+//
+// `columnGroupId` 传 Shell 原本停靠的那个分组：独立列只能和它同屏才有意义。
+//
+// **不能把 `groupIds` 覆写成 `[id]`**：多分组已分屏时，用户可能已经有若干个分组
+// 并排，把它们全踢掉会变成「拖一个 Shell 出去，其它分组的分屏全没了」——
+// 而且 `columnSplitKeys()` 只统计 `groupIds`，覆写之后会把 `isColumnSplitActive`
+// 算成「1 分组 + 1 独立列 = 2」，看似成立，实际上面那些分组已经不在参与者表里了
+// （实测 `verify-four-defects` 的 `b6-column-count-restored`：
+// `beforeJoin:4 → afterJoin:1`）。
+//
+// 因此这里只做两件事：把开关打开、把 `columnGroupId` **并入**参与者表。
+// 参与者表为空时（单分组首次独立成列）才需要补它。
+function ensureColumnSplitForShellColumn(columnGroupId) {
+    const id = resolveSerialGroupId(columnGroupId || activeGroupId);
+    // 先取旧表（此时 `enabled` 可能还是 false），再写开关，顺序不能倒。
+    const previous = groupWorkspaceSplit.enabled === true ? groupWorkspaceSplit.groupIds : [];
+    const merged = [...previous, id].filter((value, index, arr) => value && arr.indexOf(value) === index);
+    groupWorkspaceSplit.enabled = true;
+    groupWorkspaceSplit.groupIds = merged;
+    return true;
+}
+
+// 独立 Shell 列被收回后，若分屏已退回「只剩单列」就复位开关。
+//
+// **判据必须同时看两种参与者**：分组列与独立 Shell 列。
+//
+// 只数 `groupIds` 会误伤多分组：两个分组并排、第三个 Shell 独立成列时是 3 列，
+// 收回 Shell 后应剩 2 列（那两个分组仍该并排）。早期这里写的是
+// `new Set(columnSplitKeys()).size < 2`，而 `columnSplitKeys()` 会把存活分组
+// 全部算进去——看似没问题，但调用点在 `setShellColumnModeInModel(tab.id, 'row')`
+// **之后**，此时若 Shell 的 `columnId` 指向的分组恰好不在 `groupIds` 里，
+// `groupIds` 会在后续 prune 中被清成一项，于是两个分组被整体复位成一列
+// （实测 `run-all-1280.txt`：`verify-four-defects` 的
+// `b6-column-count-restored`，`beforeJoin:4 → afterJoin:1`）。
+//
+// 因此这里改成「显式参与列级分屏的分组数 + 独立列数 ≥ 2 才保留」，
+// 并把 `groupIds` 里已失效的项排掉，但不拿它去反过来推断该不该复位。
+function collapseColumnSplitIfSingleColumn() {
+    if (groupWorkspaceSplit.enabled !== true) return false;
+    const liveGroups = groupWorkspaceSplit.groupIds
+        .filter(id => serialGroups.some(group => group.id === id));
+    const ownColumns = shellTabs.some(tab => tab.columnMode === 'ownColumn' && !tab.hostGroupId) ? 1 : 0;
+    if (liveGroups.length + ownColumns >= 2) return false;
+    resetGroupWorkspaceSplit();
+    return true;
 }
 
 // 分组加入/退出分组级分屏。
@@ -4013,6 +4103,32 @@ function getGroupWorkspaceVisibleColumnKeys() {
     return Array.from(outer.children)
         .filter(child => child.classList?.contains('group-column') && !child.hidden)
         .map(child => child.dataset.groupId || '');
+}
+
+// 列级分屏是否真的生效——`buildLiveWorkspaceSections` 与写入口共用的唯一判据。
+//
+// 早期这里只判 `groupWorkspaceSplit.groupIds.length > 1`，隐含的前提是「分屏 = 多个分
+// 组并排」。但方案 1 允许单分组下把 Shell 独立成一列，那时 `groupIds` 只有一项，
+// 若沿用旧判据，`layoutColumns` 会走非分屏分支、只返回一列，`ownColumn` 写了也看不出
+// 任何变化（实测 `doc-1263.txt`：columnMode 已改成 ownColumn，columnCount 仍是 1）。
+//
+// 判据改成「开关已开 且 真实存在的列 key ≥ 2」：
+//   • 多分组：`groupIds` 里本来就是各分组 id，行为与旧判据一致；
+//   • 单分组 + Shell 独立列：两个 key 分别是该分组与 `OWN_COLUMN_ID`。
+// 无效 / 已删的分组在这里就排掉，否则关掉一个分组会留下幽灵列。
+function isColumnSplitActive() {
+    if (groupWorkspaceSplit.enabled !== true) return false;
+    const alive = new Set(columnSplitKeys());
+    return alive.size >= 2;
+}
+
+// 当前参与列级分屏的全部列 key：分组列（按 `groupIds` 顺序）+ 独立 Shell 列。
+function columnSplitKeys() {
+    const keys = groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id));
+    if (shellTabs.some(tab => tab.columnMode === 'ownColumn' && !tab.hostGroupId)) {
+        keys.push(SHELL_COLUMN_GROUP_ID);
+    }
+    return keys;
 }
 
 // 当前应当显示哪些分组工作区（返回 entryId 集合）。
@@ -4941,7 +5057,13 @@ function buildLiveWorkspaceSections() {
         // 焦点是模型状态：显式焦点还有效就用它，否则回落到激活分组自己的激活叶。
         focusedTabId: focusedTabIdForProjection(),
         split: {
-            enabled: groupWorkspaceSplit.enabled === true && groupWorkspaceSplit.groupIds.length > 1,
+            // **不用 `groupIds.length > 1` 当总闸**：那只覆盖「分组与分组并排」。
+            // 单分组下把 Shell 独立成列（方案 1）同样需要列级分屏生效，否则
+            // `layoutColumns` 的非分屏分支只返回一列，`ownColumn` 写了也看不出任何变化
+            // （实测 `doc-1263.txt`：columnMode 已是 ownColumn，columnCount 仍是 1）。
+            // 判据改成「分屏开关已开 且 至少有两个真实存在的列 key」，
+            // 多分组老路径不受影响（`groupIds` 里本来就是各分组 id）。
+            enabled: isColumnSplitActive(),
             orientation: groupWorkspaceSplit.orientation,
             sizes: { ...(groupWorkspaceSplit.sizes || {}) }
         }
@@ -5763,13 +5885,23 @@ function createShellTab(initialState = {}, targetPaneId = null) {
 
     shellTabs.push(tabState);
     updateTabTitles();
-    // 登记到 paneId 所属的分组，而不是模块级别名（见 addTabToOwningGroupPane 的注释）。
-    addTabToOwningGroupPane(tabId, resolvedPaneId, { activate: false, persist: false });
-    // 新 Shell 默认不归属任何分组：多分组时它住上层标签栏（拖到分组行才自成独立列）。
-    // 建列 / 显隐全部归 renderWorkspace：这里只请求一次重画，不再自己建列。
+    // **不登记进 `panes[].tabIds`**：I1/I2 是结构性硬约束，Shell 永远不是 pane 的成员。
+    //
+    // 旧实现这里调 `addTabToOwningGroupPane(...)`，把新建的 Shell 写进了 pane-1 的
+    // `tabIds`（实测 `sgsint-1262.txt`：`pane-1.tabIds = ["tab-main","tab-shell-1"]`）。
+    // 后果不只是违反不变式，还让右键菜单的 `canSplit`（数 `panes[].tabIds.length`）
+    // 误报 true：菜单项看起来可点，而 `splitWorkspaceTabIntoPane` 遇到 Shell 直接
+    // `return false`，用户看到的就是「点了没反应」。
+    //
+    // Shell 的位置只由它自己的 `columnId` / `columnMode` / `hostGroupId` 三个事实描述，
+    // 建列 / 显隐全部归 renderWorkspace。
+    renderWorkspaceNow();
     renderWorkspaceNow();
     if (!isRestoringWorkspaceSession) {
-        switchPaneTab(resolvedPaneId, tabId, { persist: false });
+        // 用 `setFocusedTab` 而不是 `switchPaneTab`：后者写的是 `panes[].activeTabId`，
+        // 且一进门就 `if (!pane.tabIds.includes(tabId)) return;`。Shell 已不再进 pane，
+        // 那条路径会直接返回，新 Shell 不会变成当前显示的那个。
+        setFocusedTab(tabId);
         persistShellTabs();
         persistWorkspaceLayout();
         setActionStatus(tr('main.shellStarting'));
