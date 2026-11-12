@@ -13,6 +13,27 @@
 const DEFAULT_PANE_ID = 'pane-1';
 const MAIN_TAB_ID = 'tab-main';
 
+// Shell 标签的 id 形态。
+//
+// 布局规整必须认得出它：I1 / I2 是结构性硬约束（TAB_ARCHITECTURE.md §6）——
+// 任何 `kind === 'shell'` 的 Tab 都必须是根级叶（`parentId === null`），
+// 任何 `panes[].tabIds` 都不得包含 shell id。
+//
+// 早期这里不判，于是历史配置里「Shell 被写进 pane」的脏数据会原样通过：
+// `reconcileEmptyPanes` 见到 `filled.length > 1` 就认为「两个 pane 都有内容」，
+// 不折叠；而投影层按 I1 又把 shell 提到根级，那个 pane 实际是空的，
+// 屏幕上就留下一个没有任何标签的空分屏（实测 `rcd-1500.txt`：pane-2 宽 941px、
+// 0 个标签按钮）。
+//
+// 这里只做「剔除」不做「搬移」：shell 的位置由它自己的 `columnId` / `columnMode` /
+// `hostGroupId` 三个叶级事实描述，布局层不该替它决定。剔除之后该 pane 若变空，
+// 交给 `reconcileEmptyPanes` 正常收敛即可。
+const SHELL_TAB_ID_PATTERN = /^tab-shell-\d+$/;
+
+function isShellTabId(tabId) {
+  return typeof tabId === 'string' && SHELL_TAB_ID_PATTERN.test(tabId);
+}
+
 function createDefaultLayout() {
   return createDefaultLayoutFor();
 }
@@ -151,6 +172,14 @@ function normalizeLayoutShape(layout, { paneIds = null, defaultLayout = null, ma
     const sourceTabIds = Array.isArray(pane?.tabIds) ? pane.tabIds : [];
     target.tabIds = sourceTabIds.filter(tabId => {
       if (typeof tabId !== 'string' || !tabId || usedTabIds.has(tabId)) return false;
+      // Shell 永远不是 pane 的成员（I2）。历史配置里的违规数据在这里就剔掉，
+      // 否则它会同时造成三个后果：
+      //   • 该 pane 被算成「有内容」，`reconcileEmptyPanes` 不再折叠，屏幕留下空分屏；
+      //   • 右键菜单的 `canSplit`（数 `panes[].tabIds.length`）被灌水成 true，
+      //     菜单项可点，而 `splitWorkspaceTabIntoPane` 对 shell 是硬拒——「点了没反应」；
+      //   • 拖拽落点算在这个不该存在的空行上，拖不进真正想去的 pane。
+      // 剔除后若这个 pane 空了，交给 `reconcileEmptyPanes` 按既有规则收敛。
+      if (isShellTabId(tabId)) return false;
       usedTabIds.add(tabId);
       return true;
     });
@@ -178,6 +207,7 @@ module.exports = {
   MAIN_TAB_ID,
   createDefaultLayout,
   createDefaultLayoutFor,
+  isShellTabId,
   normalizePaneSizes,
   normalizeLayoutShape,
   reconcileEmptyPanes

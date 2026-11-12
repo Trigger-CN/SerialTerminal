@@ -364,7 +364,28 @@ function isShownInColumn(column, rows, tabId) {
 // 最后一个分支不能套用焦点：分屏时其它列也要各自显示内容，而焦点只有一个。
 function visiblePanelIdsOfColumn(ws, column) {
     const rows = layoutRowsOf(ws, column);
-    if (rows.length > 1) return rows.map(pane => pane.activeTabId).filter(Boolean);
+    if (rows.length > 1) {
+        // 组内 pane 分屏：每个 pane 显示自己的 activeTabId。
+        //
+        // **但焦点落在本列的根级叶上时必须显示它**：未归属的 Shell 住在列首行，
+        // 它不属于任何 pane（I1/I2），所以 `panes[].activeTabId` 永远不可能是它。
+        // 若在这里直接返回各行的 activeTabId，Shell 就永远进不了 `panelIds`——
+        // 焦点改对了、面板却一层也不亮，用户看到的就是「点了打不开」。
+        //
+        // 老版本把 Shell 写进 `panes[].tabIds`（违反 I2）时这个分支必然踩中：
+        // 脏 id 让 `paneSplit.enabled` 保持 true、`rows` 仍是两条，而投影层按 I1
+        // 又把 Shell 提到列首行（实测 `rcd-1500.txt`：focused 从 tab-main 变成
+        // tab-shell-3，而 activePanels / panelIds 逐字不变）。
+        //
+        // 判据必须限定「焦点确实是本列的根级叶」（`resolveLeafColumnId`），
+        // 否则 Shell 的面板会同时出现在每一列上。
+        const focused = tabOf(ws, ws.focusedTabId);
+        if (focused && !isContainer(focused) && focused.parentId === null
+            && column.tabItems.some(tab => tab && tab.id === focused.id)) {
+            return [focused.id];
+        }
+        return rows.map(pane => pane.activeTabId).filter(Boolean);
+    }
 
     // 独立列：这一列只有一行标签栏，住着全部 `ownColumn` 叶。
     // 焦点落在其中某个叶上就显示它；焦点在别处时显示第一个（与渲染层「独立列必须

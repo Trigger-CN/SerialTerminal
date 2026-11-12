@@ -1,5 +1,6 @@
 const {
     createDefaultLayout: createShapeDefaultLayout,
+    isShellTabId,
     normalizeLayoutShape,
     normalizePaneSizes,
     reconcileEmptyPanes
@@ -401,6 +402,12 @@ function createWorkspaceManager(options = {}) {
 
     // 把除首个 pane 之外的所有 pane 合入首个 pane，然后关闭分屏。
     // 只改布局；DOM 由渲染层按新的布局重排（它会把按钮与面板一起搬到新宿主）。
+    //
+    // **合并时绝不搬 shell id**：I2 是结构性硬约束，`panes[].tabIds` 永远不得包含 shell。
+    // 历史配置里可能残留这种脏数据（实测 `rca-1501.txt`：对一个旧布局点「关闭分屏」后，
+    // `pane-1.tabIds` 变成 `[tab-main, tab-filter-2, tab-shell-3]`），而 merge 是无条件的，
+    // 于是每点一次就制造一份新的违规数据 —— 紧接着的启动就会因此多出一个空分屏。
+    // Shell 该去哪由它自己的 `columnMode` / `columnId` / `hostGroupId` 决定，不归这里管。
     function collapseSplit() {
         const layout = getLayoutState();
         const hostPane = getPaneById(getPrimaryPaneId());
@@ -413,7 +420,7 @@ function createWorkspaceManager(options = {}) {
             if (pane.activeTabId && pane.tabIds.includes(pane.activeTabId) && !carriedActiveTabId) {
                 carriedActiveTabId = pane.activeTabId;
             }
-            movedTabIds.push(...pane.tabIds);
+            movedTabIds.push(...pane.tabIds.filter(tabId => !isShellTabId(tabId)));
             pane.tabIds = [];
             pane.activeTabId = null;
         });
@@ -422,8 +429,9 @@ function createWorkspaceManager(options = {}) {
             onTabMoved?.({ tabId, sourcePaneId: layout.activePaneId, targetPaneId: hostPaneId });
         });
 
-        hostPane.tabIds = [...hostPane.tabIds, ...movedTabIds];
-        if (!hostPane.tabIds.includes(hostPane.activeTabId) && carriedActiveTabId) {
+        hostPane.tabIds = [...hostPane.tabIds.filter(tabId => !isShellTabId(tabId)), ...movedTabIds];
+        if (!hostPane.tabIds.includes(hostPane.activeTabId) && carriedActiveTabId
+            && hostPane.tabIds.includes(carriedActiveTabId)) {
             hostPane.activeTabId = carriedActiveTabId;
         }
         hostPane.activeTabId = hostPane.activeTabId || hostPane.tabIds[0] || null;

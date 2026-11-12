@@ -15,14 +15,62 @@ test('deduplicates tab ownership while preserving the main tab position', () => 
     activePaneId: 'pane-2',
     panes: [
       { id: 'pane-1', activeTabId: 'tab-filter-1', tabIds: ['tab-filter-1', 'tab-main', 'tab-filter-1'] },
-      { id: 'pane-2', activeTabId: 'tab-main', tabIds: ['tab-main', 'tab-filter-1', 'tab-shell-1', 'tab-shell-1'] }
+      { id: 'pane-2', activeTabId: 'tab-main', tabIds: ['tab-main', 'tab-filter-1', 'tab-filter-1'] }
     ]
   });
 
   assert.deepEqual(layout.panes[0].tabIds, ['tab-filter-1', 'tab-main']);
-  assert.deepEqual(layout.panes[1].tabIds, ['tab-shell-1']);
+  // pane-2 的两条候选都已被 pane-1 占用 ⇒ 去重后为空，但仍有两个 pane，
+  // `splitEnabled` 原样保留（reconcileEmptyPanes 只在「恰一个非空」时折叠）。
+  assert.deepEqual(layout.panes[1].tabIds, []);
   assert.equal(layout.panes[0].activeTabId, 'tab-filter-1');
-  assert.equal(layout.panes[1].activeTabId, 'tab-shell-1');
+  assert.equal(layout.panes[1].activeTabId, null);
+});
+
+// I2：`panes[].tabIds` 永远不得包含 shell id。
+//
+// 这里断言的是「剔除 + 随之收敛」两件事一起生效：历史配置里 `pane-2` 只有一条
+// `tab-shell-1`（违反 I2）时，剔除后它是空的，`reconcileEmptyPanes` 于是走
+// 「只剩一个非空 pane」分支把分屏折叠掉。
+//
+// 未剔除时的后果是实测过的（`rcd-1500.txt`）：脏 id 让这个 pane 看起来「有内容」，
+// 折叠不发生，屏幕上就留下一个 941px 宽、0 个标签的空分屏；同时右键菜单的
+// `canSplit` 被灌水成 true，而 `splitWorkspaceTabIntoPane` 对 shell 硬拒 ⇒
+// 「菜单可点、点了没反应」。
+//
+// 旧断言曾把 `['tab-shell-1']` 当作 pane-2 的合法内容（`assert.deepEqual(layout.panes[1].tabIds, ['tab-shell-1'])`），
+// 那正是把 I2 违规当成预期行为，已按新事实改写。
+test('drops shell ids from panes and collapses the pane left empty', () => {
+  const layout = normalizeWorkspaceLayoutShape({
+    splitEnabled: true,
+    activePaneId: 'pane-2',
+    panes: [
+      { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main', 'tab-filter-1'] },
+      { id: 'pane-2', activeTabId: 'tab-shell-1', tabIds: ['tab-shell-1'] }
+    ]
+  });
+
+  assert.deepEqual(layout.panes[0].tabIds, ['tab-main', 'tab-filter-1']);
+  assert.deepEqual(layout.panes[1].tabIds, []);
+  assert.equal(layout.panes[1].activeTabId, null);
+  assert.equal(layout.splitEnabled, false);
+  assert.equal(layout.activePaneId, 'pane-1');
+});
+
+// 只剔 shell，不动其他叶：两个 pane 都有真实内容时分屏不变。
+test('keeps a legitimate split while still dropping shell ids', () => {
+  const layout = normalizeWorkspaceLayoutShape({
+    splitEnabled: true,
+    activePaneId: 'pane-1',
+    panes: [
+      { id: 'pane-1', activeTabId: 'tab-main', tabIds: ['tab-main', 'tab-shell-1'] },
+      { id: 'pane-2', activeTabId: 'tab-filter-2', tabIds: ['tab-filter-2', 'tab-shell-9'] }
+    ]
+  });
+
+  assert.deepEqual(layout.panes[0].tabIds, ['tab-main']);
+  assert.deepEqual(layout.panes[1].tabIds, ['tab-filter-2']);
+  assert.equal(layout.splitEnabled, true);
 });
 
 test('normalizes a lone second pane back into the primary pane', () => {

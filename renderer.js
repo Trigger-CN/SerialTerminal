@@ -1391,7 +1391,16 @@ function requestWorkspaceTabContextMenu({ tabId, paneId, groupId }) {
     if (!tabId) return;
     const id = resolveSerialGroupId(groupId || activeGroupId);
     const layout = getGroupWorkspaceLayout(id);
-    const totalTabs = layout.panes.reduce((sum, pane) => sum + pane.tabIds.length, 0);
+    // 只数**可移动的**标签：Shell 永远进不了 pane（I1/I2），`splitWorkspaceTabIntoPane`
+    // 对它是硬拒的。把它算进 `totalTabs` 会让菜单项看起来可点、点了却一个字也不变
+    // （实测 `rca-1501.txt`：`canSplit:true`，而 split-horizontal / split-vertical /
+    // move-to-other-pane 三个动作前后 pane / rows / 可见 pane 逐字相同）。
+    //
+    // 历史配置里本就残留着写进 pane 的 shell id（`rcd-1500.txt`：`pane-2.tabIds =
+    // ["tab-shell-3"]`），所以这里必须过滤而不能假定数据干净。
+    const totalTabs = layout.panes.reduce((sum, pane) => (
+        sum + pane.tabIds.filter(tabId_ => !isShellTabId(tabId_)).length
+    ), 0);
     const shellTab = isShellTabId(tabId) ? getShellTabState(tabId) : null;
     const multiGroup = isMultiGroupLayer();
     ipcRenderer.send('show-terminal-context-menu', {
@@ -1402,16 +1411,21 @@ function requestWorkspaceTabContextMenu({ tabId, paneId, groupId }) {
         isMultiGroup: multiGroup,
         groupSplitEnabled: groupWorkspaceSplit.enabled,
         splitEnabled: layout.splitEnabled === true,
-        // `totalTabs` 现在只数 `panes[].tabIds`，这是对的：Shell 不再混进去，所以
-        // 「组内 pane 分屏」的准入（≥2 个可移动的串口标签）如实反映在菜单项上。
-        canSplit: totalTabs >= 2,
-        // 只要是 Shell 就给入口：它在模型里恒为根级叶，两种形态互切都合法。
-        // 串口主/过滤/图表标签是容器的子项（parentId !== null），`leafColumnMode` 对它们
-        // 恒返 'row'，给了也无效，所以不给。
+        // 「组内 pane 分屏」的准入要同时看两件事：
+        //   1. 该组 pane 里有 ≥ 2 个**可移动的串口标签**（`totalTabs` 已排掉 shell id）；
+        //   2. 被右键的这个标签**本身可移动**。
         //
-        // 这是单分组下「让 Shell 分屏」的**唯一可用入口**：Shell 不进 pane（I1/I2），
-        // 所以它不能与串口标签上下分行；它的分屏形态是「自成第二列」，由下面的
-        // `detach-to-own-column` 动作走到。已经在独立列时这一项变成反向的「归入分组列」。
+        // 第 2 条不能省：`splitWorkspaceTabIntoPane` 首行就是 `if (isShellTabId(tabId))
+        // return false;`（I1/I2 —— Shell 永远不进 pane）。只满足第 1 条时，对 Shell
+        // 右键仍然会拿到 `canSplit:true`，菜单项可点，而动作被硬拒 —— 用户看到的就是
+        // 「右键分屏没反应」（实测 `rca-1501.txt`）。
+        //
+        // Shell 的分屏形态是「自成第二列」，入口在下面的 `canDetach` /
+        // `detach-to-own-column`，不是这两项。
+        canSplit: totalTabs >= 2 && !isShellTabId(tabId),
+        // Shell 的分屏入口就是下面这一项（`canDetach`）：它不进 pane（I1/I2），
+        // 所以不能与串口标签上下分行，它的分屏形态是「自成第二列」。
+        // 已经在独立列时这一项变成反向的「归入分组列」。
         canDetach: Boolean(shellTab),
         shellOwnColumn: Boolean(shellTab) && getShellTabOwner(shellTab) === null && shellTab.columnMode === 'ownColumn',
         labels: getContextMenuLabels()
@@ -5895,7 +5909,6 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     //
     // Shell 的位置只由它自己的 `columnId` / `columnMode` / `hostGroupId` 三个事实描述，
     // 建列 / 显隐全部归 renderWorkspace。
-    renderWorkspaceNow();
     renderWorkspaceNow();
     if (!isRestoringWorkspaceSession) {
         // 用 `setFocusedTab` 而不是 `switchPaneTab`：后者写的是 `panes[].activeTabId`，
