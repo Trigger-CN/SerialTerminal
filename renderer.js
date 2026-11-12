@@ -5200,12 +5200,22 @@ window.__readTabModelPlan = () => {
 // 动态列的列表在 ensureSerialGroupWorkspaceDom 里建好后各自挂。
 bindGroupTabListEvents(document.getElementById(GROUP_TAB_LIST_ID));
 
-// 静态 pane-1 的标签行同理。它的列表里装的是主终端、过滤页、图表页这些普通标签，
-// 它们同样需要右键分屏菜单。动态 pane 由 createPaneElement 自己挂，Shell 独立列
-// 由 ensureShellColumnDom 挂（它不走 createPaneElement）。
-bindPaneTabListEvents(document.getElementById('pane-1-tabs-list'));
-
-bindPaneTabListEvents(document.getElementById('pane-1-tabs-list'));
+// 工作区里**所有已存在的 pane 标签行**一次性全部挂上右键委托。
+//
+// 为什么不能只写 `pane-1`：静态标记里本来就有两个 pane（`index.html` 的
+// `#pane-1` 与 `#pane-2`），而 `createPaneElement` 首行是
+// `if (getPaneDom(paneId)) return null` —— 它**只处理新建的 pane**，静态的
+// `pane-2` 永远走不到那里。早先这里只硬写了 `pane-1`，于是主终端与过滤页
+// 上下分屏后，下方那个 pane 的标签右键没有任何监听（实测 `pcm-1600.txt`：
+// `pane-1` 发出 1 次 `show-terminal-context-menu`，`pane-2` 发出 **0** 次）。
+//
+// 改成按容器扇描而不是逐个写 id：以后再往 `index.html` 里加静态 pane、或者
+// 哪个构造路径忘了自己绑，这一扇扫都能补上。`bindPaneTabListEvents` 本身是
+// 幂等的（`data-pane-tab-events`），重复调用不会挂两遍监听，所以这里不需要
+// 也不应该再维护「哪些已经绑过」的名单。
+document.querySelectorAll('#group-workspace .pane-tabs-list').forEach(listEl => {
+    bindPaneTabListEvents(listEl);
+});
 
 // 静态 pane-1 / pane-2 的动作按钮组用**同一条构造路径**重建。
 //
