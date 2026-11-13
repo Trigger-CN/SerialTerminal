@@ -902,12 +902,26 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
    带脏数据」启动后自然回到单 pane，而不是渲染出一个空分屏。
 2. **任何合并 pane 的地方都不得搬 shell id**（`collapseSplit()`）。合并是无条件的，
    不拦就是在每次「关闭分屏」时批量制造新的 I2 违规。
-3. **`canSplit` 必须同时满足「有 ≥ 2 个非 shell 标签」且「被右键的标签自己可移动」**。
-   Shell 的分屏形态是独立成列（§5.5.1），不是进 pane；菜单要对它如实置灰。
+3. **`canSplit` 必须按「单组 / 多组」分叉**（**用户裁决后改写，完整依据见 §6.1.3**）。
+   旧版这里是全局判据「有 ≥ 2 个非 shell 标签 且 被右键的标签自己可移动」，隐含前提是
+   「Shell 只能靠独立成列分屏，永远不进 pane」。**该前提已被用户裁决推翻**：单串口组下
+   所有标签（含 Shell）地位平等、可随意分屏，Shell 可以住进任意 pane。
+   若继续用旧判据，单组下 Shell 的「左右/上下分屏」会**恒置灰**，与「所有标签等价」直接矛盾。
+   现行判据：
+   - **多串口组**：仍是 `totalTabs >= 2 && !isShellTabId(tabId)`，Shell 的菜单如实置灰；
+   - **单串口组**：把「受托管但不在 `panes[].tabIds` 里的 Shell」另算一份，
+     即 `totalTabs + shellCount >= 2`，Shell 自己也可被右键分屏。
+   旧断言**没有作废**，只是**适用范围被收窄到多组**；多组下的反向对照用例仍必须全绿。
+   I2（`panes[].tabIds` 不含 shell id）**一个字未改**：Shell 只是通过叶级 `hostPaneId`
+   被 `layoutRowsOf` 并进**派生的** `rows[].tabIds`，见 §6.1.3。
 4. **`visiblePanelIdsOfColumn` 的 `rows.length > 1` 分支要能给列首行的根级叶点亮面板**，
    判据限定「焦点确实是本列根级叶」，否则 Shell 会同时出现在每一列。
+   该分支还必须覆盖**某条 pane 行里的**受托管叶（带 `hostPaneId` 的 Shell）：
+   否则会出现「按钮在那一行里、点也点得中，但内容区永远不亮」。
+5. **`detach-to-own-column` 入口在单串口组下必须关闭**（UI + 逻辑两道门）：
+   单组只有一个容器，分屏只能靠 pane；「独立列」是多组才需要的概念。见 §6.1.3。
 
-这四条把 I1 / I2 从「投影层的容错假设」变成「数据层的硬前置」，与 §6.2 的状态自愈
+这几条把 I1 / I2 从「投影层的容错假设」变成「数据层的硬前置」，与 §6.2 的状态自愈
 配合：归一化是每一条读入路径（`restoreWorkspaceLayout` / `createLayoutFromGroupConfig` /
 `getGroupWorkspaceLayout`）的共用入口，脏数据在那里就被清掉。
 
@@ -950,6 +964,85 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 > 判读提醒：**冗余代码 ≠ 行为缺陷**。事故初期读到这里是「两次相同调用」就判为「右键会弹两次
 > 菜单」，实测 `pane-1` 恰好 1 次才纠正过来 —— 幂等保护让重复调用完全无害。定性必须靠实测行为，
 > 不能靠「看起来重复」。
+
+### 6.1.3 单串口组自由分屏 / 多串口组按组归属（`hostPaneId`）
+
+#### 用户裁决
+
+> 「串口标签拖到 Shell 列之后，应该变成什么？当只有一个串口组时，串口标签页应该要可以随意分屏拖动，
+> 有多个串口组，每个组的标签不能脱离组」
+>
+> 「单串口组时所有标签都在一级栏，所以「把 shell 标签可拖到二级标签栏的需求删除，
+> shell 标签只能在一级栏」也是没问题的；**A. 旧裁决只管多组更贴切**」
+
+第一条裁决是「要什么」，第二条是它在与旧裁决冲突时的解释：**旧裁决「Shell 只能在一级栏」
+只在多组下有效**。两句合起来的决定性推论是：
+
+> **单串口组时不产生 Shell 独立列。** 单组只有一个容器，它的「分屏」只能是 **pane 分屏**；
+> 「独立列」是多组才需要的概念（每个组一列 + Shell 自成一组）。
+
+#### 规则表（单组 vs 多组的唯一分叉点）
+
+| 场景 | 单串口组 | 多串口组 |
+|---|---|---|
+| 串口标签拖到另一条 pane 行 | ✅ 允许（`moveTabToPane`） | ❌ 跨组禁止；组内允许 |
+| Shell 拖到某条 pane 行 | ✅ 写 `hostPaneId` | ❌ 跨组禁止；本组 pane 行允许 |
+| Shell 拖到分组标签行 | ⛔ 该行不存在 | ✅ 维持现状（`hostGroupId`） |
+| `canSplit`（左右/上下分屏） | ✅ **对 Shell 也开放** | ❌ 对 Shell 置灰 |
+| `canDetach`（独立成列） | ⛔ **恒为 false** | ✅ 维持现状 |
+| `detach-to-own-column` 动作 | ⛔ handler 直接拒绝 | ✅ 维持现状 |
+
+#### 唯一的模型新增事实：`hostPaneId`
+
+`hostGroupId` 只到**容器**级，派生时被无条件并入 pane-1 那条行。于是 Shell 永远只能待在第一个 pane，
+无法和串口标签一起参与组内 pane 分屏 —— 用户看到的就是「shell 标签拖不动」。
+`hostPaneId` 是同一模式的**下一层精度**：
+
+| 字段 | 粒度 | 含义 |
+|---|---|---|
+| `hostGroupId` | 容器级 | 这个叶挂靠在哪个分组的下层行 |
+| **`hostPaneId`** | **pane 级** | 这个叶住进该容器的**哪一条** pane 行 |
+| `columnId` | 列级 | 停在哪一列的列首行（未归属时才有意义） |
+| `columnMode` | 列级 | 是否自成独立列 |
+
+实现要点：
+
+1. **写入点唯一**：`setShellHostPane(tabId, paneId)`；它对非字符串 / 空串一律写 `null`，
+   写值时把 `columnMode` 清回 `row`（与「独立列」两向互斥，同 `hostGroupId` ⇄ `ownColumn`）。
+2. **派生点唯一**：`layoutRowsOf` 按 `leaf.hostPaneId` 分派到对应 pane 行。
+   没有指定、或指向一条已不存在的 pane（关分屏 / 删 pane / 切分组之后），**回落 `base[0]`**：
+   宁可让标签回到第一格（还看得见），也不能静默丢掉。
+   这个校验在投影层还有一道 `hostPaneIdBelongsToGroup`，防止坏 id 被写出去。
+3. **`panes[].tabIds` 一个字不动（I2 不变）**。合并发生在**派生出来的** `rows[].tabIds` 上：
+   `base` 是 `panes.slice()` 的浅引用，合并时新建对象，原 pane 不受影响。
+4. **旧配置零迁移**：旧配置根本没有这个字段，`null` 就是「未指定」，行为与升级前完全一致。
+   投影层（`tabs-workspace-projection.js`）是**白名单重建**，必须显式列入 `hostPaneId`，
+   否则会被静默丢弃 —— 这里踩过一次：字段在 `sections.shellTabs` 里是对的，
+   穿过投影后变成 `undefined`，表现就是「写进去了但 Shell 又回到第一格」。
+
+#### 两处需要与 UI 同步关闭的入口
+
+只改 `canDetach` 不够——它只让菜单项置灰，**动作仍可被其它路径调用**（快捷键、脚本、旧测试）。
+所以单组下：
+
+- `requestWorkspaceTabContextMenu` 返回 `canDetach: Boolean(shellTab) && multiGroup`；
+- `detach-to-own-column` 的 handler 首部再判一次 `isMultiGroupLayer()`，不成立就 `break` 并给出提示。
+
+同理，`splitWorkspaceTabIntoPane` 必须在入口校验「这个 tabId 真的存在」：
+少了这一道，任何幽灵 id 都会新建 pane、打开分屏，布局被改过一次而用户看不到任何变化。
+注意**不能用 `getTabPaneId()` 当存在性判据**——它对找不到的 id 会回落到 `'pane-1'`，恒为真；
+要用 `isLiveWorkspaceTabId()`。
+
+#### 多组跨组拦截只有一处
+
+`finishWorkspaceTabDrag` 入口：判「目标 pane 属于哪个分组」与「这个标签自己的分组」是否一致，
+不一致就静默 `return`（标签弹回原位）。**单组时「目标组 = 源组」，这道门恒开**，所以不需要额外分支。
+
+#### 环境边界
+
+以上全部通过 CDP 合成输入验证（`verify-single-group-free-split` 9 项、`verify-single-group-shell-split` 19 项、
+`verify-restore-from-config` 12 项）。**CDP 合成拖拽 ≠ 真人手测**；本机无互连串口对、无 `com0com`，
+未做双端口收发回环。
 
 
 ### 6.2 状态自愈
@@ -1736,7 +1829,12 @@ CDP 脚本的点击入口，而这并不能减少「按钮落在看不见的列�
 | 7 | Shell 拖回原屏却新建第三列 | 拖动落点存的是**行元素 id**（行上没有 `data-group-id`，反查恒 `undefined`），且 `finishWorkspaceTabDrag` 无条件 `setShellColumnModeInModel(tabId, 'ownColumn')` | 落点存 `rowTarget.groupId`；分组行分支改为 `hostGroupId=null` + `columnMode='row'` + `columnId=该列`（旧 §8.2 语义作废，见该节） |
 
 另有 1 条**产品裁决**（不是缺陷）：**组内 pane 分屏需要 ≥2 个可移动标签**。移走唯一标签后 `reconcileEmptyPanes` 必然把布局折叠回一个 pane，
-用户看到的就是「点了没反应」；而「空的分屏」又被用户明确视为缺陷。⇒ 菜单项按 `canSplit = totalTabs >= 2` 置灰，动作入口 `splitWorkspaceTabIntoPane` 再兜底 `totalTabs < 2` 直接返回。**不引入空 pane 方案，不得复活。**
+用户看到的就是「点了没反应」；而「空的分屏」又被用户明确视为缺陷。⇒ 菜单项按「可移动标签数 ≥ 2」置灰（具体判据见 §6.1.1 规则 3 / §6.1.3），
+动作入口 `splitWorkspaceTabIntoPane` 再兜底直接返回。**不引入空 pane 方案，不得复活。**
+
+> 注：本节写于「Shell 不进 pane」时期。§6.1.3 的用户裁决之后，**单串口组下 Shell 也算可移动标签**
+> （它通过 `hostPaneId` 住进 pane，不进 `panes[].tabIds`），多组下仍不算。只改「算不算一个可移动标签」，
+> 「≥ 2 个」与非空 pane 两条产品规则未变。
 
 **验证证据（全部为真实 rect / 真实 OS 鼠标输入 / 真实 term.cols）**
 

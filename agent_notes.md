@@ -3722,3 +3722,188 @@ document.querySelectorAll('#group-workspace .pane-tabs-list').forEach(listEl => 
 4. **幂等保护与扇扫是配套的**：有了幂等，扇扫可以与构造器叠加而无需维护「已绑名单」。
 5. **静态标记里的控件必须单独想到**。`index.html` 里已经存在、而构造器又因 `getPaneDom` 早退的节点，
    是「入口缝隙」的高发区。
+
+
+---
+
+
+## 16. 单串口组自由分屏 / 多串口组按组归属（`hostPaneId`）
+
+### 16.1 两次用户裁决（逐字保留）
+
+第一句是需求本身：
+
+> 串口标签拖到 Shell 列之后，应该变成什么？当只有一个串口组时，串口标签页应该要可以随意分屏拖动，
+> 有多个串口组，每个组的标签不能脱离组
+
+第二句是在我把冲突报告上去之后拍的板：
+
+> 单串口组时所有标签都在一级栏，所以「把 shell 标签可拖到二级标签栏的需求删除，
+> shell 标签只能在一级栏」也是没问题的；**A. 旧裁决只管多组更贴切**
+
+### 16.2 一处必须先停下来问的裁决冲突
+
+pane 行**就是**二级标签栏。旧裁决「Shell 只能在一级栏」若全面有效，单组下 Shell 就不能进 pane 行，
+「所有标签等价」做不到；若本轮裁决全面有效，旧裁决就失效。这是产品语义，不能由实现者选。
+
+我当时给三个候选解释并停了工：**A 旧裁决只管多组** / B 旧裁决全面有效 / C 旧裁决作废。
+用户选 A，并补了一句关键澄清「单串口组时所有标签都在一级栏」。
+
+**这句话推出一个决定性结论**（它把最难的技术障碍直接消掉了）：
+
+> 单串口组时**不该存在 Shell 独立列**。单组只有一个容器，它的「分屏」只能是 pane 分屏；
+> 「独立列」是多组才需要的东西。
+
+原先最麻烦的两个障碍随之消失：①「Shell 独立列没有 `.pane-tabs-list`，落点枚举不覆盖它」——单组不再有那一列；
+②「串口标签进 Shell 列要写什么模型」——不存在这个问题，它是「进另一个 pane」，`moveTabToPane` 是现成代码。
+
+### 16.3 我自己的两次错误判断（已撤回，必须留记录）
+
+这两条都是我先写进工作记录、随后自己核对代码推翻的。**成本是一轮返工**。
+
+**误判 ①：「要做单组自由分屏，就必须修改不变式 I1/I2」**
+
+- 错误论断：单组所有标签等价 ⇒ Shell 必须进 `panes[]` ⇒ 与 I1/I2 直接冲突。
+- 核对后的事实：I1 判 `parentId`；I2 判 `panes[].tabIds` 是否含 shell id。
+  「Shell **显示**在某条 pane 行里」早就存在（走 `hostGroupId` + `layoutRowsOf` 合并进**派生的** `rows[].tabIds`），
+  `panes[].tabIds` 一个字不动。
+- 结论：不需要推翻任何不变式。全程 `panes[].tabIds` 不含 shell id，回归实测 `offenders:[]`。
+
+**误判 ②：「Shell 独立列没有 pane 可分 ⇒ 单组自由分屏在 Shell 列上会遇到模型边界」**
+
+- 这句本身对（`layoutRowsOf` 对 `containerId === null` 返回 `[]`），但**不构成对方案的阻碍**——
+  用户裁决直接推出「单组不产生独立列」，那条边界自然消失。
+
+教训：**推断写得再自洽，只要没核对判据就是假设。** 两次都是「先按直觉给结论，再读代码推翻」。
+
+### 16.4 设计：只加一条叶级事实
+
+| 事实 | 粒度 | 含义 |
+|---|---|---|
+| `hostGroupId`（已有） | 容器级 | 挂靠在哪个分组的下层行 |
+| **`hostPaneId`（新增）** | **pane 级** | 住进该容器的**哪一条** pane 行 |
+| `columnId`（已有） | 列级 | 停在哪一列的列首行 |
+| `columnMode`（已有） | 列级 | 是否自成独立列 |
+
+为什么只加这一条就够：串口标签本来就能进 `panes[].tabIds`（`moveWorkspaceTab` 就是跨 pane 移动），
+缺的只是 Shell 分不到 pane。`hostPaneId` 与 `hostGroupId` **完全同构**，是同一模式的下一层精度。
+
+两个不变：**`panes[].tabIds` 不动**（I2 不破）、**旧配置零迁移**（没这个字段就 `null`，回落 pane-1，行为同升级前）。
+
+### 16.5 一次必须显式写明的断言改写
+
+`TAB_ARCHITECTURE.md` §6.1.1 规则 3 原本是全局判据：
+
+```js
+canSplit = totalTabs >= 2 && !isShellTabId(tabId)
+```
+
+单组放开 Shell 后，这会让 Shell 的菜单项**恒置灰**。现改为按 `multiGroup` 分叉：多组保持旧判据原样，
+单组把「受托管但不在 `panes[].tabIds` 里的 Shell」另算一份。
+
+**旧断言不是作废，只是适用范围被收窄到多组**。多组下的反向对照用例仍必须全绿——这一点写在 §6.1.3 里。
+
+同样地，两条旧回归的过期断言也显式改写并注明了原因：
+
+| 脚本 | 旧断言（旧值） | 新断言（新值） | 为何失效 |
+|---|---|---|---|
+| `verify-single-group-shell-split` | `canSplit === false` | `canSplit === true` | 旧值基于「Shell 不能进 pane」，该前提已被裁决推翻 |
+| 同上 | `canDetach === true` | `canDetach === false` | 单组只有一个容器，独立列该不该存在 |
+| 同上（C/D 段） | detach 后必须变两列 | detach 必须被拒、仍是一列、Shell 仍 `row` | 同上 |
+| `verify-restore-from-config` | 4 条（`canSplit:false` / `canDetach:true` / split 无效 / detach 生效） | 4 条反向 + 新增「I2 不含 shell id」「列数不变」 | 同上 |
+
+**这不是为了让测试变绿而改期望值**：旧期望来自已被推翻的前提，且新断言同时加了更强的约束，不是单纯放宽。
+
+### 16.6 三个必须同时做的实现细节
+
+1. **UI 置灰不够，还要逻辑兜底**。`canDetach:false` 只让菜单变灰，直接发
+   `detach-to-own-column` 仍会建 `__shell__` 列。所以 handler 首部再判一次 `isMultiGroupLayer()`。
+2. **存在性校验不能用会回落的函数**。我第一版用 `getTabPaneId(tabId)` 判存在性，
+   但它对找不到的 id 会**回落到 `'pane-1'`**，恒为真；要用 `isLiveWorkspaceTabId(tabId)`。
+3. **多组跨组拦截只放一处**：`finishWorkspaceTabDrag` 入口判源组与目标组是否一致，不一致就静默 `return`。
+   单组时两者相等，这道门恒开，不需要额外分支。
+
+### 16.7 一个跨层丢字段的教训（花了最长时间）
+
+现象：`hostPaneId` 在 `sections.shellTabs` 里**是对的**（实测 `hostPaneId:"pane-2"`），但渲染出的 `rows` 仍把 Shell 放在 pane-1。
+
+```
+sections.shellTabs[0].hostPaneId = "pane-2"      ← 投影输入正确
+        ↓ normalizeTabIds 白名单重建时丢字段
+ws.tabs["tab-shell-1"].hostPaneId = undefined  ← 模型叶上没有
+        ↓ layoutRowsOf 回落 base[0]
+Shell 仍在 pane-1
+```
+
+真因：`projectWorkspace` 不在 `tab-model.js`，而在 **`tabs-workspace-projection.js`**；它的 `normalizeTabIds()`
+是**白名单重建**，没列出的键一律静默丢掉。
+
+**教训**：往这个投影器加任何新字段，必须同时改两处（`normalizeTabIds` 的字段表 + shell 叶构造处的赋值），
+否则它在下游的表现是「完全不像字段丢了的行为」（是布局位置回退了，不是报了 undefined）。
+上一轮的工作记录还写错过这个函数的文件位置，本轮先定位再改才修对。
+
+### 16.8 反查出的两个真实产品缺陷（不是本轮引入，但本轮暴露）
+
+**① 幽灵 tabId 会真的改布局**：`splitWorkspaceTabIntoPane` 原先只判 `if (!tabId) return false`，
+对非 shell 的非空 id 不验证存在性。实测 `sgf-1731`：对 `tab-filter-99999` 发 `split-vertical`，
+结果 `pane-2.tabIds = ["tab-filter-99999","tab-shell-1"]`、`activeTabId = "tab-filter-99999"`
+——用户看不到任何变化，布局却已被改过一次。
+
+**② 单组独立列可绕过 UI 造出来**：见 16.6 第 1 条。
+
+### 16.9 我自己的三次操作失误（当场修正，不得记成产品缺陷）
+
+| 失误 | 现象 | 修正 |
+|---|---|---|
+| 编辑 `case 'detach-to-own-column'` 只换了头部注释、保留了原 `case` 行 | `SyntaxError: Unexpected token 'case'`（`r=1` / `m=1` / 测试 `exit=3`） | 删重复段 |
+| 改写探针时误删 `const payload = await ev(...)` 整段 | 探针 `exit=2` / `PROBE ERROR: [payload is not defined]` | 补回 |
+| 补回时又留下**重复行** `})()`, 'shell-menu');` | 探针 `SyntaxError`（`c=1`） | 删重复行 |
+
+**教训**：对 `case` 块、`await ev(...)` 这类「首行即结构」的片段做替换，必须把整块（含结尾 `})()`, label);`）
+一起选中，不能只换一行。三次都是同一类错误。
+
+### 16.10 验证
+
+| 项 | 结果 |
+|---|---|
+| `node --check renderer.js` / `tabs-workspace-projection.js` / `tab-model.js` | `r=0` / `p=0` / `t=0` |
+| `check-renderer-module-load` | `m=0`（`renderer.js module body initialized without throwing`） |
+| 单测 `node scripts\run-tests.js` | **572/572 / 0 fail** |
+| 新 `verify-single-group-free-split` | **9/9**（`sgf-1732`，`diag1732`） |
+| `verify-single-group-shell-split` | **19/19**（`vsgss-1737`，`diag1737`） |
+| `verify-restore-from-config`（种子） | **12/12**（`vrfc-1743`，`diag1743`） |
+| `verify-pane-context-menu` | `exit=0`（`diag1733`） |
+| `verify-four-defects` | `exit=0`（47 项，`diag1738`） |
+| `verify-shell-drag` | `exit=0`（`diag1739`） |
+| 全量回归 `run-all -Start 1750` | **25 个不同脚本全部 `exit=0`，逐个 `renderer-diag=clean`，`exit=[1-9]` 计数 = 0**（`run-all-1750.txt`） |
+| `scan-undefined.js` | `checked=95 / missing=none` |
+| `check-arch-doc.js` | `blocks total=32 js=22 / syntaxErrors=0 / arityHints=0` |
+
+> 该批次实跑 **26 次**，因为 `run-all.ps1` 的脚本清单里 `verify-restore-from-config` 被写了两次（我上一次替换时留下的，**只影响测试基础设施**）。
+> 两遍均 `exit=0` 且均带种子。重复行已删，`Parser::ParseFile` 复核 `ps1err=0`、清单数 `25`。
+
+`sgf-1732` 关键观测：
+
+```
+after-split-main   rows: pane-1=[tab-filter-1]  pane-2=[tab-main]
+after-shell-split  shells[0] = {hostGroupId:"default", hostPaneId:"pane-2", columnMode:"row"}
+                   rows:    pane-2=[tab-shell-1]
+                   paneLists: pane-2-tabs-list=["tab-shell-1"]
+no-shell-id-in-panes-tabIds  offenders:[]      ← I2 未破
+ghost-action                 changed:false
+```
+
+### 16.11 环境边界（如实标注）
+
+- 全部通过 CDP 合成输入与真实 DOM 几何测得，**CDP 合成拖拽 ≠ 真人手测**。
+- 本机无互连串口对、无 `com0com`，**没有做**双端口收发回环；本轮改的是布局模型，不涉及数据链路。
+- 用户真实 `config.json` 仅被**读取并复制**进临时 profile，未修改；已核实 `--user-data-dir` 重定向 `app.getPath('userData')`。
+- `git push`、发版、打 tag 仍未获授权，本轮只做本地提交。
+
+### 16.12 可复用的判读纪律
+
+1. **新字段穿不过投影层时，症状不是「字段丢了」，而是「位置回退了」**。先比投影输入与模型叶，再往下游找。
+2. **“UI 置灰”不等于“动作被禁”**。每个入口都要问：除菜单之外，还有谁能发这个 action。
+3. **存在性校验不能用会回落默认值的查询函数**。回退默认值是为了「总得有个位置」，不能当「存不存在」用。
+4. **裁决冲突时不要自己选**。把候选解释写清楚停下问，比事后返工便宜得多。
+5. **改过的断言必须注明为何失效**，否则下一个接手的人会以为是「为了让测试变绿而改期望值」。
