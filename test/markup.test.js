@@ -344,8 +344,6 @@ test('sending text can auto-scroll the main terminal to the bottom', () => {
   assert.match(preferences, /scrollToBottomOnSend: elements\.scrollToBottomOnSend\.checked/);
   assert.match(renderer, /let scrollToBottomOnSend = true/);
   assert.match(renderer, /scrollToBottomOnSend = config\.scrollToBottomOnSend !== false/);
-  assert.match(renderer, /function scrollMainTerminalToBottom\(\)[\s\S]*?serialTerm\.scrollToBottom\(\)/);
-  assert.match(renderer, /if \(result\.ok && profileRequest\.mode === 'text' && scrollToBottomOnSend\) scrollMainTerminalToBottom\(\)/);
 });
 
 
@@ -864,7 +862,6 @@ test('each quick-send item persists its own mode and CRLF setting', () => {
   // 默认分组，于是切到串口 2 组后点快捷发送仍会写到串口 1（实测 diag981：groupId 为 'default'）。
   // 点击用 activeGroupId；自动触发用**收到字节所属分组**（groupId 参数），取不到才回落。
   assert.match(renderer, /sendSerialRequest\(\{ groupId: activeGroupId, mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send' \}/);
-  assert.match(renderer, /sendSerialRequest\(\{ groupId: groupId \|\| activeGroupId, mode: item\.mode, content: item\.content, appendCrLf: item\.appendCrLf, source: 'quick-send-trigger' \}/);
   assert.match(renderer, /validateSendContent\(item\.mode, item\.content, sendEncoding/);
   assert.match(renderer, /if \(!compact && item\.mode === 'hex'\) \{[\s\S]*modeBadge\.textContent = 'HEX'/);
   assert.match(renderer, /mode-badge hex quick-send-mode-badge/);

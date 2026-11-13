@@ -2,8 +2,8 @@
 
 // 渲染层多串口分组注册表（P2 基础设施）。
 //
-// 这一层只负责「哪个分组当前是激活的」「某个 sessionId 属于哪个分组」这类可判定的
-// 路由问题，不持有 Terminal / parser / formatter 等 DOM 相关对象。把这些判断从
+// 这一层只负责激活分组与 (groupId, sessionId) 会话路由，
+// 不持有 Terminal / parser / formatter 等 DOM 相关对象。把这些判断从
 // renderer.js 里剥出来，是为了让「字节是否应当被本分组消费」这件事可以被单元测试
 // 直接验证——这是多串口下最危险的一类错误（数据显示到错误的分组），一旦写错，
 // 只有靠肉眼盯着两个终端才能发现。
@@ -24,8 +24,6 @@ class SerialGroupRegistry {
     this.defaultGroupId = normalizeGroupId(defaultGroupId);
     // groupId -> { groupId, sessionId, connected, portPath }
     this.groups = new Map();
-    // 最近一次被创建的 sessionId -> groupId；用于把迟到的 IPC 消息归位
-    this.sessionToGroup = new Map();
     this.activeGroupId = this.defaultGroupId;
     this.ensureGroup(this.defaultGroupId);
   }
@@ -65,7 +63,6 @@ class SerialGroupRegistry {
     const next = Number.isInteger(sessionId) ? sessionId : group.sessionId + 1;
     group.sessionId = next;
     group.connected = true;
-    this.sessionToGroup.set(next, id);
     return next;
   }
 
@@ -78,10 +75,11 @@ class SerialGroupRegistry {
     return group.sessionId;
   }
 
-  // 某个 sessionId 属于哪个分组；未知时返回 null（不能假设是激活分组）。
+  // 仅供诊断：组内会话号可重复，有歧义时不能据此路由。
   groupIdForSession(sessionId) {
     if (!Number.isInteger(sessionId)) return null;
-    return this.sessionToGroup.get(sessionId) || null;
+    const matches = [...this.groups.values()].filter(group => group.connected && group.sessionId === sessionId);
+    return matches.length === 1 ? matches[0].groupId : null;
   }
 
   // 判断一条入站消息是否应当被渲染层消费。
@@ -92,11 +90,9 @@ class SerialGroupRegistry {
     const id = normalizeGroupId(groupId);
     const group = this.groups.get(id);
     if (!group) return { accepted: false, reason: 'unknown-group', groupId: id };
-
-    if (Number.isInteger(sessionId)) {
-      const owner = this.sessionToGroup.get(sessionId);
-      if (owner && owner !== id) return { accepted: false, reason: 'session-other-group', groupId: id };
-      if (sessionId !== group.sessionId) return { accepted: false, reason: 'stale-session', groupId: id };
+    if (!group.connected) return { accepted: false, reason: 'disconnected', groupId: id };
+    if (Number.isInteger(sessionId) && sessionId !== group.sessionId) {
+      return { accepted: false, reason: 'stale-session', groupId: id };
     }
     return { accepted: true, reason: 'ok', groupId: id };
   }
@@ -111,7 +107,6 @@ class SerialGroupRegistry {
     if (id === this.defaultGroupId) return false;
     const group = this.groups.get(id);
     if (!group) return false;
-    this.sessionToGroup.delete(group.sessionId);
     this.groups.delete(id);
     if (this.activeGroupId === id) this.activeGroupId = this.defaultGroupId;
     return true;

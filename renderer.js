@@ -128,7 +128,7 @@ let textDecoder = null;
 const quickTriggerDecoders = new Map();
 const quickTriggerBuffers = new Map();
 let appliedHexSettingsKey = '';
-let serialWriteChain = Promise.resolve();
+const serialWriteChains = new Map();
 let serialSessionId = 0;
 // P2：分组上下文。首版只注册 default 一个分组，但字节分发的判定已经走注册表，
 // 后续添加分组时不需要再改这条链路。
@@ -872,9 +872,10 @@ function getTerminalPendingLineLimit() {
 }
 const terminalWriteStates = new WeakMap();
 
-function scrollMainTerminalToBottom() {
-    if (typeof serialTerm?.scrollToBottom !== 'function') return;
-    requestAnimationFrame(() => serialTerm.scrollToBottom());
+function scrollMainTerminalToBottom(groupId = REGISTRY_DEFAULT_GROUP_ID) {
+    const term = serialRuntimes.get(groupId)?.term;
+    if (typeof term?.scrollToBottom !== 'function') return;
+    requestAnimationFrame(() => term.scrollToBottom());
 }
 
 function drainTerminalOutput(term, state) {
@@ -7334,15 +7335,15 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
             source: request.source || 'renderer', terminalEnter: request.terminalEnter === true,
             newlineMode: request.newlineMode || targetDisplay.newlineMode, sessionId: requestSessionId
         };
-        const pendingWrite = serialWriteChain.then(() => {
+        const pendingWrite = (serialWriteChains.get(targetGroupId) || Promise.resolve()).then(() => {
             if (!isGroupConnected(targetGroupId) || requestSessionId !== getGroupSessionId(targetGroupId)) {
                 return { ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' };
             }
             return ipcRenderer.invoke('serial-write', writeRequest);
         });
-        serialWriteChain = pendingWrite.catch(() => undefined);
+        serialWriteChains.set(targetGroupId, pendingWrite.catch(() => undefined));
         const result = await pendingWrite;
-        if (result.ok && profileRequest.mode === 'text' && scrollToBottomOnSend) scrollMainTerminalToBottom();
+        if (result.ok && profileRequest.mode === 'text' && scrollToBottomOnSend) scrollMainTerminalToBottom(targetGroupId);
         if (result.ok) {
             renderSentRecord({
                 timestamp: formatTimestamp(),
@@ -8602,10 +8603,6 @@ ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
     // P2：入站字节的归属判定统一走分组注册表。旧写法只比一个裸的 serialSessionId，
     // 没有分组概念，多串口下无法区分「这是哪个分组的字节」。
     const groupId = resolveSerialGroupId(payload.groupId);
-    if (Number.isInteger(payload.sessionId) && !serialGroupRegistry.groupIdForSession(payload.sessionId)) {
-        // 首次见到该会话号（连接刚成功，或旧主进程不带 groupId）：登记到它声明的分组。
-        serialGroupRegistry.beginSession(groupId, payload.sessionId);
-    }
     const verdict = serialGroupRegistry.accepts({ groupId, sessionId: payload.sessionId });
     if (!verdict.accepted) return;
     // serialSessionId 只代表默认分组。其它分组的会话号改由注册表按分组持有，
@@ -8772,13 +8769,12 @@ function disconnectSerial(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     const isDefaultGroup = targetGroupId === REGISTRY_DEFAULT_GROUP_ID;
     // 递增会话号作废迟到的数据，同时让分组注册表同步失效（否则注册表仍认为旧会话有效）。
     const nextSessionId = serialGroupRegistry.invalidateSession(targetGroupId);
+    serialWriteChains.delete(targetGroupId);
+    resetQuickTriggerReceive(targetGroupId);
     if (isDefaultGroup) {
-        // serialSessionId / serialWriteChain / 自动发送 / 快捷触发 / chartTabs 都是默认分组的
-        // 全局孪生体：断一个非默认分组不能顺手把它们清掉。
+        // 默认组的兼容状态与自动发送保持旧生命周期。
         serialSessionId = nextSessionId;
-        serialWriteChain = Promise.resolve();
         stopAutoSendRuntime();
-        resetQuickTriggerReceive(targetGroupId);
         chartTabs.forEach(tab => {
             tab.stream?.flush();
             tab.stream?.reset();
@@ -8814,6 +8810,8 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
     const groupId = resolveSerialGroupId(meta?.groupId);
     const isDefaultGroup = groupId === REGISTRY_DEFAULT_GROUP_ID;
     serialGroupRegistry.invalidateSession(groupId);
+    serialWriteChains.delete(groupId);
+    resetQuickTriggerReceive(groupId);
     // 断开的判定必须按**它自己所属的分组**读：关掉 g-2 时默认分组可能还是 text，
     // 用模块级缓存会 flush 错分组的 formatter。
     if (getGroupDisplay(groupId).receiveDisplayMode === 'hex') getHexFormatter(groupId).flush();
@@ -8822,9 +8820,7 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
         // 全局连接状态、自动发送与 chartTabs 别名只属于默认分组：
         // 关掉 g-2 不应该让默认分组的界面显示成「已断开」。
         serialSessionId = getGroupSessionId(groupId);
-        serialWriteChain = Promise.resolve();
         stopAutoSendRuntime();
-        resetQuickTriggerReceive(groupId);
         chartTabs.forEach(tab => {
             tab.stream?.flush();
             tab.stream?.reset();
@@ -9199,11 +9195,8 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
     // 新会话开始，该分组的 HEX 偏移与文本解码状态都要重置。
     getHexFormatter(targetGroupId).reset({ resetOffset: true });
     resetTextReceive(targetGroupId);
-    if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) {
-        // 只作废默认分组的写入链；其它分组的旧写入由会话号比对拦下。
-        serialWriteChain = Promise.resolve();
-        resetQuickTriggerReceive(targetGroupId);
-    }
+    serialWriteChains.delete(targetGroupId);
+    resetQuickTriggerReceive(targetGroupId);
     if (reconnecting) setActionStatus(`正在应用新的波特率 ${settings.baudRate}...`);
     try {
         const connectResult = await ipcRenderer.invoke('connect-serial', {
@@ -10683,17 +10676,19 @@ function updateQuickSendValidation() {
 // groupId 是**触发字节所属的分组**，不是 activeGroupId：A 组收到的字节触发出来的指令
 // 必须发回 A 组；用 activeGroupId 会在用户切到别的分组后把回复发错端口。
 async function triggerQuickSendItem(item, groupId) {
-    if (quickSendTriggerInFlight.has(item.id)) return;
-    quickSendTriggerInFlight.add(item.id);
+    const targetGroupId = resolveSerialGroupId(groupId || activeGroupId);
+    const triggerKey = JSON.stringify([targetGroupId, item.id]);
+    if (quickSendTriggerInFlight.has(triggerKey)) return;
+    quickSendTriggerInFlight.add(triggerKey);
     try {
         flashQuickSendItem(item.id);
-        const result = await sendSerialRequest({ groupId: groupId || activeGroupId, mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
+        const result = await sendSerialRequest({ groupId: targetGroupId, mode: item.mode, content: item.content, appendCrLf: item.appendCrLf, source: 'quick-send-trigger' }, SEND_LIMITS.quick, { silent: true });
         const label = item.label || item.content;
         setActionStatus(result.ok
             ? trFallback('main.quickTriggerSent', 'Auto-trigger sent: {label}', { label })
             : trFallback('main.quickTriggerFailed', 'Auto-trigger failed: {error}', { error: result.message || result.code }));
     } finally {
-        quickSendTriggerInFlight.delete(item.id);
+        quickSendTriggerInFlight.delete(triggerKey);
     }
 }
 

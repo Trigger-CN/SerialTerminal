@@ -1,5 +1,7 @@
 # 标签体系架构设计：Tab / TabRow / subRow / tabPanel
 
+> **重构修订入口：[MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)**。本文保留旧阶段设计。后续以新方案的显式布局状态、统一动作和模式迁移为实施目标；位置是需要保存的布局数据，不放在业务 Tab 上。单组所有叶标签可自由分屏，多组串口子标签不脱组、Shell 仅在一级栏；旧的“Shell 永远不进 pane”以及“多组 Shell 可进本组 pane”等冲突描述均不再适用。
+
 > **文档定位**：本文描述标签体系的**目标架构**，不是当前实现的说明。
 >
 > `MULTI_SERIAL_DESIGN.md` §6A（第 606 行起）描述**当前实现**：两种层数形态、Shell 的三态宿主、`ownerGroupId` / `detachedColumn` / `topRowColumnId` 三个位置字段、`#serial-group-tab-bar` 的单例借位机制。本文描述要替换它的模型。两者是「现状 / 目标」的关系，不是并列规范；按 §11 的 S1–S5 推进期间，以代码实际所处阶段为准。

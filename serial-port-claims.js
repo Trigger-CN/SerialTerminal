@@ -23,48 +23,50 @@ function normalizePortKey(value) {
 
 class SerialPortClaimTable {
   constructor() {
-    // 端口键 -> 占用它的 groupId
+    // 端口键 -> { groupId, token }，token 区分同组同口的前后两次连接。
     this.claims = new Map();
   }
 
-  // 申请占用。同一个分组重复申请同一个端口是允许的（重连），
-  // 换成别的端口时会先释放它自己原来的占用。
-  claim(groupId, portPath) {
+  // 连接切换时可保留旧端口声明，直到旧句柄真正关闭。
+  claim(groupId, portPath, { retainExisting = false } = {}) {
     const key = normalizePortKey(portPath);
     if (!key) return { ok: false, reason: 'empty-port', portKey: '' };
     const owner = this.claims.get(key);
-    if (owner && owner !== groupId) {
-      return { ok: false, reason: 'port-in-use', portKey: key, ownerGroupId: owner };
+    if (owner && owner.groupId !== groupId) {
+      return { ok: false, reason: 'port-in-use', portKey: key, ownerGroupId: owner.groupId };
     }
-    this.releaseGroup(groupId);
-    this.claims.set(key, groupId);
-    return { ok: true, reason: 'claimed', portKey: key, ownerGroupId: groupId };
+    if (!retainExisting) this.releaseGroup(groupId);
+    const token = Symbol(key);
+    this.claims.set(key, { groupId, token });
+    return { ok: true, reason: 'claimed', portKey: key, ownerGroupId: groupId, token };
   }
 
   // 释放某个分组的占用。返回被释放的端口键（没有占用时为 null）。
   releaseGroup(groupId) {
+    let released = null;
     for (const [key, owner] of this.claims) {
-      if (owner === groupId) {
+      if (owner.groupId === groupId) {
         this.claims.delete(key);
-        return key;
+        released = key;
       }
     }
-    return null;
+    return released;
   }
 
   // 归还「某分组占用的某个具体端口」。只有键与所有者同时匹配才释放，
   // 避免一个迟到的断开事件把该分组已经换到的新端口释放掉。
-  releasePort(groupId, portPath) {
+  releasePort(groupId, portPath, token) {
     const key = normalizePortKey(portPath);
     if (!key) return false;
-    if (this.claims.get(key) !== groupId) return false;
+    const owner = this.claims.get(key);
+    if (!owner || owner.groupId !== groupId || (token !== undefined && owner.token !== token)) return false;
     this.claims.delete(key);
     return true;
   }
 
   ownerOf(portPath) {
     const key = normalizePortKey(portPath);
-    return key ? (this.claims.get(key) || null) : null;
+    return key ? (this.claims.get(key)?.groupId || null) : null;
   }
 
   isClaimedByOther(groupId, portPath) {

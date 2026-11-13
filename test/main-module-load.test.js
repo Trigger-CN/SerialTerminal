@@ -125,23 +125,9 @@ test('main.js module body initializes without throwing', () => {
   );
 });
 
-test('serial log routing constants resolve before first top-level use', () => {
-  // 上一个测试真正执行了模块体，已能捕获 TDZ。这里再做一层意图明确的检查：
-  // 顶层立即求值的日志路由变量必须声明在常量之后。
-  // 注意：不能用 indexOf 找首次出现，因为注释里也会出现同名文本；
-  // 按行匹配真实语句，避免被注释干扰。
-  const lines = source.split('\n');
-  const declarationLine = lines.findIndex(line => line.startsWith("const DEFAULT_SERIAL_GROUP_ID = '"));
-  const firstUseLine = lines.findIndex(line =>
-    /^(let|var|const)\s+\w+\s*=\s*DEFAULT_SERIAL_GROUP_ID\b/.test(line)
-  );
-
-  assert.ok(declarationLine >= 0, 'DEFAULT_SERIAL_GROUP_ID 必须以顶层 const 声明');
-  assert.ok(firstUseLine >= 0, '应存在引用该常量的顶层赋值');
-  assert.ok(
-    declarationLine < firstUseLine,
-    `常量声明（行 ${declarationLine + 1}）必须早于首个顶层使用（行 ${firstUseLine + 1}）`
-  );
+test('log routing no longer requires a mutable top-level active group', () => {
+  assert.match(source, /const DEFAULT_SERIAL_GROUP_ID = 'default'/);
+  assert.doesNotMatch(source, /let active(?:Main|Raw)LogGroupId/);
 });
 
 test('TDZ usage-before-declaration is actually detected by the harness', () => {

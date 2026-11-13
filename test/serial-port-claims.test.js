@@ -21,12 +21,11 @@ test('normalizePortKey upper-cases because Windows port names are case-insensiti
 
 test('a port claimed by one group cannot be claimed by another', () => {
   const table = new SerialPortClaimTable();
-  assert.deepEqual(table.claim('default', 'COM6'), {
-    ok: true,
-    reason: 'claimed',
-    portKey: 'COM6',
-    ownerGroupId: 'default'
-  });
+  const claim = table.claim('default', 'COM6');
+  assert.equal(claim.ok, true);
+  assert.equal(claim.ownerGroupId, 'default');
+  assert.equal(claim.portKey, 'COM6');
+  assert.equal(typeof claim.token, 'symbol');
 
   const denied = table.claim('g-1', 'COM6');
   assert.equal(denied.ok, false);
@@ -132,4 +131,13 @@ test('clear drops every claim', () => {
   table.clear();
   assert.equal(table.size(), 0);
   assert.equal(table.ownerOf('COM6'), null);
+});
+
+test('old connection token cannot release a replacement claim on the same port', () => {
+  const table = new SerialPortClaimTable();
+  const old = table.claim('default', 'COM6');
+  const next = table.claim('default', 'COM6');
+  assert.equal(table.releasePort('default', 'COM6', old.token), false);
+  assert.equal(table.ownerOf('COM6'), 'default');
+  assert.equal(table.releasePort('default', 'COM6', next.token), true);
 });

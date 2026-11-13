@@ -65,7 +65,7 @@ test('bytes from another group are rejected rather than merged', () => {
   const verdict = registry.accepts({ groupId: DEFAULT_SERIAL_GROUP_ID, sessionId: 2 });
 
   assert.equal(verdict.accepted, false);
-  assert.equal(verdict.reason, 'session-other-group');
+  assert.equal(verdict.reason, 'stale-session');
 });
 
 test('payloads without a session id fall back to a group-level check', () => {
@@ -99,4 +99,19 @@ test('removing a group falls back to the default and keeps the default intact', 
   assert.equal(registry.activeGroupId, DEFAULT_SERIAL_GROUP_ID);
   assert.equal(registry.removeGroup(DEFAULT_SERIAL_GROUP_ID), false);
   assert.deepEqual(registry.listGroupIds(), [DEFAULT_SERIAL_GROUP_ID]);
+});
+
+
+test('equal session ids are scoped by group and invalidation stays local', () => {
+  const registry = new SerialGroupRegistry();
+  registry.beginSession('default', 1);
+  registry.beginSession('g-1', 1);
+  assert.equal(registry.accepts({ groupId: 'default', sessionId: 1 }).accepted, true);
+  assert.equal(registry.accepts({ groupId: 'g-1', sessionId: 1 }).accepted, true);
+  assert.equal(registry.groupIdForSession(1), null);
+  registry.invalidateSession('g-1');
+  assert.equal(registry.accepts({ groupId: 'g-1', sessionId: 2 }).accepted, false);
+  assert.equal(registry.accepts({ groupId: 'default', sessionId: 1 }).accepted, true);
+  registry.removeGroup('g-1');
+  assert.equal(registry.groupIdForSession(1), 'default');
 });

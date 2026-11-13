@@ -735,24 +735,22 @@ const SERIAL_LOG_FOLDER_SHELL = '_shell';
 // 串口分组默认 id。日志层在模块顶层就会引用它，因此必须先于所有使用者声明（const 有 TDZ）。
 const DEFAULT_SERIAL_GROUP_ID = 'default';
 
-let logBuffer = [];
-let logBufferByteCount = 0;
-let mainLogFilePath = '';
-// 当前通用/raw 日志归属的分组；换端口时重置，避免继续写进上一个端口的目录。
-let activeMainLogGroupId = DEFAULT_SERIAL_GROUP_ID;
-let activeRawLogGroupId = DEFAULT_SERIAL_GROUP_ID;
-let tabLogBuffers = new Map();
-let textLogFlushError = null;
-let tabLogFlushError = null;
-let rawBinaryBuffers = [];
-let rawBinaryByteCount = 0;
-let rawBinaryLogPath = '';
+const groupLogStates = new Map();
+const tabLogBuffers = new Map();
 let activeLogDate = '';
 let logDateRotationInProgress = false;
-let rawBinaryFlushError = null;
-let rawBinaryLogOverflowNotified = false;
-let textLogOverflowNotified = false;
-let tabLogOverflowNotified = false;
+
+function getGroupLogState(groupId) {
+  const id = normalizeSerialGroupId(groupId);
+  if (!groupLogStates.has(id)) {
+    groupLogStates.set(id, {
+      groupId: id,
+      text: { buffer: [], byteCount: 0, filePath: '', flushError: null, overflowNotified: false },
+      raw: { buffer: [], byteCount: 0, filePath: '', flushError: null, overflowNotified: false }
+    });
+  }
+  return groupLogStates.get(id);
+}
 let logFlushTimer = null;
 let logCleanupTimer = null;
 let logCleanupInFlight = false;
@@ -783,7 +781,7 @@ function getAutoFlushThreshold() {
 
 function notifyLogError(kind, error, details = {}) {
   const message = error?.message || String(error || 'Unknown log write error');
-  const noticeKey = `${kind}:${details.paused ? 'paused' : 'write'}:${message}`;
+  const noticeKey = `${kind}:${details.groupId || ''}:${details.tabId || ''}:${details.paused ? 'paused' : 'write'}:${message}`;
   if (logErrorNoticeKeys.has(noticeKey)) return;
   logErrorNoticeKeys.add(noticeKey);
   log.error(`Log write failed (${kind}):`, error);
@@ -792,16 +790,16 @@ function notifyLogError(kind, error, details = {}) {
   }
 }
 
-function clearLogErrorNotice(kind) {
+function clearLogErrorNotice(kind, { groupId = '', tabId = '' } = {}) {
   for (const key of Array.from(logErrorNoticeKeys)) {
-    if (key.startsWith(`${kind}:`)) logErrorNoticeKeys.delete(key);
+    if (key.startsWith(`${kind}:${groupId}:${tabId}:`)) logErrorNoticeKeys.delete(key);
   }
 }
 
-function shouldAcceptMoreCachedLog(kind, byteCount, error, wasNotified) {
+function shouldAcceptMoreCachedLog(kind, byteCount, error, wasNotified, details = {}) {
   if (!error || byteCount < getAutoFlushThreshold()) return true;
   if (!wasNotified) {
-    notifyLogError(kind, error, { paused: true });
+    notifyLogError(kind, error, { ...details, paused: true });
   }
   return false;
 }
@@ -810,10 +808,9 @@ function ensureTabLogFile(tabId) {
   const entry = tabLogBuffers.get(tabId);
   if (!entry) return '';
   rotateLogFilesForCurrentDate();
-  // 换端口/重连后 entry 的 filePath 已被清空，会重新落到当前分组的端口目录。
+  // 本标签持有独立文件路径；只在成功刷盘后轮转。
   if (entry.filePath) return entry.filePath;
-  const logDirectory = ensureLogDirectory(entry.groupId);
-  entry.filePath = path.join(logDirectory, buildLogFileName({ tabTitle: entry.title || tabId }));
+  entry.filePath = createUniqueLogFilePath(entry.groupId, buildLogFileName({ tabTitle: entry.title || tabId }));
   tabLogBuffers.set(tabId, entry);
   return entry.filePath;
 }
@@ -827,6 +824,7 @@ function appendToTabLogSync(tabId, data) {
 }
 
 function flushTabLogEntrySync(tabId, entry) {
+  rotateLogFilesForCurrentDate();
   if (!entry || !Array.isArray(entry.buffer) || entry.buffer.length === 0) return true;
   const allData = entry.buffer.join('');
   if (!allData) {
@@ -838,13 +836,13 @@ function flushTabLogEntrySync(tabId, entry) {
     appendToTabLogSync(tabId, allData);
     entry.buffer = [];
     entry.byteCount = 0;
-    tabLogFlushError = null;
-    tabLogOverflowNotified = false;
-    clearLogErrorNotice('tab');
+    entry.flushError = null;
+    entry.overflowNotified = false;
+    clearLogErrorNotice('tab', { groupId: entry.groupId, tabId });
     return true;
   } catch (error) {
-    tabLogFlushError = error;
-    notifyLogError('tab', error, { tabId });
+    entry.flushError = error;
+    notifyLogError('tab', error, { tabId, groupId: entry.groupId });
     return false;
   }
 }
@@ -858,71 +856,72 @@ function buildRawLogFileName() {
   return fileName;
 }
 
-function ensureMainLogFilePath() {
+function ensureMainLogFilePath(groupId = DEFAULT_SERIAL_GROUP_ID) {
   rotateLogFilesForCurrentDate();
-  if (mainLogFilePath) return mainLogFilePath;
-  const logDirectory = ensureLogDirectory(activeMainLogGroupId);
-  const fileName = buildLogFileName({});
-  const extension = path.extname(fileName);
-  const baseName = path.basename(fileName, extension);
-  mainLogFilePath = path.join(logDirectory, fileName);
-  let suffix = 2;
-  while (fs.existsSync(mainLogFilePath)) {
-    mainLogFilePath = path.join(logDirectory, `${baseName}_${suffix}${extension}`);
-    suffix++;
-  }
-  return mainLogFilePath;
+  const state = getGroupLogState(groupId).text;
+  if (state.filePath) return state.filePath;
+  state.filePath = createUniqueLogFilePath(groupId, buildLogFileName({}));
+  return state.filePath;
 }
 
-function ensureRawBinaryLogPath() {
-  rotateLogFilesForCurrentDate();
-  if (rawBinaryLogPath) return rawBinaryLogPath;
-  const logDirectory = ensureLogDirectory(activeRawLogGroupId);
-  const fileName = buildRawLogFileName();
+function createUniqueLogFilePath(groupId, fileName) {
+  const logDirectory = ensureLogDirectory(groupId);
   const extension = path.extname(fileName);
   const baseName = path.basename(fileName, extension);
-  rawBinaryLogPath = path.join(logDirectory, fileName);
+  const activePaths = new Set(getActiveLogFilePaths());
+  let filePath = path.join(logDirectory, fileName);
   let suffix = 2;
-  while (fs.existsSync(rawBinaryLogPath)) {
-    rawBinaryLogPath = path.join(logDirectory, `${baseName}_${suffix}${extension}`);
+  while (fs.existsSync(filePath) || activePaths.has(filePath)) {
+    filePath = path.join(logDirectory, `${baseName}_${suffix}${extension}`);
     suffix++;
   }
-  return rawBinaryLogPath;
+  return filePath;
 }
 
-function flushRawBinaryLogSync() {
-  if (rawBinaryBuffers.length === 0) return true;
-  const snapshot = rawBinaryBuffers;
-  const byteCount = rawBinaryByteCount;
-  try {
-    fs.appendFileSync(ensureRawBinaryLogPath(), Buffer.concat(snapshot, byteCount));
-    rawBinaryBuffers = [];
-    rawBinaryByteCount = 0;
-    rawBinaryFlushError = null;
-    rawBinaryLogOverflowNotified = false;
-    clearLogErrorNotice('raw');
-    return true;
-  } catch (error) {
-    rawBinaryFlushError = error;
-    notifyLogError('raw', error);
-    return false;
+function ensureRawBinaryLogPath(groupId = DEFAULT_SERIAL_GROUP_ID) {
+  rotateLogFilesForCurrentDate();
+  const state = getGroupLogState(groupId).raw;
+  if (state.filePath) return state.filePath;
+  state.filePath = createUniqueLogFilePath(groupId, buildRawLogFileName());
+  return state.filePath;
+}
+
+function flushRawBinaryLogSync(groupId) {
+  rotateLogFilesForCurrentDate();
+  const groups = groupId === undefined ? [...groupLogStates.values()] : [getGroupLogState(groupId)];
+  let ok = true;
+  for (const group of groups) {
+    const state = group.raw;
+    if (!state.buffer.length) continue;
+    try {
+      fs.appendFileSync(ensureRawBinaryLogPath(group.groupId), Buffer.concat(state.buffer, state.byteCount));
+      state.buffer = [];
+      state.byteCount = 0;
+      state.flushError = null;
+      state.overflowNotified = false;
+      clearLogErrorNotice('raw', { groupId: group.groupId });
+    } catch (error) {
+      state.flushError = error;
+      notifyLogError('raw', error, { groupId: group.groupId });
+      ok = false;
+    }
   }
+  return ok;
 }
 
 function bufferRawSerialBytes(data, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (!currentConfig.saveRawSerialToFile || !Buffer.isBuffer(data) || data.length === 0) return;
   rotateLogFilesForCurrentDate();
-  activeRawLogGroupId = normalizeSerialGroupId(groupId);
-  ensureRawBinaryLogPath();
-  if (!shouldAcceptMoreCachedLog('raw', rawBinaryByteCount, rawBinaryFlushError, rawBinaryLogOverflowNotified)) {
-    rawBinaryLogOverflowNotified = true;
+  const group = getGroupLogState(groupId);
+  const state = group.raw;
+  ensureRawBinaryLogPath(group.groupId);
+  if (!shouldAcceptMoreCachedLog('raw', state.byteCount, state.flushError, state.overflowNotified, { groupId: group.groupId })) {
+    state.overflowNotified = true;
     return;
   }
-  rawBinaryBuffers.push(Buffer.from(data));
-  rawBinaryByteCount += data.length;
-  if (rawBinaryByteCount >= getAutoFlushThreshold()) {
-    flushRawBinaryLogSync();
-  }
+  state.buffer.push(Buffer.from(data));
+  state.byteCount += data.length;
+  if (state.byteCount >= getAutoFlushThreshold()) flushRawBinaryLogSync(group.groupId);
 }
 
 function sanitizeFileNamePart(value) {
@@ -982,9 +981,7 @@ function rotateLogFilesForCurrentDate() {
   } finally {
     logDateRotationInProgress = false;
   }
-  mainLogFilePath = '';
-  rawBinaryLogPath = '';
-  tabLogBuffers.forEach(entry => { entry.filePath = ''; });
+  resetEmptyLogPaths();
   activeLogDate = today;
 }
 
@@ -999,90 +996,92 @@ function ensureLogDirectory(groupId = DEFAULT_SERIAL_GROUP_ID) {
   return logDirectory;
 }
 
-function saveLog({ notify = true } = {}) {
-  try {
-    if (logBuffer.length === 0) return;
-    if (currentConfig.saveAllTabsLogToFiles) {
-      logBuffer = [];
-      logBufferByteCount = 0;
-      return;
+function saveLog({ notify = true, groupId } = {}) {
+  rotateLogFilesForCurrentDate();
+  const groups = groupId === undefined ? [...groupLogStates.values()] : [getGroupLogState(groupId)];
+  let ok = true;
+  for (const group of groups) {
+    const state = group.text;
+    if (!state.buffer.length) continue;
+    try {
+      const filePath = ensureMainLogFilePath(group.groupId);
+      fs.appendFileSync(filePath, iconv.encode(state.buffer.join(''), currentConfig.logEncoding));
+      state.buffer = [];
+      state.byteCount = 0;
+      state.flushError = null;
+      state.overflowNotified = false;
+      clearLogErrorNotice('text', { groupId: group.groupId });
+      if (notify && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('log-saved', { path: filePath, groupId: group.groupId });
+      }
+    } catch (error) {
+      state.flushError = error;
+      notifyLogError('text', error, { groupId: group.groupId });
+      ok = false;
     }
-    const snapshot = logBuffer;
-    const byteCount = logBufferByteCount;
-    const allData = snapshot.join('');
-    if (!allData) return;
-    const filePath = ensureMainLogFilePath();
-    fs.appendFileSync(filePath, iconv.encode(allData, currentConfig.logEncoding));
-    if (logBuffer === snapshot) {
-      logBuffer = [];
-      logBufferByteCount = 0;
-    } else {
-      logBuffer.splice(0, snapshot.length);
-      logBufferByteCount = Math.max(0, logBufferByteCount - byteCount);
-    }
-    textLogFlushError = null;
-    textLogOverflowNotified = false;
-    clearLogErrorNotice('text');
-    if (notify && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('log-saved', { path: filePath });
-    }
-  } catch (err) {
-    textLogFlushError = err;
-    notifyLogError('text', err);
   }
+  return ok;
 }
 
-function closeMainLogSession({ notify = true } = {}) {
-  saveLog({ notify });
-  if (logBuffer.length === 0) {
-    mainLogFilePath = '';
+function resetEmptyLogPaths({ text = true, raw = true, groupId } = {}) {
+  for (const group of groupLogStates.values()) {
+    if (groupId !== undefined && group.groupId !== groupId) continue;
+    if (text && !group.text.buffer.length) group.text.filePath = '';
+    if (raw && !group.raw.buffer.length) group.raw.filePath = '';
   }
+  if (text) tabLogBuffers.forEach(entry => {
+    if ((groupId === undefined || entry.groupId === groupId) && !entry.buffer.length) entry.filePath = '';
+  });
 }
 
-function saveAllTabLogs({ notify = true, closeEntries = true } = {}) {
-  if (!currentConfig.logEnabled || !currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return;
+function closeMainLogSession({ notify = true, groupId } = {}) {
+  const ok = saveLog({ notify, groupId });
+  resetEmptyLogPaths({ raw: false, groupId });
+  return ok;
+}
+
+function saveAllTabLogs({ notify = true, closeEntries = true, groupId } = {}) {
+  if (!currentConfig.logEnabled || !currentConfig.saveAllTabsLogToFiles || tabLogBuffers.size === 0) return true;
   const savedPaths = [];
-  const completedTabIds = [];
+  let ok = true;
   for (const [tabId, entry] of tabLogBuffers.entries()) {
+    if (groupId !== undefined && entry.groupId !== groupId) continue;
     if (!flushTabLogEntrySync(tabId, entry)) {
-      tabLogBuffers.set(tabId, entry);
+      ok = false;
       continue;
     }
     if (entry.filePath && fs.existsSync(entry.filePath)) savedPaths.push(entry.filePath);
-    if (closeEntries) completedTabIds.push(tabId);
+    if (closeEntries) tabLogBuffers.delete(tabId);
   }
-  completedTabIds.forEach(tabId => tabLogBuffers.delete(tabId));
   if (notify && savedPaths.length && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('all-tabs-log-saved', { paths: savedPaths });
   }
+  return ok;
 }
 
 function closeShellTabLogSessions({ notify = true } = {}) {
+  let ok = true;
   const savedPaths = [];
   for (const [tabId, entry] of tabLogBuffers.entries()) {
     if (!tabId.startsWith('tab-shell-')) continue;
-    if (!flushTabLogEntrySync(tabId, entry)) continue;
+    if (!flushTabLogEntrySync(tabId, entry)) { ok = false; continue; }
     if (entry.filePath && fs.existsSync(entry.filePath)) savedPaths.push(entry.filePath);
     tabLogBuffers.delete(tabId);
   }
   if (notify && savedPaths.length && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('all-tabs-log-saved', { paths: savedPaths });
   }
+  return ok;
 }
 
 // 关闭自动日志时把已缓冲内容落盘并清空所有日志会话，避免重新开启后接写到旧文件。
 function closeLogSessionsForDisabled() {
-  flushRawBinaryLogSync();
-  if (currentConfig.saveAllTabsLogToFiles) {
-    saveAllTabLogs({ notify: false });
-    tabLogBuffers.clear();
-  } else {
-    saveLog({ notify: false });
-  }
-  logBuffer = [];
-  logBufferByteCount = 0;
-  mainLogFilePath = '';
-  rawBinaryLogPath = '';
+  const rawOk = flushRawBinaryLogSync();
+  const textOk = currentConfig.saveAllTabsLogToFiles
+    ? saveAllTabLogs({ notify: false })
+    : saveLog({ notify: false });
+  resetEmptyLogPaths();
+  if (!rawOk || !textOk) throw new Error('Failed to flush pending logs');
 }
 
 function stripAnsi(str) {
@@ -1097,22 +1096,16 @@ function stripAnsi(str) {
 function writeLog(data, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (!currentConfig.logEnabled || !data || currentConfig.saveAllTabsLogToFiles) return;
   rotateLogFilesForCurrentDate();
-  // 日志跟随触发它的分组：首次写入时按该分组解析端口目录，随后同组内复用同一文件。
-  const resolvedGroupId = normalizeSerialGroupId(groupId);
-  if (resolvedGroupId !== activeMainLogGroupId) {
-    activeMainLogGroupId = resolvedGroupId;
-    mainLogFilePath = '';
-  }
-  ensureMainLogFilePath();
-  if (!shouldAcceptMoreCachedLog('text', logBufferByteCount, textLogFlushError, textLogOverflowNotified)) {
-    textLogOverflowNotified = true;
+  const group = getGroupLogState(groupId);
+  const state = group.text;
+  ensureMainLogFilePath(group.groupId);
+  if (!shouldAcceptMoreCachedLog('text', state.byteCount, state.flushError, state.overflowNotified, { groupId: group.groupId })) {
+    state.overflowNotified = true;
     return;
   }
-  logBuffer.push(data);
-  logBufferByteCount += Buffer.byteLength(data);
-  if (logBufferByteCount >= getAutoFlushThreshold()) {
-    saveLog({ notify: false });
-  }
+  state.buffer.push(data);
+  state.byteCount += Buffer.byteLength(data);
+  if (state.byteCount >= getAutoFlushThreshold()) saveLog({ notify: false, groupId: group.groupId });
 }
 
 function writeTabLog(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID) {
@@ -1121,7 +1114,7 @@ function writeTabLog(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (!currentConfig.logEnabled) return;
   if (tabId.startsWith('tab-shell-') && !currentConfig.saveShellTabsLogToFiles) return;
   const clean = stripAnsi(data);
-  if (tabId === 'tab-main') {
+  if (tabId === (normalizeSerialGroupId(groupId) === DEFAULT_SERIAL_GROUP_ID ? 'tab-main' : `tab-main-${normalizeSerialGroupId(groupId)}`)) {
     writeLog(clean, groupId);
   }
   if (!currentConfig.saveAllTabsLogToFiles) return;
@@ -1129,13 +1122,13 @@ function writeTabLog(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID) {
   const logGroupId = tabId.startsWith('tab-shell-')
     ? SERIAL_LOG_FOLDER_SHELL
     : normalizeSerialGroupId(groupId);
-  const existing = tabLogBuffers.get(tabId) || { title: '', buffer: [], filePath: '', byteCount: 0, groupId: logGroupId };
+  const existing = tabLogBuffers.get(tabId) || { title: title || tabId, buffer: [], filePath: '', byteCount: 0, groupId: logGroupId };
   existing.groupId = logGroupId;
   tabLogBuffers.set(tabId, existing);
   rotateLogFilesForCurrentDate();
   ensureTabLogFile(tabId);
-  if (!shouldAcceptMoreCachedLog('tab', existing.byteCount || 0, tabLogFlushError, tabLogOverflowNotified)) {
-    tabLogOverflowNotified = true;
+  if (!shouldAcceptMoreCachedLog('tab', existing.byteCount || 0, existing.flushError, existing.overflowNotified, { groupId: logGroupId, tabId })) {
+    existing.overflowNotified = true;
     return;
   }
   existing.title = title || existing.title || tabId;
@@ -1164,7 +1157,7 @@ function startLogAutoFlushTimer() {
 }
 
 function getActiveLogFilePaths() {
-  const activePaths = [mainLogFilePath, rawBinaryLogPath];
+  const activePaths = [...groupLogStates.values()].flatMap(group => [group.text.filePath, group.raw.filePath]);
   tabLogBuffers.forEach(entry => activePaths.push(entry.filePath));
   return activePaths.filter(Boolean);
 }
@@ -1235,31 +1228,25 @@ function saveConfig(config) {
   const logCleanupSettingsChanged = normalized.logPath !== currentConfig.logPath
     || normalized.logRetentionDays !== currentConfig.logRetentionDays;
   if (currentConfig.logEnabled && textLogDestinationChanged) {
-    if (currentConfig.saveAllTabsLogToFiles) saveAllTabLogs();
-    else saveLog();
+    const ok = currentConfig.saveAllTabsLogToFiles ? saveAllTabLogs() : saveLog();
+    if (!ok) throw new Error('Failed to flush pending text logs');
   }
   if (currentConfig.saveRawSerialToFile
       && (!normalized.saveRawSerialToFile || rawLogDestinationChanged)
       && !flushRawBinaryLogSync()) {
-    throw rawBinaryFlushError || new Error('Failed to flush pending raw serial log');
+    throw new Error('Failed to flush pending raw serial log');
   }
-  if (textLogDestinationChanged) {
-    mainLogFilePath = '';
+  if (textLogDestinationChanged || rawLogDestinationChanged) {
+    resetEmptyLogPaths({ text: textLogDestinationChanged, raw: rawLogDestinationChanged });
   }
-  if (rawLogDestinationChanged) {
-    rawBinaryLogPath = '';
-  }
-  if (normalized.logCreateDateFolder !== currentConfig.logCreateDateFolder) {
-    activeLogDate = '';
-    tabLogBuffers.forEach(entry => { entry.filePath = ''; });
-  }
+  if (normalized.logCreateDateFolder !== currentConfig.logCreateDateFolder) activeLogDate = '';
   if (currentConfig.saveShellTabsLogToFiles && !normalized.saveShellTabsLogToFiles) {
-    closeShellTabLogSessions();
+    if (!closeShellTabLogSessions()) throw new Error('Failed to flush pending Shell logs');
   }
   if (currentConfig.saveAllTabsLogToFiles && !normalized.saveAllTabsLogToFiles) {
-    saveAllTabLogs();
+    if (!saveAllTabLogs()) throw new Error('Failed to flush pending tab logs');
   } else if (!currentConfig.saveAllTabsLogToFiles && normalized.saveAllTabsLogToFiles) {
-    closeMainLogSession();
+    if (!closeMainLogSession()) throw new Error('Failed to flush pending text logs');
   }
   if (currentConfig.logEnabled && !normalized.logEnabled) {
     // 关闭自动日志总开关：先把已缓冲内容落盘并清空会话，避免切换后仍向旧文件追加。
@@ -2899,7 +2886,6 @@ const serialSessions = new Map();
 // 同一个物理端口同一时刻只允许一个分组占用。驱动通常会拒绝重复打开，
 // 但那不是应用保证（部分虚拟串口/复合设备允许共享打开），因此在应用层显式拦住。
 const serialPortClaims = new SerialPortClaimTable();
-let serialSessionId = 0;
 const THROUGHPUT_SAMPLE_MS = 1000;
 const THROUGHPUT_HISTORY_LENGTH = 30;
 let throughputTimer = null;
@@ -2919,6 +2905,8 @@ function createSerialSession(groupId, portPath) {
     newlineMode: 'crlf',
     cleanupComplete: true,
     connectInProgress: false,
+    claimToken: null,
+    cancelConnect: false,
     // 输出队列按 sessionId 分桶：不同会话的字节永远不会合进同一条 IPC 消息。
     outputBuckets: new Map(),
     outputFlushScheduled: false,
@@ -3059,20 +3047,23 @@ function cleanupSerialConnection(message = null, port = null, groupId = DEFAULT_
     return;
   }
   // 只丢弃不属于本分组、或不属于当前连接的事件；其他分组的事件不得被误判为幽灵事件。
-  if (port && session.port && port !== session.port) return;
+  if (port && port !== session.port) return;
   if (session.cleanupComplete) return;
   session.cleanupComplete = true;
   session.sessionId++;
-  // 会话已经不再持有端口，占用必须同步释放；否则该端口在应用内永远不可再连。
-  serialPortClaims.releaseGroup(session.groupId);
+  serialPortClaims.releasePort(session.groupId, session.portPath, session.claimToken);
+  session.claimToken = null;
   resetThroughputState(session, false);
   sendThroughputUpdate(session);
   flushRawBinaryLogSync(session.groupId);
   const disconnectMsg = message || 'Serial port disconnected';
   session.port = null;
-  if (!currentConfig.saveAllTabsLogToFiles) {
-    saveLog({ groupId: session.groupId });
+  if (currentConfig.saveAllTabsLogToFiles) {
+    saveAllTabLogs({ groupId: session.groupId, notify: false });
+  } else {
+    closeMainLogSession({ groupId: session.groupId, notify: false });
   }
+  resetEmptyLogPaths({ groupId: session.groupId });
   notifySerialDisconnected(disconnectMsg, session.groupId);
 }
 
@@ -3093,6 +3084,7 @@ function writeSerialPayload(request) {
   if (!built.ok) return Promise.resolve(built);
 
   const port = session.port;
+  const sessionId = session.sessionId;
   return new Promise(resolve => {
     try {
       port.write(built.bytes, error => {
@@ -3100,8 +3092,12 @@ function writeSerialPayload(request) {
           resolve({ ok: false, code: 'SERIAL_WRITE_FAILED', message: error.message });
           return;
         }
+        if (session.port !== port || session.sessionId !== sessionId || session.cleanupComplete) {
+          resolve({ ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' });
+          return;
+        }
         session.throughput.txCurrentBytes += built.bytes.length;
-        resolve({ ok: true, bytesWritten: built.bytes.length, sessionId: session.sessionId });
+        resolve({ ok: true, bytesWritten: built.bytes.length, sessionId });
       });
     } catch (error) {
       resolve({ ok: false, code: 'SERIAL_WRITE_FAILED', message: error.message });
@@ -3116,9 +3112,11 @@ ipcMain.handle('list-ports', async () => {
 ipcMain.handle('connect-serial', async (event, options = {}) => {
   const { path, baudRate, dataBits, stopBits, parity, encoding, sendEncoding, newlineMode } = options;
   const groupId = normalizeSerialGroupId(options.groupId);
+  const session = getOrCreateSerialSession(groupId);
+  if (session.connectInProgress) throw new Error('A serial connection attempt is already in progress');
   // 端口占用必须**在**动本分组旧连接之前判：否则把 g-1 从 COM6 换到已被 g-2
   // 占用的 COM7 时，会先把 g-1 的 COM6 断开，才发现不能连，白白丢了一条好连接。
-  const claim = serialPortClaims.claim(groupId, path);
+  const claim = serialPortClaims.claim(groupId, path, { retainExisting: true });
   if (!claim.ok) {
     if (claim.reason === 'port-in-use') {
       // 用固定 token 回传，让渲染层能翻译成本地化的友好提示；
@@ -3127,22 +3125,24 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
     }
     throw new Error('No serial port selected');
   }
-  const session = getOrCreateSerialSession(groupId, path);
-  if (session.connectInProgress) {
-    throw new Error('A serial connection attempt is already in progress');
-  }
   session.connectInProgress = true;
+  session.cancelConnect = false;
   try {
     // 只影响本分组：其他分组已打开的端口不会被关闭。
     if (session.port && session.port.isOpen) {
-      await new Promise(resolve => session.port.close(resolve));
-      cleanupSerialConnection(null, null, groupId);
+      const oldPort = session.port;
+      await new Promise((resolve, reject) => oldPort.close(error => error ? reject(error) : resolve()));
+      cleanupSerialConnection(null, oldPort, groupId);
     } else if (session.port && !session.cleanupComplete) {
       throw new Error('A serial port is still opening');
     }
-    if (rawBinaryBuffers.length > 0 && !flushRawBinaryLogSync(groupId)) {
-      throw new Error(`Failed to flush pending raw serial log: ${rawBinaryFlushError?.message || 'unknown error'}`);
-    }
+    if (session.cancelConnect) throw new Error('Serial connection cancelled');
+    const rawOk = flushRawBinaryLogSync(groupId);
+    const textOk = currentConfig.saveAllTabsLogToFiles
+      ? saveAllTabLogs({ groupId, notify: false })
+      : closeMainLogSession({ groupId, notify: false });
+    if (!rawOk || !textOk) throw new Error('Failed to flush pending serial logs');
+    resetEmptyLogPaths({ groupId });
 
     session.sendEncoding = oneOf(sendEncoding || encoding, SERIAL_ENCODINGS, 'utf8');
     session.newlineMode = newlineMode || 'crlf';
@@ -3150,15 +3150,7 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
     session.sessionId++;
     const connectionSessionId = session.sessionId;
     session.outputBuckets = new Map();
-    rawBinaryBuffers = [];
-    rawBinaryByteCount = 0;
-    rawBinaryLogPath = '';
-    rawBinaryFlushError = null;
-    // 换端口/重连必须重建日志归属，否则日志会继续写进上一次端口的目录。
-    mainLogFilePath = '';
-    textLogFlushError = null;
-    textLogOverflowNotified = false;
-    tabLogBuffers.forEach(entry => { entry.filePath = ''; });
+    session.claimToken = claim.token;
 
     return await new Promise((resolve, reject) => {
     const port = new SerialPort({
@@ -3174,24 +3166,26 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
 
     port.open((err) => {
         if (err) {
-            // 打开失败就必须把占用退回去，否则这个端口会被永久标成「in use」，
-            // 用户在另一个分组里永远连不上它。
-            serialPortClaims.releasePort(groupId, path);
+            serialPortClaims.releasePort(groupId, path, claim.token);
             cleanupSerialConnection(null, port, groupId);
             reject(err.message);
             return;
         }
-        writeLog(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`, groupId);
-        if (currentConfig.logEnabled && currentConfig.saveAllTabsLogToFiles) {
-          const title = 'Main_Terminal';
-          tabLogBuffers.set('tab-main', { title, buffer: [], byteCount: 0, filePath: '', groupId });
+        if (session.cancelConnect || session.port !== port || session.sessionId !== connectionSessionId) {
+          port.close(error => {
+            if (error) { reject(error); return; }
+            cleanupSerialConnection(null, port, groupId);
+            reject(new Error('Serial connection cancelled'));
+          });
+          return;
         }
+        writeLog(`\r\n[SERIAL CONNECTED] ${path} ${baudRate} ${dataBits}N${stopBits}\r\n`, groupId);
         initializeThroughputState(session);
         resolve({ ok: true, sessionId: connectionSessionId, groupId });
     });
 
         port.on('data', (data) => {
-      if (session.port !== port || session.cleanupComplete) return;
+      if (session.port !== port || session.cleanupComplete || session.sessionId !== connectionSessionId) return;
       session.throughput.rxCurrentBytes += data.length;
       bufferRawSerialBytes(data, groupId);
           queueSerialOutput(session, data, connectionSessionId);
@@ -3211,6 +3205,15 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
       cleanupSerialConnection('Serial port disconnected', port, groupId);
     });
     });
+  } catch (error) {
+    serialPortClaims.releasePort(groupId, path, claim.token);
+    if (session.port?.isOpen && normalizePortKey(session.portPath) === claim.portKey) {
+      session.claimToken = serialPortClaims.claim(groupId, session.portPath, { retainExisting: true }).token;
+    }
+    if (session.claimToken === claim.token && !session.port?.isOpen) {
+      cleanupSerialConnection(null, session.port, groupId);
+    }
+    throw error;
   } finally {
     session.connectInProgress = false;
   }
@@ -3225,10 +3228,11 @@ ipcMain.on('disconnect-serial', (event, payload = {}) => {
     serialPortClaims.releaseGroup(groupId);
     return;
   }
+  if (session.connectInProgress) session.cancelConnect = true;
   session.sessionId++;
   if (session.port && session.port.isOpen) {
     session.port.close();
-  } else {
+  } else if (!session.connectInProgress) {
     cleanupSerialConnection(null, null, groupId);
   }
 });

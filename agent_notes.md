@@ -4,10 +4,11 @@
 
 ## 0. 当前状态快照（维护入口）
 
+- **多串口当前重构入口：[MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)**。审查确认历史“已完成”不代表隔离与布局正确；R1 已落实会话 `(groupId, sessionId)` 判定、每组文本/RAW 日志与每标签错误状态、token 端口声明/取消、每组发送链和快捷触发。R2–R5（上下文、布局统一、迁移与集成验收）尚待实施，不能宣称多串口整体完成。
 - 当前配置 schema：**v15**。版本号由 `serial-groups-config.js` 的 `SERIAL_GROUPS_CONFIG_VERSION` 统一提供，`main.js` 以 `const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;` 引用，不再硬编码。v14 → v15 迁移已落地并实测，详见 13A 节与 `MULTI_SERIAL_DESIGN.md` 第 9 节。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell；pane 数不再固定为两个（`workspace-manager.js` 已 N pane 化，`pane-3` 及以后按需创建），支持左右/上下分屏、拖动排序和跨 pane 移动。
 - 多串口：**主进程 P1 已实现**（`serialSessions` 按 `groupId` 隔离、IPC 带 `groupId`、日志按 `<logPath>/[日期]/<端口号>/` 分目录）；**配置 v14 → v15 迁移已完成**（`serialGroups` 数据模型就位）；**P2 已完成**（分组注册表 10、分组上下文 8、行解析器 10、终端运行时注册表 19、DOM 标识契约 8、终端工厂托管 + 加载门禁 4）；**P3 已全部完成**：四个纯逻辑层（标签归属 17、分组增删改 17、标签栏结构描述 15、输出分桶 12）+ **渲染层数据面按 `groupId` 路由** + **分组标签栏与容器创建/关闭** + **Shell 标签的两层升降**（新增 `serial-container-<g>` / `tab-main-<g>` / `tab-main-<g>-button`）；**P4 已完成**：四个显示参数真正下沉到 `SerialGroupContextStore`（`get/setGroupDisplay`）+ 侧栏 9 个控件与连接按钮随 `activeGroupId` 回显与回写；**P5 已全部完成**：每分组独立的 root/pane/splitter 结构（`serial-group-layout-dom.js` 17 项）+ 每分组独立的布局与布局管理器（`groupWorkspaceLayouts` / `groupWorkspaceManagers` + 别名切换）+ `filterTabs` / `chartTabs` 按分组各一份（`serial-group-tab-lists.js` 13 项）。**仍未在真实字节流层面验证的项**：两级分屏的 fit、拖动分界条比例、跨分组字节隔离（见 `MULTI_SERIAL_DESIGN.md` §11.1）。旧的 `currentSerialPort` 等单例已删除，不得再引入。详见 `MULTI_SERIAL_DESIGN.md` 与本文 13A 节。
-- 当前发送模型：`sendEncoding` 为共享 Text 编码；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`，自动发送、主终端输入和右键串口发送固定为 Text。所有入口最终调用 `sendSerialRequest()` / `serial-write`。
+- 当前发送模型：编码与换行按目标组读取；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`。所有入口最终调用 `sendSerialRequest()` / `serial-write`，发送链与自动触发去重按组隔离，成功 Text 发送只滚动目标组主终端。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
 - 当前图表能力：三级文本解析、Worker 过载保护、原始数据保留与降采样趋势、主图/时间轴交互、CSV 导出和配置恢复均已落地；不恢复跨重启数据点。

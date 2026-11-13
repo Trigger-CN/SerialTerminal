@@ -7,36 +7,37 @@ const path = require('node:path');
 
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 
-test('closing a serial session rotates the main text log path', () => {
-  assert.match(main, /function ensureMainLogFilePath\(\)[\s\S]*?while \(fs\.existsSync\(mainLogFilePath\)\)[\s\S]*?`\$\{baseName\}_\$\{suffix\}\$\{extension\}`/);
-  assert.match(main, /function closeMainLogSession\(\{ notify = true \} = \{\}\) \{[\s\S]*?saveLog\(\{ notify \}\);[\s\S]*?if \(logBuffer\.length === 0\) \{[\s\S]*?mainLogFilePath = '';[\s\S]*?\}/);
-  assert.match(main, /ipcMain\.on\('flush-tab-logs'[\s\S]*?if \(currentConfig\.saveAllTabsLogToFiles\)[\s\S]*?else \{\s*closeMainLogSession\(\);/);
-  assert.match(main, /function cleanupSerialConnection[\s\S]*?if \(!currentConfig\.saveAllTabsLogToFiles\) \{[\s\S]*?saveLog\(/);
-  assert.doesNotMatch(main, /port\.on\('close',[\s\S]*?writeLog\('\\\r\\n\[SERIAL DISCONNECTED\]\\r\\n'\);\s*saveLog\(\);/);
+const { createFixture } = require('./main-serial-fixture');
+
+test('closing main logs rotates each group and enabling tab mode flushes all pending text', () => {
+  const f = createFixture();
+  f.run("getOrCreateSerialSession('default','COM_A');getOrCreateSerialSession('g-1','COM_B');writeLog('A','default');writeLog('B','g-1');saveConfig({saveAllTabsLogToFiles:true})");
+  assert.equal(f.text('COM_A'), 'A');
+  assert.equal(f.text('COM_B'), 'B');
+  assert.equal(f.run("getGroupLogState('default').text.filePath"), '');
 });
 
-test('enabling per-tab logs closes the previous main log session', () => {
-  assert.match(main, /!currentConfig\.saveAllTabsLogToFiles && normalized\.saveAllTabsLogToFiles\) \{\s*closeMainLogSession\(\);/);
+test('disabling Shell logging flushes only Shell sessions and keeps serial entries', () => {
+  const f = createFixture({saveAllTabsLogToFiles:true,saveShellTabsLogToFiles:true});
+  f.run("writeTabLog('tab-shell-1','Shell','SHELL');writeTabLog('tab-main','Main','SERIAL');saveConfig({saveShellTabsLogToFiles:false});writeTabLog('tab-shell-1','Shell','IGNORED')");
+  assert.equal(f.text('_shell'),'SHELL');
+  assert.equal(f.run("tabLogBuffers.has('tab-main')"),true);
+  assert.equal(f.run("tabLogBuffers.has('tab-shell-1')"),false);
 });
 
-test('Shell tab logging is opt-in and flushes buffered Shell sessions when disabled', () => {
-  assert.match(main, /function writeTabLog\(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID\) \{[\s\S]*?tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles/);
-  assert.match(main, /function closeShellTabLogSessions\([\s\S]*?tabId\.startsWith\('tab-shell-'\)[\s\S]*?flushTabLogEntrySync\(tabId, entry\)[\s\S]*?tabLogBuffers\.delete\(tabId\)/);
-  assert.match(main, /currentConfig\.saveShellTabsLogToFiles && !normalized\.saveShellTabsLogToFiles\) \{\s*closeShellTabLogSessions\(\);/);
-});
 
-
-test('date folders apply to main, tab, and raw logs and rotate at midnight', () => {
-  assert.match(main, /logCreateDateFolder: false/);
-  assert.match(main, /normalized\.logCreateDateFolder = normalizeBoolean\(source\.logCreateDateFolder, false\)/);
-  assert.match(main, /function rotateLogFilesForCurrentDate\(\)[\s\S]*?flushRawBinaryLogSync\(\)[\s\S]*?saveAllTabLogs\(\{ notify: false, closeEntries: false \}\)[\s\S]*?saveLog\(\{ notify: false \}\)[\s\S]*?mainLogFilePath = '';[\s\S]*?rawBinaryLogPath = '';[\s\S]*?entry\.filePath = ''/);
-  assert.match(main, /function writeLog\(data, groupId = DEFAULT_SERIAL_GROUP_ID\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureMainLogFilePath\(\)/);
-  assert.match(main, /function writeTabLog\(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureTabLogFile\(tabId\)/);
-  assert.match(main, /function bufferRawSerialBytes\(data, groupId = DEFAULT_SERIAL_GROUP_ID\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?ensureRawBinaryLogPath\(\)/);
-  assert.match(main, /function ensureTabLogFile\(tabId\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, buildLogFileName/);
-  assert.match(main, /function ensureMainLogFilePath\(\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, fileName\)/);
-  assert.match(main, /function ensureRawBinaryLogPath\(\)[\s\S]*?rotateLogFilesForCurrentDate\(\)[\s\S]*?path\.join\(logDirectory, fileName\)/);
-  assert.match(main, /normalized\.logCreateDateFolder !== currentConfig\.logCreateDateFolder/);
+test('date folders rotate every group text, tab and RAW stream', () => {
+  const f = createFixture({logCreateDateFolder:true,saveAllTabsLogToFiles:true});
+  f.run("getOrCreateSerialSession('default','COM_A');getOrCreateSerialSession('g-1','COM_B');writeTabLog('tab-main','Main','OLD_A');writeTabLog('tab-main-g-1','Main','OLD_B','g-1');bufferRawSerialBytes(Buffer.from('RAW'),'g-1')");
+  f.date('2026-11-14');
+  f.run("writeTabLog('tab-main','Main','NEW_A');writeTabLog('tab-main-g-1','Main','NEW_B','g-1');flushPendingLogs()");
+  const text = date => [...f.files].filter(([p]) => p.includes(date)).map(([,b]) => b.toString()).join('');
+  assert.match(text('2026-11-13'), /OLD_A/);
+  assert.match(text('2026-11-13'), /OLD_B/);
+  assert.match(text('2026-11-13'), /RAW/);
+  assert.doesNotMatch(text('2026-11-14'), /OLD|RAW/);
+  assert.match(text('2026-11-14'), /NEW_A/);
+  assert.match(text('2026-11-14'), /NEW_B/);
 });
 
 test('manual tab exports remember their last successful directory independently', () => {
@@ -63,7 +64,7 @@ test('local Electron crash dumps are enabled without uploading data', () => {
 
 test('expired log cleanup runs at startup, daily, and after settings change', () => {
   assert.match(main, /logRetentionDays = oneOf\(Number\(source\.logRetentionDays\), LOG_RETENTION_DAYS, 0\)/);
-  assert.match(main, /function getActiveLogFilePaths\(\)[\s\S]*mainLogFilePath, rawBinaryLogPath[\s\S]*entry\.filePath/);
+  assert.match(main, /function getActiveLogFilePaths\(\)[\s\S]*groupLogStates\.values\(\)[\s\S]*group\.text\.filePath[\s\S]*entry\.filePath/);
   assert.match(main, /function startLogCleanupTimer\(\)[\s\S]*runLogCleanup\(\)[\s\S]*setInterval\(runLogCleanup, LOG_CLEANUP_INTERVAL_MS\)/);
   assert.match(main, /logCleanupSettingsChanged[\s\S]*currentConfig = normalized;[\s\S]*if \(logCleanupSettingsChanged\) startLogCleanupTimer\(\)/);
   assert.match(main, /app\.whenReady\(\)[\s\S]*startLogCleanupTimer\(\)/);
@@ -75,19 +76,13 @@ test('resetting preferences preserves the telemetry installation identity', () =
   assert.match(main, /currentConfig = loadConfig\(\);\s*currentConfig = normalizeConfig\(\{ \.\.\.currentConfig, \.\.\.telemetryState \}, currentConfig\)/);
 });
 
-test('disabling automatic logging stops every file write path, including per-tab logs', () => {
-  // writeTabLog 必须在分流前统一检查总开关，否则分标签页分支会绕过它继续 append。
-  assert.match(main, /function writeTabLog\(tabId, title, data, groupId = DEFAULT_SERIAL_GROUP_ID\) \{[\s\S]*?if \(!currentConfig\.logEnabled\) return;[\s\S]*?if \(tabId\.startsWith\('tab-shell-'\) && !currentConfig\.saveShellTabsLogToFiles\)/);
-  // 分标签页刷盘与单标签页刷盘同样要受总开关约束。
-  assert.match(main, /function saveAllTabLogs\([\s\S]*?if \(!currentConfig\.logEnabled \|\| !currentConfig\.saveAllTabsLogToFiles \|\| tabLogBuffers\.size === 0\) return;/);
-  assert.match(main, /ipcMain\.on\('flush-tab-log'[\s\S]*?if \(!currentConfig\.logEnabled \|\| !currentConfig\.saveAllTabsLogToFiles \|\| !payload\.tabId\) \{ return; \}/);
-  // 周期性刷盘在关闭后必须直接返回，不能创建空文件。
-  assert.match(main, /function flushPendingLogs\(\{ notify = false \} = \{\}\) \{[\s\S]*?if \(!currentConfig\.logEnabled\) return;[\s\S]*?flushRawBinaryLogSync\(\);/);
-  // 串口重连不能无条件重建主日志条目。
-  assert.match(main, /if \(currentConfig\.logEnabled && currentConfig\.saveAllTabsLogToFiles\) \{\s*const title = 'Main_Terminal';/);
-});
-
-test('turning automatic logging off flushes and closes log sessions', () => {
-  assert.match(main, /function closeLogSessionsForDisabled\(\) \{[\s\S]*?flushRawBinaryLogSync\(\)[\s\S]*?saveAllTabLogs\(\{ notify: false \}\)[\s\S]*?tabLogBuffers\.clear\(\)[\s\S]*?mainLogFilePath = '';[\s\S]*?rawBinaryLogPath = '';/);
-  assert.match(main, /if \(currentConfig\.logEnabled && !normalized\.logEnabled\) \{[\s\S]*?closeLogSessionsForDisabled\(\);/);
+test('turning automatic logging off flushes all tabs and prevents new writes after reconnect', async () => {
+  const f = createFixture({saveAllTabsLogToFiles:true});
+  await f.connect('default','COM_A');
+  f.run("writeTabLog('tab-main','Main','BEFORE');saveConfig({logEnabled:false})");
+  assert.equal(f.text('COM_A'),'BEFORE');
+  await f.connect('default','COM_A');
+  f.run("writeTabLog('tab-main','Main','AFTER');flushPendingLogs()");
+  assert.equal(f.text('COM_A'),'BEFORE');
+  assert.equal(f.run('tabLogBuffers.size'),0);
 });
