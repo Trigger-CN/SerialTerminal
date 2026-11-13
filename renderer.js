@@ -68,7 +68,7 @@ const {
     shellPaneTabsContentId,
     describeGroupWorkspace
 } = require('./serial-group-layout-dom');
-const { createDefaultLayoutFor } = require('./workspace-layout-shape');
+const { createDefaultLayoutFor, normalizeLayoutShape } = require('./workspace-layout-shape');
 const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { SerialOutputBuckets } = require('./serial-output-buckets');
 const { createGroupTabListStore } = require('./serial-group-tab-lists');
@@ -1505,26 +1505,27 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
         const currentTerm = resolveTerm();
         if (!currentTerm) return;
         const tabState = typeof getTabState === 'function' ? getTabState() : null;
+        const tabId = tabState?.id || (terminalType === 'main' ? mainTabId(REGISTRY_DEFAULT_GROUP_ID) : '');
+        const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
         if (tabState && terminalType === 'filter') {
             tabState.contextLine = getTerminalBufferLineContextByEvent(currentTerm, element, event);
         }
         requestTerminalContextMenu({
             terminalType,
-            paneId: resolvePaneId(tabState?.paneId, tabState?.id, 'tab-main'),
-            tabId: tabState?.id || (terminalType === 'main' ? 'tab-main' : ''),
+            paneId: resolvePaneId(tabState?.paneId, tabId, mainTabId(groupId)),
+            tabId,
+            groupId,
             hasSelection: currentTerm.hasSelection(),
             selectedText: currentTerm.hasSelection() ? currentTerm.getSelection() : '',
-            isConnected,
-            splitEnabled: isSplitEnabled(),
+            isConnected: isGroupConnected(groupId),
+            splitEnabled: getGroupWorkspaceManager(groupId).isSplitEnabled(),
             filterText: tabState?.filterText || '',
             canLocateInMain: Boolean(tabState?.contextLine?.text),
             caseSensitive: Boolean(tabState?.caseSensitive),
             wholeWord: Boolean(tabState?.wholeWord),
             useRegex: Boolean(tabState?.useRegex),
             shellTextMode: Boolean(tabState?.textMode),
-            // 右键菜单只能开在可见的终端上，而可见的只有激活分组；
-            // 菜单里“清屏 / 重置 HEX 偏移”的选项因此按激活分组算。
-            receiveDisplayMode: getGroupDisplay(activeGroupId).receiveDisplayMode
+            receiveDisplayMode: getGroupDisplay(groupId).receiveDisplayMode
         });
     });
 }
@@ -1642,10 +1643,10 @@ async function handleTerminalContextMenuAction(payload = {}) {
     const isShell = terminalType === 'shell';
     const isChart = terminalType === 'chart';
     const isGroup = terminalType === 'group';
-    const filterTab = isFilter ? filterTabs.find(tab => tab.id === tabId) : null;
+    const filterTab = isFilter ? filterTabsStore.getList(contextGroupId).find(tab => tab.id === tabId) : null;
     const shellTab = isShell ? getShellTabState(tabId) : null;
-    const chartTab = isChart ? getChartTabState(tabId) : null;
-    const targetTerm = (isChart || isGroup) ? null : (isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialTerm));
+    const chartTab = isChart ? chartTabsStore.getList(contextGroupId).find(tab => tab.id === tabId) : null;
+    const targetTerm = (isChart || isGroup) ? null : (isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialRuntimes.get(contextGroupId)?.term));
     // 分组级动作不承诺任何终端：它们作用于分组容器本身，不能因拿不到 term 就被拦掉。
     if (!isGroup && ((isChart && !chartTab) || (!isChart && !targetTerm && action !== 'paste-send'))) return;
 
@@ -1672,8 +1673,8 @@ async function handleTerminalContextMenuAction(payload = {}) {
         case 'clear-reset-hex':
         case 'clear-and-reset-hex':
         case 'reset-hex-offset': {
-            clearTerminalByTabId('tab-main');
-            hexFormatter.reset({ resetOffset: true });
+            clearTerminalByTabId(mainTabId(contextGroupId));
+            getHexFormatter(contextGroupId).reset({ resetOffset: true });
             setActionStatus(trFallback('main.hexOffsetReset', 'Terminal cleared and Hex offset reset'));
             break;
         }
@@ -1682,8 +1683,8 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (text) {
                 if (isShell && shellTab) {
                     shellTab.term.paste(text);
-                } else if (isGroupConnected(activeGroupId)) {
-                    await sendSerialRequest({ groupId: activeGroupId, mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
+                } else if (isGroupConnected(contextGroupId)) {
+                    await sendSerialRequest({ groupId: contextGroupId, mode: 'text', content: text, source: 'paste' }, SEND_LIMITS.paste);
                 }
             }
             break;
@@ -1692,16 +1693,15 @@ async function handleTerminalContextMenuAction(payload = {}) {
             const text = targetTerm?.getSelection();
             if (text && isShell && shellTab) {
                 ipcRenderer.send('shell-tab-input', { tabId: shellTab.id, data: text });
-            } else if (text && isGroupConnected(activeGroupId)) {
-                await sendSerialRequest({ groupId: activeGroupId, mode: 'text', content: text, source: 'selection' }, SEND_LIMITS.paste);
+            } else if (text && isGroupConnected(contextGroupId)) {
+                await sendSerialRequest({ groupId: contextGroupId, mode: 'text', content: text, source: 'selection' }, SEND_LIMITS.paste);
             }
             break;
         }
         case 'create-filter-from-selection': {
             const text = targetTerm?.getSelection();
             if (text) {
-                // 新建的过滤页跟着可见终端走，也就是激活分组的显示模式。
-                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false, dataMode: getGroupDisplay(activeGroupId).receiveDisplayMode }, resolvePaneId(paneId, tabId));
+                createFilterTab({ filterText: text, caseSensitive: false, useRegex: false, dataMode: getGroupDisplay(contextGroupId).receiveDisplayMode }, resolvePaneId(paneId, tabId));
                 setActionStatus('已用选中文本新建过滤标签页');
             }
             break;
@@ -1809,7 +1809,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             // 单组时二者相同；多组右侧列的标签被右键时，用激活组会把标签搬错布局。
             if (splitWorkspaceTabIntoPane({
                 tabId,
-                groupId: groupIdFromPaneId(resolvePaneId(paneId, tabId)) || activeGroupId,
+                groupId: contextGroupId,
                 orientation: 'horizontal'
             })) {
                 setActionStatus('已将标签页移入左右分屏');
@@ -1820,7 +1820,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (!tabId) break;
             if (splitWorkspaceTabIntoPane({
                 tabId,
-                groupId: groupIdFromPaneId(resolvePaneId(paneId, tabId)) || activeGroupId,
+                groupId: contextGroupId,
                 orientation: 'vertical'
             })) {
                 setActionStatus('已将标签页移入上下分屏');
@@ -1829,19 +1829,17 @@ async function handleTerminalContextMenuAction(payload = {}) {
         }
         case 'move-to-other-pane': {
             if (!tabId) break;
-            const sourcePaneId = resolvePaneId(paneId, tabId);
-            const targetPaneId = getOtherPaneId(sourcePaneId);
             if (splitWorkspaceTabIntoPane({
                 tabId,
-                groupId: groupIdFromPaneId(sourcePaneId) || activeGroupId,
-                orientation: workspaceLayout.orientation
+                groupId: contextGroupId,
+                orientation: getGroupWorkspaceLayout(contextGroupId).orientation
             })) {
                 setActionStatus('已移动标签页到另一个分屏');
             }
             break;
         }
         case 'close-split': {
-            collapseSplit();
+            getGroupWorkspaceManager(contextGroupId).collapseSplit();
             setActionStatus('已关闭分屏');
             break;
         }
@@ -2232,18 +2230,24 @@ function bindPaneTabListEvents(listEl) {
     });
 }
 
-// 从 pane id 反查它属于哪个分组。
-//
-// pane id 的拼法有两种：默认分组是 'pane-1' / 'pane-2'，其它分组是 'pane-1-<groupId>'。
-// 不用正则去猜：直接扫一遍已知分组，比对自己的 pane 前缀，拿到第一个命中的。
-// 扫不到（例如 Shell 用的那个合成 pane）就返回 null，由调用方回落激活分组。
+// 优先查实际布局成员；新 pane 尚未登记时按完整生成 ID 比对，不能用宽前缀。
 function groupIdFromPaneId(paneId) {
-    if (!paneId) return null;
-    const hit = serialGroups.find(group => {
-        const prefix = groupPaneId(group.id, 1).replace(/-1$/, '');
-        return typeof paneId === 'string' && paneId.startsWith(`${prefix}-`);
-    });
-    return hit ? hit.id : null;
+    if (typeof paneId !== 'string' || !paneId) return null;
+    const index = /^pane-(\d+)(?:-|$)/.exec(paneId)?.[1];
+    const hit = serialGroups.find(group =>
+        groupWorkspaceLayouts.get(group.id)?.panes.some(pane => pane.id === paneId)
+        || (index && groupPaneId(group.id, Number(index)) === paneId));
+    return hit?.id || null;
+}
+
+function groupIdForWorkspaceTab(tabId) {
+    if (!tabId) return null;
+    const group = serialGroups.find(item =>
+        tabId === mainTabId(item.id)
+        || groupWorkspaceLayouts.get(item.id)?.panes.some(pane => pane.tabIds.includes(tabId))
+        || filterTabsStore.getList(item.id).some(tab => tab.id === tabId)
+        || chartTabsStore.getList(item.id).some(tab => tab.id === tabId));
+    return group?.id || null;
 }
 
 // 组内 pane 分屏：把一个标签搬到它**所属分组**的另一个 pane。
@@ -2275,7 +2279,7 @@ function splitWorkspaceTabIntoPane({ tabId, groupId, orientation }) {
     // （没有标签可搬），布局却已经被改过一次。
     // 不能用 `getTabPaneId()`：它对找不到的 id 会**回落到 pane-1**，恒为真。
     // 实测 `sgf-1731` 的反向对照：`tab-filter-99999` 被搬进了 pane-2。
-    if (!shellTab && !isLiveWorkspaceTabId(tabId)) return false;
+    if (!shellTab && groupIdForWorkspaceTab(tabId) !== id) return false;
     // 可拆的标签数：串口标签本就都在 `panes[].tabIds`；Shell 不在那里（I1/I2），
     // 所以单组时要把它另算一份，否则「一个 main + 一个 shell」永远拆不出来。
     const paneTabCount = layout.panes.reduce((sum, pane) => sum + pane.tabIds.length, 0);
@@ -2437,7 +2441,7 @@ function getGroupWorkspaceLayout(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     const id = normalizeGroupId(groupId);
     let layout = groupWorkspaceLayouts.get(id);
     if (!layout) {
-        layout = normalizeWorkspaceLayoutShape(
+        layout = normalizeLayoutShape(
             createLayoutFromGroupConfig(id) || createDefaultLayoutForGroup(id),
             { mainTabId: mainTabId(id) }
         );
@@ -2479,7 +2483,7 @@ function createLayoutFromGroupConfig(groupId) {
     if (!snapshot || !Array.isArray(snapshot.panes) || !snapshot.panes.length) return null;
 
     const split = snapshot.paneSplit && typeof snapshot.paneSplit === 'object' ? snapshot.paneSplit : {};
-    return normalizeWorkspaceLayoutShape({
+    return normalizeLayoutShape({
         splitEnabled: split.enabled === true,
         orientation: split.orientation,
         activePaneId: split.activePaneId,
@@ -2488,27 +2492,8 @@ function createLayoutFromGroupConfig(groupId) {
     }, { mainTabId: mainTabId(id) });
 }
 
-// 把布局持久化到**当前分组**。
-//
-// 双写是必要的：serialGroups[].workspaceLayout 是该分组自己的布局（多分组时唯一真相源），
-// currentConfig.workspaceLayout 继续写默认分组那份作兼容镜像——旧版与未迁移的读取路径
-// 只看它，且新建分组继承的就是默认分组的布局。
-//
-// 同时写 panes / paneSplit 两个新键：配置层的归一化只认它们，不写就等于每次保存
-// 都把布局改回上一次的值（读取端 createLayoutFromGroupConfig 也读它们）。两套写法
-// 写的是同一个布局对象，所以不会出现两份不同的事实。
-// 把布局持久化到**指定分组**（默认是当前分组）。
-//
-// 双写是必要的：serialGroups[].workspaceLayout 是该分组自己的布局（多分组时唯一真相源），
-// currentConfig.workspaceLayout 继续写默认分组那份作兼容镜像——旧版与未迁移的读取路径
-// 只看它，且新建分组继承的就是默认分组的布局。
-//
-// 同时写 panes / paneSplit 两个新键：配置层的归一化只认它们，不写就等于每次保存
-// 都把布局改回上一次的值（读取端 createLayoutFromGroupConfig 也读它们）。两套写法
-// 写的是同一个布局对象，所以不会出现两份不同的事实。
-//
-// groupId 参数不是可选的装饰：拖动**非激活分组**的 pane 分界条时要持久化的就是那一组，
-// 而模块级 workspaceLayout 只指向激活分组。没有这个参数就只能写错组。
+// 保存指定组；顶层 workspaceLayout 仅保留默认组兼容镜像。
+// panes / paneSplit 同步供配置归一化与恢复读取，回调必须传入其所属组。
 function persistGroupWorkspaceLayout(groupId = activeGroupId) {
     if (!currentConfig) return;
     const id = normalizeGroupId(groupId);
@@ -2542,7 +2527,10 @@ function persistGroupWorkspaceLayout(groupId = activeGroupId) {
     if (id === REGISTRY_DEFAULT_GROUP_ID) {
         currentConfig.workspaceLayout = payload;
     }
-    ipcRenderer.send('save-config', { workspaceLayout: payload, serialGroups });
+    ipcRenderer.send('save-config', {
+        serialGroups,
+        ...(id === REGISTRY_DEFAULT_GROUP_ID ? { workspaceLayout: payload } : {})
+    });
 }
 
 // 当前分组的简写：保留原调用点与签名不变。
@@ -2550,12 +2538,7 @@ function persistWorkspaceLayout() {
     persistGroupWorkspaceLayout(activeGroupId);
 }
 
-// 为一个分组造一套布局管理器。
-//
-// 每个分组各有一套 pane，因此 root / splitter / pane 集合必须按分组作用域注入
-// （见 workspace-manager.js 的 getWorkspaceRoot / getSplitter / getPaneElements）。
-// 不注入时布局层会退回全局 document.getElementById('workspace-root')，
-// 那会永远拿到默认分组那一套——非默认分组的可见性与尺寸就全部失效。
+// manager 的读写和回调绑定创建时的组，不依赖之后切换的控制组。
 function createGroupWorkspaceManager(groupId) {
     const id = normalizeGroupId(groupId);
     return createWorkspaceManager({
@@ -2564,9 +2547,9 @@ function createGroupWorkspaceManager(groupId) {
             groupWorkspaceLayouts.set(id, nextLayout);
             if (id === activeGroupId) workspaceLayout = nextLayout;
         },
-        cloneLayout: cloneWorkspaceLayout,
-        normalizeLayout: ensureWorkspaceLayoutShape,
-        persistLayout: persistWorkspaceLayout,
+        cloneLayout: (layout) => cloneWorkspaceLayout(layout || createDefaultLayoutForGroup(id)),
+        normalizeLayout: (layout) => normalizeLayoutShape(layout, { mainTabId: mainTabId(id) }),
+        persistLayout: () => persistGroupWorkspaceLayout(id),
         getPaneDom,
         getPaneTabsList,
         getPaneTabsContent,
@@ -2574,10 +2557,10 @@ function createGroupWorkspaceManager(groupId) {
             window.dispatchEvent(new CustomEvent('main-tab-changed', { detail: { tabId, paneId } }));
         },
         onTabMoved: ({ tabId, targetPaneId }) => {
-            const filterTab = filterTabs.find(tab => tab.id === tabId);
+            const filterTab = filterTabsStore.getList(id).find(tab => tab.id === tabId);
             if (filterTab) {
                 filterTab.paneId = targetPaneId;
-                persistFilterTabs();
+                persistFilterTabs({ groupId: id });
                 return;
             }
             const shellTab = getShellTabState(tabId);
@@ -2586,10 +2569,10 @@ function createGroupWorkspaceManager(groupId) {
                 persistShellTabs();
                 return;
             }
-            const chartTab = getChartTabState(tabId);
+            const chartTab = chartTabsStore.getList(id).find(tab => tab.id === tabId);
             if (chartTab) {
                 chartTab.paneId = targetPaneId;
-                persistChartTabs();
+                persistChartTabs(id);
             }
         },
         // 新建的第 3 个及以后 pane 必须挂在**本分组的 root** 下，
@@ -2685,7 +2668,7 @@ function fitWorkspaceTerminals() {
 }
 
 function getPaneById(paneId) {
-    return workspaceManager.getPaneById(paneId);
+    return getGroupWorkspaceManager(groupIdFromPaneId(paneId) || activeGroupId).getPaneById(paneId);
 }
 
 function isSplitEnabled() {
@@ -2701,19 +2684,16 @@ function normalizeWorkspaceLayout(layout) {
 }
 
 function getActivePane() {
-    return workspaceManager.getActivePane();
+    return getGroupWorkspaceManager(activeGroupId).getActivePane();
 }
 
-// 以下两个是「模块级别名」的读法：读的是 `workspaceManager` 指向的那个分组。
-// 创建标签时用它们是对的——新标签就落在当前正在操作的分组里。
-// 但侧栏按钮必须用下面按 groupId 显式取的两个：侧栏控件作用于激活分组，
-// 而别名只在 `applyActiveSerialGroup()` 里被同步过，其它时序下可能已经指向别处。
+// 当前控制组查询显式按 activeGroupId 取 manager，避免模块别名时序影响。
 function getActiveTabId(fallbackTabId = 'tab-main') {
-    return workspaceManager.getActiveTabId(fallbackTabId);
+    return getGroupWorkspaceManager(activeGroupId).getActiveTabId(fallbackTabId);
 }
 
 function getActiveTabInfo(fallbackTabId = 'tab-main') {
-    return workspaceManager.getActiveTabInfo(fallbackTabId);
+    return getGroupWorkspaceManager(activeGroupId).getActiveTabInfo(fallbackTabId);
 }
 
 // 取指定分组自己的激活标签。侧栏的「清空当前终端」「保存当前标签」
@@ -2728,15 +2708,18 @@ function getGroupActiveTabInfo(groupId = REGISTRY_DEFAULT_GROUP_ID, fallbackTabI
 }
 
 function resolvePaneId(paneId, tabId, fallbackTabId = 'tab-main') {
-    return workspaceManager.resolvePaneId(paneId, tabId, fallbackTabId);
+    const id = groupIdFromPaneId(paneId) || groupIdForWorkspaceTab(tabId) || activeGroupId;
+    return getGroupWorkspaceManager(id).resolvePaneId(paneId, tabId, fallbackTabId);
 }
 
 function getOtherPaneId(paneId) {
-    return workspaceManager.getOtherPaneId(paneId);
+    return getGroupWorkspaceManager(groupIdFromPaneId(paneId) || activeGroupId).getOtherPaneId(paneId);
 }
 
 function getTabPaneId(tabId, fallbackPaneId = 'pane-1') {
-    return workspaceManager.getTabPaneId(tabId, fallbackPaneId);
+    const shell = isShellTabId(tabId) ? getShellTabState(tabId) : null;
+    if (shell?.hostPaneId && groupIdFromPaneId(shell.hostPaneId)) return shell.hostPaneId;
+    return getGroupWorkspaceManager(groupIdForWorkspaceTab(tabId) || activeGroupId).getTabPaneId(tabId, fallbackPaneId);
 }
 
 function isTabActive(tabId) {
@@ -2744,7 +2727,7 @@ function isTabActive(tabId) {
 }
 
 function getPaneIdForTabId(tabId) {
-    return workspaceManager.getPaneIdForTabId(tabId);
+    return getTabPaneId(tabId);
 }
 
 // ─────────────────────────── Shell 标签归属 ───────────────────────────
@@ -2883,32 +2866,16 @@ function setActivePane(paneId, options = {}) {
 // 所以这里先把 paneId 反解成它的归属分组，拿到那个分组的 manager 再写；
 // 反解不出来（合成 pane、未知 id）时才回落到别名。
 function resolveWorkspaceManagerForPane(paneId) {
-    const groupId = resolveGroupIdFromPaneId(paneId);
+    const groupId = groupIdFromPaneId(paneId);
     if (groupId && serialGroups.some(group => group.id === groupId)) {
         return getGroupWorkspaceManager(groupId);
     }
-    return workspaceManager;
+    return getGroupWorkspaceManager(activeGroupId);
 }
 
 function switchPaneTab(paneId, tabId, options = {}) {
-    // 先把别名切到目标所属分组，再写布局：
-    // manager.switchPaneTab 内部还会回头读别名（ensurePaneActiveTab / 尺寸收敛），
-    // 只传别的 manager 而不切别名，会一半写对一半写错。
     const targetManager = resolveWorkspaceManagerForPane(paneId);
-    const previousGroupId = activeGroupId;
-    if (targetManager && targetManager !== workspaceManager) {
-        setActiveGroupWorkspace(resolveGroupIdFromPaneId(paneId));
-    }
-    let switched = false;
-    try {
-        switched = (targetManager || workspaceManager).switchPaneTab(paneId, tabId, options);
-    } finally {
-        // 别名只用于这一次写入，写完立刻回到原值：
-        // 否则「点一下另一列的标签」会静默把侧栏/连接按钮也切到另一个分组。
-        if (targetManager && targetManager !== workspaceManager) {
-            setActiveGroupWorkspace(previousGroupId);
-        }
-    }
+    const switched = targetManager.switchPaneTab(paneId, tabId, options);
     if (tabId) focusedWorkspaceTabId = tabId;
     renderWorkspaceNow();
     return switched;
@@ -3011,7 +2978,7 @@ function enableSplit(orientation) {
 }
 
 function moveTabToPane(tabId, targetPaneId, options = {}) {
-    return workspaceManager.moveTabToPane(tabId, targetPaneId, options);
+    return moveTabToGroupPane(tabId, targetPaneId, groupIdFromPaneId(targetPaneId), options);
 }
 
 let workspaceTabDragState = null;
@@ -3200,12 +3167,10 @@ function finishWorkspaceTabDrag(state) {
 // 另一个分组时，`getPaneById` 会回落成 pane-1，标签被“搬进了第一个 pane”而位置不变。
 // 这个错误不报错、不警告，只表现为「拖到别的列里没反应」。
 function moveTabToGroupPane(tabId, targetPaneId, targetGroupId, options = {}) {
-    const groupId = targetGroupId || resolveGroupIdFromPaneId(targetPaneId);
-    if (groupId === activeGroupId) {
-        moveTabToPane(tabId, targetPaneId, options);
-        return;
-    }
-    getGroupWorkspaceManager(groupId).moveTabToPane(tabId, targetPaneId, options);
+    const groupId = targetGroupId || groupIdFromPaneId(targetPaneId);
+    if (!groupId || groupIdFromPaneId(targetPaneId) !== groupId) return false;
+    if (isMultiGroupLayer() && groupIdForWorkspaceTab(tabId) !== groupId) return false;
+    return getGroupWorkspaceManager(groupId).moveTabToPane(tabId, targetPaneId, options);
 }
 
 function bindWorkspaceTabDragging() {
@@ -3293,16 +3258,9 @@ function addTabToOwningGroupPane(tabId, paneId, options = {}) {
     return getGroupWorkspaceManager(id).addTabToPane(tabId, paneId, options);
 }
 
-// 从 pane id 反推分组 id。规则与 serial-group-layout-dom 的命名一一对应：
-// `pane-<n>` 属于默认分组；`pane-<n>-<groupSuffix>` 属于后缀对应的分组。
+// 优先查实际布局成员，再精确匹配本组生成的 pane ID。
 function resolveGroupIdFromPaneId(paneId) {
-    if (typeof paneId !== 'string' || !paneId) return REGISTRY_DEFAULT_GROUP_ID;
-    // 匹配 pane-<数字> 之后可能跟着的 -<后缀>。后缀本身不含『-数字』开头，
-    // 但分组 id 可能是 g-1 这种带连字符的形式，因此按『第一个 - 之后的全部』取。
-    const match = /^pane-\d+(?:-(.+))?$/.exec(paneId);
-    if (!match || !match[1]) return REGISTRY_DEFAULT_GROUP_ID;
-    // pane-1-g-1 的 match[1] 是 'g-1'，与分组 id 逐字一致。
-    return normalizeGroupId(match[1]);
+    return groupIdFromPaneId(paneId) || REGISTRY_DEFAULT_GROUP_ID;
 }
 
 function setPaneSizes(pane1Ratio, options = {}) {
@@ -5681,6 +5639,10 @@ function closeSerialGroup(groupId) {
         return false;
     }
 
+    if (persistFilterTabsTimers.has(id)) {
+        clearTimeout(persistFilterTabsTimers.get(id));
+        persistFilterTabsTimers.delete(id);
+    }
     ipcRenderer.send('disconnect-serial', { groupId: id });
     const tabId = mainTabId(id);
     const buttonId = mainTabButtonId(id);
@@ -6118,6 +6080,8 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     const tabId = typeof initialState.id === 'string' && initialState.id ? initialState.id : `tab-filter-${getNextTabId()}`;
     syncNextFilterTabId(tabId);
     const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
+    const ownerGroupId = groupIdFromPaneId(resolvedPaneId) || activeGroupId;
+    const owningTabs = filterTabsStore.getList(ownerGroupId);
     
     // 1. Create Tab Button
     const tabList = getPaneTabsList(resolvedPaneId);
@@ -6147,7 +6111,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     };
     tabBtn.ondblclick = (e) => {
         if (!e.target.closest('.main-tab-close')) {
-            const tabState = filterTabs.find(tab => tab.id === tabId);
+            const tabState = owningTabs.find(tab => tab.id === tabId);
             if (tabState) openRenameTabDialog(tabState);
         }
     };
@@ -6353,7 +6317,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     sentOnlyBtn.onclick = (e) => {
         e.stopPropagation();
         applySentOnlyMode(!tabState.showSentOnly);
-        persistFilterTabs();
+        persistFilterTabs({ groupId: ownerGroupId });
     };
 
     tabState.sentOnlyBtn = sentOnlyBtn;
@@ -6364,7 +6328,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
         if (!input.value) {
             tabState.filterRegex = null;
             input.style.borderColor = 'var(--border-color)';
-            persistFilterTabs();
+            persistFilterTabs({ groupId: ownerGroupId });
             return;
         }
         try {
@@ -6383,7 +6347,7 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
             tabState.filterRegex = null;
             input.style.borderColor = 'var(--danger-color)';
         }
-        persistFilterTabs({ debounce: true });
+        persistFilterTabs({ debounce: true, groupId: ownerGroupId });
     }
 
     tabState.updateRegex = updateRegex;
@@ -6449,14 +6413,14 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     updateRegex();
     applySentOnlyMode(tabState.showSentOnly);
     
-    filterTabs.push(tabState);
+    owningTabs.push(tabState);
     updateTabTitles();
     updateFilterModeStatuses();
     addTabToOwningGroupPane(tabId, resolvedPaneId, { activate: false, persist: false });
     if (!isRestoringWorkspaceSession) {
         switchPaneTab(resolvedPaneId, tabId, { persist: false });
-        persistFilterTabs();
-        persistWorkspaceLayout();
+        persistFilterTabs({ groupId: ownerGroupId });
+        persistGroupWorkspaceLayout(ownerGroupId);
         setActionStatus(`已创建过滤标签页：${tabBtn.textContent.trim()}`);
     }
     
@@ -6467,9 +6431,11 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
 }
 
 function closeFilterTab(tabId) {
-    const index = filterTabs.findIndex(t => t.id === tabId);
+    const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
+    const tabs = filterTabsStore.getList(groupId);
+    const index = tabs.findIndex(t => t.id === tabId);
     if (index > -1) {
-        const tab = filterTabs[index];
+        const tab = tabs[index];
         ipcRenderer.send('flush-tab-log', { tabId });
         unobserveTerminalSearchChanges(tab.term);
         tab.term.dispose();
@@ -6478,31 +6444,28 @@ function closeFilterTab(tabId) {
         }
         tab.element.remove();
         tab.btn.remove();
-        filterTabs.splice(index, 1);
-        const { paneId, nextActiveTabId } = removeTabFromWorkspace(tabId, { persist: false });
-        persistFilterTabs();
+        tabs.splice(index, 1);
+        const { paneId, nextActiveTabId } = getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
+        persistFilterTabs({ groupId });
         
         updateTabTitles();
 
-        const nextPaneId = nextActiveTabId ? getPaneIdForTabId(nextActiveTabId) : getPaneIdForTabId('tab-main');
-        if (nextActiveTabId) {
-            switchPaneTab(nextPaneId, nextActiveTabId, { persist: false });
-        } else {
-            switchPaneTab(getPaneIdForTabId('tab-main'), 'tab-main', { persist: false });
-        }
-
-        persistWorkspaceLayout();
+        const nextId = nextActiveTabId || mainTabId(groupId);
+        switchPaneTab(getTabPaneId(nextId), nextId, { persist: false });
+        persistGroupWorkspaceLayout(groupId);
         setActionStatus('已关闭过滤标签页');
     }
 }
 
-let persistFilterTabsTimer = null;
+const persistFilterTabsTimers = new Map();
 
-function persistFilterTabs({ debounce = false } = {}) {
+function persistFilterTabs({ debounce = false, groupId = activeGroupId } = {}) {
     if (isApplyingConfig) return;
+    const id = normalizeGroupId(groupId);
     const save = () => {
-        persistFilterTabsTimer = null;
-        const savedTabs = filterTabs.map(tab => ({
+        persistFilterTabsTimers.delete(id);
+        if (!serialGroups.some(group => group.id === id)) return;
+        const savedTabs = filterTabsStore.getList(id).map(tab => ({
             id: tab.id,
             title: tab.title || '',
             filterText: tab.filterText || '',
@@ -6513,19 +6476,18 @@ function persistFilterTabs({ debounce = false } = {}) {
             showSentOnly: tab.showSentOnly === true,
             paneId: tab.paneId || getTabPaneId(tab.id)
         }));
-        // P5：标签属于**具体分组**。同时写全局字段作兼容镜像——旧版配置里那里
-        // 有值，且未迁移的读取路径仍会看它；新建分组继承的就是默认分组的那一份。
-        const target = serialGroups.find(group => group && group.id === activeGroupId);
+        // 顶层 filterTabs 仅是默认组的兼容镜像。
+        const target = serialGroups.find(group => group && group.id === id);
         if (target) target.filterTabs = savedTabs;
-        if (currentConfig) currentConfig.filterTabs = savedTabs;
-        ipcRenderer.send('save-config', { filterTabs: savedTabs, serialGroups });
+        if (currentConfig && id === REGISTRY_DEFAULT_GROUP_ID) currentConfig.filterTabs = savedTabs;
+        ipcRenderer.send('save-config', { serialGroups, ...(id === REGISTRY_DEFAULT_GROUP_ID ? { filterTabs: savedTabs } : {}) });
     };
-    if (persistFilterTabsTimer !== null) {
-        clearTimeout(persistFilterTabsTimer);
-        persistFilterTabsTimer = null;
+    if (persistFilterTabsTimers.has(id)) {
+        clearTimeout(persistFilterTabsTimers.get(id));
+        persistFilterTabsTimers.delete(id);
     }
     if (debounce) {
-        persistFilterTabsTimer = setTimeout(save, 250);
+        persistFilterTabsTimers.set(id, setTimeout(save, 250));
         return;
     }
     save();
@@ -6668,14 +6630,14 @@ async function exportChartSamples(scope, targetTab = chartExportState) {
     if (tab === chartExportState) closeChartExport();
 }
 
-function persistChartTabs() {
+function persistChartTabs(groupId = activeGroupId) {
     if (isApplyingConfig) return;
-    const savedTabs = chartTabs.map(serializeChartTab);
-    // 与 persistFilterTabs 同一套双写：分组自己一份，全局字段作兼容镜像。
-    const target = serialGroups.find(group => group && group.id === activeGroupId);
+    const id = normalizeGroupId(groupId);
+    const savedTabs = chartTabsStore.getList(id).map(serializeChartTab);
+    const target = serialGroups.find(group => group && group.id === id);
     if (target) target.chartTabs = savedTabs;
-    if (currentConfig) currentConfig.chartTabs = savedTabs;
-    ipcRenderer.send('save-config', { chartTabs: savedTabs, serialGroups });
+    if (currentConfig && id === REGISTRY_DEFAULT_GROUP_ID) currentConfig.chartTabs = savedTabs;
+    ipcRenderer.send('save-config', { serialGroups, ...(id === REGISTRY_DEFAULT_GROUP_ID ? { chartTabs: savedTabs } : {}) });
 }
 
 function getChartParserConfig(tab) {
@@ -6821,6 +6783,7 @@ function createChartTab(initialState = {}, targetPaneId = null) {
     const tabId = typeof initialState.id === 'string' && initialState.id ? initialState.id : `tab-chart-${getNextChartTabId()}`;
     syncNextChartTabId(tabId);
     const resolvedPaneId = targetPaneId || initialState.paneId || getActivePane()?.id || 'pane-1';
+    const ownerGroupId = groupIdFromPaneId(resolvedPaneId) || activeGroupId;
     const tabBtn = document.createElement('button');
     tabBtn.className = 'main-tab';
     tabBtn.type = 'button';
@@ -6897,24 +6860,26 @@ function createChartTab(initialState = {}, targetPaneId = null) {
     tab.lockButton.onclick = () => toggleChartLiveLock(tab);
     bindChartContextMenu(tab);
 
-    chartTabs.push(tab);
+    chartTabsStore.getList(ownerGroupId).push(tab);
     updateTabTitles();
     addTabToOwningGroupPane(tabId, resolvedPaneId, { activate: false, persist: false });
     if (tab.fields.length) configureChartTab(tab);
     else updateChartStatus(tab);
     if (!isRestoringWorkspaceSession) {
         switchPaneTab(resolvedPaneId, tabId, { persist: false });
-        persistChartTabs();
-        persistWorkspaceLayout();
+        persistChartTabs(ownerGroupId);
+        persistGroupWorkspaceLayout(ownerGroupId);
         setTimeout(() => openChartSettings(tab), 0);
     }
     return tab;
 }
 
 function closeChartTab(tabId) {
-    const index = chartTabs.findIndex(tab => tab.id === tabId);
+    const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
+    const tabs = chartTabsStore.getList(groupId);
+    const index = tabs.findIndex(tab => tab.id === tabId);
     if (index < 0) return;
-    const tab = chartTabs[index];
+    const tab = tabs[index];
     tab.closed = true;
     if (tab.renderFrame !== null) cancelAnimationFrame(tab.renderFrame);
     tab.stream?.dispose();
@@ -6922,13 +6887,13 @@ function closeChartTab(tabId) {
     tab.view?.destroy();
     tab.element.remove();
     tab.btn.remove();
-    chartTabs.splice(index, 1);
-    const { nextActiveTabId } = removeTabFromWorkspace(tabId, { persist: false });
-    persistChartTabs();
+    tabs.splice(index, 1);
+    const { nextActiveTabId } = getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
+    persistChartTabs(groupId);
     updateTabTitles();
-    const nextId = nextActiveTabId || 'tab-main';
-    switchPaneTab(getPaneIdForTabId(nextId), nextId, { persist: false });
-    persistWorkspaceLayout();
+    const nextId = nextActiveTabId || mainTabId(groupId);
+    switchPaneTab(getTabPaneId(nextId), nextId, { persist: false });
+    persistGroupWorkspaceLayout(groupId);
 }
 
 function renderChartFieldCandidates(fields) {
@@ -7134,7 +7099,7 @@ async function saveChartSettings() {
     tab.maxPoints = Math.max(1000, Math.min(1000000, Number(chartMaxPoints.value) || 200000));
     tab.maxDurationMs = Math.max(60000, Math.min(86400000, Number(chartMaxDuration.value) * 60000 || 1800000));
     configureChartTab(tab);
-    persistChartTabs();
+    persistChartTabs(groupIdForWorkspaceTab(tab.id) || activeGroupId);
     closeChartSettings();
     scheduleChartRender(tab);
 }
@@ -7186,9 +7151,10 @@ function saveRenamedTab() {
     if (!renameTabState) return;
     renameTabState.title = renameTabInput.value.trim();
     updateTabTitles();
-    if (filterTabs.includes(renameTabState)) persistFilterTabs();
+    const groupId = groupIdForWorkspaceTab(renameTabState.id);
+    if (groupId && filterTabsStore.getList(groupId).includes(renameTabState)) persistFilterTabs({ groupId });
     if (shellTabs.includes(renameTabState)) persistShellTabs();
-    if (chartTabs.includes(renameTabState)) persistChartTabs();
+    if (groupId && chartTabsStore.getList(groupId).includes(renameTabState)) persistChartTabs(groupId);
     closeRenameTabDialog();
 }
 
@@ -9063,11 +9029,7 @@ portSelect.addEventListener('change', () => {
     }
 });
 
-// 侧栏「清空当前终端」作用于**激活分组**。
-//
-// 不能用 getActiveTabInfo()：它读模块级别名 workspaceManager，只在
-// applyActiveSerialGroup() 里被同步过，其它时序下可能仍指向上一个分组。
-// 那会让侧栏按钮去清空用户看不到的那个终端。
+// 优先清空焦点终端；没有焦点时回落到当前控制组的激活终端。
 function clearActiveTerminal() {
     // 「当前终端」= 焦点所在的那个标签。焦点是模型状态（focusedWorkspaceTabId），
     // 而「哪一列可见 / 哪一行亮」全部由它派生——不再去问「上层 Shell 是否盖住了主标签」，

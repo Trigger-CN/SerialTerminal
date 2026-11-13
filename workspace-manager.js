@@ -43,6 +43,7 @@ function createWorkspaceManager(options = {}) {
         getPaneDom,
         getPaneTabsList,
         getPaneTabsContent,
+        onTabActivated,
         onTabMoved,
         ensurePaneElement,
         fitWorkspace,

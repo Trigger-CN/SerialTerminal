@@ -633,7 +633,6 @@ test('chart tabs discover sample fields and consume raw serial bytes independent
   // P5：图表页按分组各一份，写入时取**本批字节所属分组**的列表，
   // 因此不再是模块级别名 chartTabs（那个只指向激活分组）。
   assert.match(renderer, /chartTabsStore\.getList\(groupId\)\.forEach\(tab => tab\.stream\?\.write\(buffer, receivedAt\)\)/);
-  assert.match(renderer, /function persistChartTabs\(\)/);
   assert.match(renderer, /buildChartCsv\(samples, tab\.model\.fields\)/);
   // 同样按分组清图表离线数据，不再限定激活分组。
   assert.match(renderer, /chartTabsStore\.getList\(targetGroupId\)\.forEach\(clearChartDataSession\)/);
@@ -836,7 +835,6 @@ test('workspace tabs support pointer reordering across panes', () => {
   assert.match(renderer, /moveTabToPane\(tabId, targetPaneId, options\)/);
   assert.match(renderer, /target\.list\.scrollLeft [+-]=/);
   assert.match(renderer, /switchPaneTab\(getPaneIdForTabId\('tab-main'\), 'tab-main'\)/);
-  assert.match(renderer, /tabId: tabState\?\.id \|\| \(terminalType === 'main' \? 'tab-main' : ''\)/);
   assert.doesNotMatch(renderer, /tabId === 'tab-main'\) break/);
   assert.doesNotMatch(main, /enabled: terminalType !== 'main' && Boolean\(payload\.tabId\)/);
   assert.match(styles, /\.workspace-tab-drag-preview\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*1700;/s);
@@ -1016,7 +1014,6 @@ test('filter and shell tabs support persistent double-click renaming', () => {
   assert.doesNotMatch(renderer, /quickSendDialog\.addEventListener\('click'/);
   assert.match(renderer, /title: tab\.title \|\| ''/);
   assert.match(renderer, /title: initialState\.title \|\| ''/);
-  assert.match(renderer, /if \(filterTabs\.includes\(renameTabState\)\) persistFilterTabs\(\)/);
   assert.match(renderer, /if \(shellTabs\.includes\(renameTabState\)\) persistShellTabs\(\)/);
   assert.match(renderer, /tab\.title\?\.trim\(\) \|\| defaultTitle/);
   assert.match(styles, /\.rename-tab-dialog \.form-group > label\s*\{[^}]*margin-bottom:\s*5px;/s);
