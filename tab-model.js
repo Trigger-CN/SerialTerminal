@@ -321,9 +321,15 @@ function ownColumnLeaves(ws) {
 // 扁平模式（isFamily）下容器不拥有独立行（方案 A）：未开 pane 分屏时为零条，
 // 开了 pane 分屏时按 pane 数展开——否则 pane-2 的标签无处可点（I9）。
 //
-// **受托管根级叶归入本列 pane-1 那条行**：它们不属 `panes[].tabIds`（I2），
-// 但按钮与面板确实坐在 pane-1 里，所以渲染层必须能从 rows 里拿到它们——否则
-// 翻转后它们将没有任何行可去。不就地修改 pane 对象，返回一份新的行描述。
+// **受托管根级叶按 `hostPaneId` 分派到对应 pane 行**：它们不属 `panes[].tabIds`（I2），
+// 但按钮与面板确实坐在某个 pane 里。
+//
+// 早期实现把它们**无条件全并进 pane-1**，于是 Shell 永远只能待在第一个 pane，
+// 无法参与组内 pane 分屏——用户实测报的就是「shell 标签拖不动」。
+// 现在按叶自己的 `hostPaneId` 分派；没指定（或指向不存在的 pane）才回落 pane-1，
+// 保证旧配置与「刚拖进来还没选 pane」的情形仍然可见。
+//
+// 不就地修改 pane 对象，返回一份新的行描述。
 function layoutRowsOf(ws, column) {
     if (!column.containerId) return [];
     const container = tabOf(ws, column.containerId);
@@ -333,15 +339,26 @@ function layoutRowsOf(ws, column) {
     const base = column.isFamily
         ? (splitEnabled ? panes.slice() : [])
         : (splitEnabled ? panes.slice() : panes.slice(0, 1));
-    const hosted = hostLeavesOfColumn(ws, column.containerId).map(leaf => leaf.id);
-    if (!hosted.length || !base.length) return base;
-    return base.map((pane, index) => (index === 0
-        ? {
+    const hostedLeaves = hostLeavesOfColumn(ws, column.containerId);
+    if (!hostedLeaves.length || !base.length) return base;
+    const paneIds = new Set(base.map(pane => pane.id));
+    // 按 pane 分组。`hostPaneId` 指向的 pane 不在这批 base 里（关分屏后只剩一条行）时
+    // 回落到第一条行，而不是丢掉它——丢掉就是「标签消失」。
+    const hostedByPane = new Map(base.map(pane => [pane.id, []]));
+    hostedLeaves.forEach(leaf => {
+        const wanted = typeof leaf.hostPaneId === 'string' ? leaf.hostPaneId : '';
+        const target = wanted && paneIds.has(wanted) ? wanted : base[0].id;
+        hostedByPane.get(target).push(leaf.id);
+    });
+    return base.map(pane => {
+        const extra = hostedByPane.get(pane.id) || [];
+        if (!extra.length) return pane;
+        return {
             id: pane.id,
-            tabIds: [...pane.tabIds, ...hosted],
+            tabIds: [...pane.tabIds, ...extra],
             activeTabId: pane.activeTabId
-        }
-        : pane));
+        };
+    });
 }
 
 // 某个叶是不是本列真正会画出来的标签。
@@ -383,6 +400,18 @@ function visiblePanelIdsOfColumn(ws, column) {
         if (focused && !isContainer(focused) && focused.parentId === null
             && column.tabItems.some(tab => tab && tab.id === focused.id)) {
             return [focused.id];
+        }
+        // 焦点落在**某条 pane 行里**的受托管叶上（用户把 Shell 拖进了这个 pane）：
+        // 那一行就显示它。
+        //
+        // 与上面那个分支的区别：上面是「列首行」的根级叶（未归属的 Shell）；
+        // 这里是「pane 行」的受托管叶（带 `hostPaneId`）。
+        // 少了它就会出现：标签按钮确实在这一行里、点也点得中，但内容区永远不亮——
+        // 因为 `panes[].activeTabId` 永远不可能是 Shell（I1/I2）。
+        if (focused && !isContainer(focused) && focused.parentId === null) {
+            return rows
+                .filter(row => row.tabIds.includes(focused.id))
+                .map(() => focused.id);
         }
         return rows.map(pane => pane.activeTabId).filter(Boolean);
     }

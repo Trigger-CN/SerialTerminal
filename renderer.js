@@ -1411,22 +1411,27 @@ function requestWorkspaceTabContextMenu({ tabId, paneId, groupId }) {
         isMultiGroup: multiGroup,
         groupSplitEnabled: groupWorkspaceSplit.enabled,
         splitEnabled: layout.splitEnabled === true,
-        // 「组内 pane 分屏」的准入要同时看两件事：
-        //   1. 该组 pane 里有 ≥ 2 个**可移动的串口标签**（`totalTabs` 已排掉 shell id）；
-        //   2. 被右键的这个标签**本身可移动**。
+        // 「组内 pane 分屏」的准入：
         //
-        // 第 2 条不能省：`splitWorkspaceTabIntoPane` 首行就是 `if (isShellTabId(tabId))
-        // return false;`（I1/I2 —— Shell 永远不进 pane）。只满足第 1 条时，对 Shell
-        // 右键仍然会拿到 `canSplit:true`，菜单项可点，而动作被硬拒 —— 用户看到的就是
-        // 「右键分屏没反应」（实测 `rca-1501.txt`）。
+        // **单串口组**（用户裁决：所有标签地位平等、可随意分屏拖动）：
+        //   Shell 也算可移动——它现在能通过 `hostPaneId` 住进任意 pane。
+        //   只要这一组里有 ≥ 2 个标签（含 Shell）就可以拆出来。
+
+        // **多串口组**：标签不能脱离组，且 Shell 只在一级栏（旧裁决仍然有效），
+        //   所以维持原规则：`canSplit` 排掉 Shell，只数可移动的串口标签。
         //
-        // Shell 的分屏形态是「自成第二列」，入口在下面的 `canDetach` /
-        // `detach-to-own-column`，不是这两项。
-        canSplit: totalTabs >= 2 && !isShellTabId(tabId),
-        // Shell 的分屏入口就是下面这一项（`canDetach`）：它不进 pane（I1/I2），
-        // 所以不能与串口标签上下分行，它的分屏形态是「自成第二列」。
-        // 已经在独立列时这一项变成反向的「归入分组列」。
-        canDetach: Boolean(shellTab),
+        // 旧实现的判据是「`totalTabs >= 2 && !isShellTabId(tabId)`」，那是**全局**的；
+        // 单组放开 Shell 后它会让 Shell 的菜单项恒置灰（`rca-1501.txt` 那类）。
+        // 现在按 `multiGroup` 分叉：单组允许 Shell，多组仍禁。
+        canSplit: multiGroup
+            ? (totalTabs >= 2 && !isShellTabId(tabId))
+            : (totalTabs + (shellTab && !layout.panes.some(pane => pane.tabIds.includes(tabId)) ? 1 : 0)) >= 2,
+        // Shell 的分屏入口：
+        //
+        // **单组**：「独立成列」不存在（单组只有一个容器，分屏只能靠 pane），
+        //   所以 `canDetach: false`，Shell 走上面的 `canSplit` 进 pane 分屏。
+        // **多组**：保持原样（`detach-to-own-column` / `join-group-column`）。
+        canDetach: Boolean(shellTab) && multiGroup,
         shellOwnColumn: Boolean(shellTab) && getShellTabOwner(shellTab) === null && shellTab.columnMode === 'ownColumn',
         labels: getContextMenuLabels()
     });
@@ -1759,8 +1764,16 @@ async function handleTerminalContextMenuAction(payload = {}) {
         // 拖拽只能把它停到某列列首行（已锁定的裁决：拖到分组标签行不新建列），
         // 所以「开始一个独立分屏」只能是菜单里的显式动作。两个方向必须成对存在，
         // 否则进了独立列就回不去（那一列没有分组，右键只能拿到 Shell 自己的菜单）。
+        //
+        // **单串口组下这个入口关闭**（用户裁决）：单组只有一个容器，它的「分屏」
+        // 只能靠 pane；「独立列」是多组才需要的概念。菜单项已置灰（`canDetach:false`），
+        // 这里再兜一次底，避免旧快捷键 / 探针路径绕过 UI 造出单组下的独立列。
         case 'detach-to-own-column': {
             if (!tabId || !isShellTabId(tabId)) break;
+            if (!isMultiGroupLayer()) {
+                setActionStatus('单串口组下请用左右/上下分屏');
+                break;
+            }
             if (!setShellColumnModeInModel(tabId, 'ownColumn')) break;
             // 方案 1：独立列必须同时把列级分屏打开，否则 plan 里根本不会多出一列。
             // 旧实现只写 `columnMode`，而 `split.enabled` 的总闸要求 ≥ 2 个分组，
@@ -2243,15 +2256,34 @@ function groupIdFromPaneId(paneId) {
 //      分组时必须走那个分组自己的 manager（同 moveTabToGroupPane 的理由）。
 //   3. 只移动唯一那个标签时 reconcileEmptyPanes 会把布局折叠回一个 pane，等于什么
 //      都没发生。这种情形菜单项已经置灰（canSplit），这里再兜一次底。
+//
+// **Shell 的准入按单/多组分叉**（用户裁决）：
+//   单串口组 —— 所有标签地位平等，Shell 要能进 pane，写 `hostPaneId` 而不是
+//              `panes[].tabIds`（I1/I2 不变）；
+//   多串口组 —— 标签不能脱离组，Shell 仍走「独立成列」，这里硬拒。
 function splitWorkspaceTabIntoPane({ tabId, groupId, orientation }) {
-    if (!tabId || isShellTabId(tabId)) return false;
+    if (!tabId) return false;
+    const shellTab = isShellTabId(tabId) ? getShellTabState(tabId) : null;
+    // 多组时 Shell 不得进 pane（旧裁决：shell 只能在一级栏）。
+    if (shellTab && isMultiGroupLayer()) return false;
     const id = resolveSerialGroupId(groupId || activeGroupId);
     const manager = getGroupWorkspaceManager(id);
     const layout = getGroupWorkspaceLayout(id);
-    const totalTabs = layout.panes.reduce((sum, pane) => sum + pane.tabIds.length, 0);
-    if (totalTabs < 2) return false;
+    // **这个标签必须真的在任何分组的 pane 里**（Shell 走上面那条）。少了这一道，
+    // 任何不存在的 id 都会跑到下面新建一个 pane 并打开分屏——用户看不到任何变化
+    // （没有标签可搬），布局却已经被改过一次。
+    // 不能用 `getTabPaneId()`：它对找不到的 id 会**回落到 pane-1**，恒为真。
+    // 实测 `sgf-1731` 的反向对照：`tab-filter-99999` 被搬进了 pane-2。
+    if (!shellTab && !isLiveWorkspaceTabId(tabId)) return false;
+    // 可拆的标签数：串口标签本就都在 `panes[].tabIds`；Shell 不在那里（I1/I2），
+    // 所以单组时要把它另算一份，否则「一个 main + 一个 shell」永远拆不出来。
+    const paneTabCount = layout.panes.reduce((sum, pane) => sum + pane.tabIds.length, 0);
+    const shellCount = shellTab ? 1 : 0;
+    if (paneTabCount + shellCount < 2) return false;
 
-    const sourcePaneId = manager.getPaneIdForTabId(tabId);
+    const sourcePaneId = shellTab
+        ? (shellTab.hostPaneId || layout.panes[0]?.id || null)
+        : manager.getPaneIdForTabId(tabId);
     let targetPaneId = layout.panes.map(pane => pane.id).find(paneId => paneId !== sourcePaneId) || null;
     if (!targetPaneId) {
         // 补第 2 个 pane：布局与比例同步补，否则 applyColumnSizes / flex-basis 会算出 NaN。
@@ -2265,7 +2297,15 @@ function splitWorkspaceTabIntoPane({ tabId, groupId, orientation }) {
 
     layout.orientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
     layout.splitEnabled = true;
-    manager.moveTabToPane(tabId, targetPaneId, { preserveSplit: true });
+    if (shellTab) {
+        // Shell 不进 `panes[].tabIds`（I1/I2）：只写「归入这一组 + 住进这条 pane 行」。
+        setShellTabOwner(tabId, id);
+        setShellHostPane(tabId, targetPaneId);
+        renderWorkspaceNow();
+        persistShellTabs();
+    } else {
+        manager.moveTabToPane(tabId, targetPaneId, { preserveSplit: true });
+    }
     return true;
 }
 
@@ -2760,7 +2800,11 @@ function setShellColumnModeInModel(tabId, mode) {
     // 清回 row；反过来切成独立列时也必须把 hostGroupId 摘掉。只清一个方向就会出现
     // 「先拖进某组、再拖到分组标签行」把同一个 Shell 留在两个位置——独立列被建出来
     // 却一个按钮都没有，标签实际上仍停在那一组的下层行。
-    if (next === 'ownColumn') tabState.hostGroupId = null;
+    if (next === 'ownColumn') {
+        tabState.hostGroupId = null;
+        tabState.hostPaneId = null;
+    }
+
     return true;
 }
 
@@ -2771,8 +2815,42 @@ function setShellColumnInModel(tabId, columnId) {
     return true;
 }
 
+// 把「这个 Shell 住在某个容器的**哪一条 pane 行**」写进模型。
+//
+// 为什么需要它：`hostGroupId` 只到**容器**级，派生时被无条件并入 pane-1 那条行
+// （`layoutRowsOf` 里 `[...pane.tabIds, ...hosted]`）。于是 Shell 永远只能待在第一个
+// pane，无法和串口标签一起参与「组内 pane 分屏」——用户看到的就是「shell 拖不动」。
+//
+// 用户裁决：「单串口组时所有标签页应该要可以随意分屏拖动；有多个串口组时，
+// 每个组的标签不能脱离组」。单组下所有标签地位平等，Shell 也必须能住进任意 pane。
+//
+// 它只描述**显示位置**，不改变归属：`panes[].tabIds` 一个字不动，
+// 所以 I1/I2（Shell 永不进 pane 的 tabIds）仍然成立。与 `hostGroupId` 同一模式。
+function setShellHostPane(tabId, paneId) {
+    const tabState = getShellTabState(tabId);
+    if (!tabState) return false;
+    tabState.hostPaneId = typeof paneId === 'string' && paneId ? paneId : null;
+    // 住进某条 pane 行与「自成独立列」互斥：独立列整列只有一行，
+    // 两个同时成立会让同一个标签在两处可点。与 hostGroupId ⇄ ownColumn 的互斥同构。
+    if (tabState.hostPaneId) tabState.columnMode = 'row';
+    return true;
+}
+
 // 「是否存在独立列」不再由渲染层布尔量推导：模型 `layoutColumns()` 直接给出
 // 是否有 `OWN_COLUMN_ID` 那一列。下面这些函数只是兼容旧调用点的薄封装。
+//
+// `hostPaneId` 是否真的落在指定分组的 pane 上。
+//
+// 为什么不直接信任 `tab.hostPaneId`：关闭分屏、删除 pane、切换分组之后，
+// 那个 id 可能指向一条已经不存在的行。`layoutRowsOf` 遇到不存在的 pane 会静默丢掉它，
+// 用户看到的是「标签凭空消失」。这里先校验，校验不过就当它没指定（回落并入 pane-1），
+// 让标签至少还在，而不是丢掉。
+function hostPaneIdBelongsToGroup(paneId, groupId) {
+    if (!paneId || !groupId) return false;
+    const layout = groupWorkspaceLayouts.get(groupId);
+    return Boolean(layout) && layout.panes.some(pane => pane.id === paneId);
+}
+
 function hasDetachedShellColumn() {
     return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.columnMode === 'ownColumn');
 }
@@ -2845,17 +2923,20 @@ window.__switchWorkspaceTab = switchPaneTab;
 // 所以验证到的是真实代码路径，而不是另写一套仅供测试的分支。
 window.__handleContextMenuAction = handleTerminalContextMenuAction;
 
-// 仅供 CDP 验证脚本调用：把 Shell 的三事实直接写到 tabState 并重新渲染。
+// 仅供 CDP 验证脚本调用：把 Shell 的四事实直接写到 tabState 并重新渲染。
 //
 // 为什么需要：拖动是合成 pointer 手势，在本环境不可靠（同一脚本两次运行结论可以相反）。
 // 这个钩子走的是**产品同一套写入路径**（setShellTabOwner / setShellColumnModeInModel /
-// setShellColumnInModel + renderWorkspaceNow + persistShellTabs），
+// setShellColumnInModel / setShellHostPane + renderWorkspaceNow + persistShellTabs），
 // 不是另写一套分支；它只是把「拖到哪」这个输入参数化，用来验证渲染结果。
 window.__setShellPlacement = (tabId, placement = {}) => {
     const tabState = getShellTabState(tabId);
     if (!tabState) return false;
     if (Object.prototype.hasOwnProperty.call(placement, 'hostGroupId')) {
         setShellTabOwner(tabId, placement.hostGroupId || null);
+    }
+    if (Object.prototype.hasOwnProperty.call(placement, 'hostPaneId')) {
+        setShellHostPane(tabId, placement.hostPaneId || null);
     }
     if (Object.prototype.hasOwnProperty.call(placement, 'columnMode')) {
         setShellColumnModeInModel(tabId, placement.columnMode);
@@ -2938,8 +3019,10 @@ let workspaceTabDragState = null;
 //
 // 必须枚举**所有分组**的 pane，而不是当前分组的布局：用模块级别名时，别的分组的
 // pane 根本不在列表里，拖过去永远找不到目标，表现为「拖到另一列没反应」。
-// Shell 独立列没有 pane 标签行（它只有一行），所以不会被列入，
-// 拖到它上面命中 getGroupRowDropTarget 的列首行分支。
+//
+// 单串口组下**不再有 Shell 独立列**（用户裁决：「单串口组时所有标签都在一级栏」），
+// 所以这里不需要为「没有 `.pane-tabs-list` 的列」补分支：全部落点都是真正的 pane 行。
+// 多组时 Shell 独立列仍由 `getGroupRowDropTarget` 接管（那是「拖到分组标签栏 = 独立成组」）。
 function getWorkspaceTabDropTarget(clientX, clientY) {
     const lists = Array.from(document.querySelectorAll('.group-column .pane-tabs-list'));
     return lists.map(list => {
@@ -3070,14 +3153,32 @@ function finishWorkspaceTabDrag(state) {
     }
 
     if (!state.targetPaneId || state.insertionIndex === null) return;
+
+    // **多串口组：标签不能脱离自己的组**（用户裁决）。
+    //
+    // 判据是「目标 pane 属于哪个分组」与「这个标签自己的分组」是否一致，
+    // 而不是「目标列是不是同一个」。单组时 `isMultiGroupLayer()` 为假，这一道门恒开，
+    // 所以「单组下所有标签随意分屏拖动」不受影响。
+    const sourceGroupId = state.isShell
+        ? getShellTabOwner(getShellTabState(state.tabId))
+        : groupIdFromPaneId(resolvePaneId(state.tabButton.dataset.paneId, state.tabId));
+    if (isMultiGroupLayer() && sourceGroupId && state.targetGroupId
+        && sourceGroupId !== state.targetGroupId) {
+        // 静默不执行：标签弹回原位。不弹错锋也不警告——用户动作本身就不允许。
+        return;
+    }
+
     if (state.isShell) {
         if (state.targetIsShellColumn) {
             // 拖到独立列的上层行：仍然是不归属。
             setShellTabOwner(state.tabId, null);
         } else {
-            // 拖到某组的下层标签行 = **这个**标签归入那个组。
-            // 只改它自己：归属存在 tabState.hostGroupId 里，不会连带其它 Shell。
+            // 拖到某组的下层标签行 = **这个**标签归入那个组，并**住进这一条 pane 行**。
+            // 两件事都写：`hostGroupId` 决定它在不在这一组（容器级），
+            // `hostPaneId` 决定它在哪一条 pane 行（pane 级）。
+            // 后者是单组「随意分屏」的关键：没有它就只能永远待在 pane-1。
             setShellTabOwner(state.tabId, state.targetGroupId);
+            setShellHostPane(state.tabId, state.targetPaneId);
         }
         // 归属变了只影响「画在哪一行」，重画一次即可；不重画会看到标签还在旧行。
         renderWorkspaceNow();
@@ -5050,17 +5151,25 @@ function buildLiveWorkspaceSections() {
         }),
         filterTabs: {},
         chartTabs: {},
-        // 每个 Shell 带三个互不相同的事实，不能混着发：
-        //   hostGroupId  挂靠在哪个分组的**下层行**（"归属"）
+        // 每个 Shell 带四个互不相同的事实，不能混着发：
+        //   hostGroupId  挂靠在哪个分组的**下层行**（"归属"，容器级）
+        //   hostPaneId   住进该容器的**哪一条 pane 行**（pane 级，单组自由分屏用）
         //   columnId     停在哪一列的**列首行**（未归属时才有意义）
         //   columnMode   是否**自成独立列**
-        // 三个字段在 tabState 上就是这三个名字，这里直接转出，不再拆成两组同义名。
+        // 四个字段在 tabState 上就是这四个名字，这里直接转出，不再拆成两组同义名。
         shellTabs: shellTabs.map(tab => {
             const owner = getShellTabOwner(tab);
             return {
                 id: tab.id,
                 title: tab.title,
                 hostGroupId: owner,
+                // 只在归属某组时有意义：`hostPaneId` 必须落在该组真实的 pane 上，
+                // 否则布局已变形（关分屏/删 pane）时这个 id 指向不存在的行，
+                // `layoutRowsOf` 会把它静默丢掉，用户看到的就是「标签消失」。
+                hostPaneId: owner && typeof tab.hostPaneId === 'string'
+                    && hostPaneIdBelongsToGroup(tab.hostPaneId, owner)
+                    ? tab.hostPaneId
+                    : null,
                 columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row',
                 // 归属某组时它不进列首行，columnId 无意义；未归属时用渲染层唯一的落列判据
                 // `resolveShellTopRowColumn()`（记忆列 → 唯一可见列 → 激活列）而不是裸读
@@ -5756,10 +5865,12 @@ function persistShellTabs() {
             title: tab.title || '',
             paneId: tab.paneId || getTabPaneId(tab.id),
             profileId: tab.profileId || '',
-            // 与模型同名的三个字段：归属 / 停在哪列 / 是否自成独立列。
+            // 与模型同名的四个字段：归属（容器级）/ 住哪条 pane 行（pane 级）/
+            // 停在哪列 / 是否自成独立列。
             // 旧键（ownerGroupId / detachedColumn / topRowColumnId）不再写：写入两套名字，
             // 就会有两个都可能正确的值，而哪一个才是用户拖拽的决定也说不准。
             hostGroupId: getShellTabOwner(tab),
+            hostPaneId: typeof tab.hostPaneId === 'string' ? tab.hostPaneId : null,
             columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row',
             columnId: typeof tab.columnId === 'string' ? tab.columnId : null
         }))
@@ -5861,11 +5972,14 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         mouseInputSequenceCarry: '',
         shellMouseTrackingMode: undefined,
         textMode: false,
-        // 归属是**逐标签**的：null 表示停在上层标签栏，<groupId> 表示落在该分组的下层行。
-        // 字段名与模型、与持久化一致（hostGroupId / columnMode / columnId），
-        // 读代码时不需要再记一套映射。
         hostGroupId: typeof initialState.hostGroupId === 'string' && initialState.hostGroupId
             ? initialState.hostGroupId
+            : null,
+        // 住进该容器的**哪一条 pane 行**（pane 级）。单组时 Shell 靠它参与 pane 分屏。
+        // 缺省 null 表示「没指定」：`layoutRowsOf` 会把它并入第一条 pane 行，
+        // 所以旧配置、新建的 Shell 都无需迁移。
+        hostPaneId: typeof initialState.hostPaneId === 'string' && initialState.hostPaneId
+            ? initialState.hostPaneId
             : null,
         // 未归属时的两种形态：默认与分组标签同级（不新开列），只有被拖到分组标签行才独立成列。
         // 老配置只有 detachedColumn（没有 columnMode）时按它换算，两边不会分叉。

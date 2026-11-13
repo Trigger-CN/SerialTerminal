@@ -33,6 +33,10 @@ function normalizeTabIds(list, kind) {
             columnId: typeof tab.columnId === 'string' ? tab.columnId : null,
             columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row',
             hostGroupId: typeof tab.hostGroupId === 'string' ? tab.hostGroupId : null,
+            // 「住进该容器的哪一条 pane 行」（pane 级精度，与 hostGroupId 同构）。
+            // 它是 `layoutRowsOf` 分派受托管叶的唯一依据：丢在这里，Shell 会被回落
+            // 并进 pane-1，用户拖到第二个分屏后看到标签又弹回第一格。
+            hostPaneId: typeof tab.hostPaneId === 'string' ? tab.hostPaneId : null,
             // 旧键名也原样带过去：它们只用于「新键缺失时回退」，不参与新逻辑。
             // 丢掉它们会让老配置静默丢失归属（见 shell 叶投影处的注释）。
             ownerGroupId: typeof tab.ownerGroupId === 'string' ? tab.ownerGroupId : null,
@@ -210,6 +214,11 @@ function projectWorkspace(sections) {
             : (typeof item.topRowColumnId === 'string' ? item.topRowColumnId : null);
         leaf.columnMode = (item.hasColumnMode ? item.columnMode === 'ownColumn' : item.detachedColumn === true)
             ? 'ownColumn' : 'row';
+        // 没有旧键可回退：旧配置里这个字段根本不存在，null 就是「未指定」，
+        // `layoutRowsOf` 会把它并入 pane-1，行为与升级前完全一致。
+        leaf.hostPaneId = typeof item.hostPaneId === 'string' && item.hostPaneId
+            ? item.hostPaneId
+            : null;
         tabs[leaf.id] = leaf;
     });
 
