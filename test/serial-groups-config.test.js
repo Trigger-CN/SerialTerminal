@@ -209,7 +209,7 @@ test('a v14 workspaceLayout is moved onto panes / paneSplit / focusedTabId', () 
   assert.deepEqual(group.paneSplit, {
     enabled: true,
     orientation: 'vertical',
-    sizes: { 'pane-1': 0.25, 'pane-2': 0.75 }
+    sizes: { 'pane-1': 0.25, 'pane-2': 0.75 }, activePaneId: 'pane-2'
   });
   // 焦点取 activePaneId 指向的那个 pane 的激活叶，而不是 pane-1 的。
   assert.equal(group.focusedTabId, 'tab-filter-1');
@@ -264,7 +264,7 @@ test('new layout keys survive a read-save-read round trip', () => {
   assert.deepEqual(group.paneSplit, {
     enabled: true,
     orientation: 'horizontal',
-    sizes: { 'pane-1-g-1': 1 }
+    sizes: { 'pane-1-g-1': 1 }, activePaneId: 'pane-1-g-1'
   });
   assert.equal(group.focusedTabId, 'tab-main-g-1');
 });
@@ -340,4 +340,16 @@ test('shell three-state fields are dropped from the persisted group', () => {
   assert.equal(Object.prototype.hasOwnProperty.call(group, 'ownerGroupId'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(group, 'detachedColumn'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(group, 'topRowColumnId'), false);
+});
+
+
+test('explicit paneSplit activePaneId survives normalization and keeps the last pane focus', () => {
+  const input = { serialGroups: [{ id: 'default', panes: [
+    { id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' },
+    { id: 'pane-2', tabIds: ['tab-filter-1'], activeTabId: 'tab-filter-1' }
+  ], paneSplit: { enabled: true, orientation: 'vertical', activePaneId: 'pane-2', sizes: { 'pane-1': 0.4, 'pane-2': 0.6 } } }] };
+  const first = migrateSerialGroupsConfig(input);
+  assert.equal(first.serialGroups[0].paneSplit.activePaneId, 'pane-2');
+  assert.equal(first.serialGroups[0].focusedTabId, 'tab-filter-1');
+  assert.deepEqual(migrateSerialGroupsConfig(first), first);
 });

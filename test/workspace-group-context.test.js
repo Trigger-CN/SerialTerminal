@@ -30,7 +30,7 @@ function fixture() {
     filterTabsStore:{getList:id=>filters.get(id)||[]},chartTabsStore:{getList:id=>charts.get(id)||[]},
     getPaneDom:()=>({}),getPaneTabsList:()=>null,getPaneTabsContent:()=>null,
     getShellTabState:()=>null,isShellTabId:id=>id?.startsWith('tab-shell-'),persistShellTabs:()=>{},
-    serializeChartTab:tab=>({...tab}),isApplyingConfig:false,
+    serializeChartTab:tab=>({...tab}),isApplyingConfig:false,isRestoringWorkspaceSession:false,
     createPaneElement:()=>{},fitWorkspaceTerminals:()=>{},renderWorkspaceNow:()=>{},
     ipcRenderer:{send:(_,payload)=>messages.push(JSON.parse(JSON.stringify(payload)))},
     window:{dispatchEvent:event=>events.push(event)},CustomEvent:class { constructor(type, options) { this.type=type;this.detail=options.detail; } },

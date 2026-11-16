@@ -919,6 +919,8 @@ function setCollapsed(ws, containerId, collapsed) {
 function removeEmptyPane(container, pane) {
     if (pane.tabIds.length || container.panes.length <= 1) return false;
     container.panes = container.panes.filter(item => item !== pane);
+    if (container.activePaneId === pane.id) container.activePaneId = container.panes[0].id;
+    container.paneSplit.sizes = normalizeSizes(container.paneSplit.sizes || {}, container.panes.map(item => item.id));
     if (container.panes.length < 2) {
         container.paneSplit.enabled = false;
         container.collapsed = false;

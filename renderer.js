@@ -99,6 +99,7 @@ const {
 const { projectWorkspace, importWorkspace } = require('./tabs-workspace-projection');
 const tabModel = require('./tab-model');
 const { createWorkspaceModelManager } = require('./workspace-model-manager');
+const { serializeWorkspaceLayout, restoreWorkspaceLayout: decodeWorkspaceLayout } = require('./workspace-layout-state');
 
 const terminalSearchTrackers = new WeakMap();
 
@@ -2523,6 +2524,8 @@ function createLayoutFromGroupConfig(groupId) {
 // panes / paneSplit 同步供配置归一化与恢复读取，回调必须传入其所属组。
 function persistGroupWorkspaceLayout(groupId = activeGroupId) {
     if (!currentConfig) return;
+    if (isApplyingConfig || isRestoringWorkspaceSession) return;
+    if (workspaceModel) { scheduleWorkspaceLayoutSave(); return; }
     const id = normalizeGroupId(groupId);
     const payload = cloneWorkspaceLayout(getGroupWorkspaceLayout(id));
     const target = serialGroups.find(group => group && group.id === id);
@@ -2862,11 +2865,13 @@ function setShellHostPane(tabId, paneId) {
 // 让标签至少还在，而不是丢掉。
 function hostPaneIdBelongsToGroup(paneId, groupId) {
     if (!paneId || !groupId) return false;
+    if (workspaceModel) return Boolean(workspaceModel.tabs[groupId]?.panes?.some(pane => pane.id === paneId));
     const layout = groupWorkspaceLayouts.get(groupId);
     return Boolean(layout) && layout.panes.some(pane => pane.id === paneId);
 }
 
 function hasDetachedShellColumn() {
+    if (workspaceModel) return tabModel.layoutColumns(workspaceModel).some(column => column.id === tabModel.OWN_COLUMN_ID);
     return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.columnMode === 'ownColumn');
 }
 
@@ -4683,6 +4688,7 @@ let focusedWorkspaceTabId = null;
 // 这个 id 在当前活状态里还成不成立（Shell 在 shellTabs 里，其它叶在某个分组布局的 pane 里）。
 function isLiveWorkspaceTabId(tabId) {
     if (!tabId) return false;
+    if (workspaceModel) return Boolean(workspaceModel.tabs[tabId]);
     if (getShellTabState(tabId)) return true;
     return serialGroups.some(group => {
         const layout = groupWorkspaceLayouts.get(group.id);
@@ -5189,7 +5195,7 @@ function sweepStaleColumns(plan) {
 function buildLiveWorkspaceSections() {
     const sections = {
         groups: serialGroups.map((group, index) => {
-            const layout = groupWorkspaceLayouts.get(group.id);
+            const layout = workspaceModel ? getGroupWorkspaceLayout(group.id) : groupWorkspaceLayouts.get(group.id);
             return {
                 id: group.id,
                 title: group.title,
@@ -5206,7 +5212,8 @@ function buildLiveWorkspaceSections() {
                     ? {
                         enabled: layout.splitEnabled === true,
                         orientation: layout.orientation,
-                        sizes: { ...(layout.paneSizes || {}) }
+                        sizes: { ...(layout.paneSizes || {}) },
+                        activePaneId: layout.activePaneId
                     }
                     : { enabled: false, orientation: 'horizontal', sizes: {} }
             };
@@ -5280,13 +5287,55 @@ function dispatchWorkspaceAction(action) {
     workspaceModel = result.workspace;
     focusedWorkspaceTabId = workspaceModel.focusedTabId;
     renderWorkspaceNow();
+    scheduleWorkspaceLayoutSave();
     return result;
 }
 
+let workspaceLayoutSaveTimer = null;
+function buildWorkspaceConfigSnapshot() {
+    const workspaceLayoutState = serializeWorkspaceLayout(workspaceModel);
+    const groups = serialGroups.map(group => {
+        const layout = workspaceLayoutState.groups.find(item => item.id === group.id);
+        return { ...group, ...(layout ? { panes: layout.panes, paneSplit: { ...layout.paneSplit, activePaneId: layout.activePaneId } } : {}),
+            filterTabs: filterTabsStore.getList(group.id).map(serializeFilterTab),
+            chartTabs: chartTabsStore.getList(group.id).map(serializeChartTab) };
+    });
+    const defaultGroup = groups.find(group => group.id === REGISTRY_DEFAULT_GROUP_ID);
+    return { serialGroups: groups, shellTabs: shellTabs.map(tab => ({ id: tab.id, title: tab.title || '',
+        profileId: tab.profileId || '' })), workspaceLayoutState, activeSerialGroupId: activeGroupId,
+        filterTabs: defaultGroup?.filterTabs || [], chartTabs: defaultGroup?.chartTabs || [] };
+}
+
+function flushWorkspaceLayoutSave() {
+    if (workspaceLayoutSaveTimer === null) return;
+    clearTimeout(workspaceLayoutSaveTimer);
+    workspaceLayoutSaveTimer = null;
+    if (!workspaceModel || isApplyingConfig || isRestoringWorkspaceSession) return;
+    const snapshot = buildWorkspaceConfigSnapshot();
+    Object.assign(currentConfig, snapshot);
+    ipcRenderer.send('save-config', snapshot);
+}
+
+function scheduleWorkspaceLayoutSave() {
+    if (!workspaceModel || isApplyingConfig || isRestoringWorkspaceSession) return;
+    if (workspaceLayoutSaveTimer !== null) clearTimeout(workspaceLayoutSaveTimer);
+    workspaceLayoutSaveTimer = setTimeout(flushWorkspaceLayoutSave, 0);
+}
+
+window.addEventListener('beforeunload', flushWorkspaceLayoutSave);
+
+
 function initializeWorkspaceModel() {
     if (workspaceModel) return false;
-    workspaceModel = importWorkspace(buildLiveWorkspaceSections());
+    workspaceModel = decodeWorkspaceLayout(importWorkspace(buildLiveWorkspaceSections()), currentConfig?.workspaceLayoutState);
+    if (serialGroups.some(group => group.id === currentConfig?.activeSerialGroupId)) activeGroupId = currentConfig.activeSerialGroupId;
     focusedWorkspaceTabId = workspaceModel.focusedTabId;
+    // Startup-only import caches must never become a second runtime layout.
+    groupWorkspaceLayouts.clear();
+    groupLayoutSnapshots.clear();
+    shellTabs.forEach(tab => {
+        delete tab.hostGroupId; delete tab.hostPaneId; delete tab.columnMode; delete tab.columnId;
+    });
     groupWorkspaceManagers.clear();
     setActiveGroupWorkspace(activeGroupId);
     renderWorkspaceNow();
@@ -5767,18 +5816,19 @@ function addSerialGroupFromUi() {
 }
 
 function persistSerialGroups() {
+    if (workspaceModel) { scheduleWorkspaceLayoutSave(); return; }
     ipcRenderer.send('save-config', { serialGroups });
 }
 
 // 关闭一个分组：断开连接 → 释放终端 → 移除节点 → 从列表移除 → 切到邻居。
-function closeSerialGroup(groupId) {
+function closeSerialGroup(groupId, { confirm = true } = {}) {
     const id = resolveSerialGroupId(groupId);
     if (id === REGISTRY_DEFAULT_GROUP_ID) return false;
     const group = getSerialGroupById(id);
     if (!group) return false;
 
     // 已连接时二次确认：直接关掉会静默中断正在收数据的端口。
-    if (group.status === 'connected' && !window.confirm(`串口分组「${group.title}」仍处于连接状态，关闭将断开该端口。是否继续？`)) {
+    if (confirm && group.status === 'connected' && !window.confirm(`串口分组「${group.title}」仍处于连接状态，关闭将断开该端口。是否继续？`)) {
         return false;
     }
 
@@ -5966,6 +6016,7 @@ function getDefaultShellProfileId() {
 }
 
 function persistShellTabs() {
+    if (workspaceModel) { scheduleWorkspaceLayoutSave(); return; }
     ipcRenderer.send('save-config', {
         shellTabs: shellTabs.map(tab => ({
             id: tab.id,
@@ -6131,24 +6182,16 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     bindShellTextModeWheel(tabState, terminalWrapper);
 
     shellTabs.push(tabState);
-    if (workspaceModel) dispatchWorkspaceAction({ type: 'add-leaf', groupId: resolveGroupIdFromPaneId(resolvedPaneId),
-        paneId: resolvedPaneId, options: { id: tabId, kind: 'shell', title: tabState.title }, activate: !isRestoringWorkspaceSession });
+    if (workspaceModel) {
+        dispatchWorkspaceAction({ type: 'add-leaf', groupId: resolveGroupIdFromPaneId(resolvedPaneId),
+            paneId: resolvedPaneId, options: { id: tabId, kind: 'shell', title: tabState.title }, activate: !isRestoringWorkspaceSession });
+        delete tabState.hostGroupId; delete tabState.hostPaneId; delete tabState.columnMode; delete tabState.columnId;
+    }
     updateTabTitles();
-    // **不登记进 `panes[].tabIds`**：I1/I2 是结构性硬约束，Shell 永远不是 pane 的成员。
-    //
-    // 旧实现这里调 `addTabToOwningGroupPane(...)`，把新建的 Shell 写进了 pane-1 的
-    // `tabIds`（实测 `sgsint-1262.txt`：`pane-1.tabIds = ["tab-main","tab-shell-1"]`）。
-    // 后果不只是违反不变式，还让右键菜单的 `canSplit`（数 `panes[].tabIds.length`）
-    // 误报 true：菜单项看起来可点，而 `splitWorkspaceTabIntoPane` 遇到 Shell 直接
-    // `return false`，用户看到的就是「点了没反应」。
-    //
-    // Shell 的位置只由它自己的 `columnId` / `columnMode` / `hostGroupId` 三个事实描述，
-    // 建列 / 显隐全部归 renderWorkspace。
+    // 恢复前由旧位置导入；初始化后 add-leaf 已按单/多组规则登记真实成员。
     renderWorkspaceNow();
     if (!isRestoringWorkspaceSession) {
-        // 用 `setFocusedTab` 而不是 `switchPaneTab`：后者写的是 `panes[].activeTabId`，
-        // 且一进门就 `if (!pane.tabIds.includes(tabId)) return;`。Shell 已不再进 pane，
-        // 那条路径会直接返回，新 Shell 不会变成当前显示的那个。
+        // 焦点与每格 active 由统一模型动作维护。
         setFocusedTab(tabId);
         persistShellTabs();
         persistWorkspaceLayout();
@@ -6192,8 +6235,7 @@ function closeShellTab(tabId) {
     tab.btn.remove();
     shellTabs.splice(index, 1);
     ipcRenderer.send('close-shell-tab-session', { tabId });
-    // Shell 不在任何分组的 panes[].tabIds 里（I2），所以不需要走布局层的 removeTab：
-    // 它只占「列首行 / 受托管行」这个派生位置，从 shellTabs 里移除后重画一次就消失了。
+    // 模型 close 事务已处理真实成员和焦点；业务对象只负责释放终端/PTY。
     if (focusedWorkspaceTabId === tabId) focusedWorkspaceTabId = null;
     persistShellTabs();
     updateTabTitles();
@@ -6608,8 +6650,16 @@ function closeFilterTab(tabId) {
 
 const persistFilterTabsTimers = new Map();
 
+function serializeFilterTab(tab) {
+    return { id: tab.id, title: tab.title || '', filterText: tab.filterText || '',
+        caseSensitive: tab.caseSensitive, wholeWord: tab.wholeWord, useRegex: tab.useRegex,
+        dataMode: tab.dataMode, showSentOnly: tab.showSentOnly === true,
+        paneId: workspaceModel ? getTabPaneId(tab.id) : tab.paneId || getTabPaneId(tab.id) };
+}
+
 function persistFilterTabs({ debounce = false, groupId = activeGroupId } = {}) {
     if (isApplyingConfig) return;
+    if (workspaceModel) { scheduleWorkspaceLayoutSave(); return; }
     const id = normalizeGroupId(groupId);
     const save = () => {
         persistFilterTabsTimers.delete(id);
@@ -6684,7 +6734,7 @@ let chartParsingGuideTrigger = null;
 function serializeChartTab(tab) {
     return {
         id: tab.id,
-        paneId: tab.paneId || getTabPaneId(tab.id),
+        paneId: workspaceModel ? getTabPaneId(tab.id) : tab.paneId || getTabPaneId(tab.id),
         title: tab.title || '',
         encoding: tab.encoding || 'utf8',
         parserMode: tab.parserMode || 'key-value',
@@ -6781,6 +6831,7 @@ async function exportChartSamples(scope, targetTab = chartExportState) {
 
 function persistChartTabs(groupId = activeGroupId) {
     if (isApplyingConfig) return;
+    if (workspaceModel) { scheduleWorkspaceLayoutSave(); return; }
     const id = normalizeGroupId(groupId);
     const savedTabs = chartTabsStore.getList(id).map(serializeChartTab);
     const target = serialGroups.find(group => group && group.id === id);
@@ -8319,6 +8370,31 @@ document.getElementById('newline-mode-select')?.addEventListener('change', event
     saveSerialModeConfig();
 });
 
+// Reset replaces the workspace; a preferences update must never do so.
+function restoreWorkspaceConfig(config) {
+    if (workspaceLayoutSaveTimer !== null) clearTimeout(workspaceLayoutSaveTimer);
+    workspaceLayoutSaveTimer = null;
+    isRestoringWorkspaceSession = true;
+    try {
+        shellTabs.slice().forEach(tab => closeShellTab(tab.id));
+        serialGroups.slice().forEach(group => {
+            ipcRenderer.send('disconnect-serial', { groupId: group.id });
+            filterTabsStore.getList(group.id).slice().forEach(tab => closeFilterTab(tab.id));
+            chartTabsStore.getList(group.id).slice().forEach(tab => closeChartTab(tab.id));
+            if (group.id !== REGISTRY_DEFAULT_GROUP_ID) closeSerialGroup(group.id, { confirm: false });
+        });
+        workspaceModel = null;
+        groupWorkspaceManagers.clear();
+        groupWorkspaceLayouts.clear();
+        groupLayoutSnapshots.clear();
+        lastAppliedWorkspaceLayoutKey = '';
+        activeGroupId = REGISTRY_DEFAULT_GROUP_ID;
+        applyConfig(config);
+    } finally {
+        isRestoringWorkspaceSession = false;
+    }
+}
+
 function applyConfig(config) {
     isApplyingConfig = true;
     try {
@@ -8498,12 +8574,13 @@ function applyConfig(config) {
         return queue;
     };
 
-    if (filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
+    if (!workspaceModel && filterTabs.length === 0 && Array.isArray(config.filterTabs) && config.filterTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
             const paneFilterQueue = makePaneQueue(/^tab-filter-\d+$/);
             config.filterTabs.forEach(tabConfig => {
-                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
+                const requestedPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
+                const targetPaneId = getPaneTabsList(requestedPaneId) ? requestedPaneId : 'pane-1';
                 if (!tabConfig.id) {
                     const queue = paneFilterQueue[targetPaneId] || [];
                     const nextId = queue.shift();
@@ -8518,12 +8595,13 @@ function applyConfig(config) {
         }
     }
 
-    if (shellTabs.length === 0 && Array.isArray(config.shellTabs) && config.shellTabs.length > 0) {
+    if (!workspaceModel && shellTabs.length === 0 && Array.isArray(config.shellTabs) && config.shellTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
             const paneShellQueue = makePaneQueue(/^tab-shell-\d+$/);
             config.shellTabs.forEach(tabConfig => {
-                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
+                const requestedPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
+                const targetPaneId = getPaneTabsList(requestedPaneId) ? requestedPaneId : 'pane-1';
                 if (!tabConfig.id) {
                     const queue = paneShellQueue[targetPaneId] || [];
                     const nextId = queue.shift();
@@ -8539,12 +8617,13 @@ function applyConfig(config) {
         restoreShellSessions();
     }
 
-    if (chartTabs.length === 0 && Array.isArray(config.chartTabs) && config.chartTabs.length > 0) {
+    if (!workspaceModel && chartTabs.length === 0 && Array.isArray(config.chartTabs) && config.chartTabs.length > 0) {
         isRestoringWorkspaceSession = true;
         try {
             const paneChartQueue = makePaneQueue(/^tab-chart-\d+$/);
             config.chartTabs.forEach(tabConfig => {
-                const targetPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
+                const requestedPaneId = tabConfig.paneId || layoutTabToPaneMap.get(tabConfig.id) || primaryPaneId;
+                const targetPaneId = getPaneTabsList(requestedPaneId) ? requestedPaneId : 'pane-1';
                 if (!tabConfig.id) tabConfig.id = paneChartQueue[targetPaneId]?.shift();
                 createChartTab(tabConfig, targetPaneId);
             });
@@ -8609,7 +8688,10 @@ ipcRenderer.invoke('get-config').then(config => {
     applyConfig(config);
     showWelcomeGuideForCurrentVersion(config);
 });
-ipcRenderer.on('config-updated', (event, config) => applyConfig(config));
+ipcRenderer.on('config-updated', (event, config, change = {}) => {
+    if (change.scope === 'reset-workspace') restoreWorkspaceConfig(config);
+    else applyConfig(config);
+});
 
 function hideScheduledUpdateToast(animate = true) {
     if (scheduledUpdateToastTimer) clearTimeout(scheduledUpdateToastTimer);

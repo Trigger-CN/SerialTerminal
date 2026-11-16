@@ -16,10 +16,10 @@ const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-value
 const { normalizeBaudRate, normalizeCustomBaudRates, isStandardBaudRate } = require('./baud-rates');
 const { normalizeSearchHistory } = require('./search-history');
 const {
-  SERIAL_GROUPS_CONFIG_VERSION,
   migrateSerialGroupsConfig,
   needsSerialGroupsMigration
 } = require('./serial-groups-config');
+const { WORKSPACE_CONFIG_VERSION, migrateWorkspaceLayoutConfig } = require('./workspace-layout-state');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const { SerialPortClaimTable, normalizePortKey } = require('./serial-port-claims');
 const { formatLocalDate, getLogDirectory } = require('./log-directory');
@@ -144,7 +144,7 @@ const configPath = path.join(app.getPath('userData'), 'config.json');
 // v14 → v15 迁移前写入的备份。只在配置尚未迁移过时生成一次，
 // 后续启动不覆盖，保证用户回退旧版本时还能拿回原件。
 const configBackupPath = path.join(app.getPath('userData'), 'config.v14.backup.json');
-const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION;
+const CONFIG_VERSION = WORKSPACE_CONFIG_VERSION;
 const SERIAL_MODES = new Set(['text', 'hex']);
 const SERIAL_ENCODINGS = new Set(['utf8', 'ascii', 'gbk']);
 const LOG_RETENTION_DAYS = new Set([0, 7, 30, 60]);
@@ -538,7 +538,7 @@ function normalizeConfig(config, defaults) {
   // 而迁移本身必须是幂等的：migrateSerialGroupsConfig 用「有没有 serialGroups 键」
   // 判断是否已迁移，所以重复执行只会重算一次归一化，不会造出第二个分组。
   // 旧字段一律保留，用户回退到 v14 时仍能读到完整配置。
-  return migrateSerialGroupsConfig(normalized);
+  return migrateWorkspaceLayoutConfig(migrateSerialGroupsConfig(normalized));
 }
 
 // Runtime Display Settings (Initialized from config later)
@@ -704,6 +704,16 @@ function loadConfig() {
           log.info(`Config backup written before v15 migration: ${configBackupPath}`);
         } catch (backupError) {
           log.error('Failed to write config backup before migration:', backupError);
+        }
+      }
+      // Preserve the last legacy layout before the versioned snapshot becomes authoritative.
+      const layoutBackupPath = path.join(app.getPath('userData'), 'config.v15.backup.json');
+      if (Number(saved.configVersion || 0) < CONFIG_VERSION && !fs.existsSync(layoutBackupPath)) {
+        try {
+          fs.writeFileSync(layoutBackupPath, JSON.stringify(saved, null, 2));
+        } catch (error) {
+          log.error('Failed to back up legacy workspace config:', error);
+          return normalizeConfig(saved, defaults);
         }
       }
       const normalized = normalizeConfig(saved, defaults);
@@ -2123,7 +2133,7 @@ ipcMain.on('reset-config', (event) => {
   
   // Broadcast updates
   if (mainWindow) {
-    mainWindow.webContents.send('config-updated', currentConfig);
+    mainWindow.webContents.send('config-updated', currentConfig, { scope: 'reset-workspace' });
     mainWindow.webContents.send('update-display-settings', displaySettings);
   }
 });
@@ -2239,7 +2249,7 @@ ipcMain.on('save-config', (event, config) => {
 ipcMain.handle('save-config-request', (event, config) => {
   saveConfig(config);
   if (mainWindow) {
-    mainWindow.webContents.send('config-updated', currentConfig);
+    mainWindow.webContents.send('config-updated', currentConfig, { scope: 'settings' });
   }
   return { ok: true };
 });

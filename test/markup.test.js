@@ -109,8 +109,7 @@ test('right sidebar manages persistent quick commands for the active Shell tab',
   assert.doesNotMatch(shellSidebar, /shell-session-list|activeShellSessions|noActiveShellSessions/);
   assert.match(html, /id="shell-quick-command-dialog"[\s\S]*aria-labelledby="shell-quick-command-dialog-title"/);
   assert.match(html, /id="shell-quick-command-append-enter" checked/);
-  // 配置版本号已由 serial-groups-config.js 统一提供（v14 → v15），不再硬编码在 main.js。
-  assert.match(main, /const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION/);
+  assert.equal(require('../workspace-layout-state').WORKSPACE_CONFIG_VERSION, 16);
   assert.match(main, /normalized\.shellQuickCommands = Array\.isArray\(source\.shellQuickCommands\)/);
   assert.match(main, /shellQuickCommands: \[\]/);
   assert.match(renderer, /function getActiveShellTab\(\)[\s\S]*getActiveTabInfo\(\)[\s\S]*shellTabs\.find/);
@@ -180,7 +179,6 @@ test('preferences persist the optional Shell clear and automatic log scopes', ()
   const html = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
   const preferences = fs.readFileSync(path.join(root, 'preferences.js'), 'utf8');
 
-  assert.match(main, /const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION/);
   assert.match(main, /clearAllLogsIncludesShell: false/);
   assert.match(main, /saveShellTabsLogToFiles: false/);
   assert.match(main, /normalized\.clearAllLogsIncludesShell = normalizeBoolean\(source\.clearAllLogsIncludesShell, false\)/);
@@ -315,7 +313,6 @@ test('custom baud rates are normalized, persisted, and restored as reusable opti
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
 
-  assert.match(main, /const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION/);
   assert.match(main, /customBaudRates: \[\]/);
   assert.match(main, /normalized\.customBaudRates = normalizeCustomBaudRates/);
   assert.match(main, /!isStandardBaudRate\(lastBaudRate\)/);
@@ -386,7 +383,6 @@ test('terminal buffers use bounded defaults and reset fully when cleared', () =>
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const preferencesHtml = fs.readFileSync(path.join(root, 'preferences.html'), 'utf8');
-  assert.match(main, /const CONFIG_VERSION = SERIAL_GROUPS_CONFIG_VERSION/);
   assert.match(main, /source\.scrollbackLimit === 100000[\s\S]*?\? 20000/);
   assert.doesNotMatch(renderer, /scrollback:\s*100000/);
   // 主串口终端的构造已收进 `buildSerialTerminalOptions()` 模板，默认与后续分组共用同一份。

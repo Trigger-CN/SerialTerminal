@@ -123,7 +123,7 @@ function groupWorkspaceFields(source) {
       sizes: layout.paneSizes
     });
   const activePaneId = explicit
-    ? (typeof source.activePaneId === 'string' ? source.activePaneId : '')
+    ? (typeof splitSource?.activePaneId === 'string' ? splitSource.activePaneId : (typeof source.activePaneId === 'string' ? source.activePaneId : ''))
     : (typeof layout?.activePaneId === 'string' ? layout.activePaneId : '');
   const sizes = {};
   if (isPlainObject(splitSource?.sizes)) {
@@ -143,7 +143,9 @@ function groupWorkspaceFields(source) {
     paneSplit: {
       enabled: splitSource?.enabled === true,
       orientation: splitSource?.orientation === 'vertical' ? 'vertical' : 'horizontal',
-      sizes
+      sizes,
+      activePaneId: panes.some(pane => pane.id === activePaneId && pane.activeTabId)
+        ? activePaneId : panes.find(pane => pane.activeTabId)?.id || panes[0].id
     },
     ...(focusedTabId ? { focusedTabId } : {})
   };

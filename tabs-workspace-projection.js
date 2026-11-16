@@ -245,7 +245,17 @@ function projectWorkspace(sections) {
 
 // 运行态只在恢复完成时调用一次；与历史只读投影分开，避免改变影子检查的语义。
 function importWorkspace(sections) {
-    const src = sections || {};
+    const source = sections || {};
+    const sourceList = Array.isArray(source.groups) ? source.groups : [];
+    const shells = new Set((source.shellTabs || []).map(tab => tab.id));
+    const src = { ...source, groups: sourceList.map(group => {
+        const mainId = group.mainTabId || defaultMainTabId(group.id);
+        const legal = new Set([mainId, ...shells,
+            ...((source.filterTabs || {})[group.id] || []).map(tab => tab.id),
+            ...((source.chartTabs || {})[group.id] || []).map(tab => tab.id)]);
+        return { ...group, panes: (group.panes || []).map(pane => ({ ...pane,
+            tabIds: (pane.tabIds || []).filter(id => legal.has(id)) })) };
+    }) };
     const ws = projectWorkspace(src);
     const groups = Object.values(ws.tabs).filter(isContainer);
     const singleGroup = groups.length === 1 ? groups[0] : null;
@@ -253,6 +263,7 @@ function importWorkspace(sections) {
 
     for (const group of groups) {
         const source = sourceGroups.find(item => item && item.id === group.id);
+        group.activePaneId = source?.paneSplit?.activePaneId || source?.activePaneId || group.panes[0]?.id;
         const mainId = source && typeof source.mainTabId === 'string'
             ? source.mainTabId : defaultMainTabId(group.id);
         ws.tabs[mainId].ownerGroupId = group.id;
