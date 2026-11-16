@@ -1330,3 +1330,28 @@ test('split-group moves only the requested group while other groups and shells s
     const elsewhere = model.applyWorkspaceAction(focused.workspace, { type: 'activate', tabId: second.panes[0].activeTabId });
     assert.ok(buildRenderPlan(elsewhere.workspace).columns[0].panelIds.includes(shell.id));
 });
+
+
+test('Shell root moves use the destination column row index and preserve untouched root order', () => {
+    let ws = fresh();
+    const first = roots(ws).find(isContainer);
+    const second = addContainerTab(ws, { id: 'second', groupId: 'second' });
+    const third = addContainerTab(ws, { id: 'third', groupId: 'third' });
+    const shell1 = addShell(ws); const shell2 = addShell(ws);
+    ws = model.applyWorkspaceAction(ws, { type: 'split-group', groupId: second.id }).workspace;
+    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
+        target: { kind: 'roots', columnId: second.id, index: 1 } }).workspace;
+    assert.deepEqual(model.layoutColumns(ws)[1].tabItems.map(tab => tab.id), [second.id, shell2.id]);
+    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
+        target: { kind: 'roots', columnId: first.id, index: 2 } }).workspace;
+    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), [first.id, third.id, shell2.id, shell1.id]);
+    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
+        target: { kind: 'roots', columnId: first.id, index: 0 } }).workspace;
+    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), [shell2.id, first.id, third.id, shell1.id]);
+    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
+        target: { kind: 'roots', columnId: first.id, index: 2 } }).workspace;
+    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), [first.id, third.id, shell2.id, shell1.id]);
+    ws = model.applyWorkspaceAction(ws, { type: 'column-split', enabled: false }).workspace;
+    assert.deepEqual(roots(ws).map(tab => tab.id).filter(id => id !== shell2.id), [first.id, second.id, third.id, shell1.id]);
+    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), roots(ws).map(tab => tab.id));
+});

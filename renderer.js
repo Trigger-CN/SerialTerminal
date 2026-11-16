@@ -2434,9 +2434,7 @@ function createPaneElement(paneId, rootId = 'workspace-root') {
 
     paneEl.appendChild(header);
     paneEl.appendChild(content);
-    // 只选 pane，不切分组：切分组必须在 click 阶段做（在 mousedown 里重渲染会把
-    // 被点的按钮或其祖先换掉，浏览器判定按下/抬起不在同一节点，直接不合成 click）。
-    paneEl.addEventListener('click', () => setActivePane(paneId));
+    // 内容区激活由 document 委托统一处理，覆盖静态与动态 pane。
 
     // 追加到最后一个已有 pane 之后，保证 splitter 仍然落在中间。
     // 若直接 appendChild 到 root，新 pane 会跑到 splitter 后面。
@@ -3085,10 +3083,14 @@ function updateWorkspaceTabDrag(state, clientX, clientY) {
     // 落到兜底分支就变成了「新建 __shell__ 第三列」（实测 diag915 F3）。
     const rowTarget = state.isShell && getGroupRowDropTarget(clientX, clientY);
     if (rowTarget) {
-        rowTarget.row.insertBefore(state.indicator, rowTarget.row.querySelector('.serial-group-tab-actions'));
+        const list = rowTarget.row.querySelector('.serial-group-tab-list');
+        if (!list) return;
+        const tabs = Array.from(list.querySelectorAll('.main-tab')).filter(tab => tab !== state.tabButton);
+        const insertionIndex = getHorizontalInsertionIndex(tabs.map(tab => tab.getBoundingClientRect()), clientX);
+        list.insertBefore(state.indicator, tabs[insertionIndex] || null);
         state.targetColumnId = rowTarget.groupId || null;
         state.targetDropColumn = rowTarget.groupId || null;
-        state.insertionIndex = 0;
+        state.insertionIndex = insertionIndex;
         return;
     }
 
@@ -4142,24 +4144,6 @@ function createGroupPaneElement(groupId, paneId) {
 
     paneEl.appendChild(header);
     paneEl.appendChild(content);
-    paneEl.addEventListener('mousedown', () => {
-        // 外层面板被点击时把该分组切成激活分组，否则侧栏/标签栏会与可见内容错位。
-        //
-        // **不能在 mousedown 里切**：applyActiveSerialGroup 会重渲染整个分组（侧栏、
-        // 分组标签行、列可见性），按下时把被点的按钮或其祖先换掉，浏览器就判定
-        // 「按下与抬起不在同一节点」，**不合成 click**。实测 diag1157/1158/1163：
-        // 只有 pointerdown / mousedown / mouseup，没有 click；在 capture 阶段拦掉
-        // 这一次 mousedown 后 click 立刻恢复。改到 click 阶段，click 已经派发完毕，
-        // 重渲染不会再吞掉它。
-        //
-        // 只切分组，不动 pane：真正被点的那一栏会由标签自己的 click 处理链回到
-        // 这里的 setActivePane（或由 setFocusedTab 写），mousedown 没必要提前抢跑。
-        if (activeGroupId !== id) {
-            activeGroupId = id;
-            applyActiveSerialGroup({ fit: false });
-        }
-    });
-    paneEl.addEventListener('click', () => setActivePane(paneId));
     return paneEl;
 }
 
@@ -4583,7 +4567,7 @@ function setGroupConnectBusy(groupId, busy) {
 }
 
 // 切换激活分组：注册表、可见标签页、标签栏高亮一起改。
-function applyActiveSerialGroup({ fit = true } = {}) {
+function applyActiveSerialGroup({ fit = true, activateTab = true } = {}) {
     activeGroupId = resolveSerialGroupId(activeGroupId);
     serialGroupRegistry.setActiveGroup(activeGroupId);
 
@@ -4606,7 +4590,7 @@ function applyActiveSerialGroup({ fit = true } = {}) {
 
     const groupManager = getGroupWorkspaceManager(activeGroupId);
     const targetTabId = workspaceModel ? groupManager.getActiveTabId(mainTabId(activeGroupId)) : mainTabId(activeGroupId);
-    if (document.getElementById(targetTabId)) {
+    if (activateTab && document.getElementById(targetTabId)) {
         groupManager.switchPaneTab(groupManager.getPaneIdForTabId(targetTabId), targetTabId, { persist: false });
         if (!workspaceModel) focusedWorkspaceTabId = targetTabId;
     }
@@ -5068,8 +5052,9 @@ function reconcileButtons(plan) {
         // 3) 列首行（分组标签与列首行叶）同样按 plan 顺序重排。
         if (tabRowList) {
             orderButtons(tabRowList, column.tabItems
-                .filter(tab => !tabModel.isContainer(tab))
-                .map(tab => document.querySelector(`.main-tab[data-target="${tab.id}"]`))
+                .map(tab => tabModel.isContainer(tab)
+                    ? document.getElementById(describeGroupTab({ id: tab.id }).buttonId)
+                    : document.querySelector(`.main-tab[data-target="${tab.id}"]`))
                 .filter(Boolean));
         }
     });
@@ -5103,10 +5088,11 @@ function moveTabButton(tabId, listEl, paneId) {
 function orderButtons(listEl, ordered) {
     if (!listEl || typeof listEl.insertBefore !== 'function') return;
     const inList = (ordered || []).filter(button => button && button.parentElement === listEl);
-    inList.forEach((button, index) => {
-        const next = inList[index + 1] || null;
-        if (next && button.nextElementSibling !== next) listEl.insertBefore(button, next);
-    });
+    for (let index = inList.length - 2; index >= 0; index--) {
+        const button = inList[index];
+        const next = inList[index + 1];
+        if (button.nextElementSibling !== next) listEl.insertBefore(button, next);
+    }
 }
 
 // ── 第 4 步：面板显隐与宿主 ──────────────────────────────────────────
@@ -7370,11 +7356,24 @@ renameTabInput.addEventListener('keydown', event => {
 // 构造时绑好，静态那两份在加载期也会被同一函数重建。这里再绑一次会让一次点击创建
 // 两个标签（监听器叠加），是真实回归而不是测试问题。
 
-document.querySelectorAll('.workspace-pane').forEach(paneEl => {
-    paneEl.addEventListener('mousedown', () => {
-        setActivePane(paneEl.dataset.paneId);
-    });
-});
+function bindWorkspaceContentActivation() {
+    const activate = event => {
+        const panel = event.target.closest?.('.main-tab-pane');
+        if (!panel || !panel.classList.contains('active') || !workspaceModel) return;
+        const tab = workspaceModel.tabs[panel.id];
+        if (!tab) return;
+        const groupId = tab.kind === 'shell' ? null : groupIdForWorkspaceTab(tab.id);
+        if (workspaceModel.focusedTabId !== tab.id && !setFocusedTab(tab.id)) return;
+        if (groupId && activeGroupId !== groupId) {
+            activeGroupId = groupId;
+            // 面板已经可见，只更新控制上下文，不能重新选择该组的另一个标签。
+            applyActiveSerialGroup({ fit: false, activateTab: false });
+        }
+    };
+    document.addEventListener('click', activate);
+    document.addEventListener('focusin', activate);
+}
+
 
 window.addEventListener('main-tab-changed', (e) => {
     const tabId = e.detail.tabId;
@@ -8267,6 +8266,7 @@ bindMainInputEvents();
 bindWorkspaceSplitter();
 bindGroupWorkspaceSplitter();
 bindWorkspacePaneTransitionFit();
+bindWorkspaceContentActivation();
 bindShellSidebarEvents();
 bindSidebarToolbarEvents();
 

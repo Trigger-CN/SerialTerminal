@@ -148,7 +148,7 @@ function layoutColumns(ws) {
                     && leafColumnMode(leaf) !== 'ownColumn'
                     && position.groupIds.includes(resolveLeafColumnId(ws, leaf)));
                 return { id: position.id, containerId: container?.id || null, isFamily: false,
-                    tabItems: [...groups, ...leaves] };
+                    tabItems: [...groups, ...leaves].sort((a, b) => a.order - b.order) };
             }).filter(column => column.tabItems.length);
             const own = ownColumnLeaves(ws);
             if (own.length) columns.push({ id: OWN_COLUMN_ID, containerId: null, isFamily: false, tabItems: own });
@@ -993,7 +993,14 @@ function moveTabToRoots(ws, tabId, columnId, index) {
         tab.columnId = containers[0].id;
     }
     const ordered = roots(ws).filter(item => item.id !== tabId);
-    const at = Math.max(0, Math.min(index | 0, ordered.length));
+    const row = ws.split.enabled
+        ? layoutColumns(ws).find(column => column.id === columnId
+            || column.tabItems.some(item => isContainer(item) && item.id === columnId))?.tabItems.filter(item => item.id !== tabId) || []
+        : ordered;
+    const localIndex = Math.max(0, Math.min(index | 0, row.length));
+    // 拖拽下标来自目标行，不能直接用作包含其他列成员的全局 roots 下标。
+    const at = row[localIndex] ? ordered.findIndex(item => item.id === row[localIndex].id)
+        : row.length ? ordered.findIndex(item => item.id === row.at(-1).id) + 1 : ordered.length;
     ordered.splice(at, 0, tab);
     ordered.forEach((item, order) => { item.order = order; });
     return true;

@@ -109,6 +109,9 @@ test('configuration migration ignores phantom layout identities and preserves gr
     model.rebuildIndex(base);
     const saved = serializeWorkspaceLayout(base);
     saved.groups.reverse(); saved.roots.reverse();
+    // 旧快照仅用数组次序；带 order 的新快照应由数值保留跨种类交错位置。
+    saved.groups.forEach(group => delete group.order);
+    saved.roots.forEach(tab => delete tab.order);
     const restored = restoreWorkspaceLayout(base, saved);
     assert.deepEqual(serializeWorkspaceLayout(restored).groups.map(g => g.id), ['g-1', 'default']);
     assert.deepEqual(serializeWorkspaceLayout(restored).roots.map(t => t.tabId), saved.roots.map(t => t.tabId));
@@ -156,4 +159,19 @@ test('configuration migration filters malformed and conflicting business IDs bef
     assert.deepEqual(migrateWorkspaceLayoutConfig(migrated), migrated);
     assert.deepEqual(migrated.workspaceLayoutState.groups.flatMap(group => group.panes.flatMap(pane => pane.tabIds)).sort(),
         ['tab-main', 'tab-main-g-1', 'f1', 'f2', 'c1'].sort());
+});
+
+
+test('root drag interleaving survives save/restore and snapshots without order remain readable', () => {
+    let ws = baseline(true);
+    ws = act(ws, { type: 'move', tabId: 'tab-shell-1', target: { kind: 'roots', columnId: 'default', index: 1 } });
+    const saved = serializeWorkspaceLayout(ws);
+    const restored = restoreWorkspaceLayout(baseline(true), saved);
+    assert.deepEqual(model.roots(restored).map(tab => tab.id), ['default', 'tab-shell-1', 'g-1']);
+    assert.deepEqual(serializeWorkspaceLayout(restored), saved);
+    const old = JSON.parse(JSON.stringify(saved));
+    old.groups.forEach(group => delete group.order); old.roots.forEach(tab => delete tab.order);
+    const fallback = restoreWorkspaceLayout(baseline(true), old);
+    assert.deepEqual(model.roots(fallback).map(tab => tab.id), ['default', 'g-1', 'tab-shell-1']);
+    assert.deepEqual(serializeWorkspaceLayout(restoreWorkspaceLayout(baseline(true), serializeWorkspaceLayout(fallback))), serializeWorkspaceLayout(fallback));
 });

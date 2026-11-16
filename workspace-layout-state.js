@@ -12,12 +12,12 @@ function serializeWorkspaceLayout(ws) {
     const groups = Object.values(ws.tabs).filter(model.isContainer).sort((a, b) => a.order - b.order);
     return {
         version: VERSION,
-        groups: groups.map(group => ({ id: group.id, collapsed: group.collapsed === true,
+        groups: groups.map(group => ({ id: group.id, order: group.order, collapsed: group.collapsed === true,
             activePaneId: group.activePaneId || group.panes[0]?.id || null,
             panes: group.panes.map(pane => ({ id: pane.id, tabIds: pane.tabIds.slice(), activeTabId: pane.activeTabId })),
             paneSplit: { enabled: group.paneSplit.enabled === true, orientation: orientation(group.paneSplit.orientation),
                 sizes: copy(group.paneSplit.sizes || {}) } })),
-        roots: model.roots(ws).filter(tab => !model.isContainer(tab)).map(tab => ({ tabId: tab.id,
+        roots: model.roots(ws).filter(tab => !model.isContainer(tab)).map(tab => ({ tabId: tab.id, order: tab.order,
             columnId: tab.columnId || null, columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row' })),
         focusedTabId: ws.focusedTabId,
         split: copy(ws.split)
@@ -50,7 +50,10 @@ function restoreWorkspaceLayout(baseline, saved) {
     const groupOrder = new Map(sourceGroups.map((item, index) => [item?.id, index]));
     groups.sort((a, b) => (groupOrder.get(a.id) ?? sourceGroups.length + a.order)
         - (groupOrder.get(b.id) ?? sourceGroups.length + b.order));
-    groups.forEach((group, index) => { group.order = index; });
+    groups.forEach((group, index) => {
+        const source = sourceGroups.find(item => item?.id === group.id);
+        group.order = Number.isFinite(source?.order) ? source.order : index;
+    });
     for (const group of groups) {
         const source = sourceGroups.find(item => item?.id === group.id);
         const original = group.panes;
@@ -90,7 +93,7 @@ function restoreWorkspaceLayout(baseline, saved) {
         const item = rootItems.find(item => item?.tabId === tab.id);
         if (!claimed.has(tab.id)) {
             tab.parentId = null;
-            tab.order = groups.length + (rootOrder.get(tab.id) ?? rootItems.length);
+            tab.order = Number.isFinite(item?.order) ? item.order : groups.length + (rootOrder.get(tab.id) ?? rootItems.length);
             tab.columnMode = item?.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
             tab.columnId = item?.columnId == null ? null : groupIds.has(item.columnId) ? item.columnId : groups[0]?.id || null;
         }

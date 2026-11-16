@@ -4,10 +4,10 @@
 
 ## 0. 当前状态快照（维护入口）
 
-- **多串口当前重构入口：[MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)**。R1 会话/日志/claim/发送隔离、R2 显式组上下文、R3 唯一活动 `tab-model.js` 与统一原子动作已接入。R4 版本化布局、完整工作区合并保存、启动解码、settings/reset 边界与旧运行态位置清理已接入；最新根项目 **636/636 通过**。隔离 profile 有实际保存重启等价、真实面板几何/实例、reset IPC 和 pending 保存立即正常关闭的落盘证据，但不是完整用户交互或崩溃安全验收。**R5 完整 UI/真实端口验收未完成，不能宣称多串口整体完成。**
+- **多串口当前重构入口：[MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)**。R1 会话/日志/claim/发送隔离、R2 显式组上下文、R3 唯一活动 `tab-model.js` 与统一原子动作、R4 版本化保存恢复已接入。R5 用户手动报告原清单 1/2/4/5/6/7 通过；本轮修复合并/拖回标签排序及点击内容区切换控制组，最新根项目 **642/642 通过**，两项修复待用户复测。隔离 profile 已有保存重启、真实面板几何/实例、reset IPC 和 pending 保存正常关闭证据；这些不等于完整交互或崩溃安全验收。**R5 真实双端口及长时场景未完成，不能宣称多串口整体完成。**
 - 当前配置 schema：**v16**，版本由 `workspace-layout-state.js` 的 `WORKSPACE_CONFIG_VERSION` 提供，`main.js` 引用该常量。布局快照 `workspaceLayoutState.version` 为 **1**；`serial-groups-config.js` 的 15 仅为历史分组迁移阶段。旧配置升级前一次性备份至 `config.v15.backup.json`，备份失败本次启动不覆盖原配置。v14 → v15 背景见 13A 节，当前恢复规则以新方案和 codec 为准。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell。运行态仅写 `workspaceModel`，manager 为读模型/写动作适配；初始化后清旧布局缓存和业务 Shell 位置字段，启动兼容导入及模型 null host 字段仍保留。每格独立 active，N 格有 N−1 相邻分隔条，移动复用面板、xterm、parser、PTY。
-- 多串口当前规则：单组所有叶可自由移动，显式组内分屏采用方案 A；多组串口叶不得跨 owner，Shell 根级；指定组拆列不带其他组/Shell，新建组 disconnected。各组主进程会话、日志、发送与触发隔离；完整工作区清单和布局一次合并保存，恢复期不写半成品。settings 不增删布局身份，reset 明确清理重导入；没有新增通用外部导入功能。历史 P1–P5 完成标记不能代替 R5：原生菜单/真实拖拽、两级 fit、实际双端口、长时接收/最小化恢复/异常断开仍待验，旧单例不得重新引入。
+- 多串口当前规则：单组所有叶可自由移动，显式组内分屏采用方案 A；多组串口叶不得跨 owner，Shell 根级；指定组拆列不带其他组/Shell，新建组 disconnected。每组会话、日志、发送与触发隔离；完整工作区一次合并保存，恢复期不写半成品。根行组/Shell 按统一 order 混排并保存（快照 v1 可选 order，缺失沿用旧数组顺序）；DOM 排序一次收敛。内容区 click/focusin 共用委托入口，按实际叶 owner 更新侧栏，保留其他格 active 与 Shell 位置。settings 不增删布局身份，reset 明确清理重导入；未新增外部导入功能。遵照用户选择不截图，由用户手动复测；实际双端口、长时接收/最小化恢复/异常断开仍待验，旧单例不得重新引入。
 - 当前发送模型：编码与换行按目标组读取；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`。所有入口最终调用 `sendSerialRequest()` / `serial-write`，发送链与自动触发去重按组隔离，成功 Text 发送只滚动目标组主终端。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。

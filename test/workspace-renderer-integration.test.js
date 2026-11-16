@@ -220,3 +220,100 @@ test('production close-group-split menu reads Shell placement from the active mo
     assert.equal(context.workspaceModel.tabs['tab-shell-1'].columnMode, 'row');
     assert.equal(model.layoutColumns(context.workspaceModel).length, 1);
 });
+
+
+test('production button ordering converges in one pass for every four-tab permutation', () => {
+    const f = fixture();
+    f.run(section('function orderButtons(', '// ── 第 4 步'));
+    const list = new f.Element('tabs');
+    const buttons = ['main', 'filter', 'chart', 'shell'].map(id => new f.Element(id));
+    Object.defineProperty(f.Element.prototype, 'nextElementSibling', { get() { return this.nextSibling; } });
+    const permutations = items => items.length ? items.flatMap((item, i) => permutations(items.filter((_, j) => i !== j)).map(tail => [item, ...tail])) : [[]];
+    for (const order of permutations(buttons)) {
+        order.forEach(button => list.appendChild(button));
+        f.context.list = list; f.context.buttons = buttons;
+        f.run('orderButtons(list, buttons)');
+        assert.deepEqual(list.children, buttons, order.map(button => button.id).join(','));
+    }
+});
+
+test('production root reconciliation restores mixed group and Shell order after merging columns', () => {
+    const f = fixture();
+    const list = new f.Element('root-tabs');
+    const buttons = ['g1', 'g2', 'shell1', 'shell2'].map(id => new f.Element(id));
+    buttons.forEach(button => list.appendChild(button));
+    Object.defineProperty(f.Element.prototype, 'nextElementSibling', { get() { return this.nextSibling; } });
+    const byId = new Map(buttons.map(button => [button.id, button]));
+    Object.assign(f.context, { activeGroupId: 'g1', serialGroups: [{ id: 'g1' }, { id: 'g2' }],
+        getGroupTabList: () => list, getSerialGroupById: () => ({}),
+        describeGroupTab: group => ({ buttonId: group.id }), updateGroupTabButtonState() {},
+        getPaneTabsList: () => null, syncSerialGroupAddButtonLayer() {}, syncShellAddButtonVisibility() {}, placeGroupAddButton() {}, placeShellAddButton() {} });
+    f.context.document.querySelector = selector => byId.get(/data-target="([^"]+)"/.exec(selector)?.[1]);
+    f.context.document.querySelectorAll = () => [];
+    f.context.plan = { tabBarVisible: true, columns: [{ domKey: 'g1', rows: [],
+        tabItems: [{ id: 'g1', panes: [] }, { id: 'shell1' }, { id: 'g2', panes: [] }, { id: 'shell2' }] }] };
+    f.run(section('function reconcileButtons(', '// ── 第 4 步'));
+    f.run('reconcileButtons(plan)');
+    assert.deepEqual(list.children.map(button => button.id), ['g1', 'shell1', 'g2', 'shell2']);
+});
+
+test('delegated content activation follows main/filter/chart owner and preserves other panes and Shell placement', () => {
+    const f = fixture();
+    f.context.workspaceModel = importWorkspace({ groups: [
+        { id: 'default', panes: [{ id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' }] },
+        { id: 'g-1', panes: [{ id: 'pane-1-g-1', tabIds: ['tab-main-g-1', 'f2', 'c2'], activeTabId: 'tab-main-g-1' }] }
+    ], filterTabs: { 'g-1': [{ id: 'f2' }] }, chartTabs: { 'g-1': [{ id: 'c2' }] }, shellTabs: [{ id: 'tab-shell-1' }], focusedTabId: 'tab-main' });
+    f.context.workspaceModel = model.applyWorkspaceAction(f.context.workspaceModel, { type: 'split-group', groupId: 'g-1' }).workspace;
+    const shell = JSON.stringify(f.context.workspaceModel.tabs['tab-shell-1']);
+    const synced = [];
+    Object.assign(f.context, { activeGroupId: 'default',
+        groupIdForWorkspaceTab: id => f.context.workspaceModel.tabs[id]?.ownerGroupId || null,
+        setFocusedTab: id => f.context.dispatchWorkspaceAction({ type: 'activate', tabId: id }).ok,
+        resolveSerialGroupId: id => id, serialGroupRegistry: { setActiveGroup: id => synced.push(id) },
+        setActiveGroupTabLists() {}, setActiveGroupWorkspace() {}, mainTabId: id => `tab-main-${id}`,
+        getGroupWorkspaceManager: () => ({ getActiveTabId: () => 'tab-main', switchPaneTab() { assert.fail('content focus must not switch another tab'); } }),
+        renderSerialGroupTabBar() {}, applyGroupSerialOptionsToSidebar: id => synced.push(`options:${id}`),
+        syncDisplayPrefCheckboxes() {}, getGroupDisplayPrefs: () => ({}), updateSidebarActiveGroupLabel() {},
+        refreshConnectButtonState() {}, updateFilterModeStatuses() {} });
+    f.context.document.querySelectorAll = () => [];
+    f.run(section('function applyActiveSerialGroup(', '// 更新侧栏顶部'));
+    f.run(section('function bindWorkspaceContentActivation(', 'window.addEventListener(\'main-tab-changed\''));
+    f.run('bindWorkspaceContentActivation()');
+    for (const id of ['tab-main-g-1', 'f2', 'c2', 'tab-main']) {
+        f.context.activeGroupId = id === 'tab-main' ? 'g-1' : 'default';
+        const panel = { id, classList: { contains: () => true } };
+        const target = { closest: selector => selector === '.main-tab-pane' ? panel : null };
+        f.emit(id === 'f2' ? 'focusin' : 'click', { target });
+        assert.equal(f.context.activeGroupId, id === 'tab-main' ? 'default' : 'g-1');
+        assert.equal(f.context.workspaceModel.focusedTabId, id);
+        assert.equal(f.context.workspaceModel.tabs.default.panes[0].activeTabId, 'tab-main');
+        assert.equal(JSON.stringify(f.context.workspaceModel.tabs['tab-shell-1']), shell);
+        assert.equal(model.buildRenderPlan(f.context.workspaceModel).columns.length, 2);
+    }
+    assert.deepEqual(synced, ['g-1', 'options:g-1', 'g-1', 'options:g-1', 'g-1', 'options:g-1', 'default', 'options:default']);
+    const beforeShell = f.context.activeGroupId;
+    f.emit('click', { target: { closest: () => ({ id: 'tab-shell-1', classList: { contains: () => true } }) } });
+    assert.equal(f.context.activeGroupId, beforeShell, 'Shell keeps the previous serial control target');
+});
+
+
+test('production Shell drag places the root-row indicator at the actual pointer position', () => {
+    const { getHorizontalInsertionIndex } = require('../tab-reorder');
+    const f = fixture();
+    const list = new f.Element('roots');
+    const tabs = ['group', 'shell-a', 'shell-b'].map((id, i) => {
+        const tab = new f.Element(id); tab.rect = { left: i * 100, width: 100 }; list.appendChild(tab); return tab;
+    });
+    list.querySelectorAll = () => tabs;
+    const row = { querySelector: () => list };
+    Object.assign(f.context, { getGroupRowDropTarget: () => ({ row, groupId: 'default' }), getHorizontalInsertionIndex,
+        window: { innerWidth: 1000, innerHeight: 600 },
+        state: { dragging: true, isShell: true, tabButton: tabs[1], preview: { style: {}, offsetWidth: 80, offsetHeight: 20 }, indicator: { remove() {} } } });
+    f.run(section('function updateWorkspaceTabDrag(', 'function startWorkspaceTabDrag('));
+    f.run('updateWorkspaceTabDrag(state, 275, 20)');
+    assert.equal(f.context.state.insertionIndex, 2);
+    assert.equal(list.children.at(-1), f.context.state.indicator);
+    f.run('updateWorkspaceTabDrag(state, 10, 20)');
+    assert.equal(f.context.state.insertionIndex, 0);
+    assert.equal(list.children[0], f.context.state.indicator);
+});
