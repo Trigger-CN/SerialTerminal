@@ -232,3 +232,41 @@ test('new shell keys win over legacy ones when both are present', () => {
     assert.equal(leaf.columnMode, 'row');
     assert.equal(leaf.columnId, 'col-new');
 });
+
+test('runtime import restores a shell-only pane as ordinary membership without changing input', () => {
+    const { importWorkspace } = require('../tabs-workspace-projection');
+    const sections = baseSections();
+    sections.groups[0].panes = [
+        { id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' },
+        { id: 'pane-2', tabIds: [], activeTabId: null }
+    ];
+    sections.groups[0].paneSplit.enabled = true;
+    sections.shellTabs = [{ id: 'tab-shell-1', hostGroupId: 'default', hostPaneId: 'pane-2' }];
+    sections.focusedTabId = 'tab-shell-1';
+    const before = JSON.stringify(sections);
+    const ws = importWorkspace(sections);
+    assert.equal(JSON.stringify(sections), before);
+    assert.deepEqual(ws.tabs.default.panes[1].tabIds, ['tab-shell-1']);
+    assert.equal(ws.tabs.default.panes[1].activeTabId, 'tab-shell-1');
+    assert.equal(ws.tabs['tab-shell-1'].parentId, 'default');
+    assert.equal(ws.tabs['tab-shell-1'].hostGroupId, null);
+    assert.deepEqual(model.buildRenderPlan(ws).panelIds, ['tab-main', 'tab-shell-1']);
+    assert.deepEqual(acceptance.assertAll(model.withDiagnostics(ws)), []);
+});
+
+test('runtime import keeps multi-group shells at root and restores declared leaf kinds', () => {
+    const { importWorkspace } = require('../tabs-workspace-projection');
+    const sections = baseSections();
+    sections.groups[0].panes[0].tabIds = ['tab-main', 'f1', 'c1'];
+    sections.groups.push({ id: 'g2', panes: [{ id: 'g2-pane-1', tabIds: [], activeTabId: null }] });
+    sections.filterTabs.default = [{ id: 'f1', title: 'Filter' }];
+    sections.chartTabs.default = [{ id: 'c1', title: 'Chart' }];
+    sections.shellTabs = [{ id: 'tab-shell-1', hostGroupId: 'default', hostPaneId: 'default-pane-1', columnId: 'g2' }];
+    const ws = importWorkspace(sections);
+    assert.equal(ws.tabs.f1.kind, 'filter');
+    assert.equal(ws.tabs.c1.kind, 'chart');
+    assert.equal(ws.tabs['tab-shell-1'].parentId, null);
+    assert.equal(ws.tabs['tab-shell-1'].hostGroupId, null);
+    assert.equal(ws.tabs['tab-shell-1'].columnId, 'g2');
+    assert.deepEqual(acceptance.assertAll(model.withDiagnostics(ws)), []);
+});

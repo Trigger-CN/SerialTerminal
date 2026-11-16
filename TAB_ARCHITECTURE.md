@@ -839,8 +839,8 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 
 | # | 不变式 | 违反后的症状 |
 |---|---|---|
-| **I1** | 任何 `kind === 'shell'` 的 Tab，其 `parentId === null` | Shell 出现在 subRow 里，这是历史缺陷的起点 |
-| **I2** | 任何 `panes[].tabIds` 中不含 `kind === 'shell'` 的 id | 同上 |
+| **I1** | **多串口组**时 Shell 的 `parentId === null`；单组可为 pane 普通成员 | 多组 Shell 误入 subRow；单组自由分屏被错误拒绝 |
+| **I2** | **多串口组**的 `panes[].tabIds` 不含 Shell；单组包含 Shell 时使用同一成员/激活机制 | 隐形成员表导致空格、失活和保存不一致 |
 | **I3** | 每个**叶** Tab 有且只有一个 panel，`panel.id === tab.id` 且全局唯一；**容器没有 panel** | 面板串台、`fit()` 量错高度 |
 | **I4** | 每个**非根级** Tab 恰好出现在一个 `panes[].tabIds` 中；每个根级 Tab 不出现在任何 `panes` 中 | 同一标签出现在两条 subRow |
 | **I5** | 每个容器至少有一个 pane；每个 pane 的 `tabIds` 非空 | 空白列、无法新建标签 |
@@ -850,19 +850,17 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 | **I9** | 若 `isFlat(ws)` 且某容器 `paneSplit.enabled`，则该容器必须渲染 subRow（方案 A） | 扁平 + 分屏时 pane-2 的标签无处可点 |
 | **I10** | 任何容器只有在其 subRow 数量 ≥ 2 时才允许 `collapsed === true` | 收起后无行可点、无法恢复 |
 
-其中 I1 / I2 是结构性硬约束：**Shell 永远不可能进入 pane**。历史上「Shell 跑进 pane 容器」造成的全部缺陷（标签消失、点不动、`fit` 算错、叠层遮盖）由此不可能再发生。
+I1 / I2 按模式生效，不再把“Shell 永远不进 pane”当作全局硬约束。单组 Shell 使用真实成员表；多组 Shell 位于一级栏，显式列位置不随点击其他组改变。
 
 > I3 / I4 与第一版不同：第一版写「每个 Tab 的 panel.id === tab.id」，与「容器没有 panel」冲突；写「每个 Tab 恰好属于一个 pane」，漏掉了根级 Shell。
 
 ### 6.1 三条与 Shell 相关的推论
 
-由 I1 + I2 推出：
+现行推论（替代本节早期全局禁止规则）：
 
-1. Shell 的按钮 `parentElement` 只能是某条 TabRow 的列表，**绝不能是 subRow 的列表**。
-2. Shell 的**终端容器**只能挂在它自己那列的 panel 位置，**绝不在任何 pane 的 content 里**。
-3. 分屏时 Shell 自然独立成一列（它是根级 Tab），不需要 `detachedColumn` 之类的字段来「模拟独立成列」。
-
-这三条替代了 `resolveShellTabHost()` 三分支、`setShellDetachedColumn()`、`isShellColumnActive()` 等约 10 个函数。
+1. 单组默认扁平一级栏；显式 pane 分屏时 Shell 与串口叶共用每格 subRow、成员与 active。
+2. 多组 Shell 仅在一级栏；分组分屏不会自动把它拆为独立列，也不会连带移动。
+3. panel 位置只由活动模型派生，复用已有 DOM/xterm/PTY；不依赖叠层遮盖或业务 tabState 的 host 字段重新拼成员表。
 
 **一条实际事故（已在 2026 修复）**：推论 1 / 2 是推论，不是自动护栏。
 `createShellTab` 曾经在创建时调 `addTabToOwningGroupPane(tabId, resolvedPaneId, ...)`，
@@ -988,13 +986,15 @@ subRow:  [MAIN] [FILTER] [CHART]        ← COM1 的 pane-1
 | 场景 | 单串口组 | 多串口组 |
 |---|---|---|
 | 串口标签拖到另一条 pane 行 | ✅ 允许（`moveTabToPane`） | ❌ 跨组禁止；组内允许 |
-| Shell 拖到某条 pane 行 | ✅ 写 `hostPaneId` | ❌ 跨组禁止；本组 pane 行允许 |
-| Shell 拖到分组标签行 | ⛔ 该行不存在 | ✅ 维持现状（`hostGroupId`） |
+| Shell 拖到某条 pane 行 | ✅ `move` 事务修改真实成员 | ❌ 全部禁止（不区分“本组”） |
+| Shell 拖到分组标签行 | ⛔ 该行不存在 | ✅ `move` 事务修改根级列位置 |
 | `canSplit`（左右/上下分屏） | ✅ **对 Shell 也开放** | ❌ 对 Shell 置灰 |
 | `canDetach`（独立成列） | ⛔ **恒为 false** | ✅ 维持现状 |
 | `detach-to-own-column` 动作 | ⛔ handler 直接拒绝 | ✅ 维持现状 |
 
-#### 唯一的模型新增事实：`hostPaneId`
+#### 历史方案：`hostPaneId`（已被 R3 的真实 pane 成员替代）
+
+以下是旧实现的失效背景，不是当前模型规范。当前 `initializeWorkspaceModel()` 一次导入旧字段，之后 `dispatchWorkspaceAction()` 统一写 `tab-model.js`；R4 负责版本化保存与最终删除旧兼容字段。
 
 `hostGroupId` 只到**容器**级，派生时被无条件并入 pane-1 那条行。于是 Shell 永远只能待在第一个 pane，
 无法和串口标签一起参与组内 pane 分屏 —— 用户看到的就是「shell 标签拖不动」。

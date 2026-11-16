@@ -21,6 +21,7 @@ function fixture() {
   const filters=new Map(groups.map(g=>[g.id,[]]));const charts=new Map(groups.map(g=>[g.id,[]]));
   const messages=[];const events=[];const timers=new Map();let timerId=0;
   const context=vm.createContext({
+    workspaceModel:null,
     serialGroups:groups,groupWorkspaceLayouts:layouts,groupLayoutSnapshots:new Map(),
     groupWorkspaceManagers:new Map(),REGISTRY_DEFAULT_GROUP_ID:'default',activeGroupId:'default',
     workspaceLayout:layouts.get('default'),focusedWorkspaceTabId:null,currentConfig:{workspaceLayout:{defaultMirror:true}},

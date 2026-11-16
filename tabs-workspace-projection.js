@@ -243,4 +243,63 @@ function projectWorkspace(sections) {
     return ws;
 }
 
-module.exports = { projectWorkspace };
+// 运行态只在恢复完成时调用一次；与历史只读投影分开，避免改变影子检查的语义。
+function importWorkspace(sections) {
+    const src = sections || {};
+    const ws = projectWorkspace(src);
+    const groups = Object.values(ws.tabs).filter(isContainer);
+    const singleGroup = groups.length === 1 ? groups[0] : null;
+    const sourceGroups = Array.isArray(src.groups) ? src.groups : [];
+
+    for (const group of groups) {
+        const source = sourceGroups.find(item => item && item.id === group.id);
+        const mainId = source && typeof source.mainTabId === 'string'
+            ? source.mainTabId : defaultMainTabId(group.id);
+        ws.tabs[mainId].ownerGroupId = group.id;
+        for (const kind of ['filter', 'chart']) {
+            const list = (src[`${kind}Tabs`] || {})[group.id] || [];
+            for (const item of list) {
+                const leaf = ws.tabs[item.id];
+                if (!leaf || isContainer(leaf)) continue;
+                leaf.kind = kind;
+                leaf.title = pickTitle(item, item.id);
+                leaf.ownerGroupId = group.id;
+            }
+        }
+    }
+
+    for (const shell of Object.values(ws.tabs).filter(tab => tab.kind === 'shell')) {
+        const declaredPane = singleGroup && sourceGroups
+            .find(group => group && group.id === singleGroup.id)?.panes
+            ?.find(pane => Array.isArray(pane.tabIds) && pane.tabIds.includes(shell.id));
+        const hostedHere = singleGroup && shell.hostGroupId === singleGroup.id;
+        const pane = singleGroup && (declaredPane
+            ? singleGroup.panes.find(item => item.id === declaredPane.id)
+            : (hostedHere
+                ? singleGroup.panes.find(item => item.id === shell.hostPaneId) || singleGroup.panes[0]
+                : null));
+        if (pane && shell.columnMode !== 'ownColumn') {
+            if (!pane.tabIds.includes(shell.id)) pane.tabIds.push(shell.id);
+            const sourcePane = sourceGroups.find(group => group && group.id === singleGroup.id)
+                ?.panes?.find(item => item.id === pane.id);
+            if (!pane.activeTabId || sourcePane?.activeTabId === shell.id || ws.focusedTabId === shell.id) {
+                pane.activeTabId = shell.id;
+            }
+        }
+        shell.hostGroupId = null;
+        shell.hostPaneId = null;
+        shell.ownerGroupId = null;
+    }
+
+    for (const group of groups) {
+        group.panes = group.panes.filter(pane => pane.tabIds.length > 0);
+        if (group.panes.length < 2) {
+            group.paneSplit.enabled = false;
+            group.paneSplit.sizes = {};
+        }
+    }
+    rebuildIndex(ws);
+    return ws;
+}
+
+module.exports = { projectWorkspace, importWorkspace };

@@ -439,18 +439,23 @@ test('flat mode with pane split keeps the top row free of duplicated pane childr
         '一级行与 subRow 的标签不得重叠');
 });
 
-test('flat mode with pane split still puts unowned shells on the top row', () => {
+test('flat mode with pane split allows a shell to join a subRow', () => {
     const ws = fresh();
     const container = Object.values(ws.tabs).find(isContainer);
-    setPaneSplit(ws, container.id, true);
     const shell = addShell(ws);
+    setPaneSplit(ws, container.id, true);
+    const moved = model.applyWorkspaceAction(ws, {
+        type: 'move', tabId: shell.id, target: {
+            kind: 'pane', groupId: container.id, paneId: container.panes[1].id
+        }
+    });
 
-    const plan = buildRenderPlan(ws);
+    assert.equal(moved.ok, true, moved.reason);
+    const plan = buildRenderPlan(moved.workspace);
     const topIds = plan.columns[0].tabItems.map(item => item.id);
     const subIds = plan.columns[0].rows.flatMap(row => row.tabs.map(item => item.id));
-
-    assert.deepEqual(topIds, [shell.id], '一级行只应剩未归属 Shell');
-    assert.equal(subIds.includes(shell.id), false, 'Shell 绝不能进 subRow（I1/I2）');
+    assert.equal(topIds.includes(shell.id), false);
+    assert.equal(subIds.includes(shell.id), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -567,10 +572,11 @@ test('normalizeSizes falls back to equal shares for broken input', () => {
 // §6.2 自愈
 // ---------------------------------------------------------------------------
 
-test('validateAndRepair pulls a shell out of a pane (I1/I2)', () => {
+test('validateAndRepair pulls shells out of panes only in multi-group mode', () => {
     const ws = fresh();
     const container = Object.values(ws.tabs).find(isContainer);
     const shell = addShell(ws);
+    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
     dropShellIntoPane(ws, container, shell);
     assert.notDeepEqual(acceptance.assertAll(withDiagnostics(ws)), []);
 
@@ -711,21 +717,25 @@ function expectRule(ws, ruleId) {
     );
 }
 
-test('I1 is really checked: a shell under a container is reported', () => {
+test('I1/I2 violations are reported only when shells escape panes in multi-group mode', () => {
     const ws = fresh();
     const container = Object.values(ws.tabs).find(isContainer);
     const shell = addShell(ws);
+    const second = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
     shell.parentId = container.id;
     expectRule(ws, 'I1');
-});
 
-test('I2 is really checked: a shell listed in a pane is reported', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const shell = addShell(ws);
+    shell.parentId = null;
     container.panes[0].tabIds.push(shell.id);
     model.rebuildIndex(ws);
     expectRule(ws, 'I2');
+
+    const single = fresh();
+    const singleContainer = roots(single).find(isContainer);
+    const singleShell = addShell(single);
+    singleContainer.panes[0].tabIds.push(singleShell.id);
+    model.rebuildIndex(single);
+    assert.ok(!acceptance.assertAll(withDiagnostics(single)).some(error => error.startsWith('I2')));
 });
 
 test('I3 is really checked: a container holding a panel is reported', () => {
@@ -1059,6 +1069,27 @@ test('a focused unowned shell still resolves its column container', () => {
     assert.equal(plan.columns[0].splitEnabled, true, 'pane 分屏必须仍然生效');
     assert.equal(plan.columns[0].rows.length, 2, '两个 pane 各一条行');
 });
+test('focused root leaf replaces only the first pane panel in a split column', () => {
+    const ws = fresh();
+    const first = Object.values(ws.tabs).find(isContainer);
+    const second = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
+    const shell = addShell(ws);
+    setPaneSplit(ws, first.id, true);
+    setColumnSplit(ws, true);
+    setLeafColumn(ws, shell.id, first.id);
+    activateTab(ws, shell.id);
+
+    const plan = buildRenderPlan(ws);
+    const firstColumn = plan.columns.find(column => column.containerId === first.id);
+    const otherColumn = plan.columns.find(column => column.containerId === second.id);
+    const secondPaneActive = first.panes[1].activeTabId;
+
+    assert.deepEqual(firstColumn.panelIds, [shell.id, secondPaneActive]);
+    assert.deepEqual(otherColumn.panelIds, [second.panes[0].activeTabId]);
+    assert.ok(plan.panelIds.includes(shell.id));
+    assert.ok(plan.panelIds.includes(secondPaneActive));
+});
+
 
 function mainLeafIdOf(ws) {
     return Object.values(ws.tabs).find(tab => tab.kind === 'main' && !isContainer(tab)).id;
@@ -1121,4 +1152,181 @@ test('projection still prepends the main tab when no pane declares it', () => {
 
     const ws = projectWorkspace(sections);
     assert.deepEqual(ws.tabs.default.panes[0].tabIds, ['tab-main']);
+});
+
+test('applyWorkspaceAction is atomic and rejects missing targets without changing source', () => {
+    const ws = fresh();
+    const before = JSON.stringify(ws);
+
+    const rejected = model.applyWorkspaceAction(ws, { type: 'activate', tabId: 'missing' });
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.workspace, ws);
+    assert.equal(JSON.stringify(ws), before);
+
+    const accepted = model.applyWorkspaceAction(ws, { type: 'activate', tabId: findLeaf(ws, 'main').id });
+    assert.equal(accepted.ok, true);
+    assert.notEqual(accepted.workspace, ws);
+    assert.equal(JSON.stringify(ws), before, '成功事务也不能原地修改输入快照');
+    assert.deepEqual(acceptance.assertAll(withDiagnostics(accepted.workspace)), []);
+});
+
+test('applyWorkspaceAction protects main and default group from close', () => {
+    const ws = fresh();
+    const container = roots(ws).find(isContainer);
+    const main = findLeaf(ws, 'main');
+    const before = JSON.stringify(ws);
+
+    assert.equal(model.applyWorkspaceAction(ws, { type: 'close', tabId: main.id }).ok, false);
+    assert.equal(model.applyWorkspaceAction(ws, { type: 'remove-group', groupId: container.id }).ok, false);
+    assert.equal(JSON.stringify(ws), before);
+});
+
+test('group transactions preserve hosted shells and resize remains an atomic model action', () => {
+    const ws = fresh();
+    const first = roots(ws).find(isContainer);
+    const shell = addShell(ws);
+    assert.equal(setLeafHostGroup(ws, shell.id, first.id), true);
+
+    const added = model.applyWorkspaceAction(ws, {
+        type: 'add-group',
+        options: { id: 'grp-transaction', groupId: 'transaction', title: 'Transaction' }
+    });
+    assert.equal(added.ok, true);
+    const withGroup = added.workspace;
+    assert.equal(withGroup.tabs[shell.id].hostGroupId, null);
+    assert.equal(withGroup.tabs[shell.id].parentId, null);
+    assert.equal(withGroup.tabs[shell.id].panel.id, shell.id);
+    assert.deepEqual(acceptance.assertAll(withDiagnostics(withGroup)), []);
+
+    const split = model.applyWorkspaceAction(withGroup, { type: 'column-split', enabled: true });
+    assert.equal(split.ok, true);
+    const resized = model.applyWorkspaceAction(split.workspace, {
+        type: 'resize-columns',
+        sizes: { 'grp-default': 0.7, 'grp-transaction': 0.3 }
+    });
+    assert.equal(resized.ok, true);
+    assert.deepEqual(resized.workspace.split.sizes, { 'grp-default': 0.7, 'grp-transaction': 0.3 });
+    assert.deepEqual(acceptance.assertAll(withDiagnostics(resized.workspace)), []);
+
+    const removed = model.applyWorkspaceAction(resized.workspace, {
+        type: 'remove-group',
+        groupId: 'grp-transaction'
+    });
+    assert.equal(removed.ok, true);
+    assert.equal(removed.workspace.tabs['grp-transaction'], undefined);
+    assert.ok(removed.workspace.tabs[shell.id], 'closing a group must preserve shell identity and panel');
+    assert.equal(removed.workspace.tabs[shell.id].hostGroupId, null);
+    assert.equal(removed.workspace.tabs[shell.id].columnId, 'grp-default');
+    assert.deepEqual(acceptance.assertAll(withDiagnostics(removed.workspace)), []);
+});
+
+test('single-group move action allows shell to join a pane and switch back to root', () => {
+    const ws = fresh();
+    const group = roots(ws).find(isContainer);
+    const shell = addShell(ws);
+    addLeaf(ws, 'filter', group.id);
+    const enabled = model.applyWorkspaceAction(ws, {
+        type: 'pane-split', groupId: group.id, enabled: true
+    });
+    assert.equal(enabled.ok, true);
+    const pane = enabled.workspace.tabs[group.id].panes[1];
+    const moved = model.applyWorkspaceAction(enabled.workspace, {
+        type: 'move', tabId: shell.id, target: { kind: 'pane', groupId: group.id, paneId: pane.id }
+    });
+    assert.equal(moved.ok, true, moved.reason);
+    assert.equal(moved.workspace.tabs[shell.id].parentId, group.id);
+    assert.ok(moved.workspace.tabs[group.id].panes[1].tabIds.includes(shell.id));
+    assert.deepEqual(acceptance.assertAll(withDiagnostics(moved.workspace)), []);
+
+    const back = model.applyWorkspaceAction(moved.workspace, {
+        type: 'move', tabId: shell.id, target: { kind: 'roots', columnId: group.id }
+    });
+    assert.equal(back.ok, true, back.reason);
+    assert.equal(back.workspace.tabs[shell.id].parentId, null);
+    assert.ok(!back.workspace.tabs[group.id].panes.some(item => item.tabIds.includes(shell.id)));
+    assert.deepEqual(acceptance.assertAll(withDiagnostics(back.workspace)), []);
+});
+
+test('multi-group move gate keeps shells at root and serial leaves within their owner', () => {
+    const ws = fresh();
+    const first = roots(ws).find(isContainer);
+    const second = addContainerTab(ws, { id: 'grp-move-target', groupId: 'move-target' });
+    const shell = addShell(ws);
+    const main = ws.tabs[first.panes[0].activeTabId];
+    const targetPane = second.panes[0];
+
+    const shellMove = model.applyWorkspaceAction(ws, {
+        type: 'move', tabId: shell.id, target: { kind: 'pane', groupId: second.id, paneId: targetPane.id }
+    });
+    assert.equal(shellMove.workspace, ws);
+    assert.equal(shellMove.workspace.tabs[shell.id].parentId, null);
+    assert.ok(!shellMove.workspace.tabs[second.id].panes.some(pane => pane.tabIds.includes(shell.id)));
+    const mainMove = model.applyWorkspaceAction(ws, {
+        type: 'move', tabId: main.id, target: { kind: 'pane', groupId: second.id, paneId: targetPane.id }
+    });
+    assert.equal(mainMove.ok, false);
+    assert.equal(mainMove.workspace, ws);
+});
+
+test('split-tab moves an existing leaf without inventing terminal identities and close removes empty pane', () => {
+    const ws = fresh();
+    const group = roots(ws).find(isContainer);
+    const shell = addShell(ws);
+    const originalIds = Object.keys(ws.tabs).sort();
+    const split = model.applyWorkspaceAction(ws, {
+        type: 'split-tab', tabId: shell.id, groupId: group.id,
+        paneId: 'runtime-pane-2', orientation: 'vertical'
+    });
+    assert.equal(split.ok, true, split.reason);
+    assert.deepEqual(Object.keys(split.workspace.tabs).sort(), originalIds);
+    assert.deepEqual(split.workspace.tabs[group.id].panes[1].tabIds, [shell.id]);
+    assert.deepEqual(buildRenderPlan(split.workspace).panelIds, [mainLeafIdOf(ws), shell.id]);
+    const closed = model.applyWorkspaceAction(split.workspace, { type: 'close', tabId: shell.id });
+    assert.equal(closed.ok, true, closed.reason);
+    assert.deepEqual(Object.keys(closed.workspace.tabs).sort(), originalIds.filter(id => id !== shell.id));
+    assert.equal(closed.workspace.tabs[group.id].panes.length, 1);
+    assert.equal(closed.workspace.tabs[group.id].paneSplit.enabled, false);
+});
+
+test('split-tab refuses to split the sole leaf and merging keeps all existing panes members', () => {
+    const ws = fresh();
+    const group = roots(ws).find(isContainer);
+    const mainId = mainLeafIdOf(ws);
+    assert.equal(model.applyWorkspaceAction(ws, {
+        type: 'split-tab', tabId: mainId, groupId: group.id, paneId: 'empty-target'
+    }).ok, false);
+    const filter = addLeaf(ws, 'filter', group.id);
+    const split = model.applyWorkspaceAction(ws, {
+        type: 'split-tab', tabId: filter.id, groupId: group.id, paneId: 'runtime-pane-2'
+    });
+    assert.equal(split.ok, true, split.reason);
+    const merged = model.applyWorkspaceAction(split.workspace, {
+        type: 'pane-split', groupId: group.id, enabled: false
+    });
+    assert.equal(merged.ok, true, merged.reason);
+    assert.equal(merged.workspace.tabs[group.id].panes.length, 1);
+    assert.deepEqual(merged.workspace.tabs[group.id].panes[0].tabIds, [mainId, filter.id]);
+    assert.deepEqual(Object.keys(merged.workspace.tabs).sort(), Object.keys(ws.tabs).sort());
+});
+
+test('split-group moves only the requested group while other groups and shells share their original column', () => {
+    const ws = fresh();
+    const first = roots(ws).find(isContainer);
+    const second = addContainerTab(ws, { id: 'second', groupId: 'second' });
+    const third = addContainerTab(ws, { id: 'third', groupId: 'third' });
+    const shell = addShell(ws);
+    const split = model.applyWorkspaceAction(ws, { type: 'split-group', groupId: second.id, orientation: 'horizontal' });
+    assert.equal(split.ok, true, split.reason);
+    let plan = buildRenderPlan(split.workspace);
+    assert.equal(plan.columns.length, 2);
+    assert.deepEqual(plan.columns[0].tabItems.map(tab => tab.id), [first.id, third.id, shell.id]);
+    assert.deepEqual(plan.columns[1].tabItems.map(tab => tab.id), [second.id]);
+    const next = model.applyWorkspaceAction(split.workspace, { type: 'split-group', groupId: third.id });
+    assert.equal(next.ok, true, next.reason);
+    plan = buildRenderPlan(next.workspace);
+    assert.equal(plan.columns.length, 3);
+    assert.ok(plan.columns[0].tabItems.some(tab => tab.id === shell.id));
+    const focused = model.applyWorkspaceAction(next.workspace, { type: 'activate', tabId: shell.id });
+    const elsewhere = model.applyWorkspaceAction(focused.workspace, { type: 'activate', tabId: second.panes[0].activeTabId });
+    assert.ok(buildRenderPlan(elsewhere.workspace).columns[0].panelIds.includes(shell.id));
 });

@@ -63,21 +63,21 @@ function checkInvariants(ws) {
     const tabIds = Object.keys(ws.tabs || {});
     const containerIds = tabIds.filter(id => isContainerTab(ws.tabs[id]));
 
-    // I1：任何 shell 的 parentId === null
-    for (const id of tabIds) {
-        const tab = ws.tabs[id];
-        if (tab.kind === 'shell' && tab.parentId !== null) {
-            errors.push(`I1 shell ${id} 的 parentId 不是 null`);
+    // 多组模式中 Shell 保持根级；单组模式下允许同样的 pane 成员结构。
+    if (containerIds.length > 1) {
+        for (const id of tabIds) {
+            const tab = ws.tabs[id];
+            if (tab.kind === 'shell' && tab.parentId !== null) {
+                errors.push(`I1 shell ${id} 在多组模式下的 parentId 不是 null`);
+            }
         }
-    }
-
-    // I2：任何 panes[].tabIds 里不含 shell
-    for (const id of containerIds) {
-        for (const pane of ws.tabs[id].panes) {
-            for (const childId of pane.tabIds || []) {
-                const child = ws.tabs[childId];
-                if (child && child.kind === 'shell') {
-                    errors.push(`I2 pane ${pane.id} 里出现了 shell ${childId}`);
+        for (const id of containerIds) {
+            for (const pane of ws.tabs[id].panes) {
+                for (const childId of pane.tabIds || []) {
+                    const child = ws.tabs[childId];
+                    if (child && child.kind === 'shell') {
+                        errors.push(`I2 多组模式的 pane ${pane.id} 里出现了 shell ${childId}`);
+                    }
                 }
             }
         }
