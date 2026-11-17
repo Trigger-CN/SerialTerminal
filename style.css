@@ -9,7 +9,7 @@
     --accent-hover: #0098ff;
     /* 标签三态配色：基础灰 / 受控未聚焦暗灰 / 选中深蓝 */
     --tab-bg-base: #333333;
-    --tab-bg-control: #2a2a2a;
+    --tab-bg-control: #1a1a1a;
     --tab-bg-active: #0e3a5e;
     --border-color: #454545;
     --danger-color: #d94c4c;
@@ -2267,14 +2267,22 @@ html.custom-titlebar .window-titlebar {
     color: #fff;
 }
 
-/* 已连接的分组在标签上用小圆点标出，避免用户必须切过去才知道哪个分组在收数据。 */
-.serial-group-tab.connected::before {
+/* 连接状态指示：标签文字前的一道竖线，绿色已连接、红色未连接。
+   放在文字前而不是整块标签背景，避免和「受控 / 选中」的底色语义混在一起。
+   分组标签栏在单组模式下会整条隐藏，因此该指示同时挂在分组的主终端标签上。 */
+.serial-group-tab::before,
+.main-tab.serial-conn-indicator::before {
     content: '';
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--accent-color);
+    width: 3px;
+    height: 14px;
+    border-radius: 1px;
+    background: var(--danger-color);
     flex-shrink: 0;
+}
+
+.serial-group-tab.connected::before,
+.main-tab.serial-conn-indicator.connected::before {
+    background: var(--success-color);
 }
 
 /* 分组标签的关闭按钮：只在非默认分组上可点，默认分组的按钮置灰但保留占位，

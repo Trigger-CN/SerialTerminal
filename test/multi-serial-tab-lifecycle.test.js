@@ -89,7 +89,9 @@ for (const scenario of ['late-success', 'late-failure', 'config-echo', 'early-di
         ipcRenderer: { invoke: () => new Promise((resolve, reject) => { finish = failure ? reject : resolve; }), send: () => events.push('send') },
         serialRuntimes: { getOrCreate: () => { events.push('revived'); return { term: { write() {} } }; } },
         chartTabsStore: { getList: () => [] }, setActionStatus: () => events.push('status'), alert: () => events.push('alert'),
-        refreshConnectButtonState: () => events.push('refresh') });
+        refreshConnectButtonState: () => events.push('refresh'),
+        // 连接成功后 renderer 会刷新分组标签与主标签的连接指示；本用例只关心连接生命周期。
+        renderSerialGroupTabBar: () => events.push('tabs'), syncAllGroupMainTabTitles: () => events.push('titles') });
     load(context, 'clearSerialGroupAsyncState');
     const start = source.indexOf('async function connectSerialFromUi(');
     vm.runInContext(source.slice(start, source.indexOf('\n}', start) + 2), context);

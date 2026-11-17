@@ -246,6 +246,8 @@ test('production root reconciliation restores mixed group and Shell order after 
     const byId = new Map(buttons.map(button => [button.id, button]));
     Object.assign(f.context, { activeGroupId: 'g1', serialGroups: [{ id: 'g1' }, { id: 'g2' }],
         getGroupTabList: () => list, getSerialGroupById: () => ({}),
+        // 分组标签的连接指示现在取自注册表真相源；本用例只验证按钮顺序。
+        isGroupConnected: () => false,
         describeGroupTab: group => ({ buttonId: group.id }), updateGroupTabButtonState() {},
         getPaneTabsList: () => null, syncSerialGroupAddButtonLayer() {}, syncShellAddButtonVisibility() {}, placeGroupAddButton() {}, placeShellAddButton() {} });
     f.context.document.querySelector = selector => byId.get(/data-target="([^"]+)"/.exec(selector)?.[1]);

@@ -4680,6 +4680,9 @@ function syncAllGroupMainTabTitles() {
         }
         button.removeAttribute('data-i18n');
         button.title = title;
+        // 单组模式下分组标签栏整条隐藏，连接指示只能挂在它自己的主终端标签上。
+        button.classList.add('serial-conn-indicator');
+        button.classList.toggle('connected', isGroupConnected(group.id));
     });
 }
 
@@ -5050,7 +5053,7 @@ function reconcileButtons(plan) {
                     id: tab.id,
                     title: tab.title,
                     active: tab.id === activeGroupId,
-                    connected: getSerialGroupById(tab.id)?.status === 'connected'
+                    connected: isGroupConnected(tab.id)
                 }, {
                     isDefault: tab.id === REGISTRY_DEFAULT_GROUP_ID
                 });
@@ -9058,6 +9061,9 @@ function disconnectSerial(groupId = REGISTRY_DEFAULT_GROUP_ID) {
         });
     }
     refreshConnectButtonState();
+    // 连接状态变了，分组标签的指示竖线要立刻跟着变色。
+    renderSerialGroupTabBar();
+    syncAllGroupMainTabTitles();
     ipcRenderer.send('disconnect-serial', { groupId: targetGroupId });
 }
 
@@ -9111,6 +9117,9 @@ ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
     }
     // 侧栏连接按钮显示的是激活分组，任何一组断开都要重算。
     refreshConnectButtonState();
+    // 被动断开（设备拔掉/出错）同样要刷新分组标签的连接指示。
+    renderSerialGroupTabBar();
+    syncAllGroupMainTabTitles();
     const runtime = serialRuntimes.get(groupId);
     if (message && runtime) {
         const notice = `\r\n\x1b[33m[INFO] ${message}\x1b[0m\r\n`;
@@ -9506,6 +9515,9 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
         }
         // 侧栏按钮显示的是**激活分组**的连接态，无论刚连的是哪一组都要重算。
         refreshConnectButtonState();
+        // 连接成功后分组标签的指示竖线要立刻变绿。
+        renderSerialGroupTabBar();
+        syncAllGroupMainTabTitles();
 
         serialGroupContext.resetLineCounters(targetGroupId);
 
