@@ -26,6 +26,7 @@ function serializeWorkspaceLayout(ws) {
 
 function restoreWorkspaceLayout(baseline, saved) {
     const ws = copy(baseline);
+    model.normalizeSerialOwnership(ws, { discardUnknownOwners: true });
     if (!saved || saved.version !== VERSION) return ws;
     const groups = Object.values(ws.tabs).filter(model.isContainer);
     const groupIds = new Set(groups.map(group => group.id));
@@ -35,7 +36,7 @@ function restoreWorkspaceLayout(baseline, saved) {
     const sourceGroups = list(saved.groups);
     const rootItems = list(saved.roots);
     const rootIds = new Set(rootItems.map(item => item?.tabId));
-    const owner = tab => tab.ownerGroupId || baseline.tabs[tab.id]?.parentId;
+    const owner = tab => tab.ownerGroupId || tab.parentId;
     const allowed = (id, group) => {
         const tab = ws.tabs[id];
         return tab && !model.isContainer(tab) && !claimed.has(id)
@@ -128,6 +129,9 @@ function restoreWorkspaceLayout(baseline, saved) {
     }
     model.rebuildIndex(ws);
     ws.focusedTabId = ws.tabs[saved.focusedTabId] ? saved.focusedTabId : groups[0]?.panes[0]?.activeTabId || null;
+    const focusedPane = model.paneOfTab(ws, ws.tabs[ws.focusedTabId]);
+    if (focusedPane) focusedPane.container.activePaneId = focusedPane.pane.id;
+    if (!model.buildRenderPlan(ws).panelIds.includes(ws.focusedTabId)) model.activateTab(ws, ws.focusedTabId);
     const columns = model.layoutColumns(ws);
     ws.split.sizes = ws.split.enabled && Object.keys(saved.split?.sizes || {}).length
         ? model.normalizeSizes(saved.split.sizes, columns.map(column => column.id)) : {};

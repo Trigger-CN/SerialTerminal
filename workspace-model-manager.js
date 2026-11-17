@@ -41,11 +41,11 @@ function createWorkspaceModelManager({ groupId, getWorkspace, dispatch, persistL
         if (!options || !apply({ type: 'add-leaf', groupId, paneId: target.id, options, activate }, persist)) return null;
         return target.id;
     }
-    function move(tabId, targetPaneId, { insertionIndex = null } = {}) {
+    function move(tabId, targetPaneId, { insertionIndex = null, activate = true } = {}) {
         const sourcePaneId = paneForTab(tabId)?.id || null;
         const target = panes().find(pane => pane.id === targetPaneId);
         if (!target) return false;
-        if (!apply({ type: 'move', tabId, target: { kind: 'pane', groupId, paneId: targetPaneId,
+        if (!apply({ type: 'move', tabId, activate, target: { kind: 'pane', groupId, paneId: targetPaneId,
             index: insertionIndex === null ? target.tabIds.length : insertionIndex } })) return false;
         onTabMoved?.({ tabId, sourcePaneId, targetPaneId });
         return true;

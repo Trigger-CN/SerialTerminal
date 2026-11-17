@@ -651,6 +651,47 @@ function rebuildIndex(ws) {
     }
 }
 
+// 业务 owner 优先于旧布局位置；仅在导入/事务边界收回异常串口叶。
+function normalizeSerialOwnership(ws, { discardUnknownOwners = false } = {}) {
+    const groups = Object.values(ws.tabs).filter(isContainer);
+    for (const leaf of Object.values(ws.tabs)) {
+        if (!['main', 'filter', 'chart'].includes(leaf.kind) || isContainer(leaf)) continue;
+        if (leaf.ownerGroupId != null && !groups.some(group => group.id === leaf.ownerGroupId)) {
+            if (!discardUnknownOwners) throw new Error(`串口标签 owner 无效: ${leaf.id}`);
+            for (const group of groups) {
+                for (const pane of group.panes) pane.tabIds = pane.tabIds.filter(id => id !== leaf.id);
+            }
+            delete ws.tabs[leaf.id];
+            continue;
+        }
+        const membership = groups.find(group => group.panes.some(pane => pane.tabIds.includes(leaf.id)));
+        const owner = groups.find(group => group.id === leaf.ownerGroupId)
+            || membership || groups.find(group => group.id === leaf.parentId) || groups[0];
+        if (!owner) continue;
+        leaf.ownerGroupId = owner.id;
+        let claimed = false;
+        for (const group of groups) {
+            for (const pane of group.panes) {
+                pane.tabIds = pane.tabIds.filter(id => {
+                    if (id !== leaf.id) return true;
+                    if (group !== owner || claimed) return false;
+                    claimed = true;
+                    return true;
+                });
+            }
+        }
+        if (!claimed) owner.panes[0].tabIds.push(leaf.id);
+    }
+    for (const group of groups) {
+        for (const pane of group.panes.slice()) {
+            if (!pane.tabIds.length) removeEmptyPane(group, pane);
+            if (!pane.tabIds.includes(pane.activeTabId)) pane.activeTabId = pane.tabIds[0] || null;
+        }
+        if (!group.panes.some(pane => pane.id === group.activePaneId)) group.activePaneId = group.panes[0]?.id;
+    }
+    rebuildIndex(ws);
+}
+
 // ---------------------------------------------------------------------------
 // 创建
 // ---------------------------------------------------------------------------
@@ -929,7 +970,7 @@ function removeEmptyPane(container, pane) {
     return true;
 }
 
-function moveTabToPane(ws, tabId, groupId, paneId, index) {
+function moveTabToPane(ws, tabId, groupId, paneId, index, activate = true) {
     const tab = tabOf(ws, tabId);
     const container = tabOf(ws, groupId);
     if (!tab || isContainer(tab) || !isContainer(container)) return false;
@@ -937,6 +978,8 @@ function moveTabToPane(ws, tabId, groupId, paneId, index) {
     if (!pane) return false;
     const groupCount = roots(ws).filter(isContainer).length;
     const source = paneOfTab(ws, tab);
+    // 搬迁当前焦点时保留身份，也必须让它在新格中可见。
+    activate = activate || ws.focusedTabId === tabId;
     if (tab.kind === 'shell' && groupCount > 1) return false;
     if (groupCount > 1 && (!source || source.container.id !== container.id)) return false;
     if (!source && groupCount > 1) return false;
@@ -945,7 +988,7 @@ function moveTabToPane(ws, tabId, groupId, paneId, index) {
         pane.tabIds.splice(from, 1);
         const at = Math.max(0, Math.min(index | 0, pane.tabIds.length));
         pane.tabIds.splice(at, 0, tabId);
-        pane.activeTabId = tabId;
+        return true;
     } else {
         if (source) {
             source.pane.tabIds.splice(source.pane.tabIds.indexOf(tabId), 1);
@@ -958,15 +1001,15 @@ function moveTabToPane(ws, tabId, groupId, paneId, index) {
         }
         const at = Math.max(0, Math.min(index | 0, pane.tabIds.length));
         pane.tabIds.splice(at, 0, tabId);
-        pane.activeTabId = tabId;
+        if (activate || !pane.activeTabId) pane.activeTabId = tabId;
     }
     if (tab.kind === 'shell') {
         tab.hostGroupId = null;
         tab.hostPaneId = null;
         tab.columnMode = 'row';
     }
-    ws.focusedTabId = tabId;
-    return true;
+    rebuildIndex(ws);
+    return activate ? activateTab(ws, tabId) : true;
 }
 
 function moveTabToRoots(ws, tabId, columnId, index) {
@@ -974,7 +1017,7 @@ function moveTabToRoots(ws, tabId, columnId, index) {
     if (!tab || isContainer(tab)) return false;
     const containers = roots(ws).filter(isContainer);
     const source = paneOfTab(ws, tab);
-    if (containers.length > 1 && tab.kind !== 'shell') return false;
+    if (tab.kind !== 'shell') return false;
     if (source) {
         if (source.pane.tabIds.length === 1 && source.container.panes.length === 1) return false;
         source.pane.tabIds.splice(source.pane.tabIds.indexOf(tabId), 1);
@@ -1006,9 +1049,9 @@ function moveTabToRoots(ws, tabId, columnId, index) {
     return true;
 }
 
-function moveTab(ws, tabId, target) {
+function moveTab(ws, tabId, target, activate = true) {
     if (!target || typeof target !== 'object') return false;
-    if (target.kind === 'pane') return moveTabToPane(ws, tabId, target.groupId, target.paneId, target.index);
+    if (target.kind === 'pane') return moveTabToPane(ws, tabId, target.groupId, target.paneId, target.index, activate);
     if (target.kind === 'roots') return moveTabToRoots(ws, tabId, target.columnId, target.index);
     return false;
 }
@@ -1095,6 +1138,7 @@ function applyWorkspaceAction(ws, action) {
     let next;
     try {
         next = cloneWorkspace(ws);
+        normalizeSerialOwnership(next);
         const target = action.tabId ? tabOf(next, action.tabId) : null;
         let changed = false;
         switch (action.type) {
@@ -1134,7 +1178,8 @@ function applyWorkspaceAction(ws, action) {
                     leaf.columnId = container.id;
                     leaf.columnMode = 'row';
                 }
-                if (action.activate !== false) next.focusedTabId = leaf.id;
+                rebuildIndex(next);
+                if (action.activate !== false) activateTab(next, leaf.id);
                 changed = true;
                 break;
             }
@@ -1146,12 +1191,12 @@ function applyWorkspaceAction(ws, action) {
                         removeEmptyPaneAfterClose(next, hit, target.id);
                         changed = true;
                     } else {
-                        changed = closeTab(next, target.id);
+                        changed = closeTab(next, target.id, { fallbackTabId: action.fallbackTabId });
                     }
                 }
                 break;
             case 'move':
-                changed = moveTab(next, action.tabId, action.target);
+                changed = moveTab(next, action.tabId, action.target, action.activate !== false);
                 break;
             case 'split-tab': {
                 const container = tabOf(next, action.groupId);
@@ -1165,7 +1210,7 @@ function applyWorkspaceAction(ws, action) {
                 const sourceIndex = source ? container.panes.indexOf(source.pane) : container.panes.length - 1;
                 const insertionIndex = action.before === true ? Math.max(0, sourceIndex) : sourceIndex + 1;
                 container.panes.splice(insertionIndex, 0, pane);
-                changed = moveTabToPane(next, target.id, container.id, pane.id, 0);
+                changed = moveTabToPane(next, target.id, container.id, pane.id, 0, action.activate !== false);
                 if (!changed) break;
                 container.paneSplit.enabled = true;
                 container.paneSplit.orientation = action.orientation === 'vertical' ? 'vertical' : 'horizontal';
@@ -1315,6 +1360,7 @@ function applyWorkspaceAction(ws, action) {
         }
         if (!changed) return { ok: false, workspace: original, reason: `动作被拒绝: ${action.type}` };
         rebuildIndex(next);
+        if (next.focusedTabId !== original.focusedTabId) activateTab(next, next.focusedTabId);
         const repaired = validateAndRepair(next);
         if (!repaired.ok || repaired.fatal) {
             return { ok: false, workspace: original, reason: '工作区验证失败' };
@@ -1351,7 +1397,7 @@ function ensurePaneHasLeaf(ws, pane) {
     pane.activeTabId = leaf.id;
 }
 
-function closeTab(ws, tabId) {
+function closeTab(ws, tabId, { fallbackTabId } = {}) {
     const tab = tabOf(ws, tabId);
     if (!tab) return false;
 
@@ -1368,7 +1414,11 @@ function closeTab(ws, tabId) {
     if (!hit) {
         // 根级叶（例如 shell）
         delete ws.tabs[tab.id];
-        if (ws.focusedTabId === tab.id) ws.focusedTabId = fallbackFocus(ws);
+        if (ws.focusedTabId === tab.id) {
+            const fallback = tabOf(ws, fallbackTabId);
+            const nextId = tab.kind === 'shell' && fallback && !isContainer(fallback) ? fallback.id : fallbackFocus(ws);
+            activateTab(ws, nextId);
+        }
         rebuildIndex(ws);
         return true;
     }
@@ -1577,6 +1627,7 @@ module.exports = {
     buildRenderPlan,
     withDiagnostics,
     rebuildIndex,
+    normalizeSerialOwnership,
     nextId,
     resetIdSeq,
     createLeaf,

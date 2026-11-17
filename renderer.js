@@ -131,6 +131,9 @@ const quickTriggerDecoders = new Map();
 const quickTriggerBuffers = new Map();
 let appliedHexSettingsKey = '';
 const serialWriteChains = new Map();
+const serialConnectRequests = new Map();
+let serialConnectRequestSequence = 0;
+const serialConnectionSessions = new Map();
 let serialSessionId = 0;
 // P2：分组上下文。首版只注册 default 一个分组，但字节分发的判定已经走注册表，
 // 后续添加分组时不需要再改这条链路。
@@ -1607,7 +1610,8 @@ function clearTerminalByTabId(tabId) {
         serialOutputBuckets.clear(groupId);
         return;
     }
-    const filterTab = filterTabs.find(t => t.id === tabId);
+    const ownerGroupId = groupIdForWorkspaceTab(tabId);
+    const filterTab = ownerGroupId ? filterTabsStore.getList(ownerGroupId).find(t => t.id === tabId) : null;
     if (filterTab) {
         clearTerminalOutput(filterTab.term);
         filterTab.contextLine = null;
@@ -2036,6 +2040,8 @@ function createSerialRuntime(groupId) {
         dataParser,
         container,
         dispose() {
+            unobserveTerminalSearchChanges(term);
+            dataParser.reset();
             try {
                 term.dispose();
             } catch (error) {
@@ -4750,10 +4756,16 @@ function renderSerialGroupTabBar() {
 // 重入闸：收敛过程中会调用布局层的 ensurePaneElements / setActivePane，它们可能再请求
 // 一次渲染。合并到当前这一轮，避免「渲染 → 布局回调 → 再渲染」的递归环。
 let isRenderingWorkspace = false;
+let lastNotifiedWorkspaceFocus = null;
 
 // 请求一次完整渲染。所有交互只调它，不自己动 DOM。
 function renderWorkspaceNow() {
     renderWorkspace(workspaceTabState());
+    const tabId = workspaceModel?.focusedTabId || focusedWorkspaceTabId;
+    if (tabId !== lastNotifiedWorkspaceFocus) {
+        lastNotifiedWorkspaceFocus = tabId;
+        window.dispatchEvent(new CustomEvent('workspace-focus-changed', { detail: { tabId } }));
+    }
 }
 
 function renderWorkspace(ws) {
@@ -5818,12 +5830,16 @@ function closeSerialGroup(groupId, { confirm = true } = {}) {
         return false;
     }
 
-    if (workspaceModel && !dispatchWorkspaceAction({ type: 'remove-group', groupId: id }).ok) return false;
+    const removalResult = workspaceModel ? tabModel.applyWorkspaceAction(workspaceModel, { type: 'remove-group', groupId: id }) : null;
+    if (removalResult && !removalResult.ok) return false;
+    const wasControlGroup = activeGroupId === id;
+    const nextControlGroupId = resolveGroupAfterClose(serialGroups, id, activeGroupId);
     if (persistFilterTabsTimers.has(id)) {
         clearTimeout(persistFilterTabsTimers.get(id));
         persistFilterTabsTimers.delete(id);
     }
     ipcRenderer.send('disconnect-serial', { groupId: id });
+    destroySerialGroupResources(id);
     const tabId = mainTabId(id);
     const buttonId = mainTabButtonId(id);
     const containerId = serialContainerId(id);
@@ -5863,16 +5879,17 @@ function closeSerialGroup(groupId, { confirm = true } = {}) {
     // 否则 querySelector 再也找不到那些节点，标签会静默消失。
     // （历史缺陷：关掉一个分组后，原本停在它列首行的未归属 Shell 全部不见。）
 
-    // 关掉的正好是当前激活分组时，别名还指着已释放的布局，先切回默认分组。
-    if (activeGroupId === id) setActiveGroupWorkspace(REGISTRY_DEFAULT_GROUP_ID);
-    removeTabFromWorkspace(tabId, { fallbackTabId: mainTabId(REGISTRY_DEFAULT_GROUP_ID), persist: false });
+    if (!workspaceModel) removeTabFromWorkspace(tabId, { fallbackTabId: mainTabId(REGISTRY_DEFAULT_GROUP_ID), persist: false });
 
-    const previousGroups = serialGroups;
     const removal = removeSerialGroup(serialGroups, id);
     serialGroups = removal.groups;
     if (!serialGroups.length) serialGroups = [createDefaultSerialGroupState()];
-    activeGroupId = resolveGroupAfterClose(previousGroups, id, activeGroupId);
-    if (!activeGroupId) activeGroupId = serialGroups[0].id;
+    activeGroupId = nextControlGroupId || serialGroups[0].id;
+    if (removalResult) {
+        workspaceModel = removalResult.workspace;
+        focusedWorkspaceTabId = workspaceModel.focusedTabId;
+    }
+    if (wasControlGroup) applyActiveSerialGroup({ fit: false, activateTab: false });
 
     persistSerialGroups();
     // 分屏集合里可能还列着刚关掉的分组；不清掉会留下一条指向已删除列的比例，
@@ -6207,7 +6224,8 @@ function createShellTab(initialState = {}, targetPaneId = null) {
 function closeShellTab(tabId) {
     const index = shellTabs.findIndex(t => t.id === tabId);
     if (index === -1) return;
-    if (workspaceModel && !dispatchWorkspaceAction({ type: 'close', tabId }).ok) return;
+    const fallbackTabId = getGroupActiveTabId(activeGroupId, mainTabId(activeGroupId));
+    if (workspaceModel && !dispatchWorkspaceAction({ type: 'close', tabId, fallbackTabId }).ok) return;
     const tab = shellTabs[index];
     tab.closed = true;
     if (tab.sessionCreateTimer !== null) {
@@ -6227,8 +6245,8 @@ function closeShellTab(tabId) {
     updateTabTitles();
     // 独立列是否还存在、要不要拆，全由 renderWorkspace 按 plan 决定。
     renderWorkspaceNow();
-    // 关掉的正好是当前显示的 Shell：把焦点抬回本分组的主终端。
-    if (!focusedWorkspaceTabId) {
+    // 启动兼容路径没有模型时才补回退；活动模型已在 close 事务内选择。
+    if (!workspaceModel && !focusedWorkspaceTabId) {
         const fallbackTabId = mainTabId(activeGroupId);
         if (document.getElementById(fallbackTabId)) setFocusedTab(fallbackTabId);
     }
@@ -6602,36 +6620,65 @@ function createFilterTab(initialState = {}, targetPaneId = null) {
     }
     
     // Fit terminal after a short delay to ensure DOM is rendered
-    setTimeout(() => {
-        fitAddon.fit();
+    tabState.fitTimer = setTimeout(() => {
+        tabState.fitTimer = null;
+        if (!tabState.closed) fitAddon.fit();
     }, 50);
+}
+
+function destroyFilterTab(tab) {
+    if (tab.closed) return;
+    tab.closed = true;
+    const cleanup = [
+        () => { if (tab.fitTimer != null) clearTimeout(tab.fitTimer); },
+        () => ipcRenderer.send('flush-tab-log', { tabId: tab.id }),
+        () => unobserveTerminalSearchChanges(tab.term),
+        () => { if (tab.outsideClickListener) document.removeEventListener('click', tab.outsideClickListener); },
+        () => tab.term.dispose(), () => tab.element.remove(), () => tab.btn.remove()
+    ];
+    cleanup.forEach(release => {
+        try { release(); } catch (error) { console.error(`Failed to destroy filter ${tab.id}:`, error); }
+    });
+}
+
+function clearSerialGroupAsyncState(groupId) {
+    serialConnectRequests.delete(groupId);
+    serialConnectionSessions.delete(groupId);
+    serialWriteChains.delete(groupId);
+    serialConnectingGroups.delete(groupId);
+    serialReconnectingGroups.delete(groupId);
+    resetQuickTriggerReceive(groupId);
+    const waiters = serialDisconnectWaiters.get(groupId);
+    serialDisconnectWaiters.delete(groupId);
+    waiters?.forEach(resolve => resolve(false));
+}
+
+function destroySerialGroupResources(groupId) {
+    if (serialRuntimes.get(groupId)) {
+        if (getGroupDisplay(groupId).receiveDisplayMode === 'hex') getHexFormatter(groupId).flush();
+        else flushTextReceive(groupId);
+    }
+    filterTabsStore.getList(groupId).forEach(destroyFilterTab);
+    chartTabsStore.getList(groupId).forEach(destroyChartTab);
+    filterTabsStore.getList(groupId).length = 0;
+    chartTabsStore.getList(groupId).length = 0;
+    ipcRenderer.send('flush-tab-log', { tabId: mainTabId(groupId) });
+    clearSerialGroupAsyncState(groupId);
+    if (groupId !== REGISTRY_DEFAULT_GROUP_ID) serialInputBoundGroups.delete(groupId);
 }
 
 function closeFilterTab(tabId) {
     const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
     const tabs = filterTabsStore.getList(groupId);
     const index = tabs.findIndex(t => t.id === tabId);
-    if (index > -1) {
-        const tab = tabs[index];
-        ipcRenderer.send('flush-tab-log', { tabId });
-        unobserveTerminalSearchChanges(tab.term);
-        tab.term.dispose();
-        if (tab.outsideClickListener) {
-            document.removeEventListener('click', tab.outsideClickListener);
-        }
-        tab.element.remove();
-        tab.btn.remove();
-        tabs.splice(index, 1);
-        const { paneId, nextActiveTabId } = getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
-        persistFilterTabs({ groupId });
-        
-        updateTabTitles();
-
-        const nextId = nextActiveTabId || mainTabId(groupId);
-        switchPaneTab(getTabPaneId(nextId), nextId, { persist: false });
-        persistGroupWorkspaceLayout(groupId);
-        setActionStatus('已关闭过滤标签页');
-    }
+    if (index < 0) return;
+    destroyFilterTab(tabs[index]);
+    tabs.splice(index, 1);
+    getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
+    persistFilterTabs({ groupId });
+    updateTabTitles();
+    persistGroupWorkspaceLayout(groupId);
+    setActionStatus('已关闭过滤标签页');
 }
 
 const persistFilterTabsTimers = new Map();
@@ -7060,25 +7107,31 @@ function createChartTab(initialState = {}, targetPaneId = null) {
     return tab;
 }
 
+function destroyChartTab(tab) {
+    if (tab.closed) return;
+    tab.closed = true;
+    const cleanup = [
+        () => { if (tab.renderFrame !== null) cancelAnimationFrame(tab.renderFrame); tab.renderFrame = null; },
+        () => { if (chartSettingsState === tab) closeChartSettings(); },
+        () => { if (chartExportState === tab) closeChartExport(); },
+        () => tab.stream?.dispose(), () => tab.parserWorker?.close(), () => tab.view?.destroy(),
+        () => tab.element.remove(), () => tab.btn.remove()
+    ];
+    cleanup.forEach(release => {
+        try { release(); } catch (error) { console.error(`Failed to destroy chart ${tab.id}:`, error); }
+    });
+}
+
 function closeChartTab(tabId) {
     const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
     const tabs = chartTabsStore.getList(groupId);
     const index = tabs.findIndex(tab => tab.id === tabId);
     if (index < 0) return;
-    const tab = tabs[index];
-    tab.closed = true;
-    if (tab.renderFrame !== null) cancelAnimationFrame(tab.renderFrame);
-    tab.stream?.dispose();
-    tab.parserWorker?.close();
-    tab.view?.destroy();
-    tab.element.remove();
-    tab.btn.remove();
+    destroyChartTab(tabs[index]);
     tabs.splice(index, 1);
-    const { nextActiveTabId } = getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
+    getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
     persistChartTabs(groupId);
     updateTabTitles();
-    const nextId = nextActiveTabId || mainTabId(groupId);
-    switchPaneTab(getTabPaneId(nextId), nextId, { persist: false });
     persistGroupWorkspaceLayout(groupId);
 }
 
@@ -7181,6 +7234,8 @@ async function discoverChartDialogFields() {
 }
 
 function openChartSettings(tab) {
+    if (!tab || tab.closed) return;
+    chartDiscoveryRequest++;
     chartSettingsState = tab;
     chartParserMode.value = tab.parserMode;
     chartEncoding.value = tab.encoding;
@@ -7263,11 +7318,12 @@ async function saveChartSettings() {
             throw new Error(tr('main.chartSampleInvalid'));
         }
     } catch (error) {
+        if (tab.closed || tab !== chartSettingsState) return;
         chartSampleStatus.textContent = error.message;
         chartSampleStatus.className = 'input-validation invalid';
         return;
     }
-    if (tab !== chartSettingsState) return;
+    if (tab.closed || tab !== chartSettingsState) return;
     tab.parserMode = chartParserMode.value;
     tab.encoding = chartEncoding.value;
     tab.lineMarker = chartLineMarker.value;
@@ -7377,29 +7433,9 @@ function bindWorkspaceContentActivation() {
 
 window.addEventListener('main-tab-changed', (e) => {
     const tabId = e.detail.tabId;
-    const paneId = e.detail.paneId || getPaneIdForTabId(tabId);
     setTimeout(() => {
-        if (tabId === 'tab-main') {
-            serialFitAddon.fit();
-        } else {
-            const tab = filterTabs.find(t => t.id === tabId);
-            if (tab) {
-                tab.fitAddon.fit();
-            } else {
-                const shellTab = getShellTabState(tabId);
-                if (shellTab) {
-                    shellTab.fitAddon.fit();
-                    ipcRenderer.send('resize-shell-tab', { tabId: shellTab.id, cols: shellTab.term.cols, rows: shellTab.term.rows });
-                } else {
-                    const chartTab = getChartTabState(tabId);
-                    if (chartTab) {
-                        chartTab.view?.resize();
-                        scheduleChartRender(chartTab);
-                    }
-                }
-            }
-        }
-        setActivePane(paneId, { persist: false });
+        if (workspaceModel && !tabModel.buildRenderPlan(workspaceModel).panelIds.includes(tabId)) return;
+        fitWorkspaceTerminals();
     }, 0);
 });
 
@@ -7479,6 +7515,7 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
     }
     // 发送编码与换行模式按**写入目标分组**取：两个分组可以各用一种发送编码，
     // 不能用默认分组的缓存值。
+    const targetRegistry = serialGroupRegistry.getGroup(targetGroupId);
     const targetDisplay = getGroupDisplay(targetGroupId);
     const profileRequest = {
         ...request,
@@ -7501,13 +7538,14 @@ async function sendSerialRequest(request, maxBytes = SEND_LIMITS.main, { silent 
             newlineMode: request.newlineMode || targetDisplay.newlineMode, sessionId: requestSessionId
         };
         const pendingWrite = (serialWriteChains.get(targetGroupId) || Promise.resolve()).then(() => {
-            if (!isGroupConnected(targetGroupId) || requestSessionId !== getGroupSessionId(targetGroupId)) {
+            if (serialGroupRegistry.getGroup(targetGroupId) !== targetRegistry || !isGroupConnected(targetGroupId) || requestSessionId !== getGroupSessionId(targetGroupId)) {
                 return { ok: false, code: 'STALE_SERIAL_SESSION', message: 'Serial connection has changed' };
             }
             return ipcRenderer.invoke('serial-write', writeRequest);
         });
         serialWriteChains.set(targetGroupId, pendingWrite.catch(() => undefined));
         const result = await pendingWrite;
+        if (serialGroupRegistry.getGroup(targetGroupId) !== targetRegistry || requestSessionId !== getGroupSessionId(targetGroupId)) return { ok: false, code: 'STALE_SERIAL_SESSION' };
         if (result.ok && profileRequest.mode === 'text' && scrollToBottomOnSend) scrollMainTerminalToBottom(targetGroupId);
         if (result.ok) {
             renderSentRecord({
@@ -8379,9 +8417,15 @@ function restoreWorkspaceConfig(config) {
         shellTabs.slice().forEach(tab => closeShellTab(tab.id));
         serialGroups.slice().forEach(group => {
             ipcRenderer.send('disconnect-serial', { groupId: group.id });
-            filterTabsStore.getList(group.id).slice().forEach(tab => closeFilterTab(tab.id));
-            chartTabsStore.getList(group.id).slice().forEach(tab => closeChartTab(tab.id));
             if (group.id !== REGISTRY_DEFAULT_GROUP_ID) closeSerialGroup(group.id, { confirm: false });
+            else {
+                destroySerialGroupResources(group.id);
+                serialGroupRegistry.invalidateSession(group.id);
+                resetTextReceive(group.id);
+                serialOutputBuckets.clear(group.id);
+                serialTerm.clear();
+                bindGroupTerminalInput(group.id);
+            }
         });
         workspaceModel = null;
         groupWorkspaceManagers.clear();
@@ -8821,6 +8865,8 @@ ipcRenderer.on('serial-output-bytes', (event, payload = {}) => {
 });
 ipcRenderer.on('serial-error', (event, err, meta = {}) => {
     const groupId = resolveSerialGroupId(meta?.groupId);
+    if (!getSerialGroupById(groupId)) return;
+    if (Number.isInteger(meta.sessionId) && serialConnectionSessions.get(groupId) !== meta.sessionId) return;
     const runtime = serialRuntimes.get(groupId);
     if (!runtime) return;
     const errMsg = '\r\n\x1b[31m[ERROR] ' + err + '\x1b[0m\r\n';
@@ -8965,6 +9011,8 @@ function updateSerialConnectionState(connected) {
 // 用 activeGroupId 会触发 TDZ。真正「当前分组」的调用点在 toggleSerialConnection 里显式传入。
 function disconnectSerial(groupId = REGISTRY_DEFAULT_GROUP_ID) {
     const targetGroupId = resolveSerialGroupId(groupId);
+    serialConnectRequests.delete(targetGroupId);
+    serialConnectingGroups.delete(targetGroupId);
     const isDefaultGroup = targetGroupId === REGISTRY_DEFAULT_GROUP_ID;
     // 递增会话号作废迟到的数据，同时让分组注册表同步失效（否则注册表仍认为旧会话有效）。
     const nextSessionId = serialGroupRegistry.invalidateSession(targetGroupId);
@@ -9007,6 +9055,14 @@ function waitForSerialDisconnected(groupId = REGISTRY_DEFAULT_GROUP_ID) {
 
 ipcRenderer.on('serial-disconnected', (event, message, meta = {}) => {
     const groupId = resolveSerialGroupId(meta?.groupId);
+    if (!getSerialGroupById(groupId) || !serialGroupRegistry.getGroup(groupId)) return;
+    const matchesRequest = meta.requestId !== undefined && serialConnectRequests.get(groupId) === meta.requestId;
+    const matchesSession = Number.isInteger(meta.sessionId) && serialConnectionSessions.get(groupId) === meta.sessionId;
+    if ((meta.requestId !== undefined || Number.isInteger(meta.sessionId)) && !matchesRequest && !matchesSession) return;
+    if (matchesRequest || !serialConnectRequests.has(groupId)) {
+        serialConnectRequests.delete(groupId);
+        serialConnectingGroups.delete(groupId);
+    }
     const isDefaultGroup = groupId === REGISTRY_DEFAULT_GROUP_ID;
     serialGroupRegistry.invalidateSession(groupId);
     serialWriteChains.delete(groupId);
@@ -9264,15 +9320,8 @@ portSelect.addEventListener('change', () => {
 
 // 优先清空焦点终端；没有焦点时回落到当前控制组的激活终端。
 function clearActiveTerminal() {
-    // 「当前终端」= 焦点所在的那个标签。焦点是模型状态（focusedWorkspaceTabId），
-    // 而「哪一列可见 / 哪一行亮」全部由它派生——不再去问「上层 Shell 是否盖住了主标签」，
-    // 那套叠层机制已随本次翻转整体删除。
-    if (focusedWorkspaceTabId) {
-        clearTerminalByTabId(focusedWorkspaceTabId);
-        return;
-    }
-    const { tabId: activeTabId } = getGroupActiveTabInfo(activeGroupId);
-    if (activeTabId) clearTerminalByTabId(activeTabId);
+    const target = getCurrentTerminalTarget();
+    if (target.term) clearTerminalByTabId(target.id);
 }
 
 // 侧栏「清空所有 Log 标签页」的清理范围必须按分组展开。
@@ -9303,41 +9352,34 @@ openLogFolderBtn.addEventListener('click', () => {
     setActionStatus('已打开日志文件夹');
 });
 
-// 侧栏「保存当前标签」同理必须按激活分组取终端与标签列表。
-//
-// 切到 g-1 后点保存，存下来的会是默认分组的主终端内容——日志文件名也错。
-function getActiveTerminalExport() {
-    const groupId = activeGroupId;
-    const activeTabId = getGroupActiveTabId(groupId);
-    let content;
-    let title;
-    if (activeTabId === mainTabId(groupId)) {
-        title = getMainTabTitle(groupId);
-        content = getTerminalPlainText(getSerialTerm(groupId));
-    } else {
-        const filterTab = filterTabsStore.getList(groupId).find(tab => tab.id === activeTabId);
-        const shellTab = filterTab ? null : getShellTabState(activeTabId);
-        if (filterTab) {
-            title = getFilterTabLogTitle(filterTab);
-            content = getTerminalPlainText(filterTab.term);
-        } else if (shellTab) {
-            title = shellTab.title || getShellTabLogTitle(shellTab);
-            content = getTerminalPlainText(shellTab.term);
+// 当前终端操作只解析全局焦点；控制组继续独立负责串口设置和发送。
+function getCurrentTerminalTarget() {
+    const id = workspaceModel?.focusedTabId || focusedWorkspaceTabId || getGroupActiveTabId(activeGroupId);
+    const shell = getShellTabState(id);
+    if (shell) return { id, kind: 'shell', groupId: null, label: shell.title || getShellTabLogTitle(shell), term: shell.term, addon: shell.searchAddon };
+    for (const group of serialGroups) {
+        if (id === mainTabId(group.id)) {
+            const runtime = serialRuntimes.get(group.id);
+            return { id, kind: 'main', groupId: group.id, label: getMainTabTitle(group.id), term: runtime?.term || null, addon: runtime?.searchAddon || null };
         }
+        const filter = filterTabsStore.getList(group.id).find(tab => tab.id === id);
+        if (filter) return { id, kind: 'filter', groupId: group.id, label: getFilterTabLogTitle(filter), term: filter.term, addon: filter.searchAddon };
+        const chart = chartTabsStore.getList(group.id).find(tab => tab.id === id);
+        if (chart) return { id, kind: 'chart', groupId: group.id, label: chart.title || id, term: null, addon: null };
     }
-    // 非默认分组可能还没有自己的终端（惰性创建）。此时 getSerialTerm 会静默回落到默认
-    // 分组的终端，存下来的就是另一个分组的内容——宁可存空，也不能存错。
-    if (content === undefined) {
-        const runtime = serialRuntimes.get(groupId);
-        title = title || getMainTabTitle(groupId);
-        content = runtime ? getTerminalPlainText(runtime.term) : '';
-    }
-    return { title, content };
+    return { id, kind: null, groupId: null, label: id || '', term: null, addon: null };
+}
+
+function getActiveTerminalExport() {
+    const target = getCurrentTerminalTarget();
+    return target.term ? { title: target.label, content: getTerminalPlainText(target.term) } : null;
 }
 
 document.getElementById('save-current-tab-btn').addEventListener('click', async () => {
     try {
-        const result = await ipcRenderer.invoke('save-current-tab-log', getActiveTerminalExport());
+        const target = getActiveTerminalExport();
+        if (!target) { setActionStatus('当前标签页没有终端可供导出'); return; }
+        const result = await ipcRenderer.invoke('save-current-tab-log', target);
         if (result?.filePath) {
             setActionStatus(trFallback('main.currentTabSaved', 'Current tab saved: {path}', { path: result.filePath }));
         }
@@ -9369,6 +9411,14 @@ function getGroupSerialOptionsForConnect(groupId) {
 async function connectSerialFromUi({ reconnecting = false, groupId = activeGroupId } = {}) {
     const targetGroupId = resolveSerialGroupId(groupId);
     if (isGroupConnecting(targetGroupId)) return;
+    const targetGroup = getSerialGroupById(targetGroupId);
+    if (!targetGroup) return;
+    const targetRegistry = serialGroupRegistry.getGroup(targetGroupId);
+    const requestToken = ++serialConnectRequestSequence;
+    serialConnectRequests.set(targetGroupId, requestToken);
+    const isCurrent = () => Boolean(getSerialGroupById(targetGroupId))
+        && serialGroupRegistry.getGroup(targetGroupId) === targetRegistry
+        && serialConnectRequests.get(targetGroupId) === requestToken;
 
     const settings = getGroupSerialOptionsForConnect(targetGroupId);
     const path = settings.path;
@@ -9396,6 +9446,7 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
     try {
         const connectResult = await ipcRenderer.invoke('connect-serial', {
             groupId: targetGroupId,
+            requestId: requestToken,
             path,
             baudRate: settings.baudRate,
             dataBits: settings.dataBits,
@@ -9404,9 +9455,11 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
             sendEncoding: targetDisplay.sendEncoding,
             newlineMode: targetDisplay.newlineMode
         });
+        if (!isCurrent()) return;
         // 连接成功后把主进程分配的会话号登记进该分组的注册表，后续字节归属以它为准。
         // serialSessionId 只在默认分组时同步，其它分组的会话号由注册表持有。
         const nextSessionId = serialGroupRegistry.beginSession(targetGroupId, connectResult?.sessionId);
+        serialConnectionSessions.set(targetGroupId, nextSessionId);
         if (targetGroupId === REGISTRY_DEFAULT_GROUP_ID) serialSessionId = nextSessionId;
         // 新会话开始，该分组的图表离线数据必须清掉；与是否激活无关。
         chartTabsStore.getList(targetGroupId).forEach(clearChartDataSession);
@@ -9441,6 +9494,7 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
         // 非默认分组的终端是刚建出来的，键盘输入要在这里补绑。
         bindGroupTerminalInput(targetGroupId);
     } catch (err) {
+        if (!isCurrent()) return;
         // 主进程用 `SERIAL_PORT_IN_USE|端口|占用分组|英文原文` 回传「两个分组抢同一个端口」。
         // 这类错误是配置冲突而不是句柄故障，必须给用户一句能直接读懂的话，
         // 否则他看到的只是 Electron 包装过的 `Error invoking remote method ...`。
@@ -9461,6 +9515,7 @@ async function connectSerialFromUi({ reconnecting = false, groupId = activeGroup
             alert((reconnecting ? 'Failed to reconnect: ' : 'Failed to connect: ') + raw);
         }
     } finally {
+        if (!isCurrent()) return;
         serialConnectingGroups.delete(targetGroupId);
         setGroupConnectBusy(targetGroupId, false);
         refreshConnectButtonState();
@@ -9475,6 +9530,9 @@ async function reconnectSerialFromUi({ groupId = activeGroupId } = {}) {
         return;
     }
 
+    const targetRegistry = serialGroupRegistry.getGroup(targetGroupId);
+    const isCurrent = () => Boolean(getSerialGroupById(targetGroupId))
+        && serialGroupRegistry.getGroup(targetGroupId) === targetRegistry;
     const baudRate = getGroupSerialOptionsForConnect(targetGroupId).baudRate;
     serialReconnectingGroups.add(targetGroupId);
     setGroupConnectBusy(targetGroupId, true);
@@ -9483,9 +9541,11 @@ async function reconnectSerialFromUi({ groupId = activeGroupId } = {}) {
         // 必须等**这一组**的断开事件，否则换波特率会在端口还没关掉时就重连。
         const disconnected = waitForSerialDisconnected(targetGroupId);
         disconnectSerial(targetGroupId);
-        await disconnected;
+        const completed = await disconnected;
+        if (completed === false || !isCurrent()) return;
         await connectSerialFromUi({ reconnecting: true, groupId: targetGroupId });
     } finally {
+        if (!isCurrent()) return;
         serialReconnectingGroups.delete(targetGroupId);
         if (!isGroupConnecting(targetGroupId)) setGroupConnectBusy(targetGroupId, false);
         refreshConnectButtonState();
@@ -9590,51 +9650,9 @@ function getTerminalSearchRevision(term) {
     return terminalSearchTrackers.get(term)?.revision || 0;
 }
 
-// 侧栏搜索的目标必须是**激活分组**的激活标签。
-//
-// 原先用 getActiveTabId() + serialTerm / filterTabs 别名：切到 g-1 后
-// 搜索仍然在默认分组的终端里找，用户看到的结果与实际屏幕无关。
-// addon 也从本分组的 runtime 取，不能借用默认分组的 serialSearchAddon。
+// 搜索与导出、清空共用焦点身份，无终端的图表不回落到其他组。
 function getActiveSearchTarget() {
-    const groupId = activeGroupId;
-    const activeTabId = getGroupActiveTabId(groupId);
-    if (activeTabId === mainTabId(groupId)) {
-        const runtime = getSerialRuntime(groupId);
-        return {
-            id: mainTabId(groupId),
-            label: getSerialGroupById(groupId)?.title || tr('main.mainTerminal'),
-            term: runtime?.term || null,
-            addon: runtime?.searchAddon || null
-        };
-    }
-
-    const filterTab = filterTabsStore.getList(groupId).find(tab => tab.id === activeTabId);
-    if (filterTab) {
-        return {
-            id: filterTab.id,
-            label: getFilterTabLogTitle(filterTab),
-            term: filterTab.term,
-            addon: filterTab.searchAddon
-        };
-    }
-
-    const shellTab = getShellTabState(activeTabId);
-    if (shellTab) {
-        return {
-            id: shellTab.id,
-            label: shellTab.btn?.textContent?.trim() || getShellTabLogTitle(shellTab),
-            term: shellTab.term,
-            addon: shellTab.searchAddon
-        };
-    }
-
-    const runtime = getSerialRuntime(groupId);
-    return {
-        id: mainTabId(groupId),
-        label: getSerialGroupById(groupId)?.title || tr('main.mainTerminal'),
-        term: runtime?.term || null,
-        addon: runtime?.searchAddon || null
-    };
+    return getCurrentTerminalTarget();
 }
 
 function updateSearchTargetLabel() {
@@ -10033,7 +10051,7 @@ searchInput.addEventListener('input', () => {
     });
 });
 
-window.addEventListener('main-tab-changed', () => {
+window.addEventListener('workspace-focus-changed', () => {
     clearTimeout(searchDebounceTimer);
     resetSearchState();
     clearSearchSelection();

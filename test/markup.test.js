@@ -883,7 +883,7 @@ test('filter tabs support persistent whole-word matching', () => {
 
 test('passive search changes refresh results without selecting a match', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
-  const tabChangedHandler = renderer.match(/window\.addEventListener\('main-tab-changed', \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
+  const tabChangedHandler = renderer.match(/window\.addEventListener\('workspace-focus-changed', \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
   const searchInputHandler = renderer.match(/searchInput\.addEventListener\('input', \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
 
   assert.match(tabChangedHandler, /refreshSearchCount\(\)/);
@@ -900,7 +900,8 @@ test('terminal search invalidates cached coordinates and re-anchors active resul
 
   assert.match(renderer, /observeTerminalSearchChanges\(serialTerm\)/);
   assert.equal((renderer.match(/^\s{4}observeTerminalSearchChanges\(term\);$/gm) || []).length, 2);
-  assert.equal((renderer.match(/^\s{4,8}unobserveTerminalSearchChanges\(tab\.term\);$/gm) || []).length, 2);
+  assert.match(renderer, /function destroyFilterTab[\s\S]*?unobserveTerminalSearchChanges\(tab\.term\)/);
+  assert.match(renderer, /function closeShellTab[\s\S]*?unobserveTerminalSearchChanges\(tab\.term\)/);
   assert.match(renderer, /createTerminalRevisionTracker\(term,/);
   assert.match(renderer, /buildSearchCacheKey[\s\S]*?getTerminalSearchRevision\(target\.term\)/);
   assert.match(renderer, /getActiveSearchAnchor[\s\S]*?active\.marker\.line/);
@@ -988,7 +989,7 @@ test('sidebar can export the active terminal through an independent save dialog'
   assert.match(styles, /\.sidebar-log-actions\s*\{[^}]*grid-template-columns:/s);
   assert.match(renderer, /function getActiveTerminalExport\(\)/);
   assert.match(renderer, /serializeTerminalBuffer\(targetTerm\?\.buffer\?\.active\)/);
-  assert.match(renderer, /invoke\('save-current-tab-log', getActiveTerminalExport\(\)\)/);
+  assert.match(renderer, /const target = getActiveTerminalExport\(\);[\s\S]*?if \(!target\)[\s\S]*?invoke\('save-current-tab-log', target\)/);
   assert.match(main, /ipcMain\.handle\('save-current-tab-log'/);
   assert.match(main, /dialog\.showSaveDialog\(owner/);
   assert.match(main, /app\.getPath\('documents'\)/);

@@ -11,7 +11,7 @@
 //
 // 它不修改任何输入，也不持有引用；每次调用返回全新对象。
 
-const { createLeaf, isContainer, rebuildIndex } = require('./tab-model');
+const { createLeaf, isContainer, rebuildIndex, normalizeSerialOwnership } = require('./tab-model');
 
 function pickTitle(source, fallback) {
     if (!source) return fallback;
@@ -309,7 +309,7 @@ function importWorkspace(sections) {
             group.paneSplit.sizes = {};
         }
     }
-    rebuildIndex(ws);
+    normalizeSerialOwnership(ws);
     return ws;
 }
 

@@ -3007,7 +3007,7 @@ function initializeThroughputState(session) {
 
 function notifySerialDisconnected(message = null, groupId = DEFAULT_SERIAL_GROUP_ID) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('serial-disconnected', message, { groupId });
+    mainWindow.webContents.send('serial-disconnected', message, { groupId, sessionId: getSerialSession(groupId)?.connectionSessionId, requestId: getSerialSession(groupId)?.rendererRequestId });
   }
 }
 
@@ -3159,6 +3159,8 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
     session.cleanupComplete = false;
     session.sessionId++;
     const connectionSessionId = session.sessionId;
+    session.connectionSessionId = connectionSessionId;
+    session.rendererRequestId = options.requestId;
     session.outputBuckets = new Map();
     session.claimToken = claim.token;
 
@@ -3204,7 +3206,7 @@ ipcMain.handle('connect-serial', async (event, options = {}) => {
     port.on('error', (err) => {
       if (session.port !== port || session.cleanupComplete) return;
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('serial-error', err.message, { groupId });
+        mainWindow.webContents.send('serial-error', err.message, { groupId, sessionId: connectionSessionId });
       }
       writeLog(`\n[SERIAL ERROR] ${err.message}\n`, groupId);
     });

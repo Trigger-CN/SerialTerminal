@@ -16,6 +16,7 @@ function fixture(invoke) {
     Buffer, serialWriteChains: new Map(), SEND_LIMITS: {main:100,quick:100},
     REGISTRY_DEFAULT_GROUP_ID:'default', resolveSerialGroupId:value=>value || 'default',
     activeGroupId:'default', isGroupConnected:group=>sessions.has(group),
+    serialGroupRegistry:{getGroup:group=>sessions.has(group) ? group : null},
     getGroupDisplay:()=>({sendEncoding:'utf8',newlineMode:'crlf'}),
     validateSendContent:()=>({ok:true,bytes:Buffer.from('x')}),
     getGroupSessionId:group=>sessions.get(group), ipcRenderer:{invoke},

@@ -61,7 +61,9 @@ test('explicit reset cancels pending saves and replaces members under the restor
     c.serialGroups.push({ id: 'g-1' });
     c.groupWorkspaceManagers = new Map(); c.groupWorkspaceLayouts = new Map(); c.groupLayoutSnapshots = new Map();
     c.closeShellTab = id => { assert.equal(c.isRestoringWorkspaceSession, true); calls.push(['shell', id]); };
-    c.closeFilterTab = id => calls.push(['filter', id]); c.closeChartTab = id => calls.push(['chart', id]);
+    c.destroySerialGroupResources = id => { assert.equal(c.isRestoringWorkspaceSession, true); calls.push(['resources', id]); };
+    c.serialGroupRegistry = { invalidateSession: id => calls.push(['invalidate', id]) };
+    c.resetTextReceive = () => {}; c.serialOutputBuckets = { clear() {} }; c.serialTerm = { clear() {} }; c.bindGroupTerminalInput = () => {};
     c.closeSerialGroup = (id, options) => calls.push(['group', id, options.confirm]);
     c.applyConfig = config => { assert.equal(c.workspaceModel, null); calls.push(['config', config.marker]); };
     vm.runInContext("let lastAppliedWorkspaceLayoutKey = '';\n" + section('function restoreWorkspaceConfig(', 'function applyConfig('), c);

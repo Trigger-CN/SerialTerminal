@@ -4,6 +4,8 @@
 
 ## 0. 当前状态快照（维护入口）
 
+- 标签缺陷修复进度见 [MULTI_SERIAL_TAB_FIX_PLAN.md](MULTI_SERIAL_TAB_FIX_PLAN.md)。F1–F5、M1–M2 已实施：关闭组同步控制上下文并共用资源销毁，连接请求/会话身份隔离迟到回调；搜索/导出/清空统一按焦点解析，后台关闭不抢焦点；模型同步格/组/列激活并修复归属和恢复边界。当前根测试 **666/666 通过（Node 20.16.0）**，语法、renderer 模块加载与差异检查通过；隔离桌面已验证侧栏同步、资源销毁、Shell 操作目标及正常关闭重启布局等价，进程和临时目录已清理；Node >=22.12.0、原生交互/真实双端口/长时验收仍待完成，具体结果以专项计划记录为准，不能视为多串口整体验收完成。
+
 - **多串口当前重构入口：[MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)**。R1 会话/日志/claim/发送隔离、R2 显式组上下文、R3 唯一活动 `tab-model.js` 与统一原子动作、R4 版本化保存恢复已接入。R5 用户手动报告原清单 1/2/4/5/6/7 通过；本轮修复合并/拖回标签排序及点击内容区切换控制组，最新根项目 **642/642 通过**，两项修复待用户复测。隔离 profile 已有保存重启、真实面板几何/实例、reset IPC 和 pending 保存正常关闭证据；这些不等于完整交互或崩溃安全验收。**R5 真实双端口及长时场景未完成，不能宣称多串口整体完成。**
 - 当前配置 schema：**v16**，版本由 `workspace-layout-state.js` 的 `WORKSPACE_CONFIG_VERSION` 提供，`main.js` 引用该常量。布局快照 `workspaceLayoutState.version` 为 **1**；`serial-groups-config.js` 的 15 仅为历史分组迁移阶段。旧配置升级前一次性备份至 `config.v15.backup.json`，备份失败本次启动不覆盖原配置。v14 → v15 背景见 13A 节，当前恢复规则以新方案和 codec 为准。
 - 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell。运行态仅写 `workspaceModel`，manager 为读模型/写动作适配；初始化后清旧布局缓存和业务 Shell 位置字段，启动兼容导入及模型 null host 字段仍保留。每格独立 active，N 格有 N−1 相邻分隔条，移动复用面板、xterm、parser、PTY。

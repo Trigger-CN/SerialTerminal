@@ -119,6 +119,9 @@ test('closing non-control group filter and chart removes only their owner entrie
     const before=JSON.stringify(f.layouts.get('default'));
     Object.assign(f.context,{unobserveTerminalSearchChanges:()=>{},setActionStatus:()=>{}});
     const end=kind==='Filter'?'const persistFilterTabsTimers':'function renderChartFieldCandidates(';
+    const destroyName = `destroy${kind}Tab`;
+    f.run(section(`function ${destroyName}(`, `function close${kind}Tab(`));
+    Object.assign(f.context, {chartSettingsState:null, chartExportState:null});
     f.run(section(`function close${kind}Tab(`,end));
     f.run(`close${kind}Tab('${id}')`);
     assert.equal(store.get('g-1').length,0);
