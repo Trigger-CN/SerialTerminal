@@ -274,7 +274,10 @@ test('delegated content activation follows main/filter/chart owner and preserves
         getGroupWorkspaceManager: () => ({ getActiveTabId: () => 'tab-main', switchPaneTab() { assert.fail('content focus must not switch another tab'); } }),
         renderSerialGroupTabBar() {}, applyGroupSerialOptionsToSidebar: id => synced.push(`options:${id}`),
         syncDisplayPrefCheckboxes() {}, getGroupDisplayPrefs: () => ({}), updateSidebarActiveGroupLabel() {},
-        refreshConnectButtonState() {}, updateFilterModeStatuses() {} });
+        refreshConnectButtonState() {}, updateFilterModeStatuses() {},
+        // applyActiveSerialGroup 现在通过该函数同步分组标签的 active/control 样式；
+        // 本用例断言的是内容区激活链路，标签样式不在范围内，注入空实现即可。
+        syncGroupTabVisualState() {} });
     f.context.document.querySelectorAll = () => [];
     f.run(section('function applyActiveSerialGroup(', '// 更新侧栏顶部'));
     f.run(section('function bindWorkspaceContentActivation(', 'window.addEventListener(\'main-tab-changed\''));

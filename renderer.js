@@ -4572,7 +4572,27 @@ function setGroupConnectBusy(groupId, busy) {
     if (sidebarButton) sidebarButton.disabled = disabled;
 }
 
-// 切换激活分组：注册表、可见标签页、标签栏高亮一起改。
+// 分组标签的视觉状态：active 是「当前选中」，control 是「受控但焦点在 Shell」。
+// 两者必须分开：activeGroupId 决定设置栏、发送与连接作用于哪个串口，而焦点可能停在
+// 某个 Shell 上。此时分组标签仍是受控组，但用户当前看的是 Shell；若共用同一个 active
+// 样式，两个标签会同时亮着，看不出究竟在操作谁。
+function resolveGroupTabState(groupId) {
+    const isActive = groupId === activeGroupId;
+    const focusedIsShell = isShellTabId(workspaceModel?.focusedTabId || focusedWorkspaceTabId);
+    return {
+        active: isActive && !focusedIsShell,
+        control: isActive && focusedIsShell
+    };
+}
+
+function syncGroupTabVisualState(button) {
+    const state = resolveGroupTabState(button.dataset.groupId);
+    button.classList.toggle('active', state.active);
+    button.classList.toggle('control', state.control);
+    // 受控组仍是侧栏设置的作用对象，读屏应把它读成当前项。
+    button.setAttribute('aria-selected', String(state.active || state.control));
+}
+
 function applyActiveSerialGroup({ fit = true, activateTab = true } = {}) {
     activeGroupId = resolveSerialGroupId(activeGroupId);
     serialGroupRegistry.setActiveGroup(activeGroupId);
@@ -4586,13 +4606,9 @@ function applyActiveSerialGroup({ fit = true, activateTab = true } = {}) {
     // 晚切一步就会在上一个分组的布局里找这个主标签，直接返回不切。
     setActiveGroupWorkspace(activeGroupId);
 
-    // 标签栏：active 类与 aria-selected 必须同步，否则键盘/读屏看到的选中项
-    // 与视觉上的高亮不一致。
-    document.querySelectorAll('.serial-group-tab').forEach(button => {
-        const isActive = button.dataset.groupId === activeGroupId;
-        button.classList.toggle('active', isActive);
-        button.setAttribute('aria-selected', String(isActive));
-    });
+    // 标签栏：active / control 与 aria-selected 必须同步，否则键盘/读屏看到的选中项
+    // 与视觉不一致。焦点在 Shell 时分组改用 control 样式，避免两个标签同时高亮。
+    document.querySelectorAll('.serial-group-tab').forEach(syncGroupTabVisualState);
 
     const groupManager = getGroupWorkspaceManager(activeGroupId);
     const targetTabId = workspaceModel ? groupManager.getActiveTabId(mainTabId(activeGroupId)) : mainTabId(activeGroupId);
@@ -4761,6 +4777,11 @@ let lastNotifiedWorkspaceFocus = null;
 // 请求一次完整渲染。所有交互只调它，不自己动 DOM。
 function renderWorkspaceNow() {
     renderWorkspace(workspaceTabState());
+    // 焦点可能刚切到或离开某个 Shell，受控组的视觉状态要跟着切换。
+    // 无 DOM 的沙箱（如终端操作目标测试）里没有 document，直接跳过。
+    if (typeof document !== 'undefined') {
+        document.querySelectorAll('.serial-group-tab').forEach(syncGroupTabVisualState);
+    }
     const tabId = workspaceModel?.focusedTabId || focusedWorkspaceTabId;
     if (tabId !== lastNotifiedWorkspaceFocus) {
         lastNotifiedWorkspaceFocus = tabId;

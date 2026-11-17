@@ -7,6 +7,10 @@
     --text-secondary: #aaaaaa;
     --accent-color: #007acc;
     --accent-hover: #0098ff;
+    /* 标签三态配色：基础灰 / 受控未聚焦暗灰 / 选中深蓝 */
+    --tab-bg-base: #333333;
+    --tab-bg-control: #2a2a2a;
+    --tab-bg-active: #0e3a5e;
     --border-color: #454545;
     --danger-color: #d94c4c;
     --success-color: #4caf50;
@@ -2201,7 +2205,7 @@ html.custom-titlebar .window-titlebar {
     cursor: pointer;
     border: 0;
     border-right: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
+    background: var(--tab-bg-base);
     color: var(--text-secondary);
     font-size: 13px;
     user-select: none;
@@ -2248,13 +2252,19 @@ html.custom-titlebar .window-titlebar {
 /* 分组标签比普通标签略突出：它代表一整组标签页。 */
 .serial-group-tab {
     font-weight: 600;
-    background: var(--bg-primary);
+    background: var(--tab-bg-base);
+}
+
+/* 受控但焦点在 Shell：仍是侧栏设置与发送的作用对象，但不用选中色，
+   避免和 Shell 标签的选中态同时亮起。只用更暗的灰表达「在控制它，但没在看它」。 */
+.serial-group-tab.control {
+    background: var(--tab-bg-control);
+    color: var(--text-primary);
 }
 
 .serial-group-tab.active {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    box-shadow: inset 0 -2px 0 var(--accent-color);
+    background: var(--tab-bg-active);
+    color: #fff;
 }
 
 /* 已连接的分组在标签上用小圆点标出，避免用户必须切过去才知道哪个分组在收数据。 */
@@ -2781,12 +2791,14 @@ html.custom-titlebar .window-titlebar {
     background: var(--bg-input);
 }
 
+/* 选中态只靠背景色区分：不再加顶部强调线，
+   否则与标签行统一底边叠加会形成"上下半框"的效果。 */
 .main-tab.active {
-    background: var(--bg-primary);
+    background: var(--tab-bg-active);
     color: #fff;
-    border-top: 2px solid var(--accent-color);
-    height: 34px; /* compensate for border-top */
-    line-height: 34px;
+    border-top: none; /* 显式覆盖其它标签状态的边框，保持仅背景色区分 */
+    height: 36px;
+    line-height: 36px;
 }
 
 .main-tab.exited {
