@@ -976,6 +976,8 @@ test('welcome guide is shown once for each installed version', () => {
   assert.match(i18n, /感谢使用 Trigger's SerialTerminal v\{version\}/);
   assert.match(i18n, /1\. Log 过滤/);
   assert.match(i18n, /6\. 终端窗口/);
+  assert.match(i18n, /7\. 多串口分组/);
+  assert.match(i18n, /7\. Multiple serial groups/);
   assert.match(i18n, /可点击左侧“清空 Log”按钮清除此提示/);
 });
 
