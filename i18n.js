@@ -832,8 +832,12 @@ for (const [language, values] of Object.entries(sentEchoTranslations)) {
   Object.assign(translations[language].main, values);
 }
 
+// 默认语言：未显式配置或配置了未知语言时使用简体中文。
+// 保持为单一常量，避免主进程与渲染进程各自硬编码兜底值。
+const DEFAULT_LANGUAGE = 'zh-CN';
+
 function getLanguage(configLanguage) {
-  return translations[configLanguage] ? configLanguage : 'en';
+  return translations[configLanguage] ? configLanguage : DEFAULT_LANGUAGE;
 }
 function interpolate(text, params = {}) {
   return String(text).replace(/\{(\w+)\}/g, (_, key) => params[key] ?? '');
@@ -850,5 +854,6 @@ function t(language, key, params = {}) {
 module.exports = {
   translations,
   getLanguage,
+  DEFAULT_LANGUAGE,
   t
 };

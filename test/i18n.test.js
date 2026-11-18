@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { translations, t } = require('../i18n');
+const { translations, t, getLanguage, DEFAULT_LANGUAGE } = require('../i18n');
 
 const root = path.join(__dirname, '..');
 
@@ -58,7 +58,17 @@ test('application source only references defined translation keys', () => {
 
 test('translation interpolation replaces known parameters', () => {
   assert.equal(t('zh-CN', 'main.bytesSent', { count: 12 }), '已发送 12 字节');
-  assert.equal(t('unknown', 'updateDialog.versionAvailable', { version: '1.2.3' }), 'Version 1.2.3 is available.');
+});
+
+test('default language is simplified Chinese and unknown languages fall back to it', () => {
+  assert.equal(DEFAULT_LANGUAGE, 'zh-CN');
+  assert.equal(getLanguage(undefined), 'zh-CN');
+  assert.equal(getLanguage(''), 'zh-CN');
+  assert.equal(getLanguage('unknown'), 'zh-CN');
+  assert.equal(t('unknown', 'main.connect'), '连接');
+  // 显式语言不受默认值影响
+  assert.equal(getLanguage('en'), 'en');
+  assert.equal(t('en', 'main.connect'), 'Connect');
 });
 
 test('add-to-list labels do not duplicate the add icon', () => {

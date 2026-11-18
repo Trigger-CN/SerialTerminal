@@ -13,7 +13,7 @@ const code = source.slice(start, end);
 function fixture(failBackup = false) {
     const original = JSON.stringify({ configVersion: 15, serialGroups: [{ id: 'default' }], shellTabs: [] });
     const files = new Map([['/profile/config.json', original]]);
-    const c = vm.createContext({ path: path.posix, DEFAULT_SHORTCUTS: {}, CONFIG_VERSION: WORKSPACE_CONFIG_VERSION, configPath: '/profile/config.json', configBackupPath: '/profile/config.v14.backup.json',
+    const c = vm.createContext({ path: path.posix, DEFAULT_SHORTCUTS: {}, CONFIG_VERSION: WORKSPACE_CONFIG_VERSION, DEFAULT_LANGUAGE: 'zh-CN', configPath: '/profile/config.json', configBackupPath: '/profile/config.v14.backup.json',
         app: { getPath: () => '/profile' }, log: { error() {}, info() {} }, needsSerialGroupsMigration,
         fs: { existsSync: name => files.has(name), readFileSync: name => files.get(name), writeFileSync: (name, text) => {
             if (failBackup && name.includes('v15.backup')) throw Error('disk unavailable'); files.set(name, text);

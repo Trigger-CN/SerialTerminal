@@ -10,7 +10,7 @@ const { CancellationToken } = require('builder-util-runtime');
 const log = require('electron-log');
 const yaml = require('js-yaml');
 const fontList = require('font-list');
-const { t, getLanguage } = require('./i18n');
+const { t, getLanguage, DEFAULT_LANGUAGE } = require('./i18n');
 const { buildSerialWriteBuffer } = require('./serial-codec');
 const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
 const { normalizeBaudRate, normalizeCustomBaudRates, isStandardBaudRate } = require('./baud-rates');
@@ -550,6 +550,7 @@ let displaySettings = {
 function loadConfig() {
   const defaults = {
     configVersion: CONFIG_VERSION,
+    language: DEFAULT_LANGUAGE,
     fontSize: 14,
     fontWeight: 400,
     fontFamily: 'Consolas',
