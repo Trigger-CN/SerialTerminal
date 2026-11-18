@@ -136,8 +136,28 @@ global.document = documentObject;
 // 把 window 上的属性整体镜像到 global：renderer / xterm / uplot 会在模块顶层
 // 直接读裸的浏览器全局（navigator、devicePixelRatio、matchMedia……）。
 // 逐个补会反复发现下一个缺失项，整体镜像一次到位。
+//
+// 但 Node 21 起 global 上多了内置的只读 getter（navigator、performance 等），
+// 直接赋值在严格模式下抛 TypeError：
+//   Cannot set property navigator of #<Object> which has only a getter
+// 这类名字必须改用 defineProperty 覆盖；若连 configurable 都为假（无法覆盖），
+// 则保留 Node 自带的实现——它本身已提供同名的浏览器风格 API，renderer 读得到。
 Object.keys(windowObject).forEach(key => {
   if (key === 'document') return;
+  const descriptor = Object.getOwnPropertyDescriptor(global, key);
+  if (descriptor && descriptor.set === undefined && descriptor.writable !== true) {
+    try {
+      Object.defineProperty(global, key, {
+        value: windowObject[key],
+        writable: true,
+        configurable: true,
+        enumerable: descriptor.enumerable ?? true
+      });
+    } catch {
+      // 不可配置的内置属性，保留 Node 原始实现。
+    }
+    return;
+  }
   global[key] = windowObject[key];
 });
 
