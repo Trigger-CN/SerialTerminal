@@ -554,8 +554,8 @@ function loadConfig() {
     fontWeight: 400,
     fontFamily: 'Consolas',
     fontFamilyZh: '"Microsoft YaHei"',
-    foreground: '#cccccc',
-    background: '#000000',
+    foreground: '#cec7bb',
+    background: '#080808',
     terminalWallpaper: {
       path: '',
       overlayOpacity: 55
@@ -595,7 +595,7 @@ function loadConfig() {
         { regex: "\\b(info|debug|trace)\\b", color: "#1890ff", enabled: true, caseSensitive: false, useRegex: true },
         { regex: "\\b(success|ok|done)\\b", color: "#52c41a", enabled: true, caseSensitive: false, useRegex: true },
         { regex: "\\b\\d+(\\.\\d+)?\\b", color: "#13c2c2", enabled: true, caseSensitive: true, useRegex: true },
-        { regex: "[+\\-*/=<>!&|%^~]+", color: "#eb2f96", enabled: true, caseSensitive: true, useRegex: true }
+        { regex: "[+\\-*/=<>!&|%^~]+", color: "#fec320", enabled: true, caseSensitive: true, useRegex: true }
     ],
     showTimestamp: false,
     showLineNumbers: false,

@@ -135,7 +135,7 @@ const DEFAULT_HIGHLIGHT_RULES = [
     { regex: "\\b(info|debug|trace)\\b", color: "#1890ff", enabled: true, caseSensitive: false, useRegex: true },
     { regex: "\\b(success|ok|done)\\b", color: "#52c41a", enabled: true, caseSensitive: false, useRegex: true },
     { regex: "\\b\\d+(\\.\\d+)?\\b", color: "#13c2c2", enabled: true, caseSensitive: true, useRegex: true },
-    { regex: "[+\\-*/=<>!&|%^~]+", color: "#eb2f96", enabled: true, caseSensitive: true, useRegex: true }
+    { regex: "[+\\-*/=<>!&|%^~]+", color: "#fec320", enabled: true, caseSensitive: true, useRegex: true }
 ];
 const DEFAULT_SHORTCUTS = {
     sendMainInput: 'Ctrl+Enter',
