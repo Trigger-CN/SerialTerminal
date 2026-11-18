@@ -95,6 +95,16 @@ function loadMainModule() {
       return { SerialPort };
     }
     if (request.startsWith('@serialport/')) return makeStub(request);
+    // node-pty 是原生模块，`npm ci --ignore-scripts` 不会编译，Linux CI 上
+    // prebuilds/linux-x64/pty.node 不存在，真实 require 会抛错。门禁只需模块
+    // 顶层能求值，不涉及 PTY 的实际行为，因此整体 stub 掉。
+    if (request === 'node-pty') {
+      return {
+        spawn: () => makeStub('ptyProcess'),
+        on: () => {},
+        open: () => makeStub('ptyProcess')
+      };
+    }
     return originalLoad.apply(this, arguments);
   };
 
