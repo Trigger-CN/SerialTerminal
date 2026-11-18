@@ -132,21 +132,43 @@ function removeSerialGroup(groups, groupId) {
 //
 // 空标题回落到原标题而不是变成空串：空标题的分组标签是一块无法识别的空白，
 // 用户既找不到它也不知道该删哪个。
-function renameSerialGroup(groups, groupId, title) {
+//
+// followPort 表示「标题跟随串口端口」。开启后用户手填的 title 仍保留在配置里，
+// 只是显示时被端口名覆盖；关掉开关能立刻回到用户原来的命名，不会丢字。
+function renameSerialGroup(groups, groupId, title, options = {}) {
   const list = normalizeGroupList(groups);
   const id = typeof groupId === 'string' ? groupId.trim() : '';
   const index = list.findIndex(group => group.id === id);
   if (index === -1) {
     return { groups: list, group: null, changed: false };
   }
-  const previousTitle = list[index].title;
-  const nextTitle = clampTitle(title, previousTitle);
-  if (nextTitle === previousTitle) {
-    return { groups: list, group: list[index], changed: false };
+  const previous = list[index];
+  const followPort = typeof options.followPort === 'boolean' ? options.followPort : previous.followPort === true;
+  const nextTitle = clampTitle(title, previous.title);
+  const titleChanged = nextTitle !== previous.title;
+  const followChanged = followPort !== (previous.followPort === true);
+  if (!titleChanged && !followChanged) {
+    return { groups: list, group: previous, changed: false };
   }
   const nextGroups = list.slice();
-  nextGroups[index] = { ...list[index], title: nextTitle };
-  return { groups: nextGroups, group: nextGroups[index], changed: true };
+  // followPort 只存布尔值；关掉时不写该键，保持老配置的干净形状。
+  const nextGroup = { ...previous, title: nextTitle };
+  if (followPort) nextGroup.followPort = true;
+  else delete nextGroup.followPort;
+  nextGroups[index] = nextGroup;
+  return { groups: nextGroups, group: nextGroup, changed: true };
+}
+
+// 分组标签上应当显示的名字。
+//
+// 「跟随端口」开启且端口可用时用端口名，否则用分组标题。两者都不存在时回落到
+// 分组 id：标签上出现空白块，用户既找不到它也不知道该删哪个。
+function resolveGroupDisplayTitle(group, fallbackTitle = '') {
+  const source = isPlainObject(group) ? group : {};
+  const portPath = typeof source.portPath === 'string' ? source.portPath.trim() : '';
+  const title = typeof source.title === 'string' ? source.title.trim() : '';
+  if (source.followPort === true && portPath) return portPath;
+  return title || portPath || (typeof fallbackTitle === 'string' ? fallbackTitle : '') || source.id || '';
 }
 
 function findSerialGroup(groups, groupId) {
@@ -161,5 +183,6 @@ module.exports = {
   addSerialGroup,
   removeSerialGroup,
   renameSerialGroup,
+  resolveGroupDisplayTitle,
   findSerialGroup
 };

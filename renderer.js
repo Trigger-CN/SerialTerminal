@@ -72,7 +72,7 @@ const { createDefaultLayoutFor, normalizeLayoutShape } = require('./workspace-la
 const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
 const { SerialOutputBuckets } = require('./serial-output-buckets');
 const { createGroupTabListStore } = require('./serial-group-tab-lists');
-const { addSerialGroup, removeSerialGroup } = require('./serial-groups-model');
+const { addSerialGroup, removeSerialGroup, renameSerialGroup, resolveGroupDisplayTitle } = require('./serial-groups-model');
 const { describeGroupTab, describeGroupTabBar, GROUP_TAB_BAR_ID, GROUP_TAB_LIST_ID } = require('./serial-group-tab-bar');
 const { ChartView } = require('./chart-view');
 const { buildChartCsv } = require('./chart-csv');
@@ -1774,6 +1774,14 @@ async function handleTerminalContextMenuAction(payload = {}) {
             addSerialGroupFromUi();
             break;
         }
+
+        // 重命名对四类标签都成立：分组标签改分组名（可跟随端口），
+        // 其余标签改自己的标题。统一在这里分发，菜单项只有一处。
+        case 'rename-tab': {
+            const renameTarget = resolveRenameTarget({ terminalType, tabId, contextGroupId });
+            if (renameTarget) openRenameTabDialog(renameTarget);
+            break;
+        }
         // ---- Shell 的列形态（ownColumn 的显式入口） ---------------------
         //
         // 拖拽只能把它停到某列列首行（已锁定的裁决：拖到分组标签行不新建列），
@@ -2193,6 +2201,9 @@ let nextChartTabId = 1;
 let renameTabState = null;
 const renameTabDialog = document.getElementById('rename-tab-dialog');
 const renameTabInput = document.getElementById('rename-tab-input');
+const renameTabFollowPortRow = document.getElementById('rename-tab-follow-port-row');
+const renameTabFollowPortInput = document.getElementById('rename-tab-follow-port');
+const renameTabValidation = document.getElementById('rename-tab-validation');
 
 function getPaneDom(paneId) {
     return document.getElementById(paneId);
@@ -4642,7 +4653,7 @@ function updateSidebarActiveGroupLabel() {
     const nameEl = document.getElementById('sidebar-active-group-name');
     if (!nameEl) return;
     const group = getSerialGroupById(activeGroupId);
-    const title = group?.title || tr('main.mainTerminal');
+    const title = group ? resolveGroupTitleForDisplay(group) : tr('main.mainTerminal');
     nameEl.textContent = title;
     nameEl.title = title;
     const container = document.getElementById('sidebar-active-group');
@@ -4651,6 +4662,26 @@ function updateSidebarActiveGroupLabel() {
         container.dataset.connected = group?.status === 'connected' ? 'true' : 'false';
     }
     syncAllGroupMainTabTitles();
+}
+
+// 分组在标签与侧栏上显示的名字。
+//
+// 开启「跟随端口」时用端口名，否则用用户起的标题。所有显示位置（分组标签、
+// 主终端标签、侧栏指示条、侧栏标题）都必须走这里，否则四处的名字会各说各话。
+function resolveGroupTitleForDisplay(group) {
+    if (!group) return '';
+    return resolveGroupDisplayTitle(group, group.title || group.id || '');
+}
+
+// 分组标题在标签、侧栏指示条、侧栏标题上的所有展示点。
+//
+// 单独抽出来是因为「跟随端口」让标题变成派生值：端口一变，四处都要重画。
+// 只改其中一处会出现「标签叫 COM7、侧栏还写 COM6」这种自相矛盾。
+function syncGroupTitlesForPortChange(groupId) {
+    const id = resolveSerialGroupId(groupId);
+    syncAllGroupMainTabTitles();
+    renderSerialGroupTabBar();
+    if (id === resolveSerialGroupId(activeGroupId)) updateSidebarActiveGroupLabel();
 }
 
 // 让每个分组的主标签按钮显示**它自己的分组名**。
@@ -4664,7 +4695,7 @@ function syncAllGroupMainTabTitles() {
     serialGroups.forEach(group => {
         const button = document.getElementById(mainTabButtonId(group.id));
         if (!button) return;
-        const title = group.title || group.id;
+        const title = resolveGroupTitleForDisplay(group);
         // 静态按钮的文案是直接文本节点，动态按钮里包了一层 .main-tab-title。
         const titleEl = button.querySelector('.main-tab-title');
         if (titleEl) {
@@ -5051,7 +5082,7 @@ function reconcileButtons(plan) {
                 if (!hostList) return;
                 const model = describeGroupTab({
                     id: tab.id,
-                    title: tab.title,
+                    title: resolveGroupTitleForDisplay(getSerialGroupById(tab.id)) || tab.title,
                     active: tab.id === activeGroupId,
                     connected: isGroupConnected(tab.id)
                 }, {
@@ -5588,6 +5619,13 @@ function buildGroupTabButton(tab) {
         });
     }
     button.appendChild(closeEl);
+    // 双击分组标签进入重命名：与右键菜单的「重命名」走同一个目标解析。
+    button.addEventListener('dblclick', event => {
+        if (event.target.closest('.main-tab-close')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openRenameTabDialog({ groupId: tab.groupId, title: tab.title });
+    });
     return button;
 }
 
@@ -7399,13 +7437,62 @@ document.getElementById('chart-export-close')?.addEventListener('click', closeCh
 chartExportWindow?.addEventListener('click', () => exportChartSamples('window'));
 chartExportAll?.addEventListener('click', () => exportChartSamples('all'));
 
+// 把「右键的是哪一类标签」解析成重命名弹窗需要的目标对象。
+//
+// 分组标签没有自己的 tabState，所以用一个只带 groupId / title 的轻量对象承载；
+// saveRenamedTab 见 groupId 走分组保存分支。其余三类标签直接用它们的运行时状态，
+// 弹窗改的就是 title 字段本身。
+function resolveRenameTarget({ terminalType, tabId, contextGroupId }) {
+    const groupId = resolveSerialGroupId(contextGroupId);
+    if (terminalType === 'group') {
+        const group = getSerialGroupById(groupId);
+        if (!group) return null;
+        // 显示跟随端口时输入框里放的是端口名；把它作为初始文本，用户关掉开关后
+        // 仍能看到并编辑自己原来的命名。
+        return {
+            groupId,
+            title: group.followPort === true && group.portPath ? group.portPath : (group.title || '')
+        };
+    }
+    if (terminalType === 'filter') {
+        return filterTabsStore.getList(groupId).find(tab => tab.id === tabId) || null;
+    }
+    if (terminalType === 'chart') {
+        return chartTabsStore.getList(groupId).find(tab => tab.id === tabId) || null;
+    }
+    if (terminalType === 'shell') {
+        return getShellTabState(tabId);
+    }
+    // 'main' 与 'tab'：主终端标签的标题就是分组名，等价于重命名分组。
+    const group = getSerialGroupById(groupId);
+    if (!group) return null;
+    return {
+        groupId,
+        title: group.followPort === true && group.portPath ? group.portPath : (group.title || '')
+    };
+}
+
 function openRenameTabDialog(tabState) {
     if (!tabState) return;
     renameTabState = tabState;
+    // 分组标签走另一条保存路径，靠 groupId 识别；其他标签没有端口可跟。
+    const groupId = tabState.groupId || '';
+    const group = groupId ? getSerialGroupById(groupId) : null;
+    const followsPort = group?.followPort === true;
     renameTabInput.value = tabState.title || '';
+    if (renameTabFollowPortRow) renameTabFollowPortRow.classList.toggle('hidden', !group);
+    if (renameTabFollowPortInput) renameTabFollowPortInput.checked = followsPort;
+    // 跟随端口时输入框锁定但**不清空**已填文本：用户关掉开关要能马上接着编辑，
+    // 清空会把他之前起的名字直接丢掉。
+    renameTabInput.readOnly = followsPort;
+    if (renameTabValidation) renameTabValidation.textContent = '';
     renameTabDialog.classList.remove('hidden');
-    renameTabInput.focus();
-    renameTabInput.select();
+    // 锁定时不给输入框焦点，否则用户会以为能输入却没反应；焦点交给开关本身。
+    if (followsPort && renameTabFollowPortInput) renameTabFollowPortInput.focus();
+    else {
+        renameTabInput.focus();
+        renameTabInput.select();
+    }
 }
 
 function closeRenameTabDialog() {
@@ -7415,12 +7502,28 @@ function closeRenameTabDialog() {
 
 function saveRenamedTab() {
     if (!renameTabState) return;
-    renameTabState.title = renameTabInput.value.trim();
+    const target = renameTabState;
+    const text = renameTabInput.value.trim();
+    const followPort = Boolean(renameTabFollowPortInput?.checked);
+
+    // 分组标签：标题与「跟随端口」都落到分组配置上，改完四处显示点一起刷新。
+    if (target.groupId) {
+        const result = renameSerialGroup(serialGroups, target.groupId, text, { followPort });
+        if (result.changed) {
+            serialGroups = result.groups;
+            persistSerialGroups();
+            syncGroupTitlesForPortChange(target.groupId);
+        }
+        closeRenameTabDialog();
+        return;
+    }
+
+    target.title = text;
     updateTabTitles();
-    const groupId = groupIdForWorkspaceTab(renameTabState.id);
-    if (groupId && filterTabsStore.getList(groupId).includes(renameTabState)) persistFilterTabs({ groupId });
-    if (shellTabs.includes(renameTabState)) persistShellTabs();
-    if (groupId && chartTabsStore.getList(groupId).includes(renameTabState)) persistChartTabs(groupId);
+    const groupId = groupIdForWorkspaceTab(target.id);
+    if (groupId && filterTabsStore.getList(groupId).includes(target)) persistFilterTabs({ groupId });
+    if (shellTabs.includes(target)) persistShellTabs();
+    if (groupId && chartTabsStore.getList(groupId).includes(target)) persistChartTabs(groupId);
     closeRenameTabDialog();
 }
 
@@ -7430,6 +7533,22 @@ document.getElementById('rename-tab-dialog-save').addEventListener('click', save
 renameTabInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') saveRenamedTab();
     if (event.key === 'Escape') closeRenameTabDialog();
+});
+
+// 「跟随端口」开关：勾上立刻锁定输入框，但**保留已输入文本**；取消勾选恢复可编辑。
+// 输入框此时显示的还是用户自己起的名字，锁只是防止误改，不能把内容清掉。
+renameTabFollowPortInput?.addEventListener('change', () => {
+    const followsPort = renameTabFollowPortInput.checked;
+    renameTabInput.readOnly = followsPort;
+    if (renameTabValidation) {
+        renameTabValidation.textContent = followsPort
+            ? trFallback('main.followPortNameHint', 'Tab name will follow the selected serial port')
+            : '';
+    }
+    if (!followsPort) {
+        renameTabInput.focus();
+        renameTabInput.select();
+    }
 });
 
 // pane-1 / pane-2 的动作按钮的 click **不再在这里绑**：它们由 createPaneActionButtons 在
@@ -9342,6 +9461,14 @@ portSelect.addEventListener('change', () => {
     // 侧栏端口选择器编辑的是**激活分组**：切分组前若该组正连着，换端口必须断它自己的连接，
     // 不能用全局 isConnected（那是默认分组的状态）。
     const groupId = resolveSerialGroupId(activeGroupId);
+    // 端口要落到分组自己的 portPath 上：开启「跟随端口」的分组靠它决定标签名，
+    // 不写进去就会出现「端口变了但标签还叫旧端口」。
+    const portGroup = getSerialGroupById(groupId);
+    if (portGroup) {
+        portGroup.portPath = portSelect.value || '';
+        persistSerialGroups();
+        syncGroupTitlesForPortChange(groupId);
+    }
     if (isGroupConnected(groupId) && !isGroupConnecting(groupId)) {
         disconnectSerial(groupId);
         setActionStatus(trFallback('main.serialDisconnected', 'Serial port disconnected'));

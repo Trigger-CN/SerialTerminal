@@ -555,6 +555,12 @@
                     <label for="rename-tab-input" data-i18n="main.tabName">Tab Name</label>
                     <input type="text" id="rename-tab-input" autocomplete="off" data-i18n-placeholder="main.tabName">
                 </div>
+                <!-- 只有串口分组支持「跟随端口」：其他标签没有端口可跟，开关隐藏。 -->
+                <label class="rename-tab-follow-port hidden" for="rename-tab-follow-port" id="rename-tab-follow-port-row">
+                    <input type="checkbox" id="rename-tab-follow-port">
+                    <span data-i18n="main.followPortName">Follow serial port name</span>
+                </label>
+                <div id="rename-tab-validation" class="input-validation" role="status" aria-live="polite"></div>
             </div>
             <footer class="app-dialog-actions">
                 <button id="rename-tab-dialog-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>

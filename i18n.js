@@ -519,7 +519,17 @@ Object.assign(translations['zh-CN'].main, {
   welcomeClearHint: '可点击左侧“清空 Log”按钮清除此提示。'
 });
 Object.assign(translations['zh-CN'].main, { renameTab: '重命名标签页', tabName: '标签页名称', save: '保存' });
+Object.assign(translations['zh-CN'].main, {
+  renameTabMenu: '重命名…',
+  followPortName: '跟随串口端口名称',
+  followPortNameHint: '标签名将跟随所选串口端口'
+});
 Object.assign(translations.en.main, { renameTab: 'Rename Tab', tabName: 'Tab Name', save: 'Save' });
+Object.assign(translations.en.main, {
+  renameTabMenu: 'Rename…',
+  followPortName: 'Follow serial port name',
+  followPortNameHint: 'Tab name will follow the selected serial port'
+});
 Object.assign(translations.en.main, {
   chart: 'Chart', newChartTab: 'New Chart Tab', chartSettings: 'Chart Settings', chartParserMode: 'Parser',
   chartAutoKeyValue: 'Automatic key-value', chartTemplate: 'Format template', chartRegex: 'Regular expression',

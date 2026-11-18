@@ -2696,6 +2696,17 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     );
   }
 
+  // 「重命名」对所有标签类型都可用：分组标签改分组名，其余标签改自己的标题。
+  // 放在模板末尾统一追加，避免四套分支各写一份而语义漂移。
+  template.push(
+    { type: 'separator' },
+    {
+      label: labels.renameTabMenu || labels.renameTab || 'Rename…',
+      ...menuIcon('playlist_add'),
+      click: () => sendAction('rename-tab')
+    }
+  );
+
   const menu = Menu.buildFromTemplate(template);
   menu.popup({ window: browserWindow });
 });

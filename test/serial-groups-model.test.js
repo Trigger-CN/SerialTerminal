@@ -9,6 +9,7 @@ const {
   addSerialGroup,
   removeSerialGroup,
   renameSerialGroup,
+  resolveGroupDisplayTitle,
   findSerialGroup
 } = require('../serial-groups-model');
 
@@ -127,6 +128,36 @@ test('renameSerialGroup 超长标题被截断到上限', () => {
   const longTitle = 'x'.repeat(MAX_GROUP_TITLE_LENGTH + 40);
   const result = renameSerialGroup(baseGroups(), 'default', longTitle);
   assert.equal(result.groups[0].title.length, MAX_GROUP_TITLE_LENGTH);
+});
+
+test('renameSerialGroup 可开启跟随端口并保留用户填写的标题', () => {
+  const result = renameSerialGroup(baseGroups(), 'default', 'Motor', { followPort: true });
+  assert.equal(result.changed, true);
+  assert.equal(result.group.followPort, true);
+  // 手填的标题必须留着：关掉跟随开关后要能立刻回到它，不能丢字。
+  assert.equal(result.group.title, 'Motor');
+});
+
+test('renameSerialGroup 关闭跟随端口时移除该键而不是写 false', () => {
+  const on = renameSerialGroup(baseGroups(), 'default', 'Motor', { followPort: true }).groups;
+  const off = renameSerialGroup(on, 'default', 'Motor', { followPort: false });
+  assert.equal(off.changed, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(off.group, 'followPort'), false);
+  assert.equal(off.group.title, 'Motor');
+});
+
+test('renameSerialGroup 只切开关不改标题也算变更', () => {
+  const result = renameSerialGroup(baseGroups(), 'default', 'COM6', { followPort: true });
+  assert.equal(result.changed, true);
+  assert.equal(result.group.followPort, true);
+});
+
+test('resolveGroupDisplayTitle 跟随端口时用端口名，否则用标题', () => {
+  assert.equal(resolveGroupDisplayTitle({ title: 'Motor', portPath: 'COM7', followPort: true }), 'COM7');
+  assert.equal(resolveGroupDisplayTitle({ title: 'Motor', portPath: 'COM7', followPort: false }), 'Motor');
+  // 跟随开着但还没选端口：回落标题，不能显示空标签。
+  assert.equal(resolveGroupDisplayTitle({ title: 'Motor', portPath: '', followPort: true }), 'Motor');
+  assert.equal(resolveGroupDisplayTitle(null, 'Serial 1'), 'Serial 1');
 });
 
 test('renameSerialGroup 对不存在的分组返回 changed=false', () => {

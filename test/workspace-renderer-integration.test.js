@@ -248,6 +248,8 @@ test('production root reconciliation restores mixed group and Shell order after 
         getGroupTabList: () => list, getSerialGroupById: () => ({}),
         // 分组标签的连接指示现在取自注册表真相源；本用例只验证按钮顺序。
         isGroupConnected: () => false,
+        // 分组标签标题走统一的显示名派生；本用例只验证按钮顺序。
+        resolveGroupTitleForDisplay: () => '',
         describeGroupTab: group => ({ buttonId: group.id }), updateGroupTabButtonState() {},
         getPaneTabsList: () => null, syncSerialGroupAddButtonLayer() {}, syncShellAddButtonVisibility() {}, placeGroupAddButton() {}, placeShellAddButton() {} });
     f.context.document.querySelector = selector => byId.get(/data-target="([^"]+)"/.exec(selector)?.[1]);

@@ -1363,8 +1363,39 @@ html.custom-titlebar .window-titlebar {
     margin-bottom: 5px;
 }
 
-.rename-tab-dialog input {
+.rename-tab-dialog input[type="text"] {
     width: 100%;
+}
+
+/* 「跟随端口」开关：勾选后输入框锁定，但内容保留不清空。 */
+.rename-tab-follow-port {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+/* 复选框自身尺寸：label 是整行可点区域，不能让勾选框占满整行。 */
+.rename-tab-follow-port input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--accent-color);
+}
+
+.rename-tab-follow-port.hidden {
+    display: none;
+}
+
+/* 锁定时给出明确反馈：不置灰到看不清，只提示「现在不能改」。 */
+.rename-tab-dialog input[type="text"][readonly] {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: not-allowed;
 }
 
 #display-controls {
@@ -1685,12 +1716,11 @@ html.custom-titlebar .window-titlebar {
    用强对比色和加粗字体，而不是与其他标签同级的说明文字。 */
 .sidebar-active-group {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 6px;
     padding: 4px 6px;
     border-radius: 4px;
     background: var(--bg-tertiary);
-    border-left: 3px solid var(--accent-color);
     min-width: 0;
 }
 .sidebar-active-group-label {

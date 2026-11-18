@@ -1011,7 +1011,10 @@ test('filter and shell tabs support persistent double-click renaming', () => {
   assert.doesNotMatch(renderer, /quickSendDialog\.addEventListener\('click'/);
   assert.match(renderer, /title: tab\.title \|\| ''/);
   assert.match(renderer, /title: initialState\.title \|\| ''/);
-  assert.match(renderer, /if \(shellTabs\.includes\(renameTabState\)\) persistShellTabs\(\)/);
+  // 重命名现在同时服务分组标签：分组走 groupId 分支，其余标签仍逐类型持久化。
+  assert.match(renderer, /if \(target\.groupId\) \{/);
+  assert.match(renderer, /if \(shellTabs\.includes\(target\)\) persistShellTabs\(\)/);
+  assert.match(renderer, /rename-tab-follow-port/);
   assert.match(renderer, /tab\.title\?\.trim\(\) \|\| defaultTitle/);
   assert.match(styles, /\.rename-tab-dialog \.form-group > label\s*\{[^}]*margin-bottom:\s*5px;/s);
 });

@@ -36,7 +36,9 @@ function fixture() {
     window:{dispatchEvent:event=>events.push(event)},CustomEvent:class { constructor(type, options) { this.type=type;this.detail=options.detail; } },
     setTimeout:callback=>{timers.set(++timerId,callback);return timerId;},clearTimeout:id=>timers.delete(id),
     isMultiGroupLayer:()=>true,resolveSerialGroupId:v=>v||'default'
-    ,updateTabTitles:()=>{},closeRenameTabDialog:()=>{},shellTabs:[],renameTabInput:{value:'Changed'}
+    ,updateTabTitles:()=>{},closeRenameTabDialog:()=>{},shellTabs:[],renameTabInput:{value:'Changed'},
+    // 分组重命名分支会读「跟随端口」开关；本用例只验证非分组标签的持久化路径。
+    renameTabFollowPortInput:{checked:false},persistSerialGroups:()=>{},syncGroupTitlesForPortChange:()=>{}
   });
   const run=code=>vm.runInContext(code,context);
   run(section('function groupIdFromPaneId(', '// 组内 pane 分屏：'));
