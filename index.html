@@ -59,12 +59,6 @@
 
             <div id="baud-container" style="position: relative;">
                 <select id="baud-select" title="Select Baud Rate" data-i18n-title="main.baudRate" style="width: 100%;">
-                    <option value="110">110</option>
-                    <option value="300">300</option>
-                    <option value="600">600</option>
-                    <option value="1200">1200</option>
-                    <option value="2400">2400</option>
-                    <option value="4800">4800</option>
                     <option value="9600">9600</option>
                     <option value="14400">14400</option>
                     <option value="19200">19200</option>
@@ -81,6 +75,7 @@
                     <option value="2000000">2000000</option>
                     <option value="custom" data-i18n="main.addCustomBaudRate">Add custom...</option>
                 </select>
+                <button id="baud-custom-delete" class="secondary" type="button" title="Delete this custom baud rate" data-i18n-title="main.deleteCustomBaudRate" aria-label="Delete this custom baud rate" data-i18n-aria-label="main.deleteCustomBaudRate" style="display: none; position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: auto; padding: 0 6px;"><span class="material-icon-placeholder" data-material-icon="delete"></span></button>
                 <div id="baud-custom-wrapper" style="display: none; gap: 4px;">
                     <input type="number" id="baud-custom-input" min="1" step="1" inputmode="numeric" placeholder="Baud Rate" data-i18n-placeholder="main.customBaudRate" style="flex: 1; width: 0;">
                     <button id="baud-custom-confirm" class="secondary" type="button" style="width: auto; padding: 0 6px;" title="Add baud rate" data-i18n-title="main.confirmCustomBaudRate" aria-label="Add baud rate" data-i18n-aria-label="main.confirmCustomBaudRate"><span class="material-icon-placeholder" data-material-icon="check"></span></button>

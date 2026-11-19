@@ -9361,6 +9361,7 @@ const baudCustomWrapper = document.getElementById('baud-custom-wrapper');
 const baudCustomInput = document.getElementById('baud-custom-input');
 const baudCustomConfirm = document.getElementById('baud-custom-confirm');
 const baudCustomCancel = document.getElementById('baud-custom-cancel');
+const baudCustomDelete = document.getElementById('baud-custom-delete');
 const connectBtn = document.getElementById('connect-btn');
 const clearBtn = document.getElementById('clear-btn');
 const throughputPanel = document.getElementById('throughput-panel');
@@ -9384,6 +9385,15 @@ function renderCustomBaudRates(customBaudRates, selectedBaudRate) {
     if (normalizedSelection && Array.from(baudSelect.options).some(option => option.value === normalizedSelection)) {
         baudSelect.value = normalizedSelection;
     }
+    syncBaudDeleteButton();
+}
+
+// 删除按钮只在「当前选中的是非标准波特率」时出现：
+// 标准值是内置的删不掉；custom 是「添加」入口，本身不是一个可删的值。
+function syncBaudDeleteButton() {
+    if (!baudCustomDelete) return;
+    const selected = normalizeBaudRate(baudSelect.value);
+    baudCustomDelete.style.display = selected !== null && !isStandardBaudRate(selected) ? 'block' : 'none';
 }
 
 function closeCustomBaudInput(selectedBaudRate = previousBaudRate) {
@@ -9392,6 +9402,25 @@ function closeCustomBaudInput(selectedBaudRate = previousBaudRate) {
     baudCustomWrapper.style.display = 'none';
     baudSelect.style.display = 'block';
     renderCustomBaudRates(currentConfig?.customBaudRates, selectedBaudRate);
+}
+
+// 删除当前选中的自定义波特率。
+//
+// 只允许删自定义项：标准值是内置的，删了下次渲染还会回来。删除正在使用的
+// 波特率必须回落到一个仍然存在的值，否则 <select> 会停在不存在的位置，
+// 后续读取 baudSelect.value 得到空串，连接时参数非法。
+function deleteSelectedCustomBaudRate() {
+    const selected = normalizeBaudRate(baudSelect.value);
+    if (!selected || isStandardBaudRate(selected)) return;
+    const remaining = normalizeCustomBaudRates(currentConfig?.customBaudRates)
+        .filter(rate => rate !== selected);
+    if (currentConfig) currentConfig.customBaudRates = remaining;
+    // 删掉的正好是当前生效值时回落到默认值；否则保持当前选择不变。
+    const nextBaudRate = previousBaudRate === selected ? '9600' : previousBaudRate;
+    previousBaudRate = nextBaudRate;
+    renderCustomBaudRates(remaining, nextBaudRate);
+    applySerialParameterChange({ reconnect: true });
+    setActionStatus(trFallback('main.customBaudRateDeleted', 'Custom baud rate removed'));
 }
 
 function restoreBaudRateConfig(config) {
@@ -9430,11 +9459,13 @@ baudSelect.addEventListener('change', () => {
         return;
     }
     previousBaudRate = normalizeBaudRate(baudSelect.value) || previousBaudRate;
+    syncBaudDeleteButton();
     applySerialParameterChange({ reconnect: true });
 });
 
 baudCustomConfirm.addEventListener('click', confirmCustomBaudRate);
 baudCustomCancel.addEventListener('click', () => closeCustomBaudInput());
+baudCustomDelete?.addEventListener('click', deleteSelectedCustomBaudRate);
 baudCustomInput.addEventListener('input', () => baudCustomInput.setCustomValidity(''));
 baudCustomInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {

@@ -770,12 +770,12 @@ Object.assign(translations.de.prefs, {
 
 
 const baudRateTranslations = {
-  en: { addCustomBaudRate: 'Add custom...', confirmCustomBaudRate: 'Add baud rate', invalidCustomBaudRate: 'Enter a positive whole-number baud rate' },
-  'zh-CN': { addCustomBaudRate: '添加自定义波特率...', confirmCustomBaudRate: '添加波特率', invalidCustomBaudRate: '请输入正整数波特率' },
-  'zh-TW': { addCustomBaudRate: '新增自訂鮑率...', confirmCustomBaudRate: '新增鮑率', invalidCustomBaudRate: '請輸入正整數鮑率' },
-  fr: { addCustomBaudRate: 'Ajouter un débit personnalisé...', confirmCustomBaudRate: 'Ajouter le débit', invalidCustomBaudRate: 'Saisissez un débit entier positif' },
-  ru: { addCustomBaudRate: 'Добавить свою скорость...', confirmCustomBaudRate: 'Добавить скорость', invalidCustomBaudRate: 'Введите положительную целую скорость' },
-  de: { addCustomBaudRate: 'Eigene Baudrate hinzufügen...', confirmCustomBaudRate: 'Baudrate hinzufügen', invalidCustomBaudRate: 'Positive ganzzahlige Baudrate eingeben' }
+  en: { addCustomBaudRate: 'Add custom...', confirmCustomBaudRate: 'Add baud rate', invalidCustomBaudRate: 'Enter a positive whole-number baud rate', deleteCustomBaudRate: 'Delete this custom baud rate', customBaudRateDeleted: 'Custom baud rate removed' },
+  'zh-CN': { addCustomBaudRate: '添加自定义波特率...', confirmCustomBaudRate: '添加波特率', invalidCustomBaudRate: '请输入正整数波特率', deleteCustomBaudRate: '删除此自定义波特率', customBaudRateDeleted: '已删除自定义波特率' },
+  'zh-TW': { addCustomBaudRate: '新增自訂鮑率...', confirmCustomBaudRate: '新增鮑率', invalidCustomBaudRate: '請輸入正整數鮑率', deleteCustomBaudRate: '刪除此自訂鮑率', customBaudRateDeleted: '已刪除自訂鮑率' },
+  fr: { addCustomBaudRate: 'Ajouter un débit personnalisé...', confirmCustomBaudRate: 'Ajouter le débit', invalidCustomBaudRate: 'Saisissez un débit entier positif', deleteCustomBaudRate: 'Supprimer ce débit personnalisé', customBaudRateDeleted: 'Débit personnalisé supprimé' },
+  ru: { addCustomBaudRate: 'Добавить свою скорость...', confirmCustomBaudRate: 'Добавить скорость', invalidCustomBaudRate: 'Введите положительную целую скорость', deleteCustomBaudRate: 'Удалить эту скорость', customBaudRateDeleted: 'Скорость удалена' },
+  de: { addCustomBaudRate: 'Eigene Baudrate hinzufügen...', confirmCustomBaudRate: 'Baudrate hinzufügen', invalidCustomBaudRate: 'Positive ganzzahlige Baudrate eingeben', deleteCustomBaudRate: 'Diese Baudrate löschen', customBaudRateDeleted: 'Baudrate gelöscht' }
 };
 
 for (const [language, values] of Object.entries(baudRateTranslations)) {
