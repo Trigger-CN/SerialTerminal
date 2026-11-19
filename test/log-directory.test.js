@@ -48,10 +48,14 @@ test('port log folders keep the port name recognizable', () => {
 });
 
 test('port log folder names are safe for both Windows and POSIX paths', () => {
-  // Linux 的 /dev/ttyUSB0 直接当目录名会带斜杠，必须取 basename。
+  // Linux 的 /dev/ttyUSB0 直接当目录名会带斜杠，必须取末段。
   assert.equal(buildPortLogFolderName('/dev/ttyUSB0'), 'port_ttyUSB0');
   assert.equal(buildPortLogFolderName('/dev/serial/by-id/usb-abc'), 'port_usb-abc');
+  // 反斜杠路径同样取末段。这条曾在 Linux CI 上失败：当时用 path.basename()，
+  // 它在 POSIX 下不把 \ 当分隔符，整串保留后反斜杠被替换成下划线，
+  // 得到 'port____COM6'。实现已改为显式 split(/[\\/]/)，不依赖运行平台。
   assert.equal(buildPortLogFolderName('\\\\.\\COM6'), 'port_COM6');
+  assert.equal(buildPortLogFolderName('C:\\temp\\COM6'), 'port_COM6');
 
   // Windows 非法字符替换为下划线，不得出现在结果里。
   const weird = buildPortLogFolderName('COM:6?*"<>|');

@@ -20,6 +20,12 @@ const RESERVED_DEVICE_NAME = /^(?:COM[0-9]|LPT[0-9]|CON|PRN|AUX|NUL)$/i;
 
 const PORT_FOLDER_PREFIX = 'port_';
 
+// 端口路径里可能出现的路径分隔符：Windows 的 \ 与 POSIX 的 /。
+// 不用 path.basename()：它按运行平台决定是否把 \ 当分隔符，
+// 导致同一输入在 Windows（'\\.\COM6' -> 'COM6'）与 Linux（整串保留）
+// 得到不同目录名，日志目录结构随平台漂移。
+const PATH_SEPARATOR = /[\\/]/;
+
 /**
  * 把端口路径转成日志目录名。
  *
@@ -29,13 +35,17 @@ const PORT_FOLDER_PREFIX = 'port_';
  * icacls 从驱动层就被拒绝，用户无法自行修复。加前缀后不再命中保留名，
  * 规则也更好预测。
  *
- * @param {string} portPath 原始端口路径（Windows: COM6；Linux: /dev/ttyUSB0）
+ * @param {string} portPath 原始端口路径（Windows: COM6 或 \\.\COM6；Linux: /dev/ttyUSB0）
  * @returns {string} 目录名；端口路径为空时返回空串，由调用方决定回退值
  */
 function buildPortLogFolderName(portPath) {
-  const base = path.basename(String(portPath || '').trim());
+  const raw = String(portPath || '').trim();
+  // 两种分隔符都切：Linux 的 /dev/ttyUSB0 与 Windows 的 \\.\COM6 都要取末段。
+  const segments = raw.split(PATH_SEPARATOR);
+  const base = segments[segments.length - 1] || '';
   const safe = base
-    .replace(/[\\/:*?"<>|]/g, '_')
+    // 剩余非法字符（: * ? " < > |）替换为下划线；分隔符已在上面切掉。
+    .replace(/[:*?"<>|]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
     // 去尾部点和空格：Windows 会静默剥离它们，导致目录名与预期不一致。

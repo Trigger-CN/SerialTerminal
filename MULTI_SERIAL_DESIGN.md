@@ -206,15 +206,20 @@ const serialSessions = new Map();   // groupId -> session
 
 ```js
 // log-directory.js
+const PATH_SEPARATOR = /[\\/]/;
+
 function buildPortLogFolderName(portPath) {
-  const base = path.basename(String(portPath || '').trim());
-  const safe = base.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ')
+  const raw = String(portPath || '').trim();
+  const segments = raw.split(PATH_SEPARATOR);
+  const base = segments[segments.length - 1] || '';
+  const safe = base.replace(/[:*?"<>|]/g, '_').replace(/\s+/g, ' ')
     .trim().replace(/[. ]+$/g, '');
   return safe ? `port_${safe}` : '';   // 空串由调用方回退到 groupId
 }
 ```
 
-- 用 `path.basename()`：Windows 下 `COM3` → `COM3`；Linux 下 `/dev/ttyUSB0` → `ttyUSB0`（否则会把整条路径当文件夹名，产生非法字符）
+- **不用 `path.basename()`**：它按运行平台决定是否把 `\` 当分隔符。Windows 下 `\\.\COM6` → `COM6`，但 Linux（CI 运行环境）下整串保留，反斜杠随后被替换成下划线得到 `port____COM6`，日志目录结构随平台漂移。该缺陷曾导致 `test/log-directory.test.js` 在 Linux CI 失败。改为显式 `split(/[\\/]/)` 后纯函数不依赖任何平台 API，Windows 与 POSIX 语义下结果逐项一致。
+- Windows 下 `COM3` → `COM3`；Linux 下 `/dev/ttyUSB0` → `ttyUSB0`（否则会把整条路径当文件夹名，产生非法字符）
 - 去尾部 `.` 与空格：Windows 会默默修正，导致目录名与预期不一致
 - 端口名缺失（未连接就开启日志）时退回 `groupId`
 - 端口重命名/更换不迁移历史日志，新文件夹自然生成——旧文件夹的归属由名称本身表达，无需额外索引
@@ -1669,7 +1674,7 @@ serialRuntimes                      // SerialTerminalRuntimeRegistry 实例
 - [x] 两组同时收发，数据**逐字节**校验不串流（含 `serial-output-bytes` 的 sessionId 归属正确）—— 端到端 9 项通过。代码侧由 `session.outputBuckets`（`Map<sessionId, entries>`，main.js:2819/2917/2938/3035）保证按会话分桶
 - [x] 关闭 A 组，B 组连接与数据不受影响 —— 同上端到端验证；代码依据 `cleanupSerialConnection(message, port, groupId)` 按**本会话端口**判定（main.js:2958），不再全局比较
 - [x] 断开重连只影响对应分组 —— `connect-serial` 只关闭 `session.port`（main.js:3020-3022），不再 close 其他分组
-- [x] 日志目录下存在以端口号命名的子文件夹（如 `COM3/`），两个端口不写同一目录 —— `buildPortLogFolderName()`（main.js:763）取 `path.basename(portPath)` 并去尾部 `.`/空格，端口缺失时退回 `groupId`（避免多分组撞进同一目录）
+- [x] 日志目录下存在以端口号命名的子文件夹（如 `port_COM3/`），两个端口不写同一目录 —— `buildPortLogFolderName()` 显式 `split(/[\\/]/)` 取末段并去尾部 `.`/空格（不依赖平台 `path.basename()`），端口缺失时退回 `groupId`（避免多分组撞进同一目录）
 - [x] 重连同一端口继续写同一文件夹；换成另一个端口则新建对应文件夹，不往旧文件追加 —— `connect-serial` 会重置 `mainLogFilePath` / `activeMainLogGroupId` / 各 tab entry 的 `filePath`
 - [x] 开启 `logCreateDateFolder` 时层级为 `<logPath>/<日期>/<端口号>/`，`log-cleanup` 能正常清理 —— `ensureLogDirectory()` 为 `path.join(baseDirectory, resolveLogFolderName(groupId))`（main.js:990-999），日期在外层；`log-cleanup.js:35` 只递归匹配 `^\d{4}-\d{2}-\d{2}$` 的目录名，顺序写反会让过期日志永远无法删除
 - [x] `npm test` 全绿 —— P1 当次为 391/391，**当前基线 437/437**；后续纯逻辑层新增测试抬高了总数
