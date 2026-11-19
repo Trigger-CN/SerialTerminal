@@ -3300,6 +3300,30 @@ function bindWorkspaceTabDragging() {
             event.stopImmediatePropagation();
         }
     }, true);
+    // 双击主终端标签进入重命名。
+    //
+    // 必须走 document 级委托：主终端标签有两份来源——默认分组是 index.html 的
+    // 静态标记，其余分组由 ensureSerialGroupMainTabDom() 动态创建。逐处绑定必然
+    // 漏掉其中一份（历史上就是这样漏的：单串口模式下双击毫无反应）。
+    //
+    // 只匹配串口主标签（data-target 形如 tab-main / tab-main-<group>）：Shell、
+    // 过滤、图表标签各自在构建函数里绑过 dblclick，这里再绑会弹出两个弹窗。
+    document.addEventListener('dblclick', event => {
+        const tabButton = event.target.closest?.('.main-tab');
+        if (!tabButton) return;
+        if (event.target.closest('.main-tab-close')) return;
+        const tabId = tabButton.dataset.target || '';
+        if (!tabId.startsWith('tab-main')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
+        const group = getSerialGroupById(groupId);
+        if (!group) return;
+        openRenameTabDialog({
+            groupId,
+            title: group.followPort === true && group.portPath ? group.portPath : (group.title || '')
+        });
+    }, true);
 }
 
 bindWorkspaceTabDragging();
