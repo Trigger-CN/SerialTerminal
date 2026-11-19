@@ -722,7 +722,9 @@ test('all xterm terminals use Unicode 11 width rules and emoji font fallbacks', 
 
   assert.equal(packageJson.dependencies['@xterm/addon-unicode11'], '^0.9.0');
   assert.match(renderer, /const \{ TerminalUnicodeWidthAddon \} = require\('\.\/terminal-unicode-width'\)/);
-  assert.match(renderer, /function enableTerminalUnicode11\(term\) \{\s*term\.loadAddon\(new TerminalUnicodeWidthAddon\(\)\);\s*\}/);
+  // 断言的是「函数体里应用了 Unicode 11 宽度规则」，而不是「函数体只有这一行」。
+  // 后者会在该函数增加任何其他初始化时误报（OSC 52 剪贴板处理就挂在这里）。
+  assert.match(renderer, /function enableTerminalUnicode11\(term\) \{[\s\S]*?term\.loadAddon\(new TerminalUnicodeWidthAddon\(\)\);[\s\S]*?\n\}/);
   // 主串口终端的构造已收进 `createSerialRuntime(groupId)`，所以这里不再有
   // `enableTerminalUnicode11(serialTerm)`。但「每个终端都必须应用 Unicode 11 宽度」
   // 这条要求没变，而且现在更强：三个建终端的地方（串口工厂、过滤页、Shell）都要调它。

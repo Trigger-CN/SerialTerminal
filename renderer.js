@@ -106,8 +106,55 @@ const terminalSearchTrackers = new WeakMap();
 const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
 const TERMINAL_FONT_FAMILY = (config) => `${config.fontFamily}, ${config.fontFamilyZh}, "Segoe UI Emoji", "Noto Color Emoji", "Apple Color Emoji", "Courier New", monospace`;
 
+// OSC 52：把 base64 文本写进系统剪贴板。
+//
+// 为什么需要：`atman` 这类 CLI 的 copy 不是直接调系统剪贴板，而是往终端写
+// `ESC ] 52 ; c ; <base64> BEL`，由终端负责落地。Windows Terminal / iTerm /
+// kitty 实现了该协议所以能复制；xterm.js 默认忽略未知 OSC，内容被静默丢弃，
+// 表现为「复制了但剪贴板没变」。
+//
+// 有意收窄到「只写」，不做完整 OSC 52 语义：
+//   - 读取请求（负载为 '?'）一律拒绝。允许读取等于让串口另一端的设备读走
+//     用户剪贴板，这是不可接受的信息外泄面。
+//   - 'c' / 'p' 选择区都落到系统剪贴板：Windows/macOS 没有 X11 primary 概念。
+//   - 有大小上限：串口设备或日志内容可以伪造这条序列，不设限就能用超大负载
+//     反复覆盖剪贴板。
+const OSC52_CLIPBOARD_IDENT = 52;
+const OSC52_MAX_BYTES = 1024 * 1024;
+// 严格 base64：长度必须是 4 的倍数，末尾最多两个 = 填充。
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function registerTerminalOsc52(term) {
+    if (!term?.parser?.registerOscHandler) return;
+    term.parser.registerOscHandler(OSC52_CLIPBOARD_IDENT, data => {
+        // 负载格式：<select>;<base64>，select 常见为 'c'、'p' 或空。
+        const separator = data.indexOf(';');
+        if (separator === -1) return true;
+        const select = data.slice(0, separator).trim();
+        const payload = data.slice(separator + 1);
+        // '?' 是读取请求，拒绝并吞掉，避免序列泄漏到屏幕上。
+        if (!payload || payload === '?') return true;
+
+        // 先校验再解码：Buffer.from(x, 'base64') 是宽松的，会把非法字符跳过并
+        // 继续解出乱码。串口设备可以借此往剪贴板塞垃圾内容，所以这里只接受
+        // 严格合法的 base64（标准表，可含 = 填充，忽略换行）。
+        const normalized = payload.replace(/\s+/g, '');
+        if (!BASE64_PATTERN.test(normalized)) return true;
+
+        const text = Buffer.from(normalized, 'base64').toString('utf8');
+        if (!text) return true;
+        if (Buffer.byteLength(text, 'utf8') > OSC52_MAX_BYTES) {
+            ipcRenderer.send('renderer-log', `OSC 52 payload rejected: exceeds ${OSC52_MAX_BYTES} bytes (select=${select})`);
+            return true;
+        }
+        writeClipboardText(text);
+        return true;
+    });
+}
+
 function enableTerminalUnicode11(term) {
     term.loadAddon(new TerminalUnicodeWidthAddon());
+    registerTerminalOsc52(term);
 }
 
 const SEND_LIMITS = Object.freeze({ main: 1024 * 1024, quick: 1024 * 1024, auto: 64 * 1024, paste: 1024 * 1024, terminal: 1024 * 1024 });
