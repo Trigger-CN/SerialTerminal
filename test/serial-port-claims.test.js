@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { SerialPortClaimTable, normalizePortPath, normalizePortKey } = require('../serial-port-claims');
+const { SerialPortClaimTable, normalizePortPath, normalizePortKey } = require('../src/serial/serial-port-claims');
 
 test('normalizePortPath trims strings and rejects non-strings', () => {
   assert.equal(normalizePortPath('  COM6 '), 'COM6');

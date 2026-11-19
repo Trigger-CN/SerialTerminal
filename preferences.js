@@ -1,7 +1,7 @@
 const { ipcRenderer, shell } = require('electron');
 const { randomUUID } = require('crypto');
-const { t, getLanguage } = require('./i18n');
-const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
+const { t, getLanguage } = require('./src/common/i18n');
+const { normalizeFontWeight, normalizeIntegerSetting } = require('./src/common/config-values');
 
 const createMaterialIcon = (name, className = 'material-icon') => window.MaterialIcons.createIcon(name, className);
 

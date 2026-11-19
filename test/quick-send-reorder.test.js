@@ -11,7 +11,7 @@ const {
   deleteQuickSendGroup,
   disableSidebarQuickSend,
   deleteQuickSendById
-} = require('../quick-send-reorder');
+} = require('../src/common/quick-send-reorder');
 
 const shortcutRects = [
   { top: 400, height: 36 },

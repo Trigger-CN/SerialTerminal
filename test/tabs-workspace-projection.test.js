@@ -3,8 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { projectWorkspace } = require('../tabs-workspace-projection');
-const model = require('../tab-model');
+const { projectWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const model = require('../src/workspace/tab-model');
 const acceptance = require('./tab-model-acceptance');
 
 function baseSections() {
@@ -234,7 +234,7 @@ test('new shell keys win over legacy ones when both are present', () => {
 });
 
 test('runtime import restores a shell-only pane as ordinary membership without changing input', () => {
-    const { importWorkspace } = require('../tabs-workspace-projection');
+    const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
     const sections = baseSections();
     sections.groups[0].panes = [
         { id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' },
@@ -255,7 +255,7 @@ test('runtime import restores a shell-only pane as ordinary membership without c
 });
 
 test('runtime import keeps multi-group shells at root and restores declared leaf kinds', () => {
-    const { importWorkspace } = require('../tabs-workspace-projection');
+    const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
     const sections = baseSections();
     sections.groups[0].panes[0].tabIds = ['tab-main', 'f1', 'c1'];
     sections.groups.push({ id: 'g2', panes: [{ id: 'g2-pane-1', tabIds: [], activeTabId: null }] });

@@ -3,9 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const model = require('../tab-model');
-const { importWorkspace } = require('../tabs-workspace-projection');
-const { createWorkspaceModelManager } = require('../workspace-model-manager');
+const model = require('../src/workspace/tab-model');
+const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const { createWorkspaceModelManager } = require('../src/workspace/workspace-model-manager');
 const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'renderer.js'), 'utf8');
 function act(ws, action) {
     const result = model.applyWorkspaceAction(ws, action);

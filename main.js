@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, net, crashReporter } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { createTelemetryReporter, UUID_PATTERN } = require('./telemetry-reporter');
+const { createTelemetryReporter, UUID_PATTERN } = require('./src/common/telemetry-reporter');
 const pty = require('node-pty');
 const { SerialPort } = require('serialport');
 const iconv = require('iconv-lite');
@@ -10,20 +10,20 @@ const { CancellationToken } = require('builder-util-runtime');
 const log = require('electron-log');
 const yaml = require('js-yaml');
 const fontList = require('font-list');
-const { t, getLanguage, DEFAULT_LANGUAGE } = require('./i18n');
-const { buildSerialWriteBuffer } = require('./serial-codec');
-const { normalizeFontWeight, normalizeIntegerSetting } = require('./config-values');
-const { normalizeBaudRate, normalizeCustomBaudRates, isStandardBaudRate } = require('./baud-rates');
-const { normalizeSearchHistory } = require('./search-history');
+const { t, getLanguage, DEFAULT_LANGUAGE } = require('./src/common/i18n');
+const { buildSerialWriteBuffer } = require('./src/serial/serial-codec');
+const { normalizeFontWeight, normalizeIntegerSetting } = require('./src/common/config-values');
+const { normalizeBaudRate, normalizeCustomBaudRates, isStandardBaudRate } = require('./src/serial/baud-rates');
+const { normalizeSearchHistory } = require('./src/common/search-history');
 const {
   migrateSerialGroupsConfig,
   needsSerialGroupsMigration
-} = require('./serial-groups-config');
-const { WORKSPACE_CONFIG_VERSION, migrateWorkspaceLayoutConfig } = require('./workspace-layout-state');
-const { cleanupExpiredLogFiles } = require('./log-cleanup');
-const { SerialPortClaimTable, normalizePortKey } = require('./serial-port-claims');
-const { formatLocalDate, getLogDirectory, buildPortLogFolderName: buildPortFolderName } = require('./log-directory');
-const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
+} = require('./src/serial/serial-groups-config');
+const { WORKSPACE_CONFIG_VERSION, migrateWorkspaceLayoutConfig } = require('./src/workspace/workspace-layout-state');
+const { cleanupExpiredLogFiles } = require('./src/log/log-cleanup');
+const { SerialPortClaimTable, normalizePortKey } = require('./src/serial/serial-port-claims');
+const { formatLocalDate, getLogDirectory, buildPortLogFolderName: buildPortFolderName } = require('./src/log/log-directory');
+const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./src/chart/chart-parser-worker-client');
 const {
   DYNAMIC_UPDATE_METADATA_URL,
   buildUpdateMetadataCandidates,
@@ -37,12 +37,12 @@ const {
   resolveGiteeUpdateMetadataUrl,
   runUpdateSourceFallback,
   selectUpdateReleaseCandidates
-} = require('./update-source-resolver');
+} = require('./src/common/update-source-resolver');
 const {
   findShellProfile: findConfiguredShellProfile,
   normalizeShellProfiles,
   resolveDefaultShellProfileId
-} = require('./shell-profiles');
+} = require('./src/shell/shell-profiles');
 
 // Configure logging
 log.transports.file.level = 'info';

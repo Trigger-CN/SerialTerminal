@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeFontWeight, normalizeIntegerSetting } = require('../config-values');
+const { normalizeFontWeight, normalizeIntegerSetting } = require('../src/common/config-values');
 
 test('accepts integer settings and clamps values outside their ranges', () => {
   assert.equal(normalizeIntegerSetting('24', 'fontSize'), 24);

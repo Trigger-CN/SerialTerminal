@@ -10,7 +10,7 @@ const {
   normalizeSerialGroups,
   migrateSerialGroupsConfig,
   needsSerialGroupsMigration
-} = require('../serial-groups-config');
+} = require('../src/serial/serial-groups-config');
 
 test('a v14 config without serialGroups becomes one group carrying the old state', () => {
   const migrated = migrateSerialGroupsConfig({

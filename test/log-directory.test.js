@@ -9,7 +9,7 @@ const {
   buildPortLogFolderName,
   RESERVED_DEVICE_NAME,
   PORT_FOLDER_PREFIX
-} = require('../log-directory');
+} = require('../src/log/log-directory');
 
 test('formats local dates and optionally creates a dated log path', () => {
   const date = new Date(2026, 7, 14, 23, 59, 59);

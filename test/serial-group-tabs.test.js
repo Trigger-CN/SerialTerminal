@@ -12,7 +12,7 @@ const {
   resolveGroupAfterAdd,
   resolveGroupAfterClose,
   didLayerCountChange
-} = require('../serial-group-tabs');
+} = require('../src/serial/serial-group-tabs');
 
 // 常用夹具：两个分组，每组一个主标签 + 一个过滤标签。
 function twoGroups() {

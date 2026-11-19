@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ChartDataModel } = require('../chart-data-model');
+const { ChartDataModel } = require('../src/chart/chart-data-model');
 
 test('stores aligned series with null gaps and calculates statistics', () => {
   const model = new ChartDataModel({ fields: [{ key: 'a' }, { key: 'b' }], maxPoints: 100 });

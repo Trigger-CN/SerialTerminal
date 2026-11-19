@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createWorkspaceManager } = require('../workspace-manager');
+const { createWorkspaceManager } = require('../src/workspace/workspace-manager');
 
 // 构造一个可被 workspace-manager 驱动的最小 DOM：
 // 每个 pane 元素都要有 dataset.paneId、classList、hidden、style 与 querySelector(All)。

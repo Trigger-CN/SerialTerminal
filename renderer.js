@@ -21,24 +21,24 @@ window.addEventListener('unhandledrejection', (event) => {
 const { Terminal } = require('@xterm/xterm');
 const { FitAddon } = require('@xterm/addon-fit');
 const { SearchAddon } = require('@xterm/addon-search');
-const { TerminalUnicodeWidthAddon } = require('./terminal-unicode-width');
+const { TerminalUnicodeWidthAddon } = require('./src/terminal/terminal-unicode-width');
 const iconv = require('iconv-lite');
-const { t, getLanguage } = require('./i18n');
-const { isStandardBaudRate, normalizeBaudRate, normalizeCustomBaudRates } = require('./baud-rates');
-const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./workspace-manager');
-const { getHorizontalInsertionIndex } = require('./tab-reorder');
-const { parseHexInput, buildSerialWriteBuffer } = require('./serial-codec');
-const { HexStreamFormatter } = require('./hex-formatter');
-const { serializeTerminalBuffer } = require('./terminal-buffer-text');
-const { appendPendingOutput, takePendingChunk } = require('./terminal-output-buffer');
-const { formatSentRecord } = require('./sent-record');
-const { translateConptyMouseMode } = require('./shell-mouse-compat');
+const { t, getLanguage } = require('./src/common/i18n');
+const { isStandardBaudRate, normalizeBaudRate, normalizeCustomBaudRates } = require('./src/serial/baud-rates');
+const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./src/workspace/workspace-manager');
+const { getHorizontalInsertionIndex } = require('./src/workspace/tab-reorder');
+const { parseHexInput, buildSerialWriteBuffer } = require('./src/serial/serial-codec');
+const { HexStreamFormatter } = require('./src/terminal/hex-formatter');
+const { serializeTerminalBuffer } = require('./src/terminal/terminal-buffer-text');
+const { appendPendingOutput, takePendingChunk } = require('./src/terminal/terminal-output-buffer');
+const { formatSentRecord } = require('./src/terminal/sent-record');
+const { translateConptyMouseMode } = require('./src/shell/shell-mouse-compat');
 const uPlot = require('uplot');
-const { SerialTextStream } = require('./serial-text-stream');
-const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./chart-parser-ipc-client');
-const { ChartDataModel } = require('./chart-data-model');
-const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./serial-group-registry');
-const { SerialGroupContextStore } = require('./serial-group-context');
+const { SerialTextStream } = require('./src/serial/serial-text-stream');
+const { ChartParserIpcClient, discoverChartFieldsInWorker } = require('./src/chart/chart-parser-ipc-client');
+const { ChartDataModel } = require('./src/chart/chart-data-model');
+const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID: REGISTRY_DEFAULT_GROUP_ID } = require('./src/serial/serial-group-registry');
+const { SerialGroupContextStore } = require('./src/serial/serial-group-context');
 const {
     DISPLAY_PREF_SCOPES,
     normalizeDisplayPrefScope,
@@ -46,9 +46,9 @@ const {
     readGroupDisplayPrefs,
     resolveDisplayPrefs,
     displayPrefsEqual
-} = require('./serial-group-display-prefs');
-const { SerialDataParser } = require('./serial-data-parser');
-const { mainTabId, mainTabButtonId, serialContainerId } = require('./serial-group-dom');
+} = require('./src/serial/serial-group-display-prefs');
+const { SerialDataParser } = require('./src/serial/serial-data-parser');
+const { mainTabId, mainTabButtonId, serialContainerId } = require('./src/serial/serial-group-dom');
 const {
     groupPaneId,
     groupSplitterId,
@@ -67,26 +67,26 @@ const {
     shellPaneId,
     shellPaneTabsContentId,
     describeGroupWorkspace
-} = require('./serial-group-layout-dom');
-const { createDefaultLayoutFor, normalizeLayoutShape } = require('./workspace-layout-shape');
-const { SerialTerminalRuntimeRegistry } = require('./serial-group-runtime');
-const { SerialOutputBuckets } = require('./serial-output-buckets');
-const { createGroupTabListStore } = require('./serial-group-tab-lists');
-const { addSerialGroup, removeSerialGroup, renameSerialGroup, resolveGroupDisplayTitle } = require('./serial-groups-model');
-const { describeGroupTab, describeGroupTabBar, GROUP_TAB_BAR_ID, GROUP_TAB_LIST_ID } = require('./serial-group-tab-bar');
-const { ChartView } = require('./chart-view');
-const { buildChartCsv } = require('./chart-csv');
+} = require('./src/serial/serial-group-layout-dom');
+const { createDefaultLayoutFor, normalizeLayoutShape } = require('./src/workspace/workspace-layout-shape');
+const { SerialTerminalRuntimeRegistry } = require('./src/serial/serial-group-runtime');
+const { SerialOutputBuckets } = require('./src/serial/serial-output-buckets');
+const { createGroupTabListStore } = require('./src/serial/serial-group-tab-lists');
+const { addSerialGroup, removeSerialGroup, renameSerialGroup, resolveGroupDisplayTitle } = require('./src/serial/serial-groups-model');
+const { describeGroupTab, describeGroupTabBar, GROUP_TAB_BAR_ID, GROUP_TAB_LIST_ID } = require('./src/serial/serial-group-tab-bar');
+const { ChartView } = require('./src/chart/chart-view');
+const { buildChartCsv } = require('./src/chart/chart-csv');
 const {
     deleteSearchHistoryItem,
     normalizeSearchHistory,
     recordSearchHistory,
     setSearchHistoryPinned
-} = require('./search-history');
+} = require('./src/common/search-history');
 const {
     createTerminalRevisionTracker,
     findAnchoredMatchIndex,
     resolveNavigationIndex
-} = require('./terminal-search-state');
+} = require('./src/terminal/terminal-search-state');
 const {
     getVerticalInsertionIndex,
     reorderQuickSendItems,
@@ -95,11 +95,11 @@ const {
     deleteQuickSendGroup,
     disableSidebarQuickSend,
     deleteQuickSendById
-} = require('./quick-send-reorder');
-const { projectWorkspace, importWorkspace } = require('./tabs-workspace-projection');
-const tabModel = require('./tab-model');
-const { createWorkspaceModelManager } = require('./workspace-model-manager');
-const { serializeWorkspaceLayout, restoreWorkspaceLayout: decodeWorkspaceLayout } = require('./workspace-layout-state');
+} = require('./src/common/quick-send-reorder');
+const { projectWorkspace, importWorkspace } = require('./src/workspace/tabs-workspace-projection');
+const tabModel = require('./src/workspace/tab-model');
+const { createWorkspaceModelManager } = require('./src/workspace/workspace-model-manager');
+const { serializeWorkspaceLayout, restoreWorkspaceLayout: decodeWorkspaceLayout } = require('./src/workspace/workspace-layout-state');
 
 const terminalSearchTrackers = new WeakMap();
 

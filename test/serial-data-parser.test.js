@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { SerialDataParser, MAX_UNTERMINATED_LINE } = require('../serial-data-parser');
+const { SerialDataParser, MAX_UNTERMINATED_LINE } = require('../src/serial/serial-data-parser');
 
 test('splits a chunk into lines and keeps the trailing partial line', () => {
   const parser = new SerialDataParser();

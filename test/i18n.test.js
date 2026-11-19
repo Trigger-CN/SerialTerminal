@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { translations, t, getLanguage, DEFAULT_LANGUAGE } = require('../i18n');
+const { translations, t, getLanguage, DEFAULT_LANGUAGE } = require('../src/common/i18n');
 
 const root = path.join(__dirname, '..');
 

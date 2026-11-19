@@ -6,7 +6,7 @@ const {
   createTerminalRevisionTracker,
   findAnchoredMatchIndex,
   resolveNavigationIndex
-} = require('../terminal-search-state');
+} = require('../src/terminal/terminal-search-state');
 
 function createEvent() {
   const listeners = new Set();

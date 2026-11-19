@@ -8,7 +8,7 @@
 //
 // 校验的是 TAB_ARCHITECTURE.md §6 定义的 I1–I10，一条不多、一条不少。
 
-const DOC_PATH = 'TAB_ARCHITECTURE.md';
+const DOC_PATH = 'docs/TAB_ARCHITECTURE.md';
 
 const INVARIANT_IDS = ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I9', 'I10'];
 

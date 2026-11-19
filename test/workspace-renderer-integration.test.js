@@ -5,9 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const model = require('../tab-model');
-const { importWorkspace } = require('../tabs-workspace-projection');
-const { groupPaneId, groupWorkspaceRootId, groupSplitterId } = require('../serial-group-layout-dom');
+const model = require('../src/workspace/tab-model');
+const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const { groupPaneId, groupWorkspaceRootId, groupSplitterId } = require('../src/serial/serial-group-layout-dom');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
 function section(start, end) {
@@ -305,7 +305,7 @@ test('delegated content activation follows main/filter/chart owner and preserves
 
 
 test('production Shell drag places the root-row indicator at the actual pointer position', () => {
-    const { getHorizontalInsertionIndex } = require('../tab-reorder');
+    const { getHorizontalInsertionIndex } = require('../src/workspace/tab-reorder');
     const f = fixture();
     const list = new f.Element('roots');
     const tabs = ['group', 'shell-a', 'shell-b'].map((id, i) => {

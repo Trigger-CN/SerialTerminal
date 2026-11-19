@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { HexStreamFormatter, formatHexLine } = require('../hex-formatter');
+const { HexStreamFormatter, formatHexLine } = require('../src/terminal/hex-formatter');
 
 test('formats offsets, bytes, and printable ASCII consistently', () => {
   const line = formatHexLine(16, Uint8Array.from([0x41, 0x00, 0x7e]), { bytesPerLine: 8 });

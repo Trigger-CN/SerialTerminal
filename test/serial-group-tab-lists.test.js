@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createGroupTabListStore } = require('../serial-group-tab-lists');
+const { createGroupTabListStore } = require('../src/serial/serial-group-tab-lists');
 
 test('the default group starts with an empty list', () => {
   const store = createGroupTabListStore();

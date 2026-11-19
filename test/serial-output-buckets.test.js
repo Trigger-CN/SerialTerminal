@@ -7,8 +7,8 @@ const {
   SerialOutputBuckets,
   DEFAULT_HIGH_WATER_BYTES,
   normalizeHighWater
-} = require('../serial-output-buckets');
-const { DEFAULT_SERIAL_GROUP_ID } = require('../serial-group-registry');
+} = require('../src/serial/serial-output-buckets');
+const { DEFAULT_SERIAL_GROUP_ID } = require('../src/serial/serial-group-registry');
 
 function asText(batch) {
   return batch.buffer.toString('utf8');

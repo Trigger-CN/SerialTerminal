@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
-const { SerialPortClaimTable, normalizePortKey } = require('../serial-port-claims');
+const { SerialPortClaimTable, normalizePortKey } = require('../src/serial/serial-port-claims');
 const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
 
@@ -48,7 +48,7 @@ function createFixture(config = {}) {
     getLogDirectory: (base, dated) => dated ? path.join(base, today) : base,
     // 注入真实实现而不是桩：端口目录名（含 port_ 前缀）是本次修复的核心，
     // 用桩会让测试失去对目录结构的校验能力。名字必须与 main.js 中的别名一致。
-    buildPortFolderName: require('../log-directory').buildPortLogFolderName,
+    buildPortFolderName: require('../src/log/log-directory').buildPortLogFolderName,
     SerialPort: FakePort, SerialPortClaimTable, normalizePortKey,
     ipcMain: { handle: (name, fn) => handles[name] = fn, on: (name, fn) => listeners[name] = fn },
     setInterval: () => 1, clearInterval: () => {}, setImmediate: () => {},

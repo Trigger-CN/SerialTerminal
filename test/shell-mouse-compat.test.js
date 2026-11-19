@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { translateConptyMouseMode } = require('../shell-mouse-compat');
+const { translateConptyMouseMode } = require('../src/shell/shell-mouse-compat');
 
 test('restores SGR drag mouse mode consumed by ConPTY', () => {
     const state = {};

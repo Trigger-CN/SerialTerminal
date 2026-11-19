@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const iconv = require('iconv-lite');
-const { SerialTextStream } = require('../serial-text-stream');
+const { SerialTextStream } = require('../src/serial/serial-text-stream');
 
 test('frames CRLF, LF and CR without a split CRLF artifact', () => {
   const stream = new SerialTextStream();

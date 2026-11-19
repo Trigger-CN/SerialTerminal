@@ -6,7 +6,7 @@ const {
   findShellProfile,
   normalizeShellProfiles,
   resolveDefaultShellProfileId
-} = require('../shell-profiles');
+} = require('../src/shell/shell-profiles');
 
 test('assigns unique stable IDs while preserving profile argv', () => {
   const profiles = normalizeShellProfiles([

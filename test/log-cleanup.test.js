@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { cleanupExpiredLogFiles } = require('../log-cleanup');
+const { cleanupExpiredLogFiles } = require('../src/log/log-cleanup');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

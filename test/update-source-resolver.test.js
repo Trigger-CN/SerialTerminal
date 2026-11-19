@@ -19,7 +19,7 @@ const {
   runUpdateSourceFallback,
   selectUpdateReleaseCandidates,
   validateMetadataUrl
-} = require('../update-source-resolver');
+} = require('../src/common/update-source-resolver');
 
 function response(status, body, headers = {}) {
   return {

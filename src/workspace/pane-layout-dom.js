@@ -13,7 +13,7 @@
 // 分组的 DOM 标识（tab-main / serial-container）由 serial-group-dom.js 统一生成。
 // 这里不再重复字面量：两处各写一份 'serial-container' 正是「一个分组一个容器」
 // 迟迟无法成立的原因——两份定义可以独立漂移，而漂移后的失败方式是终端区空白。
-const { mainTabId, serialContainerId } = require('./serial-group-dom');
+const { mainTabId, serialContainerId } = require('../serial/serial-group-dom');
 
 const PANE_TAB_BUTTONS = Object.freeze([
   { kind: 'shell', icon: 'terminal', titleKey: 'main.newShellTab' },

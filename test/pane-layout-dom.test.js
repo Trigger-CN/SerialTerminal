@@ -10,7 +10,7 @@ const {
   describePane,
   describeWorkspace,
   findMissingPaneIds
-} = require('../pane-layout-dom');
+} = require('../src/workspace/pane-layout-dom');
 
 test('pane element ids follow the naming the existing selectors depend on', () => {
   const pane = describePane('pane-1');

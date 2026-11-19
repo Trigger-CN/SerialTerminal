@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const model = require('../tab-model');
+const model = require('../src/workspace/tab-model');
 const acceptance = require('./tab-model-acceptance');
 
 const {
@@ -1103,7 +1103,7 @@ function mainLeafIdOf(ws) {
 //
 // 反向对照：删掉 `declaredMain` 判定、改回无条件 unshift，下面 pane-2 的 tabIds 立即变空。
 test('projection keeps the main tab in the pane that actually declares it', () => {
-    const { projectWorkspace } = require('../tabs-workspace-projection');
+    const { projectWorkspace } = require('../src/workspace/tabs-workspace-projection');
     const sections = {
         groups: [{
             id: 'default',
@@ -1133,7 +1133,7 @@ test('projection keeps the main tab in the pane that actually declares it', () =
 // 反过来：任何 pane 都没声明主标签时，仍要按老行为补到 pane-1 队首。
 // 这一条是上一条的反向对照，两条一起才能证明「保留声明位置」没有把兜底补位删掉。
 test('projection still prepends the main tab when no pane declares it', () => {
-    const { projectWorkspace } = require('../tabs-workspace-projection');
+    const { projectWorkspace } = require('../src/workspace/tabs-workspace-projection');
     const sections = {
         groups: [{
             id: 'default',

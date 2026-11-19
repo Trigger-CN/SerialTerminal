@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('../chart-parser-worker-client');
+const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('../src/chart/chart-parser-worker-client');
 
 class FakeWorker extends EventEmitter {
   static instances = [];

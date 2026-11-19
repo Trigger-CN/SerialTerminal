@@ -28,7 +28,7 @@ const {
   describeGroupPanes,
   describeGroupWorkspace,
   findMissingGroupPaneIds
-} = require('../serial-group-layout-dom');
+} = require('../src/serial/serial-group-layout-dom');
 
 const root = path.join(__dirname, '..');
 

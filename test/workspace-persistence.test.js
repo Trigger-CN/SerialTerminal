@@ -3,9 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const model = require('../tab-model');
-const { importWorkspace } = require('../tabs-workspace-projection');
-const { serializeWorkspaceLayout, restoreWorkspaceLayout } = require('../workspace-layout-state');
+const model = require('../src/workspace/tab-model');
+const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const { serializeWorkspaceLayout, restoreWorkspaceLayout } = require('../src/workspace/workspace-layout-state');
 const source = fs.readFileSync(require.resolve('../renderer.js'), 'utf8');
 function section(start, end) {
     const offset = source.indexOf(start), limit = source.indexOf(end, offset);

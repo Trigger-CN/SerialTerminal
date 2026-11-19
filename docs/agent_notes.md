@@ -88,30 +88,28 @@
 ```text
 SerialTerminal/
 ├─ assets/                     图标、截图和菜单图标
+├─ docs/                       设计、待办与维护文档
 ├─ scripts/                    测试、发布、镜像和 native 准备脚本
+├─ src/                        模块源码，按功能域分层
+│  ├─ chart/                   图表解析、数据模型、绘图与 CSV 导出
+│  ├─ common/                  配置归一化、i18n 与 locales、遥测、搜索历史
+│  ├─ log/                     日志目录命名与清理
+│  ├─ serial/                  串口编解码、分组模型、标签栏与运行时
+│  ├─ shell/                   Shell Profile 与 ConPTY 鼠标兼容
+│  ├─ terminal/                终端缓冲区、宽度、搜索状态与 Hex 格式化
+│  └─ workspace/               标签树模型、布局序列化与工作区投影
 ├─ test/                       Node 自动化测试与 Python 串口联调脚本
 ├─ telemetry-server/           匿名活跃统计与动态更新 manifest 服务
 ├─ index.html                  主窗口 HTML
 ├─ renderer.js                 主窗口渲染与业务编排
-├─ workspace-manager.js        pane/tab 状态、恢复和 DOM 编排
-├─ serial-codec.js             严格 Hex 解析与统一发送 Buffer 构造
-├─ serial-text-stream.js       图表独立文本流解码和分行
-├─ hex-formatter.js            流式 Hex dump 格式化
-├─ chart-parser.js             图表三级解析与字段发现
-├─ chart-parser-worker*.js     图表 Worker 与客户端
-├─ chart-data-model.js         图表保留、统计和降采样
-├─ chart-view.js               主图、时间轴和视口交互
-├─ chart-csv.js                UTF-8 BOM CSV 导出
-├─ search-history.js           搜索历史归一化、置顶和淘汰
-├─ config-values.js            共享数值范围归一化
-├─ shell-profiles.js           Shell Profile 迁移与查找
 ├─ main.js                     窗口、配置、串口、日志、更新和 Shell PTY
 ├─ preferences.html/js         设置窗口
-├─ i18n.js                     多语言字典与翻译函数
+├─ update-progress.html/js     更新下载进度窗口
+├─ material-icons.js           图标字形注入
+├─ window-titlebar.js          自绘标题栏
+├─ style.css                   全局样式
 ├─ README.md                   对外项目说明
-├─ ToDo.md                     全局工程待办与验证基线
-└─ agent_notes.md              本文档
-```
+└─ docs/agent_notes.md         本文档
 
 ### 3.1 主文件说明
 

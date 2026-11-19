@@ -4,10 +4,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createWorkspaceManager } = require('../workspace-manager');
-const { createDefaultLayoutFor, normalizeLayoutShape } = require('../workspace-layout-shape');
-const { groupPaneId, groupWorkspaceRootId } = require('../serial-group-layout-dom');
-const { mainTabId } = require('../serial-group-dom');
+const { createWorkspaceManager } = require('../src/workspace/workspace-manager');
+const { createDefaultLayoutFor, normalizeLayoutShape } = require('../src/workspace/workspace-layout-shape');
+const { groupPaneId, groupWorkspaceRootId } = require('../src/serial/serial-group-layout-dom');
+const { mainTabId } = require('../src/serial/serial-group-dom');
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
 const section = (start,end) => {
   const offset=source.indexOf(start);const limit=source.indexOf(end,offset);

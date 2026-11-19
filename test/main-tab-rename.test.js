@@ -15,7 +15,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-const dom = require('../serial-group-dom');
+const dom = require('../src/serial/serial-group-dom');
 
 test('主终端标签的双击重命名走 document 级委托', () => {
   // 委托监听必须存在：一处绑定覆盖静态与动态两种主标签。

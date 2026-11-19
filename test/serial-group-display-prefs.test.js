@@ -12,7 +12,7 @@ const {
   readGroupDisplayPrefs,
   resolveDisplayPrefs,
   displayPrefsEqual
-} = require('../serial-group-display-prefs');
+} = require('../src/serial/serial-group-display-prefs');
 
 const GLOBAL_PREFS = {
   showTimestamp: true,

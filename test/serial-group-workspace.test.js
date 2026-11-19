@@ -8,7 +8,7 @@ const {
   describeGroupWorkspaceEntry,
   describeGroupWorkspace,
   findMissingGroupContainers
-} = require('../serial-group-workspace');
+} = require('../src/serial/serial-group-workspace');
 
 function makeGroups(ids, overrides = {}) {
   return ids.map(id => ({ id, title: `T-${id}`, status: 'disconnected', ...overrides }));

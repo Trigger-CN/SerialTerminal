@@ -15,13 +15,13 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
-const i18n = fs.readFileSync(path.join(root, 'i18n.js'), 'utf8');
+const i18n = fs.readFileSync(path.join(root, 'src', 'common', 'i18n.js'), 'utf8');
 const {
   STANDARD_BAUD_RATES,
   MIN_BAUD_RATE,
   isSupportedBaudRate,
   normalizeCustomBaudRates
-} = require('../baud-rates');
+} = require('../src/serial/baud-rates');
 
 test('下拉框中不再出现 9600 以下的速率', () => {
   const selectStart = html.indexOf('<select id="baud-select"');

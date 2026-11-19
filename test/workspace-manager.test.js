@@ -7,7 +7,7 @@ const {
   normalizeWorkspaceLayoutShape,
   reconcileEmptyPaneLayout,
   moveWorkspaceTab
-} = require('../workspace-manager');
+} = require('../src/workspace/workspace-manager');
 
 test('deduplicates tab ownership while preserving the main tab position', () => {
   const layout = normalizeWorkspaceLayoutShape({

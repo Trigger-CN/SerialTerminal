@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildChartCsv } = require('../chart-csv');
+const { buildChartCsv } = require('../src/chart/chart-csv');
 
 test('exports UTF-8 BOM, original timestamps, labels, and empty missing values', () => {
   const csv = buildChartCsv([

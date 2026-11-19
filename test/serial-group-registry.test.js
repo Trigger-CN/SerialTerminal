@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID } = require('../serial-group-registry');
+const { SerialGroupRegistry, normalizeGroupId, DEFAULT_SERIAL_GROUP_ID } = require('../src/serial/serial-group-registry');
 
 test('normalizes group ids and falls back to the default group', () => {
   assert.equal(normalizeGroupId(undefined), DEFAULT_SERIAL_GROUP_ID);

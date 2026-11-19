@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createTelemetryReporter } = require('../telemetry-reporter');
+const { createTelemetryReporter } = require('../src/common/telemetry-reporter');
 
 const installationId = '9284747a-85cc-4e0a-92b2-6d577442b27e';
 

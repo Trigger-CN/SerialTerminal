@@ -1,9 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const model = require('../tab-model');
-const { importWorkspace } = require('../tabs-workspace-projection');
-const { serializeWorkspaceLayout, restoreWorkspaceLayout } = require('../workspace-layout-state');
+const model = require('../src/workspace/tab-model');
+const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const { serializeWorkspaceLayout, restoreWorkspaceLayout } = require('../src/workspace/workspace-layout-state');
 
 function baseline(multi = false) {
     return importWorkspace({ groups: [{ id: 'default', panes: [{ id: 'pane-1', tabIds: ['tab-main', 'f1', 'tab-shell-1'], activeTabId: 'f1' }] },
@@ -69,8 +69,8 @@ test('unknown snapshot version falls back without mutating or sharing baseline',
 
 
 test('legacy configuration migration is deterministic and versioned layout wins over stale mirrors', () => {
-    const { migrateSerialGroupsConfig } = require('../serial-groups-config');
-    const { migrateWorkspaceLayoutConfig } = require('../workspace-layout-state');
+    const { migrateSerialGroupsConfig } = require('../src/serial/serial-groups-config');
+    const { migrateWorkspaceLayoutConfig } = require('../src/workspace/workspace-layout-state');
     const old = migrateSerialGroupsConfig({ configVersion: 15, serialGroups: [{ id: 'default',
         panes: [{ id: 'pane-1', tabIds: ['tab-main', 'f1'], activeTabId: 'f1' }, { id: 'pane-2', tabIds: ['tab-shell-1'], activeTabId: 'tab-shell-1' }],
         paneSplit: { enabled: true, activePaneId: 'pane-2', orientation: 'vertical', sizes: { 'pane-1': 0.6, 'pane-2': 0.4 } },
@@ -99,8 +99,8 @@ test('single-to-multi removes promoted Shell pane ratios before saving', () => {
 
 
 test('configuration migration ignores phantom layout identities and preserves group/root ordering', () => {
-    const { migrateSerialGroupsConfig } = require('../serial-groups-config');
-    const { migrateWorkspaceLayoutConfig } = require('../workspace-layout-state');
+    const { migrateSerialGroupsConfig } = require('../src/serial/serial-groups-config');
+    const { migrateWorkspaceLayoutConfig } = require('../src/workspace/workspace-layout-state');
     const config = migrateSerialGroupsConfig({ serialGroups: [{ id: 'default', panes: [{ id: 'p', tabIds: ['tab-main', 'ghost', 'f1'] }], filterTabs: [{ id: 'f1' }] }, { id: 'g-1' }], shellTabs: [{ id: 'tab-shell-1' }, { id: 'tab-shell-2' }] });
     const migrated = migrateWorkspaceLayoutConfig(config);
     assert.equal(migrated.workspaceLayoutState.groups.flatMap(g => g.panes.flatMap(p => p.tabIds)).includes('ghost'), false);
@@ -140,8 +140,8 @@ test('root Shell without an explicit column keeps first-column local activation'
 
 
 test('configuration migration filters malformed and conflicting business IDs before importing layout', () => {
-    const { migrateSerialGroupsConfig } = require('../serial-groups-config');
-    const { migrateWorkspaceLayoutConfig } = require('../workspace-layout-state');
+    const { migrateSerialGroupsConfig } = require('../src/serial/serial-groups-config');
+    const { migrateWorkspaceLayoutConfig } = require('../src/workspace/workspace-layout-state');
     const source = migrateSerialGroupsConfig({ serialGroups: [
         { id: 'default', filterTabs: [null, {}, { id: 'tab-main' }, { id: 'f1', title: 'keep' }, { id: 'f1' }],
             chartTabs: [{ id: 'f1' }, { id: 'c1' }, { id: 'tab-shell-1' }] },

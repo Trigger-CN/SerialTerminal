@@ -2,8 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { SerialGroupContextStore, createDefaultState } = require('../serial-group-context');
-const { DEFAULT_SERIAL_GROUP_ID } = require('../serial-group-registry');
+const { SerialGroupContextStore, createDefaultState } = require('../src/serial/serial-group-context');
+const { DEFAULT_SERIAL_GROUP_ID } = require('../src/serial/serial-group-registry');
 
 test('default state carries independent screen and log counters', () => {
   const state = createDefaultState();

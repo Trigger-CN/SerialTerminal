@@ -10,7 +10,7 @@ const {
   mainTabId,
   mainTabButtonId,
   serialContainerId
-} = require('../serial-group-dom');
+} = require('../src/serial/serial-group-dom');
 
 const root = path.join(__dirname, '..');
 

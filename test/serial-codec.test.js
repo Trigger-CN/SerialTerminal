@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseHexInput, buildSerialWriteBuffer } = require('../serial-codec');
+const { parseHexInput, buildSerialWriteBuffer } = require('../src/serial/serial-codec');
 
 test('parses supported Hex formats into identical bytes', () => {
   for (const input of ['AA5501FF', 'AA 55 01 FF', '0xAA,0x55,0x01,0xFF', 'aa:55-01-ff']) {

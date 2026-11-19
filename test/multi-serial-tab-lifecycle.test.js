@@ -3,8 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const model = require('../tab-model');
-const { importWorkspace } = require('../tabs-workspace-projection');
+const model = require('../src/workspace/tab-model');
+const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
 const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'renderer.js'), 'utf8');
 function load(context, name) {
     const start = source.indexOf(`function ${name}(`);
@@ -75,7 +75,7 @@ for (const kind of ['Filter', 'Chart']) test(`closing background ${kind} preserv
 
 for (const scenario of ['late-success', 'late-failure', 'config-echo', 'early-disconnect']) test(`pending connection handles ${scenario}`, async () => {
     const failure = scenario === 'late-failure';
-    const { SerialGroupRegistry } = require('../serial-group-registry');
+    const { SerialGroupRegistry } = require('../src/serial/serial-group-registry');
     const registry = new SerialGroupRegistry(); registry.ensureGroup('b');
     let group = { id: 'b' }, finish;
     const events = [];

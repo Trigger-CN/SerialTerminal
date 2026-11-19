@@ -1,10 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const model = require('../tab-model');
-const { importWorkspace } = require('../tabs-workspace-projection');
-const { serializeWorkspaceLayout: save, restoreWorkspaceLayout: restore } = require('../workspace-layout-state');
-const { createWorkspaceModelManager } = require('../workspace-model-manager');
+const model = require('../src/workspace/tab-model');
+const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const { serializeWorkspaceLayout: save, restoreWorkspaceLayout: restore } = require('../src/workspace/workspace-layout-state');
+const { createWorkspaceModelManager } = require('../src/workspace/workspace-model-manager');
 
 function fixture(multi = false) {
     return importWorkspace({ groups: [{ id: 'default', panes: [{ id: 'p1', tabIds: ['tab-main', 'f1', 'f2'], activeTabId: 'tab-main' }] },

@@ -7,7 +7,7 @@ const {
   normalizePaneSizes,
   normalizeLayoutShape,
   reconcileEmptyPanes
-} = require('../workspace-layout-shape');
+} = require('../src/workspace/workspace-layout-shape');
 
 // 旧实现（改造前 workspace-manager.js 的 normalizeWorkspaceLayoutShape）。
 // 保留一份只处理两 pane 的参考实现，用来证明新实现没有改变既有行为。

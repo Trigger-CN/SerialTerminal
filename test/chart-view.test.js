@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ChartView } = require('../chart-view');
+const { ChartView } = require('../src/chart/chart-view');
 
 class FakeResizeObserver {
   observe() {}

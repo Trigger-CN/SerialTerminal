@@ -7,7 +7,7 @@ const {
   normalizeSearchHistory,
   recordSearchHistory,
   setSearchHistoryPinned
-} = require('../search-history');
+} = require('../src/common/search-history');
 
 function ids() {
   let next = 0;

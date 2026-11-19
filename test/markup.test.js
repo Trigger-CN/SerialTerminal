@@ -109,7 +109,7 @@ test('right sidebar manages persistent quick commands for the active Shell tab',
   assert.doesNotMatch(shellSidebar, /shell-session-list|activeShellSessions|noActiveShellSessions/);
   assert.match(html, /id="shell-quick-command-dialog"[\s\S]*aria-labelledby="shell-quick-command-dialog-title"/);
   assert.match(html, /id="shell-quick-command-append-enter" checked/);
-  assert.equal(require('../workspace-layout-state').WORKSPACE_CONFIG_VERSION, 16);
+  assert.equal(require('../src/workspace/workspace-layout-state').WORKSPACE_CONFIG_VERSION, 16);
   assert.match(main, /normalized\.shellQuickCommands = Array\.isArray\(source\.shellQuickCommands\)/);
   assert.match(main, /shellQuickCommands: \[\]/);
   assert.match(renderer, /function getActiveShellTab\(\)[\s\S]*getActiveTabInfo\(\)[\s\S]*shellTabs\.find/);
@@ -721,7 +721,7 @@ test('all xterm terminals use Unicode 11 width rules and emoji font fallbacks', 
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
   assert.equal(packageJson.dependencies['@xterm/addon-unicode11'], '^0.9.0');
-  assert.match(renderer, /const \{ TerminalUnicodeWidthAddon \} = require\('\.\/terminal-unicode-width'\)/);
+  assert.match(renderer, /const \{ TerminalUnicodeWidthAddon \} = require\('\.\/src\/terminal\/terminal-unicode-width'\)/);
   // 断言的是「函数体里应用了 Unicode 11 宽度规则」，而不是「函数体只有这一行」。
   // 后者会在该函数增加任何其他初始化时误报（OSC 52 剪贴板处理就挂在这里）。
   assert.match(renderer, /function enableTerminalUnicode11\(term\) \{[\s\S]*?term\.loadAddon\(new TerminalUnicodeWidthAddon\(\)\);[\s\S]*?\n\}/);
@@ -961,7 +961,7 @@ test('preferences configure search, filter, and selection highlight colors', () 
 test('welcome guide is shown once for each installed version', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
-  const i18n = fs.readFileSync(path.join(root, 'i18n.js'), 'utf8');
+  const i18n = fs.readFileSync(path.join(root, 'src', 'common', 'i18n.js'), 'utf8');
 
   assert.match(main, /lastWelcomeVersion: ''/);
   assert.match(main, /normalized\.lastWelcomeVersion = typeof source\.lastWelcomeVersion === 'string'/);
@@ -1056,7 +1056,7 @@ test('shell terminals preserve xterm keyboard, paste, and mouse input handling',
   assert.match(renderer, /if \(isShell && shellTab\) \{\s*shellTab\.term\.paste\(text\)/);
   assert.match(renderer, /term\.onBinary\(\(data\) => \{[\s\S]*?ipcRenderer\.send\('shell-tab-binary-input'/);
   assert.match(renderer, /term\.onData\(\(data\) => \{[\s\S]*?ipcRenderer\.send\('shell-tab-input', \{ tabId, data \}\)/);
-  assert.match(renderer, /require\('\.\/shell-mouse-compat'\)/);
+  assert.match(renderer, /require\('\.\/src\/shell\/shell-mouse-compat'\)/);
   assert.match(renderer, /ipcRenderer\.on\('shell-tab-output'[\s\S]*?const translatedData = translateConptyMouseMode\(tab, payload\.data\);[\s\S]*?tab\.term\.write\(translatedData, \(\) => \{[\s\S]*?setShellTextMode\(tab, true\)/);
   assert.doesNotMatch(renderer, /translateShellMouseInput/);
   assert.match(renderer, /const action = getShortcutAction\(combo\);\s*if \(!action\) return;[\s\S]*?event\.preventDefault\(\)/);
@@ -1307,7 +1307,7 @@ test('log hot path reuses buffers, batch timestamps, and compiled regexes', () =
 
   // D：解析器不再每个 flush 重新 split 整个缓冲
   // 解析器已抽到 serial-data-parser.js（无 DOM 依赖，可单测），因此改查该文件。
-  const parserSource = fs.readFileSync(path.join(root, 'serial-data-parser.js'), 'utf8');
+  const parserSource = fs.readFileSync(path.join(root, 'src', 'serial', 'serial-data-parser.js'), 'utf8');
   assert.doesNotMatch(parserSource, /incomingBuffer\.split\(/);
   assert.match(parserSource, /const LINE_DELIMITER_RE = \//);
   assert.match(parserSource, /LINE_DELIMITER_RE\.lastIndex = scanFrom;/);

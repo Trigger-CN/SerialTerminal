@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { appendPendingOutput, countTextLines, dropOldestLines, takePendingChunk } = require('../terminal-output-buffer');
+const { appendPendingOutput, countTextLines, dropOldestLines, takePendingChunk } = require('../src/terminal/terminal-output-buffer');
 
 function createState() {
   return { pending: [], pendingLength: 0, pendingLines: 0 };

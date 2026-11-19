@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { serializeTerminalBuffer } = require('../terminal-buffer-text');
+const { serializeTerminalBuffer } = require('../src/terminal/terminal-buffer-text');
 
 function createBuffer(lines) {
   return {

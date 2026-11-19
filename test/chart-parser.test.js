@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { discoverChartFields, createChartParser, convertUnit } = require('../chart-parser');
+const { discoverChartFields, createChartParser, convertUnit } = require('../src/chart/chart-parser');
 
 const frameLine = 'frame_perf_disp_event_cb: [FRAME_PERF] count=321 frame_total=93600us layout_prep=5300us render_envelope=39300us flush=28300us draw=11000us post_render=49000us mo_dual_disp.c:187';
 

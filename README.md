@@ -289,36 +289,27 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 ```text
 .
 ├─ assets/                    图标与截图资源
+├─ docs/                      设计与维护文档
 ├─ scripts/                   辅助脚本
+├─ src/                       模块源码（按功能域分层）
+│  ├─ chart/                  图表解析、数据模型、绘制与 CSV 导出
+│  ├─ common/                 配置归一化、i18n 与 locales、遥测、搜索历史
+│  ├─ log/                    日志目录命名与清理
+│  ├─ serial/                 串口编解码、分组模型、标签栏与运行时
+│  ├─ shell/                  Shell Profile 与 ConPTY 鼠标兼容
+│  ├─ terminal/               终端缓冲区、宽度、搜索状态与 Hex 格式化
+│  └─ workspace/              标签树模型、布局序列化与工作区投影
 ├─ test/                      Node 自动化测试与 Python 串口测试脚本
 ├─ index.html                 主窗口界面
 ├─ renderer.js                主窗口渲染逻辑（终端、过滤、搜索、输入、Shell、图表、串口分组）
-├─ chart-parser.js             图表自动键值、模板和正则解析
-├─ chart-parser-worker.js      图表解析 Worker 入口
-├─ chart-parser-ipc-client.js  图表解析 IPC 客户端
-├─ chart-data-model.js         图表数据保留、降采样、查询与统计
-├─ chart-view.js               实时折线图、时间轴和视口交互
-├─ chart-csv.js                图表 CSV 导出
-├─ search-history.js           搜索历史归一化、置顶、淘汰和删除
-├─ serial-codec.js             Text/Hex 发送请求校验与字节构造
-├─ serial-text-stream.js       图表使用的串口文本流解码与分行
-├─ config-values.js            设置数值范围与统一归一化
-├─ shell-profiles.js           Shell Profile 归一化、迁移与查找
-├─ hex-formatter.js            流式 Hex dump 格式化
-├─ workspace-manager.js       工作区 pane/tab 布局管理
-├─ serial-groups-model.js      串口分组增删改、重命名与标签名派生
-├─ serial-group-registry.js    分组连接态与会话号真相源
-├─ serial-group-tab-bar.js     分组标签栏结构描述
-├─ tab-model.js                多串口标签与分屏布局模型
 ├─ main.js                    主进程逻辑（窗口、配置、串口、日志、更新、Shell PTY）
 ├─ preferences.html           设置窗口界面
 ├─ preferences.js             设置窗口逻辑
-├─ i18n.js                    多语言字典与翻译函数
+├─ update-progress.html       更新下载进度窗口
+├─ update-progress.js         更新下载进度逻辑
+├─ material-icons.js          图标字形注入
+├─ window-titlebar.js         自绘标题栏
 ├─ style.css                  全局样式
-├─ agent_notes.md             项目接手与维护说明
-├─ HEX_FEATURE_TODO.md         Hex 功能实施状态、测试矩阵与未完成项
-├─ CHART_TAB_IMPLEMENTATION_PLAN.md  图表设计基线、实施状态与验收标准
-├─ MULTI_SERIAL_DESIGN.md     多串口支持设计基线与分阶段实施方案
 ├─ package.json               依赖、脚本与打包配置
 └─ README.md                  项目说明
 ```
@@ -326,12 +317,16 @@ Serial Terminal 使用 Electron 构建桌面应用，串口通信基于 `serialp
 ### 文档导航
 
 - `README.md`：面向用户和贡献者的当前功能、运行与发布说明。
-- `agent_notes.md`：维护者接手入口，记录当前架构、不变量和高风险区域。
-- `ToDo.md`：全仓库仍需执行的工程待办与验证基线。
-- `HEX_FEATURE_TODO.md`：Hex 功能的历史实施记录和剩余实机测试矩阵。
-- `CHART_TAB_IMPLEMENTATION_PLAN.md`：图表页设计基线、当前落地映射和剩余性能/交互验证。
-- `MULTI_SERIAL_DESIGN.md`：多串口支持的设计基线，含数据模型、主进程多实例、双层标签栏、两级分屏与分阶段验收（已实现）。
+- `docs/agent_notes.md`：维护者接手入口，记录当前架构、不变量和高风险区域。
+- `docs/ToDo.md`：全仓库仍需执行的工程待办与验证基线。
+- `docs/HEX_FEATURE_TODO.md`：Hex 功能的历史实施记录和剩余实机测试矩阵。
+- `docs/CHART_TAB_IMPLEMENTATION_PLAN.md`：图表页设计基线、当前落地映射和剩余性能/交互验证。
+- `docs/MULTI_SERIAL_DESIGN.md`：多串口支持的设计基线，含数据模型、主进程多实例、双层标签栏、两级分屏与分阶段验收（已实现）。
+- `docs/MULTI_SERIAL_REFACTOR.md`：多串口重构的阶段划分与当前落地状态。
+- `docs/MULTI_SERIAL_TAB_FIX_PLAN.md`：多串口标签缺陷的复现、归因与修复记录。
+- `docs/TAB_ARCHITECTURE.md`：标签体系的目标架构与不变量定义。
 - `telemetry-server/README.md`：遥测与动态更新服务的独立部署、数据和运维说明。
+
 
 ## 技术栈
 

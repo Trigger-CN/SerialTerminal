@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { SerialTerminalRuntimeRegistry, describeRuntime } = require('../serial-group-runtime');
+const { SerialTerminalRuntimeRegistry, describeRuntime } = require('../src/serial/serial-group-runtime');
 
 function makeRegistry(overrides = {}) {
   const created = [];

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { formatSentBody, formatSentRecord, escapeControlChars } = require('../sent-record');
+const { formatSentBody, formatSentRecord, escapeControlChars } = require('../src/terminal/sent-record');
 
 test('control characters are escaped so they cannot drive the terminal', () => {
   assert.equal(escapeControlChars('AT+RST\r\n'), 'AT+RST\\r\\n');

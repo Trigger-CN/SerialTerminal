@@ -9,7 +9,7 @@ const {
   isStandardBaudRate,
   normalizeBaudRate,
   normalizeCustomBaudRates
-} = require('../baud-rates');
+} = require('../src/serial/baud-rates');
 
 test('baud rates accept only positive safe whole numbers', () => {
   assert.equal(normalizeBaudRate(' 250000 '), '250000');

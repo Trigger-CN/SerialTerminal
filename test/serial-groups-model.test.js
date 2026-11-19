@@ -11,7 +11,7 @@ const {
   renameSerialGroup,
   resolveGroupDisplayTitle,
   findSerialGroup
-} = require('../serial-groups-model');
+} = require('../src/serial/serial-groups-model');
 
 function baseGroups() {
   return [

@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { getHorizontalInsertionIndex } = require('../tab-reorder');
+const { getHorizontalInsertionIndex } = require('../src/workspace/tab-reorder');
 
 test('tab insertion follows horizontal tab centers', () => {
   const rects = [

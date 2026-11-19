@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Terminal } = require('@xterm/xterm');
-const { TerminalUnicodeWidthAddon, usesEmojiCellWidth } = require('../terminal-unicode-width');
+const { TerminalUnicodeWidthAddon, usesEmojiCellWidth } = require('../src/terminal/terminal-unicode-width');
 
 function getRenderedCells(text) {
     return new Promise(resolve => {

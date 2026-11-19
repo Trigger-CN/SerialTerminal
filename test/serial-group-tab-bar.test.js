@@ -14,8 +14,8 @@ const {
   describeGroupTabBar,
   describeAddGroupButton,
   describeGroupVisibility
-} = require('../serial-group-tab-bar');
-const { mainTabId, mainTabButtonId, serialContainerId } = require('../serial-group-dom');
+} = require('../src/serial/serial-group-tab-bar');
+const { mainTabId, mainTabButtonId, serialContainerId } = require('../src/serial/serial-group-dom');
 
 test('group tab ids never collide with the main terminal tab ids', () => {
   // 这是本模块最容易被写错的地方：分组标签与「该分组内的主终端标签」
