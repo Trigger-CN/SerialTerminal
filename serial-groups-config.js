@@ -187,7 +187,10 @@ function buildMigratedDefaultGroup(config) {
     // 这一层的职责是「搬家」，不是「重新校验」。
     filterTabs: Array.isArray(source.filterTabs) ? source.filterTabs : [],
     chartTabs: Array.isArray(source.chartTabs) ? source.chartTabs : [],
-    workspaceLayout: isPlainObject(source.workspaceLayout) ? source.workspaceLayout : null
+    workspaceLayout: isPlainObject(source.workspaceLayout) ? source.workspaceLayout : null,
+    // 默认开启「标题跟随串口端口」：迁移来的旧配置没有 followPort 键，
+    // 但用户期望新分组的行为与新建分组一致。
+    followPort: true
   };
 }
 
@@ -212,6 +215,8 @@ function normalizeSerialGroup(group, index, fallbackOptions) {
     status: oneOf(source.status, SERIAL_STATUSES, 'disconnected'),
     // sessionId 是运行时标识，重启后一律为 null；写进配置只为保持 schema 形状。
     sessionId: null,
+    // followPort 表示「标题跟随串口端口」。默认开启，仅在 source 明确写过该键时保留其值。
+    followPort: typeof source.followPort === 'boolean' ? source.followPort : undefined,
     serialOptions: normalizeGroupSerialOptions(source.serialOptions, fallbackOptions),
     ...(uiPrefs ? { uiPrefs } : {}),
     filterTabs: Array.isArray(source.filterTabs) ? source.filterTabs : [],

@@ -101,7 +101,10 @@ function addSerialGroup(groups, options = {}) {
     // 继承过来会把上一个端口的数据视图复制给一个还没连接的端口。
     filterTabs: [],
     chartTabs: [],
-    workspaceLayout: null
+    workspaceLayout: null,
+    // 默认开启「标题跟随串口端口」：用户点「添加串口」通常是要连同型号设备，
+    // 标签名自动跟着端口走，省去每次手动重命名。
+    followPort: true
   };
 
   return {

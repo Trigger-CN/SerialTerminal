@@ -4323,11 +4323,16 @@ function resolveVisibleGroupWorkspaceEntryIds() {
 // unknown-group 把这些分组的全部字节静默丢弃。
 function syncSerialGroupsFromConfig(config) {
     const next = normalizeSerialGroupState(config?.serialGroups);
+    // 兼容旧配置：followPort 缺失表示「未被用户明确设置」，按默认开启处理。
+    next.forEach(group => { if (group && group.followPort !== false) group.followPort = true; });
     if (workspaceModel) {
         // 设置保存的回声只更新业务设置，不能重建或覆盖交互后的布局和成员。
         serialGroups = serialGroups.map(existing => {
             const incoming = next.find(group => group.id === existing.id);
-            return incoming ? { ...existing, ...incoming } : existing;
+            const merged = incoming ? { ...existing, ...incoming } : existing;
+            if (merged && merged.followPort !== false) merged.followPort = true;
+            return merged;
+
         });
         return;
     }
