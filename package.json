@@ -19,6 +19,7 @@
       "output": "dist"
     },
     "files": [
+      "**/*",
       "!**/.vscode/*",
       "!**/.idea/*",
       "!**/*.ts",
@@ -31,8 +32,11 @@
       "!scripts/validate-github-release.js",
       "!scripts/validate-release-tag.js",
       "!telemetry-server/**",
-      "package.json",
-      "**/*"
+      "!.me/**",
+      "!.me-gateway/**",
+      "!.zcode/**",
+      "!.workflow/**",
+      "package.json"
     ],
     "asarUnpack": [
       "node_modules/node-pty/build/Release/**"
