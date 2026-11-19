@@ -46,6 +46,9 @@ function createFixture(config = {}) {
     mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } },
     formatLocalDate: () => today,
     getLogDirectory: (base, dated) => dated ? path.join(base, today) : base,
+    // 注入真实实现而不是桩：端口目录名（含 port_ 前缀）是本次修复的核心，
+    // 用桩会让测试失去对目录结构的校验能力。名字必须与 main.js 中的别名一致。
+    buildPortFolderName: require('../log-directory').buildPortLogFolderName,
     SerialPort: FakePort, SerialPortClaimTable, normalizePortKey,
     ipcMain: { handle: (name, fn) => handles[name] = fn, on: (name, fn) => listeners[name] = fn },
     setInterval: () => 1, clearInterval: () => {}, setImmediate: () => {},

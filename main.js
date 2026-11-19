@@ -22,7 +22,7 @@ const {
 const { WORKSPACE_CONFIG_VERSION, migrateWorkspaceLayoutConfig } = require('./workspace-layout-state');
 const { cleanupExpiredLogFiles } = require('./log-cleanup');
 const { SerialPortClaimTable, normalizePortKey } = require('./serial-port-claims');
-const { formatLocalDate, getLogDirectory } = require('./log-directory');
+const { formatLocalDate, getLogDirectory, buildPortLogFolderName: buildPortFolderName } = require('./log-directory');
 const { ChartParserWorkerClient, discoverChartFieldsInWorker } = require('./chart-parser-worker-client');
 const {
   DYNAMIC_UPDATE_METADATA_URL,
@@ -771,11 +771,9 @@ const LOG_AUTO_FLUSH_INTERVAL_MS = 5000;
 const LOG_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function buildPortLogFolderName(portPath, groupId) {
-  // 必须取 basename：Linux 的 /dev/ttyUSB0 直接当目录名会产生非法字符。
-  const base = path.basename(String(portPath || '').trim());
-  const safe = sanitizeFileNamePart(base).replace(/[. ]+$/g, '');
-  // 端口名缺失时退回 groupId，避免多个分组撞进同一个目录。
-  return safe || normalizeSerialGroupId(groupId);
+  // 目录名生成规则（含 port_ 前缀）放在 log-directory.js，便于纯函数单测。
+  // 这里只负责「端口名缺失时退回 groupId」，不自行实现命名规则。
+  return buildPortFolderName(portPath) || normalizeSerialGroupId(groupId);
 }
 
 function resolveLogFolderName(groupId) {

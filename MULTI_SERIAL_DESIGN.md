@@ -205,10 +205,12 @@ const serialSessions = new Map();   // groupId -> session
 #### 目录名的生成规则
 
 ```js
-function buildPortLogFolderName(portPath, groupId) {
+// log-directory.js
+function buildPortLogFolderName(portPath) {
   const base = path.basename(String(portPath || '').trim());
-  const safe = sanitizeFileNamePart(base).replace(/[. ]+$/g, '');
-  return safe || groupId;   // 端口缺失时退回 groupId，避免多个组撞进同一目录
+  const safe = base.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ')
+    .trim().replace(/[. ]+$/g, '');
+  return safe ? `port_${safe}` : '';   // 空串由调用方回退到 groupId
 }
 ```
 
@@ -216,6 +218,17 @@ function buildPortLogFolderName(portPath, groupId) {
 - 去尾部 `.` 与空格：Windows 会默默修正，导致目录名与预期不一致
 - 端口名缺失（未连接就开启日志）时退回 `groupId`
 - 端口重命名/更换不迁移历史日志，新文件夹自然生成——旧文件夹的归属由名称本身表达，无需额外索引
+
+**必须加 `port_` 前缀（2026-11-19 实测修复）。** `COM1`–`COM9`、`LPT1`–`LPT9`、`CON`/`PRN`/`AUX`/`NUL` 是 DOS 保留设备名。企业加密/DLP 驱动会给同名目录写入 `Low Mandatory Level:(NW)` 与全显式 ACE（无任何 `(I)` 继承标记），导致：
+
+- 资源管理器打开时提示"你当前无权访问该文件夹"
+- `fltmc filters` 可见 `TFsdframe` / `TFsfltdrv` / `TsdEncrypt`（天锐绿盾）生效
+- `takeown` / `icacls` / `fsutil reparsepoint` 全部返回"拒绝访问"，驱动层拦截，用户无法自行修复
+- 但 Node 的 `readdirSync` / `rename` / 写入仍然成功——**同一用户、同一 Medium 完整性级别**，证明不是 ACL 权限问题，而是 Win32 路径枚举被驱动隐藏
+
+触发条件是**目录名完全匹配 `COM` + 单个数字**（大小写不敏感）：`COM6`/`COM8`/`COM0` 全部中招，`COM11`/`COM99` 不受影响（两位数字），`port_COM6`/`xCOM6`/`COM6_port` 也不受影响。因此换日志根目录**无效**——规则按目录名匹配，与路径无关。
+
+统一加前缀而不是只给保留名打补丁：规则简单可预测，且一并规避未来其他保留名冲突。加前缀后实测 `port_COM6` / `port_COM8` 在受管控机器上可见、可写、无 Low IL。
 
 #### 已实测验证
 
