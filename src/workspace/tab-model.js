@@ -151,7 +151,12 @@ function layoutColumns(ws) {
                     tabItems: [...groups, ...leaves].sort((a, b) => a.order - b.order) };
             }).filter(column => column.tabItems.length);
             const own = ownColumnLeaves(ws);
-            if (own.length) columns.push({ id: OWN_COLUMN_ID, containerId: null, isFamily: false, tabItems: own });
+            if (own.length) {
+                const rank = Math.min(...own.map(leaf => leaf.order));
+                const index = columns.findIndex(column => Math.min(...column.tabItems.map(tab => tab.order)) > rank);
+                columns.splice(index < 0 ? columns.length : index, 0,
+                    { id: OWN_COLUMN_ID, containerId: null, isFamily: false, tabItems: own });
+            }
             return columns;
         }
         const rank = new Map(roots(ws).map((tab, index) => [tab.id, index]));
@@ -888,12 +893,12 @@ function activateTab(ws, tabId) {
             if (!pane.activeTabId && pane.tabIds.length) pane.activeTabId = pane.tabIds[0];
         }
     }
-    if (ws.split.enabled && Array.isArray(ws.split.columns)) {
-        const groupId = isContainer(tab) ? tab.id : tab.parentId || resolveLeafColumnId(ws, tab);
-        const position = ws.split.columns.find(column => column.groupIds.includes(groupId));
-        if (position) {
+    if (ws.split.enabled) {
+        const column = layoutColumns(ws).find(item => item.tabItems.some(member => member.id === tab.id)
+            || item.tabItems.some(member => isContainer(member) && member.id === tab.parentId));
+        if (column) {
             ws.split.activeTabs ||= {};
-            ws.split.activeTabs[position.id] = tab.id;
+            ws.split.activeTabs[column.id] = tab.id;
         }
     }
     return true;
@@ -1276,10 +1281,21 @@ function applyWorkspaceAction(ws, action) {
                 const container = tabOf(next, action.groupId);
                 const groups = roots(next).filter(isContainer);
                 if (!isContainer(container) || groups.length < 2) break;
-                if (!next.split.enabled || !Array.isArray(next.split.columns)) {
+                const existingColumns = layoutColumns(next);
+                const sizes = next.split.enabled
+                    ? normalizeSizes(next.split.sizes, existingColumns.map(column => column.id)) : {};
+                if (!next.split.enabled) {
                     const base = groups.find(group => group.id !== container.id);
                     next.split.columns = [{ id: base.id, groupIds: groups.map(group => group.id) }];
                     next.split.activeTabs = {};
+                    sizes[base.id] = 1;
+                } else if (!Array.isArray(next.split.columns)) {
+                    // 固化当前列而不是把已分开的组重新合并；Shell 列由根叶继续派生。
+                    next.split.columns = existingColumns.filter(column => column.containerId).map(column => ({
+                        id: column.id, groupIds: column.tabItems.filter(isContainer).map(group => group.id)
+                    }));
+                    next.split.activeTabs = Object.fromEntries(existingColumns.map(column =>
+                        [column.id, visiblePanelIdsOfColumn(next, column)[0]]));
                 }
                 const sourceIndex = next.split.columns.findIndex(column => column.groupIds.includes(container.id));
                 const source = next.split.columns[sourceIndex];
@@ -1290,17 +1306,28 @@ function applyWorkspaceAction(ws, action) {
                     changed = true;
                     break;
                 }
+                const sourceId = source.id;
+                const selected = tabOf(next, next.split.activeTabs?.[sourceId]);
+                const selectedMoves = selected && (selected.id === container.id || selected.parentId === container.id);
                 source.groupIds = source.groupIds.filter(id => id !== container.id);
                 if (source.id === container.id) source.id = source.groupIds[0];
-                // 未归属叶留在原列，列身份不因被移动组改变。
                 for (const leaf of roots(next).filter(tab => !isContainer(tab))) {
-                    if (leaf.columnId === container.id) leaf.columnId = source.groupIds[0];
+                    if (leaf.columnId === container.id && leafColumnMode(leaf) !== 'ownColumn') leaf.columnId = source.groupIds[0];
                 }
+                next.split.activeTabs ||= {};
+                delete next.split.activeTabs[sourceId];
+                next.split.activeTabs[source.id] = selected && !selectedMoves ? selected.id : source.groupIds[0];
+                next.split.activeTabs[container.id] = selectedMoves ? selected.id
+                    : (container.panes.find(pane => pane.id === container.activePaneId) || container.panes[0]).activeTabId;
                 next.split.columns.splice(sourceIndex + (action.before === true ? 0 : 1), 0,
                     { id: container.id, groupIds: [container.id] });
                 next.split.enabled = true;
                 next.split.orientation = action.orientation === 'vertical' ? 'vertical' : 'horizontal';
-                next.split.sizes = normalizeSizes({}, next.split.columns.map(column => column.id));
+                const sourceSize = sizes[sourceId];
+                delete sizes[sourceId];
+                sizes[source.id] = sourceSize / 2;
+                sizes[container.id] = sourceSize / 2;
+                next.split.sizes = normalizeSizes(sizes, layoutColumns(next).map(column => column.id));
                 changed = true;
                 break;
             }

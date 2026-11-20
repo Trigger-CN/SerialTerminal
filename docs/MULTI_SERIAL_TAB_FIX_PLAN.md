@@ -113,6 +113,16 @@
 
 ## 7. 实施与验收记录
 
+### 后续缺陷：串口组分屏破坏既有 Shell 列
+
+- 已复现范围：已有根级独立 Shell 列后执行串口组 `split-group`，隐式列被误作未分屏而重新合并，Shell 列移位、比例重置或局部活动内容丢失。修复前新增首批 5 项回归全部失败。
+- 统一模型事务中保留既有列：未显式记录的串口列按当前布局固化，不重新合并。共享列只拆出请求组，源列宽度二分给源/目标，其他串口列及 `__shell__` 比例保持；显式列按根 order 插入 Shell 列，保持原相对位置。
+- 源列 ID 随被移动组改名时迁移局部选择，普通 row Shell 留在源列，独立 Shell 不改位置锚点。激活按列的全部组成员定位，维护独立 Shell 列选择；codec 仅恢复合法 `ownColumn` Shell 的局部 active。中间回归曾漏掉共享列后台组，已修正查找并保留既有关闭 Shell 回退断言。
+- 新增 `test/group-split-shell-preservation.test.js` 7 项，覆盖隐式列保留、共享源宽度二分、Shell 中间位置、源列改名与 row Shell、完整快照往返、两个 Shell 的局部选择、前置拆组及其他组内格不变。
+- 最终验证：`node --test test/group-split-shell-preservation.test.js test/tab-model.test.js test/workspace-layout-state.test.js test/multi-serial-model-fixes.test.js test/workspace-renderer-integration.test.js` **103/103**；`node scripts/run-tests.js` **740/740**。两份产品模块 `node --check`、renderer module-load、`git diff --check` 全部退出 0；环境 Node **20.16.0**，未运行 telemetry-server 测试，Node >=22.12.0 仍待验证。配置保持 v16/v1，不新增依赖、线程，不改变终端实例或发布流程。
+- 范围边界：本轮不改变外层共用 `split.orientation` 的结构，不支持独立嵌套分屏方向；新增串口组时单→多的 `promoteShellsToRoots` 路径未改，不将根 Shell 列修复扩大为全部转换场景完成。
+- 人工待验（本轮未截图、未启动/操作用户应用）：已有 Shell 列并调整宽度后，对串口组执行同方向分屏，检查 Shell 不合并、不移位、不重置比例；Shell 列选中第二个 Shell，再切串口组并分屏，原 Shell 内容保持；Shell 位于两串口列中间及其他组已有上下格时，位置和其他组内布局保持；正常关闭重启后位置、比例和局部选择保持。原菜单、排序/控制组定向复测及真实双端口/长时异常验收仍待反馈，R5 不标整体完成。
+
 ### 后续缺陷：终端内容区分屏菜单
 
 - 内容区曾只检查 `tabId` 存在就启用新建分屏，标签栏却检查源格成员数；执行时模型拒绝唯一叶，renderer 又无失败提示。“移到另一分屏”还错误发出 `split-tab`。

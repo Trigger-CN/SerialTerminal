@@ -127,6 +127,11 @@ function restoreWorkspaceLayout(baseline, saved) {
                     && (column.groupIds.includes(tab.columnId) || (!tab.columnId && column === ws.split.columns[0]))))) ws.split.activeTabs[column.id] = id;
         }
     }
+    const ownSelected = ws.tabs[saved.split?.activeTabs?.[model.OWN_COLUMN_ID]];
+    if (ws.split.enabled && ownSelected?.kind === 'shell' && ownSelected.columnMode === 'ownColumn') {
+        ws.split.activeTabs ||= {};
+        ws.split.activeTabs[model.OWN_COLUMN_ID] = ownSelected.id;
+    }
     model.rebuildIndex(ws);
     ws.focusedTabId = ws.tabs[saved.focusedTabId] ? saved.focusedTabId : groups[0]?.panes[0]?.activeTabId || null;
     const focusedPane = model.paneOfTab(ws, ws.tabs[ws.focusedTabId]);
