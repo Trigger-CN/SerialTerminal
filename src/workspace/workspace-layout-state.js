@@ -96,35 +96,59 @@ function restoreWorkspaceLayout(baseline, saved) {
             tab.parentId = null;
             tab.order = Number.isFinite(item?.order) ? item.order : groups.length + (rootOrder.get(tab.id) ?? rootItems.length);
             tab.columnMode = item?.columnMode === 'ownColumn' ? 'ownColumn' : 'row';
-            tab.columnId = item?.columnId == null ? null : groupIds.has(item.columnId) ? item.columnId : groups[0]?.id || null;
+            const columnExists = list(saved.split?.columns).some(column => column?.id === item?.columnId
+                && list(column?.groupIds).every(id => groupIds.has(id)));
+            tab.columnId = item?.columnId == null ? null : groupIds.has(item.columnId) || columnExists
+                ? item.columnId : groups[0]?.id || null;
         }
         tab.hostGroupId = null; tab.hostPaneId = null;
     }
     ws.split = { enabled: saved.split?.enabled === true, orientation: orientation(saved.split?.orientation), sizes: {} };
     if (ws.split.enabled && Array.isArray(saved.split?.columns)) {
-        const used = new Set(); const usedColumns = new Set();
+        const used = new Set(); const usedColumns = new Set(); const projectedPanes = new Set();
         ws.split.columns = [];
         for (const item of saved.split.columns) {
+            if (!item || typeof item !== 'object') continue;
+            const wanted = typeof item.id === 'string' && item.id ? item.id : list(item.groupIds).find(id => groupIds.has(id));
+            if (!wanted || usedColumns.has(wanted) || wanted === model.OWN_COLUMN_ID
+                || (groupIds.has(wanted) && !list(item.groupIds).includes(wanted))) continue;
             const ids = list(item?.groupIds).filter(id => {
                 if (!groupIds.has(id) || used.has(id)) return false;
                 used.add(id); return true;
             });
-            if (!ids.length) continue;
-            const id = ids.includes(item.id) && !usedColumns.has(item.id) ? item.id : ids[0];
-            usedColumns.add(id); ws.split.columns.push({ id, groupIds: ids });
+            const shells = rootItems.filter(root => root && item && root.columnId === item.id && !claimed.has(root.tabId)
+                && ws.tabs[root.tabId]?.kind === 'shell' && root.columnMode !== 'ownColumn');
+            const container = ws.tabs[item?.containerId];
+            const panes = model.isContainer(container)
+                ? container.panes.filter(pane => list(item.paneIds).includes(pane.id) && !projectedPanes.has(pane.id)) : [];
+            if (!ids.length && !shells.length && !panes.length) continue;
+            const id = wanted;
+            usedColumns.add(id);
+            panes.forEach(pane => projectedPanes.add(pane.id));
+            ws.split.columns.push({ id, groupIds: ids,
+                ...(panes.length ? { containerId: container.id, paneIds: panes.map(pane => pane.id) } : {}) });
         }
         const remaining = groups.filter(group => !used.has(group.id)).map(group => group.id);
         if (remaining.length) {
             if (ws.split.columns.length) ws.split.columns[0].groupIds.push(...remaining);
             else ws.split.columns.push({ id: remaining[0], groupIds: remaining });
         }
+        // 损坏/缺失的 pane 引用回收至该组的主区域，保证每个业务 pane 只投影一次。
+        for (const group of groups) {
+            const regions = ws.split.columns.filter(column => column.containerId === group.id && column.paneIds);
+            const primary = regions.find(column => column.groupIds.includes(group.id));
+            if (primary) primary.paneIds.push(...group.panes.filter(pane => !projectedPanes.has(pane.id)).map(pane => pane.id));
+        }
         ws.split.activeTabs = {};
         for (const column of ws.split.columns) {
             const id = saved.split.activeTabs?.[column.id];
             const tab = ws.tabs[id];
             if (tab && (column.groupIds.includes(id) || column.groupIds.includes(tab.parentId)
+                || (column.paneIds && ws.tabs[column.containerId]?.panes.some(pane =>
+                    column.paneIds.includes(pane.id) && pane.tabIds.includes(id)))
                 || (tab.kind === 'shell' && tab.columnMode !== 'ownColumn'
-                    && (column.groupIds.includes(tab.columnId) || (!tab.columnId && column === ws.split.columns[0]))))) ws.split.activeTabs[column.id] = id;
+                    && (tab.columnId === column.id || column.groupIds.includes(tab.columnId)
+                        || (!tab.columnId && column === ws.split.columns[0]))))) ws.split.activeTabs[column.id] = id;
         }
     }
     const ownSelected = ws.tabs[saved.split?.activeTabs?.[model.OWN_COLUMN_ID]];

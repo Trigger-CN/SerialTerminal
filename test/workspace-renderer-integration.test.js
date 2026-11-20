@@ -324,3 +324,87 @@ test('production Shell drag places the root-row indicator at the actual pointer 
     assert.equal(f.context.state.insertionIndex, 0);
     assert.equal(list.children[0], f.context.state.indicator);
 });
+
+test('single-to-multi production reconciliation retains Shell panel and button identities in distinct root regions', () => {
+    const f = fixture();
+    const dom = require('../src/serial/serial-group-layout-dom');
+    Object.assign(f.Element.prototype, { setAttribute() {} });
+    Object.defineProperty(f.Element.prototype, 'nextElementSibling', { get() { return this.nextSibling; } });
+    const outer = new f.Element(dom.GROUP_WORKSPACE_CONTAINER_ID);
+    const serialColumn = new f.Element(dom.groupWorkspaceEntryId('default'), 'group-column');
+    const serialList = new f.Element(dom.groupTabListId('default'));
+    serialColumn.appendChild(serialList); serialColumn.appendChild(f.root); outer.appendChild(serialColumn);
+    const content = new f.Element('pane-1-tabs-content');
+    f.createPane('pane-1', 'workspace-root').appendChild(content);
+    const shellPanel = new f.Element('tab-shell-1', 'main-tab-pane');
+    const mainPanel = new f.Element('tab-main', 'main-tab-pane');
+    const shellButton = new f.Element('shell-button', 'main-tab'); shellButton.dataset.target = shellPanel.id;
+    const mainButton = new f.Element('main-button', 'main-tab'); mainButton.dataset.target = mainPanel.id;
+    const groupButton = new f.Element('default-button', 'main-tab serial-group-tab'); groupButton.dataset.groupId = 'default';
+    const nextButton = new f.Element('next-button', 'main-tab serial-group-tab'); nextButton.dataset.groupId = 'next';
+    content.appendChild(shellPanel); content.appendChild(mainPanel); serialList.appendChild(shellButton); serialList.appendChild(mainButton);
+    serialList.appendChild(groupButton); serialList.appendChild(nextButton);
+    f.context.workspaceModel = singleWorkspace(); split(f, 'tab-shell-1', 'shell-region');
+    f.context.workspaceModel = model.applyWorkspaceAction(f.context.workspaceModel, { type: 'add-group', options: { id: 'next', mainId: 'next-main' } }).workspace;
+    Object.assign(f.context, dom, { SHELL_COLUMN_GROUP_ID: dom.SHELL_COLUMN_GROUP_ID,
+        GROUP_WORKSPACE_CONTAINER_ID: dom.GROUP_WORKSPACE_CONTAINER_ID, activeGroupId: 'default',
+        bindPaneTabListEvents() {}, getPaneTabsContent: id => f.get(`${id}-tabs-content`), getPaneTabsList: () => serialList,
+        getGroupTabList: id => f.get(dom.groupTabListId(id)),
+        serialGroups: [{ id: 'default' }, { id: 'next' }], getSerialGroupById: () => ({}),
+        resolveGroupTitleForDisplay: () => '', isGroupConnected: () => false,
+        describeGroupTab: group => ({ buttonId: `${group.id}-button` }), updateGroupTabButtonState() {},
+        syncSerialGroupAddButtonLayer() {}, syncShellAddButtonVisibility() {}, placeGroupAddButton() {}, placeShellAddButton() {} });
+    f.context.document.querySelector = selector => f.nodes.find(node => node.dataset.target === /data-target="([^"]+)"/.exec(selector)?.[1]);
+    f.context.document.querySelectorAll = selector => f.nodes.filter(node => selector === '.main-tab-pane' ? node.classList.contains('main-tab-pane')
+        : selector === '.main-tab' ? node.classList.contains('main-tab')
+        : selector === '.serial-group-tab' ? node.classList.contains('serial-group-tab') : false);
+    f.run(section('function ensureShellColumnDom(', '// 造一个非默认分组'));
+    f.run(section('function reconcileButtons(', '// ── 第 4 步'));
+    f.run(section('function applyVisibility(', '// 拆掉'));
+    f.context.plan = model.buildRenderPlan(f.context.workspaceModel);
+    const shellColumn = f.context.plan.columns.find(column => column.rootOnly);
+    assert.ok(shellColumn);
+    f.run(`ensureShellColumnDom(${JSON.stringify(shellColumn.domKey)}); reconcileRows(plan); reconcileButtons(plan); applyVisibility(plan)`);
+    const shellHost = f.get(`${dom.groupPaneId(shellColumn.domKey, 1)}-tabs-content`);
+    assert.equal(shellPanel.parentElement, shellHost);
+    assert.equal(shellButton.parentElement, f.get(dom.groupTabListId(shellColumn.domKey)));
+    assert.ok(shellPanel.classList.contains('active'));
+    assert.ok(mainPanel.classList.contains('active'));
+    f.run('reconcileRows(plan); reconcileButtons(plan); applyVisibility(plan)');
+    assert.equal(f.nodes.filter(node => node.id === shellPanel.id).length, 1);
+    assert.equal(shellPanel.parentElement, shellHost);
+    assert.equal(f.get(dom.groupTabRowId(shellColumn.domKey)).hidden, false);
+});
+
+
+test('converted Shell region keys reach root drop targets and every adjacent outer splitter', () => {
+    const f = fixture();
+    const dom = require('../src/serial/serial-group-layout-dom');
+    Object.assign(f.Element.prototype, { remove() { if (this.parentElement) this.parentElement.children.splice(this.parentElement.children.indexOf(this), 1); this.parentElement = null; } });
+    const outer = new f.Element(dom.GROUP_WORKSPACE_CONTAINER_ID);
+    const keys = ['default', 'shell-region-a', 'shell-region-b'];
+    const columns = keys.map(key => { const column = new f.Element(dom.groupWorkspaceEntryId(key), 'group-column'); column.dataset.groupId = key; outer.appendChild(column); return column; });
+    const rows = columns.map((column, index) => {
+        const row = new f.Element(`row-${index}`, 'group-tab-row');
+        row.rect = { left: index * 200, right: (index + 1) * 200, top: 0, bottom: 30 };
+        row.closest = () => column; column.appendChild(row); return row;
+    });
+    const splitter = new f.Element(dom.GROUP_WORKSPACE_SPLITTER_ID, 'group-workspace-splitter'); outer.appendChild(splitter);
+    Object.assign(f.context, dom, { keys, SHELL_COLUMN_GROUP_ID: dom.SHELL_COLUMN_GROUP_ID,
+        getGroupWorkspaceSplitters: () => outer.children.filter(node => node.classList.contains('group-workspace-splitter')),
+        resolveSerialGroupId: () => 'default', workspaceModel: { split: { columns: keys.map(id => ({ id, groupIds: [] })) } } });
+    f.context.document.querySelectorAll = () => rows;
+    f.run(section('function getGroupColumnElement(', '// 为一个非默认分组'));
+    f.run(section('function resolveWorkspaceColumnId(', 'function ensureSerialGroupWorkspaceDom('));
+    f.run(section('function syncGroupWorkspaceSplitters(', '// 现有的分组级分界条'));
+    f.run(section('function getGroupRowDropTarget(', 'function updateWorkspaceTabDrag('));
+    assert.equal(f.run('resolveWorkspaceColumnId("shell-region-a")'), 'shell-region-a');
+    assert.equal(f.run('getGroupRowDropTarget(250, 15).groupId'), 'shell-region-a');
+    f.run('syncGroupWorkspaceSplitters(keys)');
+    const gutters = outer.children.filter(node => node.classList.contains('group-workspace-splitter'));
+    assert.equal(gutters.length, 2);
+    assert.deepEqual(gutters.map(node => [node.dataset.splitterLeft, node.dataset.splitterRight]),
+        [['default', 'shell-region-a'], ['shell-region-a', 'shell-region-b']]);
+    assert.deepEqual(outer.children.map(node => node.id || 'gutter'),
+        [columns[0].id, splitter.id, columns[1].id, 'gutter', columns[2].id]);
+});

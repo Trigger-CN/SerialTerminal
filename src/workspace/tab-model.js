@@ -143,13 +143,16 @@ function layoutColumns(ws) {
                 const groups = position.groupIds.map(id => tabOf(ws, id)).filter(isContainer);
                 const selected = tabOf(ws, ws.split.activeTabs?.[position.id]);
                 const selectedGroup = isContainer(selected) ? selected.id : selected?.parentId;
-                const container = groups.find(group => group.id === selectedGroup) || groups[0];
+                const container = groups.find(group => group.id === selectedGroup) || groups[0]
+                    || tabOf(ws, position.containerId);
                 const leaves = roots(ws).filter(leaf => !isContainer(leaf) && !leafHostGroup(ws, leaf)
                     && leafColumnMode(leaf) !== 'ownColumn'
-                    && position.groupIds.includes(resolveLeafColumnId(ws, leaf)));
-                return { id: position.id, containerId: container?.id || null, isFamily: false,
+                    && (resolveLeafColumnId(ws, leaf) === position.id
+                        || position.groupIds.includes(resolveLeafColumnId(ws, leaf))));
+                return { id: position.id, containerId: isContainer(container) ? container.id : null, isFamily: false,
+                    paneIds: container?.id === position.containerId ? position.paneIds : undefined,
                     tabItems: [...groups, ...leaves].sort((a, b) => a.order - b.order) };
-            }).filter(column => column.tabItems.length);
+            }).filter(column => column.tabItems.length || column.containerId);
             const own = ownColumnLeaves(ws);
             if (own.length) {
                 const rank = Math.min(...own.map(leaf => leaf.order));
@@ -309,6 +312,7 @@ function resolveLeafColumnId(ws, leaf) {
     const containers = roots(ws).filter(isContainer);
     if (!containers.length) return null;
     const wanted = typeof leaf.columnId === 'string' ? leaf.columnId : '';
+    if (ws.split.columns?.some(column => column.id === wanted)) return wanted;
     if (wanted && containers.some(container => container.id === wanted)) return wanted;
     return containers[0].id;
 }
@@ -355,7 +359,7 @@ function layoutRowsOf(ws, column) {
     if (!column.containerId) return [];
     const container = tabOf(ws, column.containerId);
     if (!isContainer(container)) return [];
-    const panes = panesOf(container);
+    const panes = column.paneIds ? panesOf(container).filter(pane => column.paneIds.includes(pane.id)) : panesOf(container);
     const splitEnabled = Boolean(container.paneSplit && container.paneSplit.enabled);
     const base = column.isFamily
         ? (splitEnabled ? panes.slice() : [])
@@ -410,6 +414,7 @@ function visiblePanelIdsOfColumn(ws, column) {
             ? rows.map((row, index) => index === 0 ? selected.id : row.activeTabId).filter(Boolean)
             : [selected.id];
     }
+    if (column.paneIds) return rows.map(row => row.activeTabId).filter(Boolean);
     if (rows.length > 1) {
         // 每个 pane 都保留自己的激活内容。根级叶（例如多组模式的 Shell）
         // 只能替换它实际占据的这一格；焦点不能把同列其余格的 activeTabId 清掉。
@@ -569,14 +574,16 @@ function buildRenderPlan(ws) {
                 // 渲染层据此找/建列容器；容器列 = 容器 id，独立列 = OWN_COLUMN_ID。
                 domKey,
                 containerId: column.containerId,
+                rootOnly: Boolean(ws.split.enabled && !column.containerId),
                 isFamily: column.isFamily,
                 tabItems: column.tabItems,
                 collapsed: container ? container.collapsed === true : false,
                 // 「这一列内部要不要分屏」也是渲染层需要的事实：它决定 subRow 数量与
                 // 各 pane 的显示，但**判断本身**在模型里已经做完，渲染层只读结果。
-                splitEnabled: Boolean(paneSplit && paneSplit.enabled === true),
+                splitEnabled: Boolean(paneSplit && paneSplit.enabled === true && (!column.paneIds || rows.length > 1)),
                 orientation: paneSplit && paneSplit.orientation === 'vertical' ? 'vertical' : 'horizontal',
-                paneSizes: paneSplit ? { ...(paneSplit.sizes || {}) } : {},
+                paneSizes: paneSplit ? (column.paneIds
+                    ? normalizeSizes(paneSplit.sizes, rows.map(row => row.id)) : { ...(paneSplit.sizes || {}) }) : {},
                 // 这一列在分组级分屏里的占比（外层容器按它写 flex-basis）。
                 //
                 // **必须取归一化后的值**：`ws.split.sizes` 可能只覆盖部分列（旧配置、
@@ -894,8 +901,9 @@ function activateTab(ws, tabId) {
         }
     }
     if (ws.split.enabled) {
-        const column = layoutColumns(ws).find(item => item.tabItems.some(member => member.id === tab.id)
-            || item.tabItems.some(member => isContainer(member) && member.id === tab.parentId));
+        const column = layoutColumns(ws).find(item => layoutRowsOf(ws, item).some(pane => pane.tabIds.includes(tab.id)))
+            || layoutColumns(ws).find(item => item.tabItems.some(member => member.id === tab.id)
+                || item.tabItems.some(member => isContainer(member) && member.id === tab.parentId));
         if (column) {
             ws.split.activeTabs ||= {};
             ws.split.activeTabs[column.id] = tab.id;
@@ -1061,7 +1069,8 @@ function moveTabToRoots(ws, tabId, columnId, index) {
     if (columnId === OWN_COLUMN_ID && tab.kind === 'shell') {
         tab.columnMode = 'ownColumn';
     }
-    if (typeof columnId === 'string' && containers.some(container => container.id === columnId)) {
+    if (typeof columnId === 'string' && (containers.some(container => container.id === columnId)
+        || ws.split.columns?.some(column => column.id === columnId))) {
         tab.columnId = columnId;
     } else if (containers.length) {
         tab.columnId = containers[0].id;
@@ -1085,6 +1094,106 @@ function moveTab(ws, tabId, target, activate = true) {
     if (target.kind === 'pane') return moveTabToPane(ws, tabId, target.groupId, target.paneId, target.index, activate);
     if (target.kind === 'roots') return moveTabToRoots(ws, tabId, target.columnId, target.index);
     return false;
+}
+
+// 单组的格是用户布局，不是串口业务归属。转为多组时把格提升为根级区域，
+// 串口叶仍属于原组；Shell 只改变成员层级，不改变区域、比例或局部选择。
+function preserveSingleGroupRegions(ws, container) {
+    if (ws.split.enabled) {
+        if (!Array.isArray(ws.split.columns)) {
+            const columns = layoutColumns(ws);
+            ws.split.columns = columns.filter(column => column.containerId).map(column => ({
+                id: column.id, groupIds: column.tabItems.filter(isContainer).map(group => group.id)
+            }));
+            ws.split.activeTabs = Object.fromEntries(columns.map(column => [column.id, visiblePanelIdsOfColumn(ws, column)[0]]));
+        }
+        return;
+    }
+    if (!container?.paneSplit.enabled || container.panes.length < 2) return;
+    if (!container.panes.some(pane => pane.tabIds.some(id => tabOf(ws, id)?.kind === 'shell'))) return;
+    const panes = container.panes;
+    const sizes = normalizeSizes(container.paneSplit.sizes, panes.map(pane => pane.id));
+    const primary = panes.find(pane => pane.tabIds.some(id => tabOf(ws, id)?.kind !== 'shell'));
+    const columns = panes.map(pane => {
+        const serial = pane.tabIds.some(id => tabOf(ws, id)?.kind !== 'shell');
+        return { id: pane === primary ? container.id : pane.id,
+            groupIds: pane === primary ? [container.id] : [],
+            ...(serial ? { containerId: container.id, paneIds: [pane.id] } : {}) };
+    });
+    const activeTabs = {};
+    const columnSizes = {};
+    panes.forEach((pane, index) => {
+        const column = columns[index];
+        activeTabs[column.id] = pane.activeTabId;
+        columnSizes[column.id] = sizes[pane.id];
+        pane.tabIds.forEach(id => {
+            const shell = tabOf(ws, id);
+            if (shell?.kind !== 'shell') return;
+            shell.parentId = null;
+            shell.hostGroupId = null;
+            shell.hostPaneId = null;
+            shell.columnMode = 'row';
+            shell.columnId = column.id;
+        });
+    });
+    ws.split = { enabled: true, orientation: container.paneSplit.orientation,
+        columns, activeTabs, sizes: columnSizes };
+}
+
+function restoreSingleGroupRegions(ws, container) {
+    if (!ws.split.columns?.some(column => column.paneIds)
+        || ownColumnLeaves(ws).length) return;
+    const panes = []; const sizes = {};
+    for (const column of layoutColumns(ws)) {
+        const rows = layoutRowsOf(ws, column);
+        const shells = column.tabItems.filter(tab => !isContainer(tab));
+        const localSizes = normalizeSizes(container.paneSplit.sizes, rows.map(row => row.id));
+        const regionPanes = rows.length ? rows.map(row => ({ ...row, tabIds: row.tabIds.slice() }))
+            : [{ id: column.id, tabIds: [], activeTabId: null }];
+        regionPanes[0].tabIds.push(...shells.map(tab => tab.id));
+        const selected = ws.split.activeTabs?.[column.id];
+        if (regionPanes[0].tabIds.includes(selected)) regionPanes[0].activeTabId = selected;
+        for (const pane of regionPanes) {
+            if (!pane.tabIds.length) continue;
+            pane.activeTabId ||= pane.tabIds[0];
+            panes.push(pane);
+            sizes[pane.id] = ws.split.sizes[column.id] * (rows.length > 1 ? localSizes[pane.id] : 1);
+        }
+    }
+    container.panes = panes;
+    container.paneSplit = { enabled: panes.length > 1, orientation: ws.split.orientation,
+        sizes: normalizeSizes(sizes, panes.map(pane => pane.id)) };
+    container.activePaneId = panes.find(pane => pane.tabIds.includes(ws.focusedTabId))?.id || panes[0].id;
+    ws.split = { enabled: false, orientation: ws.split.orientation, sizes: {} };
+}
+
+// 所有动作共用区域收敛，避免移动/关闭后留下空列或未投影的新 pane。
+function reconcileSplitRegions(ws) {
+    if (!ws.split.enabled || !Array.isArray(ws.split.columns)) return;
+    const columns = ws.split.columns;
+    for (const column of columns) {
+        column.groupIds = column.groupIds.filter(id => isContainer(tabOf(ws, id)));
+        if (!column.paneIds) continue;
+        const container = tabOf(ws, column.containerId);
+        column.paneIds = isContainer(container)
+            ? column.paneIds.filter(id => container.panes.some(pane => pane.id === id)) : [];
+    }
+    for (const container of roots(ws).filter(isContainer)) {
+        const regions = columns.filter(column => column.containerId === container.id && column.paneIds);
+        if (!regions.length) continue;
+        const primary = regions.find(column => column.groupIds.includes(container.id)) || regions[0];
+        const assigned = new Set(regions.flatMap(column => column.paneIds));
+        primary.paneIds.push(...container.panes.filter(pane => !assigned.has(pane.id)).map(pane => pane.id));
+    }
+    ws.split.columns = columns.filter(column => column.groupIds.length || column.paneIds?.length
+        || roots(ws).some(tab => !isContainer(tab) && leafColumnMode(tab) !== 'ownColumn' && tab.columnId === column.id));
+    for (const column of ws.split.columns) {
+        if (column.paneIds?.length) continue;
+        delete column.paneIds; delete column.containerId;
+    }
+    const ids = layoutColumns(ws).map(column => column.id);
+    ws.split.sizes = normalizeSizes(ws.split.sizes, ids);
+    ws.split.activeTabs = Object.fromEntries(Object.entries(ws.split.activeTabs || {}).filter(([id]) => ids.includes(id)));
 }
 
 function promoteShellsToRoots(ws, fallbackColumnId) {
@@ -1111,7 +1220,7 @@ function promoteShellsToRoots(ws, fallbackColumnId) {
                 shell.hostGroupId = null;
                 shell.hostPaneId = null;
                 shell.columnMode = 'row';
-                if (fallbackColumnId) shell.columnId = fallbackColumnId;
+                if (fallbackColumnId && !ws.split.columns?.some(column => column.id === shell.columnId)) shell.columnId = fallbackColumnId;
             }
         }
     }
@@ -1249,10 +1358,12 @@ function applyWorkspaceAction(ws, action) {
                 const options = action.options || {};
                 if (options.id && hasOwn(next.tabs, options.id)) break;
                 if (options.mainId && hasOwn(next.tabs, options.mainId)) break;
+                const existingGroups = roots(next).filter(isContainer);
+                if (existingGroups.length === 1) preserveSingleGroupRegions(next, existingGroups[0]);
                 const container = addContainerTab(next, options);
                 const firstGroupId = roots(next).find(tab => isContainer(tab) && tab.id !== container.id)?.id || null;
                 promoteShellsToRoots(next, firstGroupId);
-                if (Array.isArray(next.split.columns)) next.split.columns[0]?.groupIds.push(container.id);
+                if (Array.isArray(next.split.columns)) next.split.columns.find(column => column.groupIds.length)?.groupIds.push(container.id);
                 changed = Boolean(container);
                 break;
             }
@@ -1272,8 +1383,13 @@ function applyWorkspaceAction(ws, action) {
                 changed = closeTab(next, container.id);
                 if (Array.isArray(next.split.columns)) {
                     next.split.columns.forEach(column => { column.groupIds = column.groupIds.filter(id => id !== container.id); });
-                    next.split.columns = next.split.columns.filter(column => column.groupIds.length);
-                    if (remaining.length === 1) setColumnSplit(next, false);
+                    const preservedRegions = next.split.columns.some(column => column.paneIds
+                        || roots(next).some(tab => !isContainer(tab) && tab.columnId === column.id));
+                    next.split.columns = next.split.columns.filter(column => column.groupIds.length
+                        || (column.containerId && isContainer(tabOf(next, column.containerId)))
+                        || roots(next).some(tab => !isContainer(tab) && tab.columnId === column.id));
+                    if (remaining.length === 1 && !preservedRegions) setColumnSplit(next, false);
+                    else if (remaining.length === 1) restoreSingleGroupRegions(next, remaining[0]);
                 }
                 break;
             }
@@ -1309,6 +1425,9 @@ function applyWorkspaceAction(ws, action) {
                 const sourceId = source.id;
                 const selected = tabOf(next, next.split.activeTabs?.[sourceId]);
                 const selectedMoves = selected && (selected.id === container.id || selected.parentId === container.id);
+                const projection = source.containerId === container.id && source.paneIds
+                    ? { containerId: container.id, paneIds: source.paneIds.slice() } : {};
+                if (projection.paneIds) { delete source.containerId; delete source.paneIds; }
                 source.groupIds = source.groupIds.filter(id => id !== container.id);
                 if (source.id === container.id) source.id = source.groupIds[0];
                 for (const leaf of roots(next).filter(tab => !isContainer(tab))) {
@@ -1320,7 +1439,7 @@ function applyWorkspaceAction(ws, action) {
                 next.split.activeTabs[container.id] = selectedMoves ? selected.id
                     : (container.panes.find(pane => pane.id === container.activePaneId) || container.panes[0]).activeTabId;
                 next.split.columns.splice(sourceIndex + (action.before === true ? 0 : 1), 0,
-                    { id: container.id, groupIds: [container.id] });
+                    { id: container.id, groupIds: [container.id], ...projection });
                 next.split.enabled = true;
                 next.split.orientation = action.orientation === 'vertical' ? 'vertical' : 'horizontal';
                 const sourceSize = sizes[sourceId];
@@ -1343,6 +1462,7 @@ function applyWorkspaceAction(ws, action) {
                     host.tabIds = container.panes.flatMap(pane => pane.tabIds);
                     if (host.tabIds.includes(next.focusedTabId)) host.activeTabId = next.focusedTabId;
                     container.panes = [host];
+                    container.activePaneId = host.id;
                     changed = setPaneSplit(next, action.groupId, false, action.orientation);
                 } else {
                     if (container.panes.length < 2) {
@@ -1410,6 +1530,7 @@ function applyWorkspaceAction(ws, action) {
         }
         if (!changed) return { ok: false, workspace: original, reason: `动作被拒绝: ${action.type}` };
         rebuildIndex(next);
+        reconcileSplitRegions(next);
         if (next.focusedTabId !== original.focusedTabId) activateTab(next, next.focusedTabId);
         const repaired = validateAndRepair(next);
         if (!repaired.ok || repaired.fatal) {
@@ -1603,7 +1724,8 @@ function validateAndRepair(ws) {
     // 不修的话 resolveLeafColumnId 会回落，看似能用；但那意味着真源里存了一个不存在的
     // 列，下次增加一个同名分组时它会酶然命中——写回去才是真的修好。
     // 注意：自成独立列的叶（ownColumn）不用 columnId，它自己就是列 id，跳过。
-    const columnIds = roots(ws).filter(isContainer).map(container => container.id);
+    const columnIds = [...roots(ws).filter(isContainer).map(container => container.id),
+        ...(ws.split.columns || []).map(column => column.id)];
     for (const leaf of Object.values(ws.tabs)) {
         if (isContainer(leaf) || leaf.parentId !== null) continue;
         if (leafColumnMode(leaf) === 'ownColumn') {

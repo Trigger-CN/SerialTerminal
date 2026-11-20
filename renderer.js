@@ -3914,8 +3914,13 @@ function getGroupColumnElement(groupId) {
 // `#serial-container` 在静态 `pane-1` 内，而默认分组的 xterm 在模块加载期就 open() 了它。
 //
 // 幂等：已存在就直接返回。
+function resolveWorkspaceColumnId(columnId) {
+    return workspaceModel?.split.columns?.some(column => column.id === columnId)
+        ? columnId : resolveSerialGroupId(columnId);
+}
+
 function ensureSerialGroupWorkspaceDom(groupId) {
-    const id = resolveSerialGroupId(groupId);
+    const id = resolveWorkspaceColumnId(groupId);
     if (id === REGISTRY_DEFAULT_GROUP_ID) {
         return document.getElementById(groupWorkspaceEntryId(id));
     }
@@ -3980,24 +3985,24 @@ function ensureSerialGroupWorkspaceDom(groupId) {
 //
 // 为什么仍然建一个 .workspace-pane：xterm 的容器跟 pane 走（fit() 需要真实的
 // 尺寸链），而 .main-tab-pane 是绝对定位、依赖最近的已定位祖先。
-function ensureShellColumnDom() {
-    const existing = document.getElementById(shellColumnId());
+function ensureShellColumnDom(columnKey = SHELL_COLUMN_GROUP_ID) {
+    const existing = document.getElementById(groupWorkspaceEntryId(columnKey));
     if (existing) return existing;
     const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
     if (!outer) return null;
 
     const column = document.createElement('div');
     column.className = 'serial-group-workspace group-column shell-column';
-    column.id = shellColumnId();
-    column.dataset.groupId = SHELL_COLUMN_GROUP_ID;
+    column.id = groupWorkspaceEntryId(columnKey);
+    column.dataset.groupId = columnKey;
     column.dataset.shellColumn = 'true';
 
     const row = document.createElement('div');
     row.className = 'group-tab-row serial-group-tab-bar';
-    row.id = shellTabRowId();
+    row.id = groupTabRowId(columnKey);
     const list = document.createElement('div');
     list.className = 'main-tabs-list serial-group-tab-list';
-    list.id = shellTabListId();
+    list.id = groupTabListId(columnKey);
     list.setAttribute('role', 'tablist');
     // Shell 标签的右键菜单也要能用（它住在这一行里）。
     // 该行的 class 与分组标签行相同，但里面装的是 .main-tab 而不是 .serial-group-tab，
@@ -4008,23 +4013,23 @@ function ensureShellColumnDom() {
 
     const root = document.createElement('div');
     root.className = 'workspace-root';
-    root.id = shellWorkspaceRootId();
-    root.dataset.groupId = SHELL_COLUMN_GROUP_ID;
+    root.id = groupWorkspaceRootId(columnKey);
+    root.dataset.groupId = columnKey;
 
     const pane = document.createElement('div');
     pane.className = 'workspace-pane active';
-    pane.id = shellPaneId();
-    pane.dataset.paneId = shellPaneId();
+    pane.id = groupPaneId(columnKey, 1);
+    pane.dataset.paneId = pane.id;
 
     const content = document.createElement('div');
     content.className = 'main-tabs-content pane-tabs-content';
-    content.id = shellPaneTabsContentId();
+    content.id = `${pane.id}-tabs-content`;
 
     pane.appendChild(content);
     root.appendChild(pane);
     column.appendChild(root);
 
-    // 放在最后：Shell 列永远在串口分组列的右边（用户图里 SHELL1 就在最右）。
+    // 最终位置由统一列协调器按渲染计划排列。
     outer.appendChild(column);
     return column;
 }
@@ -4034,7 +4039,7 @@ function ensureShellColumnDom() {
 // 「添加串口」按钮**不在**每列各造一个：它只保留静态那一个，由
 // placeGroupAddButton() 移到当前激活列。多列各一个会让用户同时看到好几个同样的按钮。
 function createGroupTabRowElement(groupId) {
-    const id = resolveSerialGroupId(groupId);
+    const id = resolveWorkspaceColumnId(groupId);
     const row = document.createElement('div');
     row.className = 'group-tab-row serial-group-tab-bar';
     row.id = groupTabRowId(id);
@@ -4052,7 +4057,7 @@ function createGroupTabRowElement(groupId) {
 
 // 取（必要时建）某个分组的分组标签行。默认分组走静态标记，永不重建。
 function getGroupTabRow(groupId) {
-    const id = resolveSerialGroupId(groupId);
+    const id = resolveWorkspaceColumnId(groupId);
     const rowId = groupTabRowId(id);
     const existing = document.getElementById(rowId);
     if (existing) return existing;
@@ -4067,7 +4072,7 @@ function getGroupTabRow(groupId) {
 
 // 取某个分组的分组标签列表容器。
 function getGroupTabList(groupId) {
-    const id = resolveSerialGroupId(groupId);
+    const id = resolveWorkspaceColumnId(groupId);
     return document.getElementById(groupTabListId(id));
 }
 
@@ -4868,8 +4873,8 @@ function reconcileColumns(plan) {
     // 建：容器列走 ensureSerialGroupWorkspaceDom（默认分组复用静态标记）。
     // Shell 独立列走 ensureShellColumnDom —— 它建的正是模型 OWN_COLUMN_ID 那一列的真实容器。
     plan.columns.forEach(column => {
-        if (column.domKey === tabModel.OWN_COLUMN_ID) {
-            ensureShellColumnDom();
+        if (column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID) {
+            ensureShellColumnDom(column.domKey);
         } else {
             ensureSerialGroupWorkspaceDom(column.domKey);
         }
@@ -4951,10 +4956,10 @@ function applyColumnSizes(plan) {
 // 以及 Shell 独立列（它只有这一行）。
 function reconcileRows(plan) {
     plan.columns.forEach(column => {
-        const isOwnColumn = column.domKey === tabModel.OWN_COLUMN_ID;
+        const isOwnColumn = column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID;
         const groupRowVisible = isOwnColumn || plan.tabBarVisible;
         const groupRow = isOwnColumn
-            ? document.getElementById(shellTabRowId())
+            ? document.getElementById(groupTabRowId(column.domKey))
             : getGroupTabRow(column.domKey);
         if (groupRow) groupRow.hidden = !groupRowVisible;
 
@@ -5082,12 +5087,12 @@ function rowSpecsOfColumn(column) {
 // 且父节点没变就不 appendChild（C2）。
 function reconcileButtons(plan) {
     plan.columns.forEach(column => {
-        const isOwnColumn = column.domKey === tabModel.OWN_COLUMN_ID;
+        const isOwnColumn = column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID;
         const groupRowVisible = isOwnColumn || plan.tabBarVisible;
         const specs = isOwnColumn ? [] : rowSpecsOfColumn(column);
         // 列的 TabRow 列表：分组行可见时是分组行，否则是首个 pane 的列表。
         const tabRowList = groupRowVisible
-            ? (isOwnColumn ? document.getElementById(shellTabListId()) : getGroupTabList(column.domKey))
+            ? (isOwnColumn ? document.getElementById(groupTabListId(column.domKey)) : getGroupTabList(column.domKey))
             : (specs[0] ? getPaneTabsList(specs[0].paneId) : null);
 
         // 1) 列首行上的项：容器 → 分组标签按钮；叶 → 普通按钮。
@@ -5186,11 +5191,11 @@ function orderButtons(listEl, ordered) {
 function applyVisibility(plan) {
     const visible = new Set(plan.panelIds || []);
     plan.columns.forEach(column => {
-        const isOwnColumn = column.domKey === tabModel.OWN_COLUMN_ID;
+        const isOwnColumn = column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID;
         const specs = isOwnColumn ? [] : rowSpecsOfColumn(column);
         // 列首行的叶与扁平形态的行内项共用一个内容区。
         const primaryContentEl = isOwnColumn
-            ? document.getElementById(shellPaneTabsContentId())
+            ? document.getElementById(`${groupPaneId(column.domKey, 1)}-tabs-content`)
             : (specs[0]?.paneId ? getPaneTabsContent(specs[0].paneId) : null);
 
         column.tabItems.forEach(tab => {
