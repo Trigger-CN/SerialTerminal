@@ -43,6 +43,13 @@ const {
   normalizeShellProfiles,
   resolveDefaultShellProfileId
 } = require('./src/shell/shell-profiles');
+const {
+  buildReleaseList,
+  GITHUB_OWNER: RELEASE_GITHUB_OWNER,
+  GITHUB_REPO: RELEASE_GITHUB_REPO,
+  isTrustedReleaseDownloadUrl,
+  MAX_LISTED_RELEASES
+} = require('./src/common/release-history');
 
 // Configure logging
 log.transports.file.level = 'info';
@@ -1551,6 +1558,180 @@ function closeUpdateDownloadWindow() {
   updateDownloadWindow.close();
 }
 
+// ---------------------------------------------------------------------------
+// 历史版本下载
+//
+// electron-updater 只能处理「最新版本」的元数据流，历史版本没有可指向的
+// latest.yml，所以这里自己下载安装包，然后用系统默认方式打开，由用户完成安装。
+// ---------------------------------------------------------------------------
+
+const RELEASE_LIST_API_URL = `https://api.github.com/repos/${RELEASE_GITHUB_OWNER}/${RELEASE_GITHUB_REPO}/releases?per_page=${MAX_LISTED_RELEASES}`;
+const RELEASE_LIST_TIMEOUT_MS = 8000;
+const RELEASE_LIST_MAX_BYTES = 2 * 1024 * 1024;
+const HISTORY_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+
+let historyDownloadJob = null;
+
+/**
+ * 取历史版本列表。GitHub 对未认证请求按 IP 限流（60 次/小时），
+ * 因此结果做短时缓存，避免用户反复开关弹窗时耗光配额。
+ */
+let releaseListCache = null;
+const RELEASE_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function fetchReleaseList() {
+  if (releaseListCache && Date.now() - releaseListCache.at < RELEASE_LIST_CACHE_TTL_MS) {
+    return releaseListCache.items;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RELEASE_LIST_TIMEOUT_MS);
+  try {
+    const response = await fetch(RELEASE_LIST_API_URL, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `SerialTerminal/${app.getVersion()}`,
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      redirect: 'error',
+      signal: controller.signal
+    });
+
+    if (response.status === 403 || response.status === 429) {
+      const resetHeader = response.headers.get('x-ratelimit-reset');
+      const resetAt = Number(resetHeader) ? new Date(Number(resetHeader) * 1000) : null;
+      const error = new Error('rate limited');
+      error.code = 'RATE_LIMITED';
+      error.resetAt = resetAt ? truncateForLog(resetAt.toISOString()) : '';
+      throw error;
+    }
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.code = 'HTTP_ERROR';
+      error.status = response.status;
+      throw error;
+    }
+
+    const body = await readLimitedResponse(response, RELEASE_LIST_MAX_BYTES);
+    const releases = JSON.parse(body);
+    const items = buildReleaseList(releases, {
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      limit: MAX_LISTED_RELEASES
+    });
+    releaseListCache = { at: Date.now(), items };
+    return items;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function truncateForLog(value, max = 200) {
+  const text = String(value ?? '');
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * 下载指定版本的安装包并打开。同一时刻只允许一个历史版本下载任务，
+ * 因为安装包体积接近 90MB，并发下载既慢又容易触发网络问题。
+ */
+async function downloadHistoricalRelease(payload = {}) {
+  const downloadUrl = String(payload.downloadUrl || '');
+  const version = String(payload.version || '');
+  const assetName = String(payload.assetName || '');
+
+  if (!isTrustedReleaseDownloadUrl(downloadUrl)) {
+    throw new Error('Untrusted release download URL');
+  }
+  if (!assetName || !/\.(exe|deb|AppImage)$/i.test(assetName)) {
+    throw new Error('Unsupported release asset');
+  }
+  if (historyDownloadJob && !historyDownloadJob.cancelled) {
+    const busy = new Error('Another historical download is in progress');
+    busy.code = 'BUSY';
+    throw busy;
+  }
+
+  const job = { cancelled: false, controller: new AbortController() };
+  historyDownloadJob = job;
+
+  const notify = (status, data = {}) => {
+    if (prefsWindow && !prefsWindow.isDestroyed()) {
+      prefsWindow.webContents.send('history-download-status', { status, data });
+    }
+  };
+
+  const timer = setTimeout(() => job.controller.abort(), HISTORY_DOWNLOAD_TIMEOUT_MS);
+
+  try {
+    const targetDirectory = app.getPath('downloads');
+    await fs.promises.mkdir(targetDirectory, { recursive: true });
+    const targetPath = path.join(targetDirectory, assetName);
+
+    notify('start', { version, assetName, targetPath });
+
+    const response = await fetch(downloadUrl, {
+      headers: { 'User-Agent': `SerialTerminal/${app.getVersion()}`, Accept: 'application/octet-stream' },
+      redirect: 'follow',
+      signal: job.controller.signal
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.body) throw new Error('Empty download body');
+
+    const totalBytes = Number(response.headers.get('content-length')) || 0;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let receivedBytes = 0;
+    let lastNotifiedPercent = -1;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (job.cancelled) {
+        try { await reader.cancel(); } catch {}
+        throw Object.assign(new Error('cancelled'), { code: 'CANCELLED' });
+      }
+      chunks.push(Buffer.from(value));
+      receivedBytes += value.length;
+      const percent = totalBytes > 0 ? Math.min(100, Math.floor((receivedBytes / totalBytes) * 100)) : 0;
+      if (percent !== lastNotifiedPercent) {
+        lastNotifiedPercent = percent;
+        notify('progress', { version, percent, receivedBytes, totalBytes });
+      }
+    }
+
+    await fs.promises.writeFile(targetPath, Buffer.concat(chunks));
+    notify('downloaded', { version, assetName, targetPath, sizeBytes: receivedBytes });
+
+    // 打开安装包，把安装交给用户完成：运行中的 exe 无法被自身替换。
+    const openError = await shell.openPath(targetPath);
+    if (openError) {
+      log.warn(`Historical release downloaded but could not be opened: ${openError}`);
+      notify('downloaded-not-opened', { version, assetName, targetPath, message: openError });
+    }
+    return { ok: true, targetPath, sizeBytes: receivedBytes };
+  } catch (error) {
+    if (job.cancelled || error.code === 'CANCELLED') {
+      notify('cancelled', { version });
+      return { ok: false, cancelled: true };
+    }
+    const message = error.name === 'AbortError' ? 'Download timed out' : error.message;
+    log.warn(`Historical release download failed: ${message}`);
+    notify('error', { version, message: truncateForLog(message) });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    if (historyDownloadJob === job) historyDownloadJob = null;
+  }
+}
+
+function cancelHistoricalReleaseDownload() {
+  if (!historyDownloadJob) return { ok: true, cancelled: false };
+  historyDownloadJob.cancelled = true;
+  try { historyDownloadJob.controller.abort(); } catch {}
+  return { ok: true, cancelled: true };
+}
+
 function getManualUpdateDownloadUrl(info) {
   const artifactPattern = new RegExp(`\\.${UPDATE_PACKAGE_TYPE}(?:$|[?#])`, 'i');
   const artifactFile = Array.isArray(info?.files)
@@ -2042,6 +2223,45 @@ ipcMain.handle('get-about-info', () => {
     github: pkg.homepage || (pkg.repository ? (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository.url) : 'https://github.com/your/repo')
   };
 });
+
+ipcMain.handle('show-release-confirm', async (event, options = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender) || prefsWindow || mainWindow;
+  const message = String(options.message || "");
+  const detail = String(options.detail || "");
+  const result = await dialog.showMessageBox(owner, {
+    type: "warning",
+    buttons: [String(options.confirmLabel || "OK"), String(options.cancelLabel || "Cancel")],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    title: String(options.title || ""),
+    message,
+    detail
+  });
+  return { response: result.response };
+});
+
+ipcMain.handle('get-release-history', async () => {
+  try {
+    const items = await fetchReleaseList();
+    return { ok: true, currentVersion: app.getVersion(), platform: process.platform, items };
+  } catch (error) {
+    log.warn(`Failed to load release history: ${error.message}`);
+    return {
+      ok: false,
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      items: [],
+      code: error.code || 'UNKNOWN',
+      message: truncateForLog(error.message),
+      resetAt: error.resetAt || ''
+    };
+  }
+});
+
+ipcMain.handle('download-release-version', (event, payload) => downloadHistoricalRelease(payload));
+
+ipcMain.handle('cancel-release-version-download', () => cancelHistoricalReleaseDownload());
 
 app.on('before-quit', () => {
   telemetryReporter.stop();

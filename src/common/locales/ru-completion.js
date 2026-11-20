@@ -193,6 +193,26 @@ module.exports = {
     cancelDownload: 'Отмена',
     downloadCancelled: 'Загрузка отменена',
     logCreateDateFolder: 'Создавать отдельную папку для каждой даты',
-    logCreateDateFolderHelp: 'Текстовые и необработанные журналы сохраняются в подпапках YYYY-MM-DD; в полночь папка переключается автоматически.'
+    logCreateDateFolderHelp: 'Текстовые и необработанные журналы сохраняются в подпапках YYYY-MM-DD; в полночь папка переключается автоматически.',
+    downloadOlderVersions: "Скачать старые версии",
+    releaseHistoryHint: "Загрузка выполняется с GitHub. Выберите версию, чтобы скачать её установщик.",
+    releaseStateCurrent: "Текущая",
+    releaseStateNewer: "Новее",
+    releaseStateOlder: "Старее",
+    releaseHistoryEmpty: "Доступных для загрузки версий не найдено.",
+    releaseHistoryFailed: "Не удалось загрузить список версий. Проверьте подключение и повторите попытку.",
+    releaseHistoryRateLimited: "Достигнут лимит запросов GitHub. Попробуйте позже.",
+    releasePublished: "Опубликована",
+    releaseSize: "Размер",
+    releaseAsset: "Установщик",
+    releaseConfirmTitle: "Скачать установщик",
+    releaseConfirmMessage: "Скачать установщик версии {version}?",
+    releaseOverwriteWarning: "Установка версии {version} заменит текущую запущенную версию. Настройки и журналы сохранятся.",
+    releaseConfirmDownload: "Скачать",
+    releaseDownloading: "Загрузка версии {version}...",
+    releaseDownloaded: "Версия {version} загружена, установщик открыт. Сохранено в: {path}",
+    releaseDownloadedNotOpened: "Версия загружена в {path}, но установщик не удалось открыть автоматически. Запустите его вручную.",
+    releaseDownloadCancelled: "Загрузка отменена.",
+    releaseDownloadFailed: "Не удалось загрузить: {message}"
   }
 };

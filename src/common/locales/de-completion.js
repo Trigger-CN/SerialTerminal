@@ -191,6 +191,26 @@ module.exports = {
     cancelDownload: 'Abbrechen',
     downloadCancelled: 'Download abgebrochen',
     logCreateDateFolder: 'Für jedes Datum einen Ordner erstellen',
-    logCreateDateFolderHelp: 'Speichert Text- und Rohdatenprotokolle in Unterordnern im Format YYYY-MM-DD und wechselt um Mitternacht automatisch den Ordner.'
+    logCreateDateFolderHelp: 'Speichert Text- und Rohdatenprotokolle in Unterordnern im Format YYYY-MM-DD und wechselt um Mitternacht automatisch den Ordner.',
+    downloadOlderVersions: "Ältere Versionen herunterladen",
+    releaseHistoryHint: "Downloads stammen von GitHub. Wählen Sie eine Version, um deren Installer herunterzuladen.",
+    releaseStateCurrent: "Aktuell",
+    releaseStateNewer: "Neuer",
+    releaseStateOlder: "Älter",
+    releaseHistoryEmpty: "Keine herunterladbaren Versionen gefunden.",
+    releaseHistoryFailed: "Versionsliste konnte nicht geladen werden. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
+    releaseHistoryRateLimited: "GitHub-Ratenlimit erreicht. Bitte später erneut versuchen.",
+    releasePublished: "Veröffentlicht",
+    releaseSize: "Größe",
+    releaseAsset: "Installer",
+    releaseConfirmTitle: "Installer herunterladen",
+    releaseConfirmMessage: "Installer für Version {version} herunterladen?",
+    releaseOverwriteWarning: "Die Installation von Version {version} ersetzt die aktuell ausgeführte Version. Einstellungen und Protokolle bleiben erhalten.",
+    releaseConfirmDownload: "Herunterladen",
+    releaseDownloading: "Version {version} wird heruntergeladen...",
+    releaseDownloaded: "Version {version} wurde heruntergeladen und der Installer geöffnet. Gespeichert unter: {path}",
+    releaseDownloadedNotOpened: "Version wurde nach {path} heruntergeladen, der Installer konnte aber nicht automatisch geöffnet werden. Bitte manuell starten.",
+    releaseDownloadCancelled: "Download abgebrochen.",
+    releaseDownloadFailed: "Download fehlgeschlagen: {message}"
   }
 };

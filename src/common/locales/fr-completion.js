@@ -191,6 +191,26 @@ module.exports = {
     cancelDownload: 'Annuler',
     downloadCancelled: 'Téléchargement annulé',
     logCreateDateFolder: 'Créer un dossier pour chaque date',
-    logCreateDateFolderHelp: 'Enregistre les journaux texte et bruts dans des sous-dossiers YYYY-MM-DD et change automatiquement de dossier à minuit.'
+    logCreateDateFolderHelp: 'Enregistre les journaux texte et bruts dans des sous-dossiers YYYY-MM-DD et change automatiquement de dossier à minuit.',
+    downloadOlderVersions: "Télécharger d'anciennes versions",
+    releaseHistoryHint: "Les téléchargements proviennent de GitHub. Choisissez une version pour télécharger son installateur.",
+    releaseStateCurrent: "Actuelle",
+    releaseStateNewer: "Plus récente",
+    releaseStateOlder: "Plus ancienne",
+    releaseHistoryEmpty: "Aucune version téléchargeable trouvée.",
+    releaseHistoryFailed: "Impossible de charger la liste des versions. Vérifiez votre connexion et réessayez.",
+    releaseHistoryRateLimited: "Limite de requêtes GitHub atteinte. Veuillez réessayer plus tard.",
+    releasePublished: "Publiée le",
+    releaseSize: "Taille",
+    releaseAsset: "Installateur",
+    releaseConfirmTitle: "Télécharger l'installateur",
+    releaseConfirmMessage: "Télécharger l'installateur de la version {version} ?",
+    releaseOverwriteWarning: "Installer la version {version} remplacera la version actuellement exécutée. Vos paramètres et journaux sont conservés.",
+    releaseConfirmDownload: "Télécharger",
+    releaseDownloading: "Téléchargement de la version {version}...",
+    releaseDownloaded: "La version {version} a été téléchargée et l'installateur a été ouvert. Enregistré dans : {path}",
+    releaseDownloadedNotOpened: "Version téléchargée dans {path}, mais l'installateur n'a pas pu être ouvert. Lancez-le manuellement.",
+    releaseDownloadCancelled: "Téléchargement annulé.",
+    releaseDownloadFailed: "Échec du téléchargement : {message}"
   }
 };

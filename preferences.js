@@ -994,6 +994,261 @@ elements.languageSelect?.addEventListener('change', () => {
 });
 
 // Wrap init in DOMContentLoaded to be safe, or just call it if document is ready
+
+// ---------------------------------------------------------------------------
+// 历史版本下载
+//
+// 列表来自主进程（GitHub Releases API）。这里只负责渲染、确认与进度展示，
+// 任何关于「版本是否可用」「状态标签」的判断都在 src/common/release-history.js。
+// ---------------------------------------------------------------------------
+
+const releaseHistoryModal = document.getElementById('release-history-modal');
+const releaseHistoryList = document.getElementById('release-history-list');
+const releaseHistoryStatus = document.getElementById('release-history-status');
+const releaseHistoryButton = document.getElementById('release-history-btn');
+const releaseDownloadProgress = document.getElementById('release-download-progress');
+const releaseDownloadLabel = document.getElementById('release-download-label-text');
+const releaseDownloadPercent = document.getElementById('release-download-percent');
+const releaseDownloadFill = document.getElementById('release-download-fill');
+const releaseDownloadCancel = document.getElementById('release-download-cancel');
+
+let releaseHistoryState = { loaded: false, loading: false, items: [], currentVersion: '', platform: '' };
+let releaseDownloadBusy = false;
+
+function formatReleaseSize(bytes) {
+    const value = Number(bytes) || 0;
+    if (value <= 0) return '';
+    const mb = value / 1024 / 1024;
+    return mb >= 1 ? mb.toFixed(1) + ' MB' : Math.max(1, Math.round(value / 1024)) + ' KB';
+}
+
+function releaseStateLabel(state) {
+    if (state === 'same') return tr('prefs.releaseStateCurrent');
+    if (state === 'newer') return tr('prefs.releaseStateNewer');
+    return tr('prefs.releaseStateOlder');
+}
+
+function setReleaseHistoryStatus(message, isError = false) {
+    if (!releaseHistoryStatus) return;
+    releaseHistoryStatus.textContent = message || '';
+    releaseHistoryStatus.classList.toggle('is-error', Boolean(message) && isError);
+}
+
+function setReleaseDownloadBusy(busy) {
+    releaseDownloadBusy = busy;
+    if (releaseDownloadProgress) releaseDownloadProgress.hidden = !busy;
+    if (releaseHistoryButton) releaseHistoryButton.disabled = busy;
+    for (const item of releaseHistoryList?.querySelectorAll('.release-item') || []) {
+        item.disabled = busy || item.dataset.state === 'same';
+    }
+}
+
+function resetReleaseDownloadProgress() {
+    if (releaseDownloadFill) releaseDownloadFill.style.width = '0%';
+    if (releaseDownloadPercent) releaseDownloadPercent.textContent = '0%';
+    if (releaseDownloadLabel) releaseDownloadLabel.textContent = '';
+}
+
+function renderReleaseHistory() {
+    if (!releaseHistoryList) return;
+    releaseHistoryList.textContent = '';
+
+    if (!releaseHistoryState.items.length) return;
+
+    for (const item of releaseHistoryState.items) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'release-item';
+        row.dataset.version = item.version;
+        row.dataset.state = item.state;
+        if (item.state === 'same') {
+            row.classList.add('is-current');
+            row.disabled = true;
+        }
+
+        const versionEl = document.createElement('span');
+        versionEl.className = 'release-version';
+        versionEl.textContent = 'v' + item.version;
+        row.appendChild(versionEl);
+
+        const metaEl = document.createElement('span');
+        metaEl.className = 'release-meta';
+        const metaParts = [item.publishedAt, formatReleaseSize(item.sizeBytes)].filter(Boolean);
+        metaEl.textContent = metaParts.join(' · ');
+        row.appendChild(metaEl);
+
+        const badge = document.createElement('span');
+        badge.className = 'release-badge';
+        if (item.state === 'same') badge.classList.add('is-current');
+        if (item.state === 'newer') badge.classList.add('is-newer');
+        badge.textContent = releaseStateLabel(item.state);
+        row.appendChild(badge);
+
+        if (item.state !== 'same') {
+            row.addEventListener('click', () => confirmAndDownloadRelease(item));
+        }
+
+        releaseHistoryList.appendChild(row);
+    }
+}
+
+/**
+ * 安装包会覆盖当前安装，因此先明确告知用户后果再开始下载。
+ * 确认对话框走主进程的系统原生实现，与「检查更新」的交互保持一致。
+ */
+async function confirmAndDownloadRelease(item) {
+    if (releaseDownloadBusy) return;
+
+    const detail = [
+        tr('prefs.releaseOverwriteWarning', { version: item.version }),
+        '',
+        tr('prefs.releasePublished') + ': ' + (item.publishedAt || '-'),
+        tr('prefs.releaseSize') + ': ' + (formatReleaseSize(item.sizeBytes) || '-'),
+        tr('prefs.releaseAsset') + ': ' + item.assetName
+    ].join('\n');
+
+    const { response } = await ipcRenderer.invoke('show-release-confirm', {
+        title: tr('prefs.releaseConfirmTitle'),
+        message: tr('prefs.releaseConfirmMessage', { version: item.version }),
+        detail,
+        confirmLabel: tr('prefs.releaseConfirmDownload'),
+        cancelLabel: tr('prefs.cancel')
+    });
+    if (response !== 0) return;
+
+    if (releaseHistoryModal) releaseHistoryModal.hidden = true;
+    resetReleaseDownloadProgress();
+    setReleaseDownloadBusy(true);
+    if (releaseDownloadLabel) {
+        releaseDownloadLabel.textContent = tr('prefs.releaseDownloading', { version: item.version });
+    }
+
+    try {
+        const result = await ipcRenderer.invoke('download-release-version', {
+            version: item.version,
+            assetName: item.assetName,
+            downloadUrl: item.downloadUrl
+        });
+        if (result && result.ok === false && !result.cancelled) {
+            setReleaseHistoryStatus(tr('prefs.releaseDownloadFailed', { message: '' }), true);
+        }
+    } catch (error) {
+        setReleaseHistoryStatus(tr('prefs.releaseDownloadFailed', { message: error.message }), true);
+    }
+}
+
+async function loadReleaseHistory({ force = false } = {}) {
+    if (!releaseHistoryModal) return;
+    if (releaseHistoryState.loading) return;
+    if (releaseHistoryState.loaded && !force) return;
+
+    releaseHistoryState.loading = true;
+    if (releaseHistoryList) releaseHistoryList.textContent = '';
+    setReleaseHistoryStatus(tr('common.loading'));
+
+    try {
+        const payload = await ipcRenderer.invoke('get-release-history');
+        releaseHistoryState = {
+            loaded: Boolean(payload?.ok),
+            loading: false,
+            items: Array.isArray(payload?.items) ? payload.items : [],
+            currentVersion: payload?.currentVersion || '',
+            platform: payload?.platform || ''
+        };
+
+        if (!payload?.ok) {
+            const message = payload?.code === 'RATE_LIMITED'
+                ? tr('prefs.releaseHistoryRateLimited')
+                : tr('prefs.releaseHistoryFailed');
+            setReleaseHistoryStatus(message, true);
+            return;
+        }
+
+        if (!releaseHistoryState.items.length) {
+            setReleaseHistoryStatus(tr('prefs.releaseHistoryEmpty'));
+            return;
+        }
+
+        setReleaseHistoryStatus('');
+        renderReleaseHistory();
+    } catch (error) {
+        releaseHistoryState.loading = false;
+        setReleaseHistoryStatus(tr('prefs.releaseHistoryFailed'), true);
+    }
+}
+
+function openReleaseHistory() {
+    if (!releaseHistoryModal) return;
+    releaseHistoryModal.hidden = false;
+    loadReleaseHistory();
+}
+
+function closeReleaseHistory() {
+    if (!releaseHistoryModal) return;
+    releaseHistoryModal.hidden = true;
+}
+
+releaseHistoryButton?.addEventListener('click', openReleaseHistory);
+document.getElementById('release-history-close')?.addEventListener('click', closeReleaseHistory);
+releaseHistoryModal?.querySelectorAll('[data-release-modal-close]').forEach(el => {
+    el.addEventListener('click', closeReleaseHistory);
+});
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && releaseHistoryModal && !releaseHistoryModal.hidden) {
+        closeReleaseHistory();
+    }
+});
+
+releaseDownloadCancel?.addEventListener('click', () => {
+    ipcRenderer.invoke('cancel-release-version-download');
+});
+
+ipcRenderer.on('history-download-status', (event, payload = {}) => {
+    const { status, data = {} } = payload;
+    switch (status) {
+        case 'start':
+            setReleaseDownloadBusy(true);
+            if (releaseDownloadLabel) {
+                releaseDownloadLabel.textContent = tr('prefs.releaseDownloading', { version: data.version || '' });
+            }
+            break;
+        case 'progress': {
+            const percent = Math.max(0, Math.min(100, Number(data.percent) || 0));
+            if (releaseDownloadFill) releaseDownloadFill.style.width = percent + '%';
+            if (releaseDownloadPercent) releaseDownloadPercent.textContent = percent + '%';
+            break;
+        }
+        case 'downloaded':
+            setReleaseDownloadBusy(false);
+            resetReleaseDownloadProgress();
+            setReleaseHistoryStatus(tr('prefs.releaseDownloaded', {
+                version: data.version || '',
+                path: data.targetPath || ''
+            }));
+            openReleaseHistory();
+            loadReleaseHistory({ force: true });
+            break;
+        case 'downloaded-not-opened':
+            setReleaseDownloadBusy(false);
+            resetReleaseDownloadProgress();
+            setReleaseHistoryStatus(tr('prefs.releaseDownloadedNotOpened', { path: data.targetPath || '' }), true);
+            openReleaseHistory();
+            break;
+        case 'cancelled':
+            setReleaseDownloadBusy(false);
+            resetReleaseDownloadProgress();
+            setReleaseHistoryStatus(tr('prefs.releaseDownloadCancelled'));
+            openReleaseHistory();
+            break;
+        case 'error':
+            setReleaseDownloadBusy(false);
+            resetReleaseDownloadProgress();
+            setReleaseHistoryStatus(tr('prefs.releaseDownloadFailed', { message: data.message || '' }), true);
+            openReleaseHistory();
+            break;
+    }
+});
+
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
 } else {
