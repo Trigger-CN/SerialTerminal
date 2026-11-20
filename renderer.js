@@ -1398,9 +1398,25 @@ function bindShellTextModeWheel(tabState, element) {
     }, { passive: false, capture: true });
 }
 
+function getWorkspaceTabMenuCapabilities(tabId, groupId) {
+    const groupId_ = groupIdForWorkspaceTab(tabId) || groupId || activeGroupId;
+    const container = workspaceModel?.tabs[groupId_];
+    const source = workspaceModel ? tabModel.paneOfTab(workspaceModel, workspaceModel.tabs[tabId]) : null;
+    return {
+        groupId: groupId_,
+        paneId: source?.pane.id || '',
+        isMultiGroup: workspaceModel ? tabModel.roots(workspaceModel).filter(tabModel.isContainer).length > 1 : false,
+        groupSplitEnabled: workspaceModel?.split.enabled === true,
+        splitEnabled: tabModel.isContainer(container) && container.paneSplit.enabled === true,
+        canSplit: Boolean(workspaceModel && tabModel.canSplitTab(workspaceModel, tabId, groupId_)),
+        canMoveToOtherPane: Boolean(workspaceModel && tabModel.getOtherPaneTarget(workspaceModel, tabId, groupId_))
+    };
+}
+
 function requestTerminalContextMenu(payload) {
     ipcRenderer.send('show-terminal-context-menu', {
         ...payload,
+        ...getWorkspaceTabMenuCapabilities(payload.tabId, payload.groupId),
         labels: getContextMenuLabels()
     });
 }
@@ -1424,74 +1440,18 @@ function requestSerialGroupContextMenu(groupId) {
     });
 }
 
-// 普通标签（main / filter / chart / shell）的右键菜单。
-//
-// **总是发 terminalType='tab'**，不分成单/多分组两套：
-//
-// 旧实现在多分组时直接转给 requestSerialGroupContextMenu，代价是 `tabId` 被丢掉——
-// 用户右键一个 Shell 只能拿到分组菜单，里面没有任何与这个 Shell 有关的项，「让 Shell
-// 独立成列」因此完全没有入口（实测 diag985 step6：payload 的 tabId 是空串）。
-//
-// 分组级分屏项现在都在 `'tab'` 菜单里（主进程模板自己按 isMultiGroup 置灰），
-// 因此一条分支就能同时满足单分组与多分组两个形态。
-//
-// canSplit 只在「本组 pane 里真的有第二个可移动标签」时为真：只移动唯一那个标签，
-// reconcileEmptyPanes 会发现只剩一个非空 pane 并立刻折叠回去，用户看到的就是「点了
-// 没反应」。与其给一个必然无效的菜单项，不如明确置灰。
-//
-// canDetach 只给 Shell：`ownColumn` 是根级叶的显示形态，串口主/过滤/图表标签是容器的
-// 子项（parentId !== null），模型里 `leafColumnMode` 对它们恒返 'row'，给了也无效。
-function requestWorkspaceTabContextMenu({ tabId, paneId, groupId }) {
+// 标签栏与内容区共用模型能力；菜单展示不是执行授权，点击时仍重新校验。
+function requestWorkspaceTabContextMenu({ tabId, groupId }) {
     if (!tabId) return;
-    const id = resolveSerialGroupId(groupId || activeGroupId);
-    const layout = getGroupWorkspaceLayout(id);
-    // 只数**可移动的**标签：Shell 永远进不了 pane（I1/I2），`splitWorkspaceTabIntoPane`
-    // 对它是硬拒的。把它算进 `totalTabs` 会让菜单项看起来可点、点了却一个字也不变
-    // （实测 `rca-1501.txt`：`canSplit:true`，而 split-horizontal / split-vertical /
-    // move-to-other-pane 三个动作前后 pane / rows / 可见 pane 逐字相同）。
-    //
-    // 历史配置里本就残留着写进 pane 的 shell id（`rcd-1500.txt`：`pane-2.tabIds =
-    // ["tab-shell-3"]`），所以这里必须过滤而不能假定数据干净。
-    const totalTabs = layout.panes.reduce((sum, pane) => (
-        sum + pane.tabIds.filter(tabId_ => !isShellTabId(tabId_)).length
-    ), 0);
-    const shellTab = isShellTabId(tabId) ? getShellTabState(tabId) : null;
-    const multiGroup = isMultiGroupLayer();
+    const capabilities = getWorkspaceTabMenuCapabilities(tabId, groupId);
+    const shellTab = getShellTabState(tabId);
     ipcRenderer.send('show-terminal-context-menu', {
         terminalType: 'tab',
         tabId,
-        paneId: paneId || '',
-        groupId: id,
-        isMultiGroup: multiGroup,
-        groupSplitEnabled: workspaceModel ? workspaceModel.split.enabled : groupWorkspaceSplit.enabled,
-        splitEnabled: layout.splitEnabled === true,
-        // 「组内 pane 分屏」的准入：
-        //
-        // **单串口组**（用户裁决：所有标签地位平等、可随意分屏拖动）：
-        //   Shell 也算可移动——它现在能通过 `hostPaneId` 住进任意 pane。
-        //   只要这一组里有 ≥ 2 个标签（含 Shell）就可以拆出来。
-
-        // **多串口组**：标签不能脱离组，且 Shell 只在一级栏（旧裁决仍然有效），
-        //   所以维持原规则：`canSplit` 排掉 Shell，只数可移动的串口标签。
-        //
-        // 旧实现的判据是「`totalTabs >= 2 && !isShellTabId(tabId)`」，那是**全局**的；
-        // 单组放开 Shell 后它会让 Shell 的菜单项恒置灰（`rca-1501.txt` 那类）。
-        // 现在按 `multiGroup` 分叉：单组允许 Shell，多组仍禁。
-        canSplit: workspaceModel
-            ? (() => {
-                const hit = tabModel.paneOfTab(workspaceModel, workspaceModel.tabs[tabId]);
-                return !(multiGroup && shellTab) && (hit ? hit.pane.tabIds.length > 1 : !multiGroup && Boolean(shellTab));
-            })()
-            : multiGroup ? (totalTabs >= 2 && !isShellTabId(tabId))
-                : (totalTabs + (shellTab && !layout.panes.some(pane => pane.tabIds.includes(tabId)) ? 1 : 0)) >= 2,
-        // Shell 的分屏入口：
-        //
-        // **单组**：「独立成列」不存在（单组只有一个容器，分屏只能靠 pane），
-        //   所以 `canDetach: false`，Shell 走上面的 `canSplit` 进 pane 分屏。
-        // **多组**：保持原样（`detach-to-own-column` / `join-group-column`）。
-        canDetach: Boolean(shellTab) && multiGroup,
+        ...capabilities,
+        canDetach: Boolean(shellTab) && capabilities.isMultiGroup,
         shellOwnColumn: Boolean(shellTab) && getShellTabOwner(shellTab) === null
-            && (workspaceModel ? workspaceModel.tabs[tabId]?.columnMode : shellTab.columnMode) === 'ownColumn',
+            && workspaceModel?.tabs[tabId]?.columnMode === 'ownColumn',
         labels: getContextMenuLabels()
     });
 }
@@ -1706,8 +1666,9 @@ async function handleTerminalContextMenuAction(payload = {}) {
     const shellTab = isShell ? getShellTabState(tabId) : null;
     const chartTab = isChart ? chartTabsStore.getList(contextGroupId).find(tab => tab.id === tabId) : null;
     const targetTerm = (isChart || isGroup) ? null : (isFilter ? filterTab?.term : (isShell ? shellTab?.term : serialRuntimes.get(contextGroupId)?.term));
-    // 分组级动作不承诺任何终端：它们作用于分组容器本身，不能因拿不到 term 就被拦掉。
-    if (!isGroup && ((isChart && !chartTab) || (!isChart && !targetTerm && action !== 'paste-send'))) return;
+    // 布局动作不依赖终端实例；菜单打开后标签可能已关闭，交给最新模型拒绝并提示。
+    const isLayoutAction = ['split-horizontal', 'split-vertical', 'move-to-other-pane'].includes(action);
+    if (!isGroup && !isLayoutAction && ((isChart && !chartTab) || (!isChart && !targetTerm && action !== 'paste-send'))) return;
 
     switch (action) {
         case 'copy-all': {
@@ -1872,39 +1833,20 @@ async function handleTerminalContextMenuAction(payload = {}) {
             setActionStatus('已让 Shell 归入分组列');
             break;
         }
-        case 'split-horizontal': {
-            if (!tabId) break;
-            // 组内 pane 分屏：动作属于**标签所在的那个分组**，不是激活分组。
-            // 单组时二者相同；多组右侧列的标签被右键时，用激活组会把标签搬错布局。
-            if (splitWorkspaceTabIntoPane({
-                tabId,
-                groupId: contextGroupId,
-                orientation: 'horizontal'
-            })) {
-                setActionStatus('已将标签页移入左右分屏');
-            }
-            break;
-        }
+        case 'split-horizontal':
         case 'split-vertical': {
-            if (!tabId) break;
-            if (splitWorkspaceTabIntoPane({
-                tabId,
-                groupId: contextGroupId,
-                orientation: 'vertical'
-            })) {
-                setActionStatus('已将标签页移入上下分屏');
-            }
+            const orientation = action === 'split-vertical' ? 'vertical' : 'horizontal';
+            const changed = Boolean(tabId) && splitWorkspaceTabIntoPane({ tabId, groupId: contextGroupId, orientation });
+            setActionStatus(changed
+                ? (orientation === 'vertical' ? '已将标签页移入上下分屏' : '已将标签页移入左右分屏')
+                : '无法新建分屏：当前格至少需要两个标签，或标签位置已变化，请重新打开菜单');
             break;
         }
         case 'move-to-other-pane': {
-            if (!tabId) break;
-            if (splitWorkspaceTabIntoPane({
-                tabId,
-                groupId: contextGroupId,
-                orientation: getGroupWorkspaceLayout(contextGroupId).orientation
-            })) {
-                setActionStatus('已移动标签页到另一个分屏');
-            }
+            const changed = moveWorkspaceTabToOtherPane({ tabId, groupId: contextGroupId });
+            setActionStatus(changed
+                ? '已移动标签页到另一个分屏'
+                : '无法移动：没有可用的其他分屏，或标签位置已变化，请重新打开菜单');
             break;
         }
         case 'close-split': {
@@ -2330,20 +2272,18 @@ function groupIdForWorkspaceTab(tabId) {
     return group?.id || null;
 }
 
-// 组内 pane 分屏：把一个标签搬到它**所属分组**的另一个 pane。
-//
-// 三个必须自己处理的细节，任何一项漏掉都是「右键分屏没反应」：
-//
-//   1. 非默认分组默认只有 1 个 pane（createDefaultLayoutForGroup 的 paneCount:1），
-//      而 getOtherPaneId 在单 pane 时返回**自己**，moveTabToPane(tabId, 自己) 什么也不改。
-//      所以先把 pane-2 补进布局与 DOM（ensurePaneElements 会建节点）。
-//   2. 模块级 moveTabToPane / workspaceLayout 只指向**激活分组**；目标 pane 属于另一个
-//      分组时必须走那个分组自己的 manager（同 moveTabToGroupPane 的理由）。
-//   3. 只移动唯一那个标签时 reconcileEmptyPanes 会把布局折叠回一个 pane，等于什么
-//      都没发生。这种情形菜单项已经置灰（canSplit），这里再兜一次底。
-//
-// Shell 准入按模式：单组是 pane 的普通成员，多组仅根级。
-// 初始化后的分屏使用统一 split-tab 事务；下面旧字段分支仅供恢复前兼容。
+function moveWorkspaceTabToOtherPane({ tabId, groupId }) {
+    if (!workspaceModel) return false;
+    const id = groupIdForWorkspaceTab(tabId) || groupId || activeGroupId;
+    const target = tabModel.getOtherPaneTarget(workspaceModel, tabId, id);
+    if (!target) return false;
+    const result = dispatchWorkspaceAction({ type: 'move', tabId, target });
+    if (result.ok) { persistGroupWorkspaceLayout(id); persistShellTabs(); }
+    return result.ok;
+}
+
+// 新建组内格使用 split-tab，已有格之间移动使用上面的 move，不能互相替代。
+// 运行态由模型准入和事务接管；下面旧字段分支仅供初始化前兼容。
 function splitWorkspaceTabIntoPane({ tabId, groupId, orientation }) {
     if (workspaceModel) {
         const id = groupIdForWorkspaceTab(tabId) || groupId || activeGroupId;

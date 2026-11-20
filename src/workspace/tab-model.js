@@ -970,6 +970,32 @@ function removeEmptyPane(container, pane) {
     return true;
 }
 
+// 菜单与 split-tab 共用准入；根级 Shell 在单组时仍可拆入新格。
+function canSplitTab(ws, tabId, groupId) {
+    const tab = tabOf(ws, tabId);
+    const container = tabOf(ws, groupId);
+    if (!tab || isContainer(tab) || !isContainer(container)) return false;
+    const source = paneOfTab(ws, tab);
+    if (roots(ws).filter(isContainer).length > 1
+        && (tab.kind === 'shell' || source?.container.id !== container.id)) return false;
+    return !source || source.pane.tabIds.length > 1;
+}
+
+function getOtherPaneTarget(ws, tabId, groupId) {
+    const container = tabOf(ws, groupId);
+    if (!isContainer(container) || !container.paneSplit.enabled || container.panes.length < 2) return null;
+    const source = paneOfTab(ws, tabOf(ws, tabId));
+    const sourceIndex = source ? container.panes.indexOf(source.pane) : -1;
+    for (let offset = 1; offset <= container.panes.length; offset++) {
+        const pane = container.panes[(sourceIndex + offset) % container.panes.length];
+        if (pane === source?.pane) continue;
+        const target = { kind: 'pane', groupId, paneId: pane.id, index: pane.tabIds.length };
+        // 交易在副本上校验归属与空格收敛，不让菜单复制另一套移动规则。
+        if (applyWorkspaceAction(ws, { type: 'move', tabId, target }).ok) return target;
+    }
+    return null;
+}
+
 function moveTabToPane(ws, tabId, groupId, paneId, index, activate = true) {
     const tab = tabOf(ws, tabId);
     const container = tabOf(ws, groupId);
@@ -1200,12 +1226,9 @@ function applyWorkspaceAction(ws, action) {
                 break;
             case 'split-tab': {
                 const container = tabOf(next, action.groupId);
-                if (!target || isContainer(target) || !isContainer(container) || !action.paneId) break;
+                if (!canSplitTab(next, action.tabId, action.groupId) || !action.paneId) break;
                 if (container.panes.some(pane => pane.id === action.paneId)) break;
                 const source = paneOfTab(next, target);
-                if (roots(next).filter(isContainer).length > 1
-                    && (target.kind === 'shell' || source?.container.id !== container.id)) break;
-                if (source && source.pane.tabIds.length < 2) break;
                 const pane = { id: action.paneId, tabIds: [], activeTabId: null };
                 const sourceIndex = source ? container.panes.indexOf(source.pane) : container.panes.length - 1;
                 const insertionIndex = action.before === true ? Math.max(0, sourceIndex) : sourceIndex + 1;
@@ -1645,6 +1668,8 @@ module.exports = {
     setCollapsed,
     closeTab,
     moveTab,
+    canSplitTab,
+    getOtherPaneTarget,
     applyWorkspaceAction,
     normalizeSizes,
     validateAndRepair

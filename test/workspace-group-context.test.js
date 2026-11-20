@@ -41,7 +41,7 @@ function fixture() {
     renameTabFollowPortInput:{checked:false},persistSerialGroups:()=>{},syncGroupTitlesForPortChange:()=>{}
   });
   const run=code=>vm.runInContext(code,context);
-  run(section('function groupIdFromPaneId(', '// 组内 pane 分屏：'));
+  run(section('function groupIdFromPaneId(', 'function moveWorkspaceTabToOtherPane('));
   run(section('function persistGroupWorkspaceLayout(', '// 把模块级别名切到目标分组。'));
   run(section('function resolvePaneId(paneId, tabId, fallbackTabId', 'function isTabActive('));
   run(section('function resolveWorkspaceManagerForPane(', 'window.__switchWorkspaceTab'));

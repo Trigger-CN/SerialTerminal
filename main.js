@@ -2518,12 +2518,12 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   const isConnected = Boolean(payload.isConnected);
   const canLocateInMain = Boolean(payload.canLocateInMain);
   const isMultiGroup = Boolean(payload.isMultiGroup);
-  // 'tab' = 单分组时右键某个普通标签：只给组内 pane 分屏那几项。
-  // 多分组仍走 'group'（分组级菜单），两者作用面不同，不要合并。
+  // 普通叶标签统一使用 'tab'；组级拆列仍使用独立的 'group' 动作。
   const terminalType = ['main', 'filter', 'shell', 'chart', 'group', 'tab'].includes(payload.terminalType)
     ? payload.terminalType
     : 'main';
   const canSplitTab = Boolean(payload.canSplit);
+  const canMoveToOtherPane = Boolean(payload.canMoveToOtherPane);
   const labels = payload.labels || {};
 
   const sendAction = (action) => {
@@ -2540,10 +2540,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
   // 它与下面的组内 pane 分屏（split-horizontal / split-vertical）是两件事，
   // 后者把单个标签移动另一个 pane，前者决定哪些分组并排显示。
   //
-  //
-  // 'tab' 是单分组专用：此时分组级分屏无对象（candidates < 2），直接给组内 pane 分屏。
-  // canSplit 为假（该组 pane 里只有一个标签）时置灰而不是隐藏：移走唯一标签会被
-  // reconcileEmptyPanes 立即折叠回一个 pane，用户看到的是「点了没反应」。
+  // 'tab' 覆盖单/多组叶标签；新建格的准入由当前模型提供，不能借其他格的标签充数。
   //
   // 三种「新建」项与二级标签行上的按钮**走同一个创建入口**：按钮 click 里调的是
   // createShellTab / createFilterTab / createChartTab，这里只是把它发出去，
@@ -2664,7 +2661,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     {
       label: labels.moveToOtherPane || 'Move to Other Pane',
       ...menuIcon('swap_horiz'),
-      enabled: Boolean(payload.tabId),
+      enabled: canMoveToOtherPane,
       click: () => sendAction('move-to-other-pane')
     },
     {
@@ -2686,13 +2683,13 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     {
       label: labels.splitHorizontal || 'Move Tab to Right Split',
       ...menuIcon('vertical_split'),
-      enabled: Boolean(payload.tabId),
+      enabled: canSplitTab,
       click: () => sendAction('split-horizontal')
     },
     {
       label: labels.splitVertical || 'Move Tab to Bottom Split',
       ...menuIcon('horizontal_split'),
-      enabled: Boolean(payload.tabId),
+      enabled: canSplitTab,
       click: () => sendAction('split-vertical')
     },
     {
@@ -2765,7 +2762,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       {
         label: labels.moveToOtherPane || 'Move to Other Pane',
         ...menuIcon('swap_horiz'),
-        enabled: Boolean(payload.tabId),
+        enabled: canMoveToOtherPane,
         click: () => sendAction('move-to-other-pane')
       },
       {
@@ -2846,7 +2843,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       {
         label: labels.moveToOtherPane || 'Move to Other Pane',
         ...menuIcon('swap_horiz'),
-        enabled: Boolean(payload.tabId),
+        enabled: canMoveToOtherPane,
         click: () => sendAction('move-to-other-pane')
       },
       {
