@@ -31,9 +31,10 @@ function fixture() {
         serialRuntimes: { get: () => null, release: id => events.push(`runtime:${id}`) }, serialGroupIo: new Map(), serialOutputBuckets: { clear() {} }, serialGroupContext: { removeContext() {} }, serialGroupRegistry: { removeGroup() {} },
         serialConnectRequests: new Map(), serialConnectionSessions: new Map(), serialWriteChains: new Map(), serialConnectingGroups: new Set(), serialReconnectingGroups: new Set(), serialDisconnectWaiters: new Map(), serialInputBoundGroups: new Set(['b']),
         resetQuickTriggerReceive: () => {}, resetTextReceive: () => {},
-        ipcRenderer: { send: (name, payload) => events.push([name, payload]) },
+        ipcRenderer: { send: (name, payload) => events.push([name, payload]), invoke: async () => ({ response: 0 }) },
+        pendingTabCloseConfirmations: new Set(), tr: key => key,
         document: { getElementById: () => null, removeEventListener: () => events.push('listener') },
-        window: { confirm: () => true }, clearTimeout: () => {}, cancelAnimationFrame: () => events.push('frame'),
+        clearTimeout: () => {}, cancelAnimationFrame: () => events.push('frame'),
         unobserveTerminalSearchChanges: () => events.push('search'), chartSettingsState: null, chartExportState: null,
         reclaimSharedGroupTabRow() {}, reclaimGroupAddButton() {}, reclaimShellAddButton() {},
         removeTabFromWorkspace() {}, setActiveGroupWorkspace() {}, persistSerialGroups() {}, pruneGroupWorkspaceSplit() {}, renderSerialGroupTabBar() {}, setActionStatus() {},
@@ -44,33 +45,50 @@ function fixture() {
         dispatchWorkspaceAction: action => { const result = model.applyWorkspaceAction(context.workspaceModel, action); if (result.ok) { context.workspaceModel = result.workspace; context.focusedWorkspaceTabId = result.workspace.focusedTabId; } return result; },
         getGroupWorkspaceManager: () => ({ removeTab: id => { const result = context.dispatchWorkspaceAction({ type: 'close', tabId: id }); return { ...result, nextActiveTabId: 'tab-main-b' }; } }) });
     for (const name of ['destroyFilterTab', 'destroyChartTab', 'destroySerialGroupResources', 'clearSerialGroupAsyncState']) if (source.includes(`function ${name}(`)) load(context, name);
-    for (const name of ['resolveGroupAfterClose', 'closeSerialGroup', 'closeFilterTab', 'closeChartTab']) load(context, name);
+    for (const name of ['requestTabCloseConfirmation', 'resolveGroupAfterClose', 'closeSerialGroup', 'closeFilterTab', 'closeChartTab']) load(context, name);
     return { context, events, filters, charts, run: code => vm.runInContext(code, context) };
 }
-test('closing control group synchronizes sidebar without replacing model Shell focus', () => {
-    const f = fixture(); assert.equal(f.run("closeSerialGroup('b')"), true);
+test('closing control group synchronizes sidebar without replacing model Shell focus', async () => {
+    const f = fixture(); assert.equal(await f.run("closeSerialGroup('b')"), true);
     assert.equal(f.context.activeGroupId, 'default');
     assert.equal(f.events.filter(e => Array.isArray(e) && e[0] === 'sync').length, 1);
     assert.equal(f.context.workspaceModel.focusedTabId, 'tab-shell-1');
     assert.equal(f.context.focusedWorkspaceTabId, 'tab-shell-1');
 });
-test('group close destroys child resources once, flushes owned logs and permits clean ID reuse', () => {
-    const f = fixture(); f.run("closeSerialGroup('b'); closeSerialGroup('b')");
+test('group close destroys child resources once, flushes owned logs and permits clean ID reuse', async () => {
+    const f = fixture(); await f.run("closeSerialGroup('b')"); await f.run("closeSerialGroup('b')");
     for (const event of ['term:filter-b', 'worker:chart-b', 'stream:chart-b', 'view:chart-b', 'listener', 'frame', 'runtime:b']) assert.equal(f.events.filter(e => e === event).length, 1, event);
     assert.ok(f.events.some(e => Array.isArray(e) && e[0] === 'flush-tab-log' && e[1].tabId === 'filter-b'));
     assert.equal(f.context.serialInputBoundGroups.has('b'), false);
     assert.equal(f.context.workspaceModel.tabs['tab-shell-1'].kind, 'shell');
 });
-test('closing background group preserves control selection', () => {
-    const f = fixture(); f.context.activeGroupId = 'default'; f.run("closeSerialGroup('b')");
+test('closing background group preserves control selection', async () => {
+    const f = fixture(); f.context.activeGroupId = 'default'; await f.run("closeSerialGroup('b')");
     assert.equal(f.context.activeGroupId, 'default');
     assert.equal(f.events.some(e => Array.isArray(e) && e[0] === 'sync'), false);
 });
 
-for (const kind of ['Filter', 'Chart']) test(`closing background ${kind} preserves Shell focus`, () => {
-    const f = fixture(); f.run(`close${kind}Tab('${kind.toLowerCase()}-b')`);
+for (const kind of ['Filter', 'Chart']) test(`closing background ${kind} preserves Shell focus`, async () => {
+    const f = fixture(); await f.run(`close${kind}Tab('${kind.toLowerCase()}-b')`);
     assert.equal(f.context.focusedWorkspaceTabId, 'tab-shell-1');
     assert.equal(f.context.workspaceModel.focusedTabId, 'tab-shell-1');
+});
+
+test('connected group closes only after one native confirmation without prompting for each child', async () => {
+    const f = fixture(), dialogs = []; f.context.serialGroups[1].status = 'connected';
+    f.context.ipcRenderer.invoke = async (channel, payload) => { dialogs.push({ channel, payload }); assert.deepEqual(f.events, []); return { response: 0 }; };
+    assert.equal(await f.context.closeSerialGroup('b'), true); assert.equal(dialogs.length, 1);
+    assert.equal(f.events.filter(event => Array.isArray(event) && event[0] === 'disconnect-serial').length, 1);
+    assert.equal(f.events.filter(event => event === 'term:filter-b').length, 1);
+    assert.equal(f.context.workspaceModel.tabs['tab-shell-1'].kind, 'shell');
+});
+test('cancelled group close preserves connected state, children, layout and control selection', async () => {
+    const f = fixture(), before = f.context.workspaceModel, filters = f.filters.get('b'), charts = f.charts.get('b');
+    f.context.serialGroups[1].status = 'connected'; f.context.ipcRenderer.invoke = async () => ({ response: 1 });
+    assert.equal(await f.context.closeSerialGroup('b'), false);
+    assert.equal(f.context.workspaceModel, before); assert.equal(f.context.activeGroupId, 'b');
+    assert.equal(f.context.serialGroups[1].status, 'connected'); assert.equal(f.filters.get('b'), filters); assert.equal(f.charts.get('b'), charts);
+    assert.deepEqual(f.events, []);
 });
 
 for (const scenario of ['late-success', 'late-failure', 'config-echo', 'early-disconnect']) test(`pending connection handles ${scenario}`, async () => {

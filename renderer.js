@@ -1804,7 +1804,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'close-chart-tab': {
-            if (chartTab) closeChartTab(chartTab.id);
+            if (chartTab) await closeChartTab(chartTab.id);
             break;
         }
         case 'use-selection-as-filter': {
@@ -1860,7 +1860,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
         }
         case 'close-filter-tab': {
             if (filterTab) {
-                closeFilterTab(filterTab.id);
+                await closeFilterTab(filterTab.id);
             }
             break;
         }
@@ -1871,7 +1871,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
         }
         case 'close-shell-tab': {
             if (shellTab) {
-                closeShellTab(shellTab.id);
+                await closeShellTab(shellTab.id);
             }
             break;
         }
@@ -4389,6 +4389,26 @@ function persistSerialGroups() {
     ipcRenderer.send('save-config', { serialGroups });
 }
 
+const pendingTabCloseConfirmations = new Set();
+
+function requestTabCloseConfirmation(tab, kind, close) {
+    const key = `${kind}:${tab.id}`;
+    if (pendingTabCloseConfirmations.has(key)) return Promise.resolve(false);
+    pendingTabCloseConfirmations.add(key);
+    const title = tab.title || tab.btn?.querySelector?.('.main-tab-title')?.textContent || tab.id;
+    const detailKey = kind === 'group' ? 'closeGroupTabWarning' : kind === 'shell' ? 'closeShellTabWarning' : 'closeTabWarning';
+    return Promise.resolve().then(() => ipcRenderer.invoke('confirm-tab-close', {
+        title: tr('main.closeTab'),
+        message: tr('main.confirmCloseTab', { title }),
+        detail: tr(`main.${detailKey}`),
+        confirmLabel: tr('main.closeTab'),
+        cancelLabel: tr('main.cancel')
+    })).then(result => result?.response === 0 ? close() : false).catch(error => {
+        setActionStatus(tr('main.closeTabConfirmFailed', { error: error.message || String(error) }));
+        return false;
+    }).finally(() => pendingTabCloseConfirmations.delete(key));
+}
+
 // 关闭一个分组：断开连接 → 释放终端 → 移除节点 → 从列表移除 → 切到邻居。
 function closeSerialGroup(groupId, { confirm = true } = {}) {
     const id = resolveSerialGroupId(groupId);
@@ -4396,10 +4416,8 @@ function closeSerialGroup(groupId, { confirm = true } = {}) {
     const group = getSerialGroupById(id);
     if (!group) return false;
 
-    // 已连接时二次确认：直接关掉会静默中断正在收数据的端口。
-    if (confirm && group.status === 'connected' && !window.confirm(`串口分组「${group.title}」仍处于连接状态，关闭将断开该端口。是否继续？`)) {
-        return false;
-    }
+    if (confirm) return requestTabCloseConfirmation(group, 'group', () =>
+        getSerialGroupById(id) === group ? closeSerialGroup(id, { confirm: false }) : false);
 
     const removalResult = workspaceModel ? tabModel.applyWorkspaceAction(workspaceModel, { type: 'remove-group', groupId: id }) : null;
     if (removalResult && !removalResult.ok) return false;
@@ -4746,12 +4764,14 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     }, 50);
 }
 
-function closeShellTab(tabId) {
+function closeShellTab(tabId, { confirm = true } = {}) {
     const index = shellTabs.findIndex(t => t.id === tabId);
-    if (index === -1) return;
-    const fallbackTabId = getGroupActiveTabId(activeGroupId, mainTabId(activeGroupId));
-    if (workspaceModel && !dispatchWorkspaceAction({ type: 'close', tabId, fallbackTabId }).ok) return;
+    if (index === -1) return false;
     const tab = shellTabs[index];
+    if (confirm) return requestTabCloseConfirmation(tab, 'shell', () =>
+        shellTabs.includes(tab) && !tab.closed ? closeShellTab(tabId, { confirm: false }) : false);
+    const fallbackTabId = getGroupActiveTabId(activeGroupId, mainTabId(activeGroupId));
+    if (workspaceModel && !dispatchWorkspaceAction({ type: 'close', tabId, fallbackTabId }).ok) return false;
     tab.closed = true;
     if (tab.sessionCreateTimer !== null) {
         clearTimeout(tab.sessionCreateTimer);
@@ -4777,6 +4797,7 @@ function closeShellTab(tabId) {
     }
     persistWorkspaceLayout();
     setActionStatus(tr('main.shellClosed'));
+    return true;
 }
 
 function restoreShellSessions() {
@@ -5192,18 +5213,22 @@ function destroySerialGroupResources(groupId) {
     if (groupId !== REGISTRY_DEFAULT_GROUP_ID) serialInputBoundGroups.delete(groupId);
 }
 
-function closeFilterTab(tabId) {
+function closeFilterTab(tabId, { confirm = true } = {}) {
     const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
     const tabs = filterTabsStore.getList(groupId);
     const index = tabs.findIndex(t => t.id === tabId);
-    if (index < 0) return;
-    destroyFilterTab(tabs[index]);
+    if (index < 0) return false;
+    const tab = tabs[index];
+    if (confirm) return requestTabCloseConfirmation(tab, 'filter', () =>
+        filterTabsStore.getList(groupId).includes(tab) && !tab.closed ? closeFilterTab(tabId, { confirm: false }) : false);
+    destroyFilterTab(tab);
     tabs.splice(index, 1);
     getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
     persistFilterTabs({ groupId });
     updateTabTitles();
     persistGroupWorkspaceLayout(groupId);
     setActionStatus('已关闭过滤标签页');
+    return true;
 }
 
 const persistFilterTabsTimers = new Map();
@@ -5647,17 +5672,21 @@ function destroyChartTab(tab) {
     });
 }
 
-function closeChartTab(tabId) {
+function closeChartTab(tabId, { confirm = true } = {}) {
     const groupId = groupIdForWorkspaceTab(tabId) || activeGroupId;
     const tabs = chartTabsStore.getList(groupId);
     const index = tabs.findIndex(tab => tab.id === tabId);
-    if (index < 0) return;
-    destroyChartTab(tabs[index]);
+    if (index < 0) return false;
+    const tab = tabs[index];
+    if (confirm) return requestTabCloseConfirmation(tab, 'chart', () =>
+        chartTabsStore.getList(groupId).includes(tab) && !tab.closed ? closeChartTab(tabId, { confirm: false }) : false);
+    destroyChartTab(tab);
     tabs.splice(index, 1);
     getGroupWorkspaceManager(groupId).removeTab(tabId, { fallbackTabId: mainTabId(groupId), persist: false });
     persistChartTabs(groupId);
     updateTabTitles();
     persistGroupWorkspaceLayout(groupId);
+    return true;
 }
 
 function renderChartFieldCandidates(fields) {
@@ -7019,7 +7048,7 @@ function restoreWorkspaceConfig(config) {
     workspaceLayoutSaveTimer = null;
     isRestoringWorkspaceSession = true;
     try {
-        shellTabs.slice().forEach(tab => closeShellTab(tab.id));
+        shellTabs.slice().forEach(tab => closeShellTab(tab.id, { confirm: false }));
         serialGroups.slice().forEach(group => {
             ipcRenderer.send('disconnect-serial', { groupId: group.id });
             if (group.id !== REGISTRY_DEFAULT_GROUP_ID) closeSerialGroup(group.id, { confirm: false });

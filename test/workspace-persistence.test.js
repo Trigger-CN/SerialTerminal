@@ -63,7 +63,7 @@ test('explicit reset cancels pending saves and replaces members under the restor
     const f = fixture(), c = f.context, calls = [];
     c.serialGroups.push({ id: 'g-1' });
     c.groupWorkspaceManagers = new Map(); c.groupWorkspaceLayouts = new Map(); c.groupLayoutSnapshots = new Map();
-    c.closeShellTab = id => { assert.equal(c.isRestoringWorkspaceSession, true); calls.push(['shell', id]); };
+    c.closeShellTab = (id, options) => { assert.equal(c.isRestoringWorkspaceSession, true); assert.equal(options.confirm, false); calls.push(['shell', id]); };
     c.destroySerialGroupResources = id => { assert.equal(c.isRestoringWorkspaceSession, true); calls.push(['resources', id]); };
     c.serialGroupRegistry = { invalidateSession: id => calls.push(['invalidate', id]) };
     c.resetTextReceive = () => {}; c.serialOutputBuckets = { clear() {} }; c.serialTerm = { clear() {} }; c.bindGroupTerminalInput = () => {};

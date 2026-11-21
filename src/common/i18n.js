@@ -832,6 +832,18 @@ for (const [language, values] of Object.entries(sentEchoTranslations)) {
   Object.assign(translations[language].main, values);
 }
 
+const tabCloseTranslations = {
+  en: { confirmCloseTab: 'Close tab “{title}”?', closeTabWarning: 'The tab and its in-memory content will be closed.', closeShellTabWarning: 'Closing this tab will end its Shell session and any running command.', closeGroupTabWarning: 'Closing this serial group will disconnect its port and close all of its main, filter and chart tabs. Shell tabs are not affected.', closeTabConfirmFailed: 'Could not confirm closing the tab: {error}' },
+  'zh-CN': { confirmCloseTab: '确定关闭标签页「{title}」吗？', closeTabWarning: '关闭后将移除此标签页及其内存中的内容。', closeShellTabWarning: '关闭后将结束此 Shell 会话及其中正在运行的命令。', closeGroupTabWarning: '关闭此串口组将断开端口，并关闭组内的主终端、过滤和图表标签页，不影响 Shell 标签页。', closeTabConfirmFailed: '无法确认关闭标签页：{error}' },
+  'zh-TW': { confirmCloseTab: '確定關閉分頁「{title}」嗎？', closeTabWarning: '關閉後將移除此分頁及其記憶體中的內容。', closeShellTabWarning: '關閉後將結束此 Shell 工作階段及其中正在執行的命令。', closeGroupTabWarning: '關閉此串口分組將中斷連接，並關閉組內的主終端、過濾和圖表分頁，不影響 Shell 分頁。', closeTabConfirmFailed: '無法確認關閉分頁：{error}' },
+  fr: { confirmCloseTab: 'Fermer l’onglet « {title} » ?', closeTabWarning: 'L’onglet et son contenu en mémoire seront fermés.', closeShellTabWarning: 'La fermeture mettra fin à cette session Shell et à toute commande en cours.', closeGroupTabWarning: 'La fermeture déconnectera le port et fermera tous les onglets du groupe série. Les onglets Shell ne seront pas affectés.', closeTabConfirmFailed: 'Impossible de confirmer la fermeture de l’onglet : {error}' },
+  ru: { confirmCloseTab: 'Закрыть вкладку «{title}»?', closeTabWarning: 'Вкладка и её содержимое в памяти будут закрыты.', closeShellTabWarning: 'Закрытие завершит этот сеанс Shell и выполняемую команду.', closeGroupTabWarning: 'Закрытие отключит порт и закроет все вкладки этой группы. Вкладки Shell не будут затронуты.', closeTabConfirmFailed: 'Не удалось подтвердить закрытие вкладки: {error}' },
+  de: { confirmCloseTab: 'Tab „{title}“ schließen?', closeTabWarning: 'Der Tab und sein Inhalt im Arbeitsspeicher werden geschlossen.', closeShellTabWarning: 'Das Schließen beendet diese Shell-Sitzung und laufende Befehle.', closeGroupTabWarning: 'Das Schließen trennt den Port und schließt alle Tabs dieser seriellen Gruppe. Shell-Tabs bleiben unverändert.', closeTabConfirmFailed: 'Schließen des Tabs konnte nicht bestätigt werden: {error}' }
+};
+for (const [language, values] of Object.entries(tabCloseTranslations)) {
+  Object.assign(translations[language].main, values);
+}
+
 // 默认语言：未显式配置或配置了未知语言时使用简体中文。
 // 保持为单一常量，避免主进程与渲染进程各自硬编码兜底值。
 const DEFAULT_LANGUAGE = 'zh-CN';

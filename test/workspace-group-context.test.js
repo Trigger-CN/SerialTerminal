@@ -112,20 +112,22 @@ test('renaming a non-control group filter persists its own list',()=>{
   assert.equal(f.context.currentConfig.filterTabs,undefined);
 });
 
-test('closing non-control group filter and chart removes only their owner entries',()=>{
+test('closing non-control group filter and chart removes only their owner entries',async()=>{
   for (const kind of ['Filter','Chart']) {
     const f=fixture();const id=`tab-${kind.toLowerCase()}-b`;const store=kind==='Filter'?f.filters:f.charts;
     const disposed=[];
     store.get('g-1').push({id,paneId:'pane-1-g-1',renderFrame:null,term:{dispose:()=>disposed.push(id)},element:{remove(){}},btn:{remove(){}}});
     f.layouts.get('g-1').panes[0].tabIds.push(id);
     const before=JSON.stringify(f.layouts.get('default'));
-    Object.assign(f.context,{unobserveTerminalSearchChanges:()=>{},setActionStatus:()=>{}});
+    Object.assign(f.context,{unobserveTerminalSearchChanges:()=>{},setActionStatus:()=>{},pendingTabCloseConfirmations:new Set(),tr:key=>key});
+    f.context.ipcRenderer.invoke=async()=>({response:0});
+    f.run(section('function requestTabCloseConfirmation(', '// 关闭一个分组'));
     const end=kind==='Filter'?'const persistFilterTabsTimers':'function renderChartFieldCandidates(';
     const destroyName = `destroy${kind}Tab`;
     f.run(section(`function ${destroyName}(`, `function close${kind}Tab(`));
     Object.assign(f.context, {chartSettingsState:null, chartExportState:null});
     f.run(section(`function close${kind}Tab(`,end));
-    f.run(`close${kind}Tab('${id}')`);
+    await f.run(`close${kind}Tab('${id}')`);
     assert.equal(store.get('g-1').length,0);
     assert.equal(JSON.stringify(f.layouts.get('default')),before);
     assert.equal(f.context.activeGroupId,'default');

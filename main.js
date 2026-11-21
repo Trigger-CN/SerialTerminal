@@ -2260,6 +2260,21 @@ ipcMain.handle('show-release-confirm', async (event, options = {}) => {
   return { response: result.response };
 });
 
+ipcMain.handle('confirm-tab-close', async (event, options = {}) => {
+  const owner = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const result = await dialog.showMessageBox(owner, {
+    type: 'warning',
+    title: String(options.title || ''),
+    message: String(options.message || ''),
+    detail: String(options.detail || ''),
+    buttons: [String(options.confirmLabel || 'Close Tab'), String(options.cancelLabel || 'Cancel')],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true
+  });
+  return { response: result.response };
+});
+
 ipcMain.handle('get-release-history', async () => {
   try {
     const items = await fetchReleaseList();

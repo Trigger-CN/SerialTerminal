@@ -4,6 +4,8 @@
 
 ## 0. 当前状态快照（维护入口）
 
+- **关闭标签页统一确认**：用户点击关闭按钮或右键关闭 Shell、过滤、图表标签，以及关闭非默认串口组，均通过同一 `requestTabCloseConfirmation()` → 原生 `confirm-tab-close` 对话框，显示目标名称，默认选中取消；Esc/窗口关闭也按取消处理。Shell 提示会话/命令结束，串口组提示断开端口并关闭组内标签（不影响 Shell）；组内资源只随组统一销毁，不逐个重复弹窗。确认前不写布局、不释放终端、不发断开/关闭 PTY；重复请求去重，迟到确认不能关闭重建同 ID 的对象，提示失败保持打开。内部 reset 使用显式 `{ confirm:false }`，默认组/主标签仍保留原不可关闭约束，局部合并分屏不属于关闭标签。不新增设置项或配置版本。新增 24 项行为回归，专项 **55/55**、根项目 **809/809**、0 skipped，main/renderer/i18n 语法、renderer module-load 和差异检查通过（Node20.16.0）；未启动应用、截图或修改真实配置，原生弹框/真实会话交互、Node >=22.12.0 和 telemetry-server 待验。
+
 - **Shell 快捷命令目标已修复**：发送目标读取唯一 `workspaceModel.focusedTabId`（模型初始化前仅用启动焦点），不再借用串口控制组的 `getActiveTabInfo()`。原实现会在单组双 Shell 分屏时发给另一格的 Shell，多组时还可能误判未选 Shell。现在只发给最近通过标签或可见内容 click/focusin 选中的 Shell；串口获得焦点时提示先选择 Shell，选中会话未 ready 时拒绝，不回退到其他 Shell，也不广播。保留已有追加回车与精确 `tabId` → PTY 路由，不修改配置 schema。新增 11 项真实函数/model/manager/IPC 回归；相邻专项 **86/86**、根项目 **785/785**、0 skipped，renderer 语法/module-load/diff check 通过（Node20.16.0）；Node >=22.12.0、telemetry-server 和真实 Shell 手测未验，未启动应用或截图。用户仅反馈上轮简单布局测试未发现问题，不视为完整布局/硬件验收。下面 774 等数字为对应历史阶段结果。
 
 - **统一布局内核已接入生产**：现有 `workspaceModel.layout.root` 使用同构 Split/Stack，根与组内共用几何、独立节点 ID、四方向 source/target、局部 merge 与相邻 resize；不是第二个可写 Workspace。取消某组分屏只搬指定锚点，不关闭/断开业务组、不全局收走 Shell。菜单/IPC/拖拽/激活/创建/关闭/递归渲染/fit/保存统一接通；移入已有分屏不再创建新格。稳定按钮/面板移动保留终端资源引用。单多转换保合法子树，同格多锚点回单组时以横向等比分支组合完整 content，内部轴向/比例/选择不丢；收起只隐藏非首条 header，首条保留展开按钮。详见 [布局内核契约与手测](WORKSPACE_LAYOUT_KERNEL.md)。

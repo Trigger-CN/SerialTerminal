@@ -25,18 +25,20 @@ function fixture(mode = 'single', target = 'tab-main-c') {
         shellTabs: ['tab-shell-1', 'tab-shell-2'].map(id => ({ id, sessionCreateTimer: null, term: { dispose() {} }, element: { remove() {} }, btn: { remove() {} } })),
         mainTabId: id => id === 'default' ? 'tab-main' : `tab-main-${id}`,
         dispatchWorkspaceAction: action => { actions.push(action); const result = model.applyWorkspaceAction(context.workspaceModel, action); if (result.ok) { context.workspaceModel = result.workspace; context.focusedWorkspaceTabId = result.workspace.focusedTabId; } return result; },
-        clearTimeout() {}, ipcRenderer: { send() {} }, unobserveTerminalSearchChanges() {}, persistShellTabs() {}, updateTabTitles() {}, renderWorkspaceNow() {},
-        persistWorkspaceLayout() {}, setActionStatus() {}, tr: value => value,
+        clearTimeout() {}, ipcRenderer: { send() {}, invoke: async () => ({ response: 0 }) }, unobserveTerminalSearchChanges() {}, persistShellTabs() {}, updateTabTitles() {}, renderWorkspaceNow() {},
+        pendingTabCloseConfirmations: new Set(), persistWorkspaceLayout() {}, setActionStatus() {}, tr: value => value,
         document: { getElementById: () => null }, setFocusedTab: () => assert.fail('second activation') });
     context.getGroupActiveTabId = (groupId, fallback) => createWorkspaceModelManager({ groupId, getWorkspace: () => context.workspaceModel }).getActiveTabId(fallback);
+    const confirmOffset = source.indexOf('function requestTabCloseConfirmation(');
+    vm.runInContext(source.slice(confirmOffset, source.indexOf('\n}', confirmOffset) + 2), context);
     const offset = source.indexOf('function closeShellTab(');
     vm.runInContext(source.slice(offset, source.indexOf('\n}', offset) + 2), context);
     return { context, actions, close: id => context.closeShellTab(id) };
 }
 for (const mode of ['single', 'shared', 'split']) for (const target of ['tab-main-c', 'filter-c', 'chart-c']) {
-    test(`three groups/two Shells: ${mode} close returns to control group's ${target}`, () => {
+    test(`three groups/two Shells: ${mode} close returns to control group's ${target}`, async () => {
         const f = fixture(mode, target), before = JSON.stringify(model.containerIds(f.context.workspaceModel).map(id => model.groupLayout(f.context.workspaceModel, id).trees));
-        f.close('tab-shell-2');
+        await f.close('tab-shell-2');
         assert.equal(f.context.workspaceModel.focusedTabId, target);
         assert.equal(f.context.focusedWorkspaceTabId, target);
         assert.equal(f.context.activeGroupId, 'c');
@@ -46,13 +48,13 @@ for (const mode of ['single', 'shared', 'split']) for (const target of ['tab-mai
         assert.equal(f.context.workspaceModel.tabs['tab-shell-1'].kind, 'shell');
     });
 }
-test('explicit close fallback returns to the control group second pane in one transaction', () => {
+test('explicit close fallback returns to the control group second pane in one transaction', async () => {
     const f = fixture('shared', 'filter-c');
     let ws = act(f.context.workspaceModel, { type: 'split-tab', tabId: 'filter-c', groupId: 'c', paneId: 'c-second' });
     ws = act(ws, { type: 'activate', tabId: 'tab-shell-2' });
     f.context.workspaceModel = ws; f.context.focusedWorkspaceTabId = ws.focusedTabId;
     const before = JSON.stringify(model.groupLayout(ws, 'c').trees), targetId = model.locateTab(ws, 'filter-c').stack.id;
-    f.close('tab-shell-2');
+    await f.close('tab-shell-2');
     assert.equal(f.context.workspaceModel.focusedTabId, 'filter-c');
     assert.equal(model.groupLayout(f.context.workspaceModel, 'c').activePaneId, targetId);
     assert.equal(JSON.stringify(model.groupLayout(f.context.workspaceModel, 'c').trees), before);
@@ -60,9 +62,9 @@ test('explicit close fallback returns to the control group second pane in one tr
     assert.deepEqual(f.actions.map(action => action.type), ['close']);
 });
 
-test('background Shell close keeps focus and all local selections', () => {
+test('background Shell close keeps focus and all local selections', async () => {
     const f = fixture('shared', 'filter-c'), before = JSON.stringify(f.context.workspaceModel.layout);
-    f.close('tab-shell-1');
+    await f.close('tab-shell-1');
     assert.equal(f.context.workspaceModel.focusedTabId, 'tab-shell-2');
     const expected = structuredClone(f.context.workspaceModel.layout);
     const original = JSON.parse(before);
