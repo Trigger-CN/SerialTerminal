@@ -4,6 +4,8 @@
 
 ## 0. 当前状态快照（维护入口）
 
+- **Shell 快捷命令目标已修复**：发送目标读取唯一 `workspaceModel.focusedTabId`（模型初始化前仅用启动焦点），不再借用串口控制组的 `getActiveTabInfo()`。原实现会在单组双 Shell 分屏时发给另一格的 Shell，多组时还可能误判未选 Shell。现在只发给最近通过标签或可见内容 click/focusin 选中的 Shell；串口获得焦点时提示先选择 Shell，选中会话未 ready 时拒绝，不回退到其他 Shell，也不广播。保留已有追加回车与精确 `tabId` → PTY 路由，不修改配置 schema。新增 11 项真实函数/model/manager/IPC 回归；相邻专项 **86/86**、根项目 **785/785**、0 skipped，renderer 语法/module-load/diff check 通过（Node20.16.0）；Node >=22.12.0、telemetry-server 和真实 Shell 手测未验，未启动应用或截图。用户仅反馈上轮简单布局测试未发现问题，不视为完整布局/硬件验收。下面 774 等数字为对应历史阶段结果。
+
 - **统一布局内核已接入生产**：现有 `workspaceModel.layout.root` 使用同构 Split/Stack，根与组内共用几何、独立节点 ID、四方向 source/target、局部 merge 与相邻 resize；不是第二个可写 Workspace。取消某组分屏只搬指定锚点，不关闭/断开业务组、不全局收走 Shell。菜单/IPC/拖拽/激活/创建/关闭/递归渲染/fit/保存统一接通；移入已有分屏不再创建新格。稳定按钮/面板移动保留终端资源引用。单多转换保合法子树，同格多锚点回单组时以横向等比分支组合完整 content，内部轴向/比例/选择不丢；收起只隐藏非首条 header，首条保留展开按钮。详见 [布局内核契约与手测](WORKSPACE_LAYOUT_KERNEL.md)。
 - **本轮验证边界**：根项目 **774/774**、0 skipped，`main.js`/`renderer.js`/全部 workspace 模块语法、renderer module-load、差异检查共 16 项全部退出 0（Node **20.16.0**）。包含独立 I1–I10、120×120 随机动作、40 组随机渲染及真实生产函数/递归模块的 VM/fake-DOM 回归，补跨锚点收起时首个可见栏的展开入口。旧表示断言迁移但有效行为不跳过；这不是原生菜单、真实拖拽、实际重启、xterm/PTY 或物理串口验收。Node >=22.12.0、telemetry-server 及上述用户手测待验。本轮未截图、未启动/操作应用、未改真实配置。下列旧数字、v16/v1 和扁平列说明只代表各历史阶段。
 

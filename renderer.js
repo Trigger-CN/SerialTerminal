@@ -6266,7 +6266,8 @@ function saveShellQuickCommands() {
 }
 
 function getActiveShellTab() {
-    const { tabId } = getActiveTabInfo();
+    // Shell 的发送目标属于工作区焦点，不是串口控制组的局部选择。
+    const tabId = workspaceModel ? workspaceModel.focusedTabId : focusedWorkspaceTabId;
     return shellTabs.find(tab => tab.id === tabId) || null;
 }
 

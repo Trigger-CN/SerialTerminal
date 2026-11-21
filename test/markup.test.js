@@ -112,7 +112,6 @@ test('right sidebar manages persistent quick commands for the active Shell tab',
   assert.equal(require('../src/workspace/workspace-layout-state').WORKSPACE_CONFIG_VERSION, 17);
   assert.match(main, /normalized\.shellQuickCommands = Array\.isArray\(source\.shellQuickCommands\)/);
   assert.match(main, /shellQuickCommands: \[\]/);
-  assert.match(renderer, /function getActiveShellTab\(\)[\s\S]*getActiveTabInfo\(\)[\s\S]*shellTabs\.find/);
   assert.match(renderer, /if \(!shellTab\.sessionReady\)/);
   assert.match(renderer, /const data = `\$\{item\.command\}\$\{item\.appendEnter \? '\\r' : ''\}`/);
   assert.match(renderer, /ipcRenderer\.send\('shell-tab-input', \{ tabId: shellTab\.id, data \}\)/);
