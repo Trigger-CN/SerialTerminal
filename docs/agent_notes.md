@@ -4,6 +4,9 @@
 
 ## 0. 当前状态快照（维护入口）
 
+- **统一布局内核已接入生产**：现有 `workspaceModel.layout.root` 使用同构 Split/Stack，根与组内共用几何、独立节点 ID、四方向 source/target、局部 merge 与相邻 resize；不是第二个可写 Workspace。取消某组分屏只搬指定锚点，不关闭/断开业务组、不全局收走 Shell。菜单/IPC/拖拽/激活/创建/关闭/递归渲染/fit/保存统一接通；移入已有分屏不再创建新格。稳定按钮/面板移动保留终端资源引用。单多转换保合法子树，同格多锚点回单组时以横向等比分支组合完整 content，内部轴向/比例/选择不丢；收起只隐藏非首条 header，首条保留展开按钮。详见 [布局内核契约与手测](WORKSPACE_LAYOUT_KERNEL.md)。
+- **本轮验证边界**：根项目 **774/774**、0 skipped，`main.js`/`renderer.js`/全部 workspace 模块语法、renderer module-load、差异检查共 16 项全部退出 0（Node **20.16.0**）。包含独立 I1–I10、120×120 随机动作、40 组随机渲染及真实生产函数/递归模块的 VM/fake-DOM 回归，补跨锚点收起时首个可见栏的展开入口。旧表示断言迁移但有效行为不跳过；这不是原生菜单、真实拖拽、实际重启、xterm/PTY 或物理串口验收。Node >=22.12.0、telemetry-server 及上述用户手测待验。本轮未截图、未启动/操作应用、未改真实配置。下列旧数字、v16/v1 和扁平列说明只代表各历史阶段。
+
 - **新增第二串口组保留单组 Shell 分屏**：修复单→多转换仅提升 Shell 归属却删除原格的问题。原格转为显式根区域，保留顺序、方向、比例与各格活动标签；多个 Shell 格分别保留，串口叶 owner 不变，新组加入原串口区域并保持 disconnected。已存在的外层独立 Shell 列同样保留。区域关闭/搬空统一收敛，回到单组恢复普通 pane 自由拖动，新增/合并串口 pane 与再次拆组维护唯一投影。renderer 复用现有按钮/面板和单行 Shell 列构造；codec 在快照 v1 中兼容可选 `containerId`/`paneIds`，过滤重复区域及 pane 引用。新增 17 项转换/恢复回归和 2 项真实 renderer 函数回归；最终根测试 **759/759**、相关专项 **120/120**、三份产品 JS 语法、renderer module-load 与差异检查通过（Node 20.16.0）。未运行 telemetry-server 或 Node >=22.12.0；未截图、启动/操作用户应用，原生拖拽、实际重启与硬件仍待用户验证。配置维持 v16/v1，未增加依赖或线程；不同方向的任意独立嵌套布局仍未实现。见 [单→多保留记录](MULTI_SERIAL_TAB_FIX_PLAN.md#后续缺陷新增第二组破坏单组-shell-分屏)。下列数字及范围说明为历史阶段记录。
 
 - **串口组分屏保留既有 Shell 列**：修复 `split-group` 将已开启的隐式列重建为共享列、均分时遗漏 `__shell__`、显式布局把 Shell 挪到末尾及源列改名丢局部选择的问题。已有列只固化、不重新合并；从共享列拆组只二分该源列空间，保留其他列与 Shell 的位置、比例及局部活动标签；codec 恢复独立 Shell 列选择。新增 7 项回归，最新根测试 **740/740**、相邻模型/codec/renderer **103/103**、两份模块语法/renderer module-load/差异检查全部退出 0（Node 20.16.0）；未运行 telemetry-server 测试，Node >=22.12.0 仍待验证。配置维持 v16/v1，不增加依赖、线程或终端重建。范围为既有根级 Shell 列；外层仍共用一个方向，未实现独立嵌套分屏方向，也未修改新增组时的单→多 Shell 格提升。详情和手测见 [Shell 列保留记录](MULTI_SERIAL_TAB_FIX_PLAN.md#后续缺陷串口组分屏破坏既有-shell-列)。本轮未截图、未启动/操作用户应用，原生交互、正常关闭重启及硬件待用户验证；下列数字为各历史阶段结果。
@@ -12,10 +15,10 @@
 
 - 标签缺陷修复进度见 [MULTI_SERIAL_TAB_FIX_PLAN.md](MULTI_SERIAL_TAB_FIX_PLAN.md)。F1–F5、M1–M2 已实施：关闭组同步控制上下文并共用资源销毁，连接请求/会话身份隔离迟到回调；搜索/导出/清空统一按焦点解析，后台关闭不抢焦点；模型同步格/组/列激活并修复归属和恢复边界。当前根测试 **666/666 通过（Node 20.16.0）**，语法、renderer 模块加载与差异检查通过；隔离桌面已验证侧栏同步、资源销毁、Shell 操作目标及正常关闭重启布局等价，进程和临时目录已清理；Node >=22.12.0、原生交互/真实双端口/长时验收仍待完成，具体结果以专项计划记录为准，不能视为多串口整体验收完成。
 
-- **多串口当前重构入口：[MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)**。R1 会话/日志/claim/发送隔离、R2 显式组上下文、R3 唯一活动 `tab-model.js` 与统一原子动作、R4 版本化保存恢复已接入。R5 用户手动报告原清单 1/2/4/5/6/7 通过；本轮修复合并/拖回标签排序及点击内容区切换控制组，最新根项目 **642/642 通过**，两项修复待用户复测。隔离 profile 已有保存重启、真实面板几何/实例、reset IPC 和 pending 保存正常关闭证据；这些不等于完整交互或崩溃安全验收。**R5 真实双端口及长时场景未完成，不能宣称多串口整体完成。**
-- 当前配置 schema：**v16**，版本由 `workspace-layout-state.js` 的 `WORKSPACE_CONFIG_VERSION` 提供，`main.js` 引用该常量。布局快照 `workspaceLayoutState.version` 为 **1**；`serial-groups-config.js` 的 15 仅为历史分组迁移阶段。旧配置升级前一次性备份至 `config.v15.backup.json`，备份失败本次启动不覆盖原配置。v14 → v15 背景见 13A 节，当前恢复规则以新方案和 codec 为准。
-- 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell。运行态仅写 `workspaceModel`，manager 为读模型/写动作适配；初始化后清旧布局缓存和业务 Shell 位置字段，启动兼容导入及模型 null host 字段仍保留。每格独立 active，N 格有 N−1 相邻分隔条，移动复用面板、xterm、parser、PTY。
-- 多串口当前规则：单组所有叶可自由移动，显式组内分屏采用方案 A；多组串口叶不得跨 owner，Shell 根级；指定组拆列不带其他组/Shell，新建组 disconnected。每组会话、日志、发送与触发隔离；完整工作区一次合并保存，恢复期不写半成品。根行组/Shell 按统一 order 混排并保存（快照 v1 可选 order，缺失沿用旧数组顺序）；DOM 排序一次收敛。内容区 click/focusin 共用委托入口，按实际叶 owner 更新侧栏，保留其他格 active 与 Shell 位置。settings 不增删布局身份，reset 明确清理重导入；未新增外部导入功能。遵照用户选择不截图，由用户手动复测；实际双端口、长时接收/最小化恢复/异常断开仍待验，旧单例不得重新引入。
+- **多串口当前入口：[WORKSPACE_LAYOUT_KERNEL.md](WORKSPACE_LAYOUT_KERNEL.md)**，阶段背景见 [MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)。R1–R4 历史隔离/状态/保存成果保留，旧 R5 记录不作为新几何内核验收。当前代码及自动化完成，本轮原生菜单/拖拽、正常关闭重启与真实双端口/长时场景仍待用户手测，不能宣称多串口整体验收完成。
+- 当前配置 schema：**v17**，由 `workspace-layout-state.js` 的 `WORKSPACE_CONFIG_VERSION` 提供；布局快照为 **v2**，保存实际树。v1 仅单向导入，v2 对照业务清单去重/补漏/修复身份；不合成业务终端。升级前保留旧 schema 备份（例如 `config.v16.backup.json`）；读取、备份或不安全迁移失败进入本次运行写保护，普通及遥测保存均不覆盖原文件，窗口加载后提示。`serial-groups-config.js` 的 15 仅为历史迁移阶段。
+- 当前工作区标签类型：主 Log、过滤 Log、实时图表和 Shell。运行态布局只写 `workspaceModel`，manager 读派生副本/写动作；初始化后清旧缓存和 Shell 位置字段，旧几何仅在导入边界消费。每格独立 active，每个 Split 的 N 个孩子有 N−1 条 6px gutter；拖动合帧且释放后最终 fit。布局变化不主动重建 panel/xterm/parser/PTY。
+- 多串口规则：单组所有叶自由移动，默认扁平、显式分屏采用方案 A；多组串口叶不脱 owner、Shell 根级；只移动指定组/锚点，新组 disconnected。快捷定义共享，会话、日志、发送与触发执行隔离；完整业务+布局快照合并保存，恢复期不写半成品。树成员数组决定区域顺序；内容 click/focusin 按实际叶 owner 更新侧栏，Shell 不改控制组。settings 不重导入运行态，reset 为显式清理恢复；未新增任意外部导入功能。
 - 当前发送模型：编码与换行按目标组读取；底部输入框保存自身 `mode`/`appendCrLf`，快捷指令各自保存 `mode`/`appendCrLf`。所有入口最终调用 `sendSerialRequest()` / `serial-write`，发送链与自动触发去重按组隔离，成功 Text 发送只滚动目标组主终端。
 - 当前搜索模型：渲染层扫描活动 xterm buffer 并维护匹配数组；`search-history.js` 管理查询及正则/大小写/整词选项、置顶、删除和 0-200 条上限。大 scrollback 的同步扫描仍是待优化项。
 - 当前外观能力：终端支持 PNG/JPEG/WebP 壁纸和 0-100% 暗色遮罩；Windows 主窗口、设置窗口和更新进度窗口使用统一自绘标题栏配色。
@@ -31,7 +34,7 @@
 - 类型：基于 Electron 的桌面串口终端工具
 - 目标场景：嵌入式开发、串口调试、设备联调、日志查看、关键字过滤、自动发送与快捷发送
 - 运行平台：Windows / Linux
-- 当前主界面形态：可折叠左侧侧边栏 + 最多双 pane 工作区 + 主输入框 + 过滤/图表/Shell 标签页 + 可切换右侧 Shell 侧边栏
+- 当前主界面形态：可折叠左右侧栏 + 支持嵌套双轴的 Split/Stack 工作区 + 发送输入框 + 主/过滤/图表/Shell 标签；串口业务归属与几何位置分离。
 
 项目核心能力：
 - 串口连接和参数配置

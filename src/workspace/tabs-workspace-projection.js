@@ -310,7 +310,7 @@ function importWorkspace(sections) {
         }
     }
     normalizeSerialOwnership(ws);
-    return ws;
+    return require('./layout-migration').importLegacyLayout(ws);
 }
 
 module.exports = { projectWorkspace, importWorkspace };

@@ -17,7 +17,7 @@ function fixture(mode = 'single', target = 'tab-main-c') {
         filterTabs: { c: [{ id: 'filter-c' }] }, chartTabs: { c: [{ id: 'chart-c' }] },
         shellTabs: [{ id: 'tab-shell-1' }, { id: 'tab-shell-2' }] });
     if (mode === 'shared') ws = act(ws, { type: 'split-group', groupId: 'b' });
-    if (mode === 'split') ws = act(ws, { type: 'column-split', enabled: true });
+    if (mode === 'split') for (const groupId of ['b', 'c']) ws = act(ws, { type: 'split-group', groupId });
     ws = act(ws, { type: 'activate', tabId: target });
     ws = act(ws, { type: 'activate', tabId: 'tab-shell-2' });
     const actions = [];
@@ -35,13 +35,13 @@ function fixture(mode = 'single', target = 'tab-main-c') {
 }
 for (const mode of ['single', 'shared', 'split']) for (const target of ['tab-main-c', 'filter-c', 'chart-c']) {
     test(`three groups/two Shells: ${mode} close returns to control group's ${target}`, () => {
-        const f = fixture(mode, target), before = JSON.stringify(Object.values(f.context.workspaceModel.tabs).filter(model.isContainer).map(tab => tab.panes));
+        const f = fixture(mode, target), before = JSON.stringify(model.containerIds(f.context.workspaceModel).map(id => model.groupLayout(f.context.workspaceModel, id).trees));
         f.close('tab-shell-2');
         assert.equal(f.context.workspaceModel.focusedTabId, target);
         assert.equal(f.context.focusedWorkspaceTabId, target);
         assert.equal(f.context.activeGroupId, 'c');
         assert.ok(model.buildRenderPlan(f.context.workspaceModel).panelIds.includes(target));
-        assert.equal(JSON.stringify(Object.values(f.context.workspaceModel.tabs).filter(model.isContainer).map(tab => tab.panes)), before);
+        assert.equal(JSON.stringify(model.containerIds(f.context.workspaceModel).map(id => model.groupLayout(f.context.workspaceModel, id).trees)), before);
         assert.deepEqual(f.actions.map(action => action.type), ['close']);
         assert.equal(f.context.workspaceModel.tabs['tab-shell-1'].kind, 'shell');
     });
@@ -51,20 +51,23 @@ test('explicit close fallback returns to the control group second pane in one tr
     let ws = act(f.context.workspaceModel, { type: 'split-tab', tabId: 'filter-c', groupId: 'c', paneId: 'c-second' });
     ws = act(ws, { type: 'activate', tabId: 'tab-shell-2' });
     f.context.workspaceModel = ws; f.context.focusedWorkspaceTabId = ws.focusedTabId;
-    const before = JSON.stringify(ws.tabs.c.panes);
+    const before = JSON.stringify(model.groupLayout(ws, 'c').trees), targetId = model.locateTab(ws, 'filter-c').stack.id;
     f.close('tab-shell-2');
     assert.equal(f.context.workspaceModel.focusedTabId, 'filter-c');
-    assert.equal(f.context.workspaceModel.tabs.c.activePaneId, 'c-second');
-    assert.equal(JSON.stringify(f.context.workspaceModel.tabs.c.panes), before);
+    assert.equal(model.groupLayout(f.context.workspaceModel, 'c').activePaneId, targetId);
+    assert.equal(JSON.stringify(model.groupLayout(f.context.workspaceModel, 'c').trees), before);
     assert.ok(model.buildRenderPlan(f.context.workspaceModel).panelIds.includes('filter-c'));
     assert.deepEqual(f.actions.map(action => action.type), ['close']);
 });
 
 test('background Shell close keeps focus and all local selections', () => {
-    const f = fixture('shared', 'filter-c'), before = JSON.stringify(f.context.workspaceModel.tabs.c.panes);
+    const f = fixture('shared', 'filter-c'), before = JSON.stringify(f.context.workspaceModel.layout);
     f.close('tab-shell-1');
     assert.equal(f.context.workspaceModel.focusedTabId, 'tab-shell-2');
-    assert.equal(JSON.stringify(f.context.workspaceModel.tabs.c.panes), before);
+    const expected = structuredClone(f.context.workspaceModel.layout);
+    const original = JSON.parse(before);
+    model.tree.walk(original.root, node => { if (node.type === 'stack') node.items = node.items.filter(item => item.tabId !== 'tab-shell-1'); });
+    assert.deepEqual(expected, original);
 });
 for (const fallbackTabId of ['missing', 'tab-shell-2', 'c']) test(`invalid explicit fallback ${fallbackTabId} safely uses existing model fallback`, () => {
     const f = fixture();

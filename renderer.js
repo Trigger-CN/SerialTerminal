@@ -26,6 +26,7 @@ const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./src/common/i18n');
 const { isStandardBaudRate, normalizeBaudRate, normalizeCustomBaudRates } = require('./src/serial/baud-rates');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./src/workspace/workspace-manager');
+const { createLayoutRenderer } = require('./src/workspace/layout-renderer');
 const { getHorizontalInsertionIndex } = require('./src/workspace/tab-reorder');
 const { parseHexInput, buildSerialWriteBuffer } = require('./src/serial/serial-codec');
 const { HexStreamFormatter } = require('./src/terminal/hex-formatter');
@@ -1398,18 +1399,20 @@ function bindShellTextModeWheel(tabState, element) {
     }, { passive: false, capture: true });
 }
 
-function getWorkspaceTabMenuCapabilities(tabId, groupId) {
+function getWorkspaceTabMenuCapabilities(tabId, groupId, itemId) {
     const groupId_ = groupIdForWorkspaceTab(tabId) || groupId || activeGroupId;
-    const container = workspaceModel?.tabs[groupId_];
-    const source = workspaceModel ? tabModel.paneOfTab(workspaceModel, workspaceModel.tabs[tabId]) : null;
+    const source = workspaceModel && tabModel.locateTab(workspaceModel, tabId, itemId);
+    const group = workspaceModel && tabModel.groupLayout(workspaceModel, groupId_);
     return {
         groupId: groupId_,
-        paneId: source?.pane.id || '',
-        isMultiGroup: workspaceModel ? tabModel.roots(workspaceModel).filter(tabModel.isContainer).length > 1 : false,
-        groupSplitEnabled: workspaceModel?.split.enabled === true,
-        splitEnabled: tabModel.isContainer(container) && container.paneSplit.enabled === true,
-        canSplit: Boolean(workspaceModel && tabModel.canSplitTab(workspaceModel, tabId, groupId_)),
-        canMoveToOtherPane: Boolean(workspaceModel && tabModel.getOtherPaneTarget(workspaceModel, tabId, groupId_))
+        paneId: source?.stack.id || '',
+        itemId: source?.item.id || '',
+        isMultiGroup: workspaceModel ? !tabModel.isFlat(workspaceModel) : false,
+        groupSplitEnabled: Boolean(workspaceModel && workspaceModel.layout.root.type === 'split'),
+        splitEnabled: group?.splitEnabled === true,
+        canMerge: Boolean(workspaceModel && tabModel.getMergeTarget(workspaceModel, tabId, itemId)),
+        canSplit: Boolean(workspaceModel && tabModel.canSplitTab(workspaceModel, tabId, groupId_, itemId)),
+        canMoveToOtherPane: Boolean(workspaceModel && tabModel.getOtherPaneTarget(workspaceModel, tabId, groupId_, itemId))
     };
 }
 
@@ -1427,31 +1430,19 @@ function requestTerminalContextMenu(payload) {
 // 而不是另开一条通道：主进程那份菜单模板和发送回流逻辑已经存在，再造一条会让
 // 「渲染进程发什么、主进程回什么」这套对应关系变成两套。
 //
-// tabId 留空：分屏是分组维度的动作，不针对任何标签页。
-function requestSerialGroupContextMenu(groupId) {
-    ipcRenderer.send('show-terminal-context-menu', {
-        terminalType: 'group',
-        tabId: '',
-        paneId: '',
-        groupId,
-        isMultiGroup: isMultiGroupLayer(),
-        groupSplitEnabled: workspaceModel ? workspaceModel.split.enabled : groupWorkspaceSplit.enabled,
-        labels: getContextMenuLabels()
-    });
+// tabId 为业务组身份，itemId 精确指向该组被点击的布局锚点。
+function requestSerialGroupContextMenu(groupId, itemId) {
+    requestWorkspaceTabContextMenu({ tabId: groupId, groupId, itemId });
 }
 
 // 标签栏与内容区共用模型能力；菜单展示不是执行授权，点击时仍重新校验。
-function requestWorkspaceTabContextMenu({ tabId, groupId }) {
-    if (!tabId) return;
-    const capabilities = getWorkspaceTabMenuCapabilities(tabId, groupId);
-    const shellTab = getShellTabState(tabId);
+function requestWorkspaceTabContextMenu({ tabId, groupId, itemId }) {
+    if (!tabId || !workspaceModel) return;
+    const capabilities = getWorkspaceTabMenuCapabilities(tabId, groupId, itemId);
     ipcRenderer.send('show-terminal-context-menu', {
-        terminalType: 'tab',
-        tabId,
-        ...capabilities,
-        canDetach: Boolean(shellTab) && capabilities.isMultiGroup,
-        shellOwnColumn: Boolean(shellTab) && getShellTabOwner(shellTab) === null
-            && workspaceModel?.tabs[tabId]?.columnMode === 'ownColumn',
+        terminalType: tabModel.isContainer(workspaceModel.tabs[tabId]) ? 'group' : 'tab',
+        tabId, ...capabilities, itemId: itemId || capabilities.itemId,
+        canMerge: Boolean(tabModel.getMergeTarget(workspaceModel, tabId, itemId)),
         labels: getContextMenuLabels()
     });
 }
@@ -1654,6 +1645,15 @@ function restartShellTab(tabId) {
 
 async function handleTerminalContextMenuAction(payload = {}) {
     const { action, tabId, terminalType, paneId } = payload;
+    if (workspaceModel && (/^split-(left|right|top|bottom)$/.test(action) || action === 'merge-layout' || action === 'close-group-split' || action === 'close-split')) {
+        const sourceId = tabId || payload.groupId;
+        const hit = tabModel.locateTab(workspaceModel, sourceId, payload.itemId);
+        const result = hit && dispatchWorkspaceAction(action.startsWith('split-')
+            ? { type: 'split', source: { tabId: sourceId, itemId: hit.item.id }, target: { nodeId: hit.stack.id }, direction: action.slice(6) }
+            : { type: 'merge', source: { tabId: sourceId, itemId: hit.item.id } });
+        setActionStatus(result?.ok ? '已更新局部分屏' : `无法更新分屏：${result?.reason || '没有合法目标'}`);
+        return;
+    }
     // 被右键的那一个分组（主进程回传）。分组级动作必须作用于它而不是激活分组：
     // 用户右键的是「这一个组」，而激活组可能是旁边那个（实测 diag985：三列共存时
     // 右键 g-2 选分屏，参与表里记的却是 g-1）。
@@ -1738,44 +1738,12 @@ async function handleTerminalContextMenuAction(payload = {}) {
             setActionStatus('已新建图表标签页');
             break;
         }
-        // ---- 分组级分屏 -------------------------------------------------
-        //
-        // 与下面的 split-horizontal / split-vertical 区别：那两个把**单个标签**搬到另一个
-        // pane（组内分屏），这三个决定**哪些分组**并排显示（分组级分屏）。
-        // 两者名称相近但作用面完全不同，不要合并。
-        case 'split-group-horizontal': {
-            setGroupWorkspaceSplit(true, { orientation: 'horizontal', groupIds: [contextGroupId] });
-            setActionStatus('已启用左右分屏（分组级）');
-            break;
-        }
+        case 'split-group-horizontal':
         case 'split-group-vertical': {
-            setGroupWorkspaceSplit(true, { orientation: 'vertical', groupIds: [contextGroupId] });
-            setActionStatus('已启用上下分屏（分组级）');
-            break;
-        }
-        // 这个分支不能因重构而丢：它之前就在这两个 split 分支后面，为了插入
-        // Shell 列形态的两个 case 而重写邻接代码时被一并抹掉过，结果是「关闭分组分屏」
-        // 完全失效（实测 run-all-990：verify-group-split 4 条 FAIL、verify-group-columns 2 条、
-        // verify-user-paths / verify-shell-drag 各 1 条，全都停在「关不掉分屏」）。
-        case 'close-group-split': {
-            // 收回独立 Shell 列：`setGroupWorkspaceSplit(false)` 只复位列级分屏开关，
-            // 而 `columnMode === 'ownColumn'` 是叶自己的事实。不收回就会变成
-            // 「菜单说已关闭分屏，屏幕上仍并排两列」（单分组下尤其明显）。
-            //
-            // **只收回「靠自己那一列站着」的叶，且必须在 `setGroupWorkspaceSplit(false)`
-            // 之前**：`resetGroupWorkspaceSplit()` 会把 `groupIds` 清空，之后就再也判断不出
-            // 哪些分组本来就在分屏。早期实现无条件把所有 Shell 都回退成 `row`，包括
-            // 那些本来就已经停靠在某列的（`hostGroupId` 有值、`ownColumn` 与它互斥），
-            // 也会被连带写一次模型并触发重渲染，把紧随其后的拖拽落点测量打偏
-            // （实测 `verify-shell-drag` 的 `group-row-drop-keeps-row-mode` 三条）。
-            const ownColumnShellIds = shellTabs
-                .filter(tab => workspaceModel
-                    ? workspaceModel.tabs[tab.id]?.columnMode === 'ownColumn'
-                    : tab.columnMode === 'ownColumn' && !tab.hostGroupId)
-                .map(tab => tab.id);
-            ownColumnShellIds.forEach(id => setShellColumnModeInModel(id, 'row'));
-            setGroupWorkspaceSplit(false);
-            setActionStatus('已关闭分组级分屏');
+            const hit = workspaceModel && tabModel.locateTab(workspaceModel, contextGroupId, payload.itemId);
+            const result = hit && dispatchWorkspaceAction({ type: 'split', source: { tabId: contextGroupId, itemId: hit.item.id },
+                target: { nodeId: hit.stack.id }, direction: action === 'split-group-vertical' ? 'bottom' : 'right' });
+            setActionStatus(result?.ok ? '已移动指定串口组' : '无法分屏：没有合法目标');
             break;
         }
         case 'add-serial-group': {
@@ -1790,49 +1758,6 @@ async function handleTerminalContextMenuAction(payload = {}) {
             if (renameTarget) openRenameTabDialog(renameTarget);
             break;
         }
-        // ---- Shell 的列形态（ownColumn 的显式入口） ---------------------
-        //
-        // 拖拽只能把它停到某列列首行（已锁定的裁决：拖到分组标签行不新建列），
-        // 所以「开始一个独立分屏」只能是菜单里的显式动作。两个方向必须成对存在，
-        // 否则进了独立列就回不去（那一列没有分组，右键只能拿到 Shell 自己的菜单）。
-        //
-        // **单串口组下这个入口关闭**（用户裁决）：单组只有一个容器，它的「分屏」
-        // 只能靠 pane；「独立列」是多组才需要的概念。菜单项已置灰（`canDetach:false`），
-        // 这里再兜一次底，避免旧快捷键 / 探针路径绕过 UI 造出单组下的独立列。
-        case 'detach-to-own-column': {
-            if (!tabId || !isShellTabId(tabId)) break;
-            if (!isMultiGroupLayer()) {
-                setActionStatus('单串口组下请用左右/上下分屏');
-                break;
-            }
-            if (!setShellColumnModeInModel(tabId, 'ownColumn')) break;
-            // 方案 1：独立列必须同时把列级分屏打开，否则 plan 里根本不会多出一列。
-            // 旧实现只写 `columnMode`，而 `split.enabled` 的总闸要求 ≥ 2 个分组，
-            // 单分组下写了也是零效果（实测 `doc-1263.txt`：columnMode=ownColumn 但
-            // columnCount 仍为 1）。这里补齐两个键：「该分组」+「Shell 独立列」，
-            // 两个真实存在的列 key 就是分屏的最小前提。
-            ensureColumnSplitForShellColumn(activeGroupId);
-            renderWorkspaceNow();
-            persistShellTabs();
-            setActionStatus('已让 Shell 独立成列');
-            break;
-        }
-        case 'join-group-column': {
-            if (!tabId || !isShellTabId(tabId)) break;
-            // 回到启动格的列：先回到 row 形态，再把列记忆指到被右键的那一组。
-            // 两步都写而不是只写一个：`setShellColumnModeInModel('row')` 不会自动
-            // 补 columnId，两者不一致时落列会回落到第一列。
-            if (!setShellColumnModeInModel(tabId, 'row')) break;
-            setShellColumnInModel(tabId, contextGroupId);
-            // 收尾：若屏幕上已没有独立列，列级分屏就失去了第二个参与者，必须复位。
-            // 不写这一句时，`split.enabled` 会停在 true 而只剩一列，之后打开
-            // 任何 Shell 的独立列都会直接生效——用户没有新做过动作，列却自己分开了。
-            collapseColumnSplitIfSingleColumn();
-            renderWorkspaceNow();
-            persistShellTabs();
-            setActionStatus('已让 Shell 归入分组列');
-            break;
-        }
         case 'split-horizontal':
         case 'split-vertical': {
             const orientation = action === 'split-vertical' ? 'vertical' : 'horizontal';
@@ -1843,7 +1768,7 @@ async function handleTerminalContextMenuAction(payload = {}) {
             break;
         }
         case 'move-to-other-pane': {
-            const changed = moveWorkspaceTabToOtherPane({ tabId, groupId: contextGroupId });
+            const changed = moveWorkspaceTabToOtherPane({ tabId, groupId: contextGroupId, itemId: payload.itemId });
             setActionStatus(changed
                 ? '已移动标签页到另一个分屏'
                 : '无法移动：没有可用的其他分屏，或标签位置已变化，请重新打开菜单');
@@ -2221,9 +2146,7 @@ function getPaneTabsContent(paneId) {
 // 来回走），构造时用闭包绑定的引用在搬动后仍有效，但拿到的 paneId 可能已经过时。
 // 委托在列表容器上、每次从 dataset 现读，与分组标签的写法保持一致。
 //
-// 定义位置必须在所有 pane 构造器之前：createPaneElement、createGroupPaneElement、
-// ensureShellColumnDom 都在模块加载期或早期调用，而函数声明虽然会提升，
-// 这里的调用发生在同一次加载里，提前定义能避免「某些 pane 先建、委托却没挂上」。
+// 初始化兼容行使用本委托；运行态行由递归布局协调器捕获事件并读取精确成员身份。
 function bindPaneTabListEvents(listEl) {
     if (!listEl || listEl.dataset.paneTabEvents === '1') return;
     listEl.dataset.paneTabEvents = '1';
@@ -2249,8 +2172,17 @@ function bindPaneTabListEvents(listEl) {
 // 优先查实际布局成员；新 pane 尚未登记时按完整生成 ID 比对，不能用宽前缀。
 function groupIdFromPaneId(paneId) {
     if (typeof paneId !== 'string' || !paneId) return null;
-    if (workspaceModel) return Object.values(workspaceModel.tabs)
-        .find(tab => tabModel.isContainer(tab) && tab.panes.some(pane => pane.id === paneId))?.id || null;
+    if (workspaceModel) {
+        const hit = tabModel.tree.find(workspaceModel.layout.root, paneId);
+        if (hit?.scope) return hit.scope.tabId;
+        if (hit?.node.type === 'stack') {
+            const selected = hit.node.items.find(item => item.id === hit.node.activeItemId);
+            if (selected?.content) return selected.tabId;
+            const anchor = hit.node.items.find(item => item.content);
+            if (anchor) return anchor.tabId;
+        }
+        return tabModel.isFlat(workspaceModel) ? serialGroups[0]?.id : null;
+    }
     const index = /^pane-(\d+)(?:-|$)/.exec(paneId)?.[1];
     const hit = serialGroups.find(group =>
         groupWorkspaceLayouts.get(group.id)?.panes.some(pane => pane.id === paneId)
@@ -2272,75 +2204,25 @@ function groupIdForWorkspaceTab(tabId) {
     return group?.id || null;
 }
 
-function moveWorkspaceTabToOtherPane({ tabId, groupId }) {
+function moveWorkspaceTabToOtherPane({ tabId, groupId, itemId }) {
     if (!workspaceModel) return false;
     const id = groupIdForWorkspaceTab(tabId) || groupId || activeGroupId;
-    const target = tabModel.getOtherPaneTarget(workspaceModel, tabId, id);
+    const target = tabModel.getOtherPaneTarget(workspaceModel, tabId, id, itemId);
     if (!target) return false;
-    const result = dispatchWorkspaceAction({ type: 'move', tabId, target });
+    const result = dispatchWorkspaceAction({ type: 'move', tabId, itemId, target });
     if (result.ok) { persistGroupWorkspaceLayout(id); persistShellTabs(); }
     return result.ok;
 }
 
-// 新建组内格使用 split-tab，已有格之间移动使用上面的 move，不能互相替代。
-// 运行态由模型准入和事务接管；下面旧字段分支仅供初始化前兼容。
+// The compatibility axis entry translates directly into a local tree split.
 function splitWorkspaceTabIntoPane({ tabId, groupId, orientation }) {
-    if (workspaceModel) {
-        const id = groupIdForWorkspaceTab(tabId) || groupId || activeGroupId;
-        const container = workspaceModel.tabs[id];
-        if (!tabModel.isContainer(container)) return false;
-        let ordinal = 2;
-        while (container.panes.some(pane => pane.id === groupPaneId(id, ordinal))) ordinal++;
-        const result = dispatchWorkspaceAction({ type: 'split-tab', tabId, groupId: id,
-            paneId: groupPaneId(id, ordinal), orientation });
-        if (result.ok) { persistGroupWorkspaceLayout(id); persistShellTabs(); }
-        return result.ok;
-    }
-    if (!tabId) return false;
-    const shellTab = isShellTabId(tabId) ? getShellTabState(tabId) : null;
-    // 多组时 Shell 不得进 pane（旧裁决：shell 只能在一级栏）。
-    if (shellTab && isMultiGroupLayer()) return false;
-    const id = resolveSerialGroupId(groupId || activeGroupId);
-    const manager = getGroupWorkspaceManager(id);
-    const layout = getGroupWorkspaceLayout(id);
-    // **这个标签必须真的在任何分组的 pane 里**（Shell 走上面那条）。少了这一道，
-    // 任何不存在的 id 都会跑到下面新建一个 pane 并打开分屏——用户看不到任何变化
-    // （没有标签可搬），布局却已经被改过一次。
-    // 不能用 `getTabPaneId()`：它对找不到的 id 会**回落到 pane-1**，恒为真。
-    // 实测 `sgf-1731` 的反向对照：`tab-filter-99999` 被搬进了 pane-2。
-    if (!shellTab && groupIdForWorkspaceTab(tabId) !== id) return false;
-    // 可拆的标签数：串口标签本就都在 `panes[].tabIds`；Shell 不在那里（I1/I2），
-    // 所以单组时要把它另算一份，否则「一个 main + 一个 shell」永远拆不出来。
-    const paneTabCount = layout.panes.reduce((sum, pane) => sum + pane.tabIds.length, 0);
-    const shellCount = shellTab ? 1 : 0;
-    if (paneTabCount + shellCount < 2) return false;
-
-    const sourcePaneId = shellTab
-        ? (shellTab.hostPaneId || layout.panes[0]?.id || null)
-        : manager.getPaneIdForTabId(tabId);
-    let targetPaneId = layout.panes.map(pane => pane.id).find(paneId => paneId !== sourcePaneId) || null;
-    if (!targetPaneId) {
-        // 补第 2 个 pane：布局与比例同步补，否则 applyColumnSizes / flex-basis 会算出 NaN。
-        const paneIds = describeGroupWorkspace(id, { paneCount: 2 }).paneIds;
-        targetPaneId = paneIds[1];
-        layout.panes.push({ id: targetPaneId, tabIds: [], activeTabId: null });
-        layout.paneSizes = {};
-        layout.panes.forEach(pane => { layout.paneSizes[pane.id] = 1 / layout.panes.length; });
-    }
-    if (!targetPaneId || targetPaneId === sourcePaneId) return false;
-
-    layout.orientation = orientation === 'vertical' ? 'vertical' : 'horizontal';
-    layout.splitEnabled = true;
-    if (shellTab) {
-        // Shell 不进 `panes[].tabIds`（I1/I2）：只写「归入这一组 + 住进这条 pane 行」。
-        setShellTabOwner(tabId, id);
-        setShellHostPane(tabId, targetPaneId);
-        renderWorkspaceNow();
-        persistShellTabs();
-    } else {
-        manager.moveTabToPane(tabId, targetPaneId, { preserveSplit: true });
-    }
-    return true;
+    if (!workspaceModel) return false;
+    const id = groupIdForWorkspaceTab(tabId) || groupId || activeGroupId;
+    const hit = tabModel.locateTab(workspaceModel, tabId);
+    const result = hit && dispatchWorkspaceAction({ type: 'split', source: { tabId },
+        target: { nodeId: hit.stack.id }, direction: orientation === 'vertical' ? 'bottom' : 'right' });
+    if (result?.ok) { persistGroupWorkspaceLayout(id); persistShellTabs(); }
+    return result?.ok === true;
 }
 
 
@@ -2359,7 +2241,8 @@ function splitWorkspaceTabIntoPane({ tabId, groupId, orientation }) {
 const PANE_ACTION_BUTTON_SPECS = Object.freeze([
     { kind: 'shell', icon: 'terminal', titleKey: 'main.newShellTab' },
     { kind: 'filter', icon: 'filter_alt', titleKey: 'main.newFilterTab' },
-    { kind: 'chart', icon: 'show_chart', titleKey: 'main.newChartTab' }
+    { kind: 'chart', icon: 'show_chart', titleKey: 'main.newChartTab' },
+    { kind: 'serial', icon: 'add', titleKey: 'main.addSerialPort' }
 ]);
 
 // create 闭包必须拿**按钮所在的 pane**，否则在第二分屏那一行点「新建过滤」会建到第一个 pane 里。
@@ -2375,7 +2258,8 @@ function createPaneActionButtons(paneId) {
         button.addEventListener('click', () => {
             if (spec.kind === 'shell') createShellTab({ profileId: getDefaultShellProfileId() }, paneId);
             else if (spec.kind === 'filter') createFilterTab({}, paneId);
-            else createChartTab({}, paneId);
+            else if (spec.kind === 'chart') createChartTab({}, paneId);
+            else addSerialGroupFromUi();
         });
         elements.push(button);
     });
@@ -2770,114 +2654,6 @@ function getPaneIdForTabId(tabId) {
     return getTabPaneId(tabId);
 }
 
-// ─────────────────────────── Shell 标签归属 ───────────────────────────
-//
-// 归属是**每个标签自己**的，不是全局一份。早期把它写成一个模块级变量
-// （shellOwnerGroupId），于是「拖动一个 Shell」会把**所有** Shell 一起搬走 ——
-// 用户实测报告为「拖动 shell，所有 shell 会跟着一起移动」。归属写进每个
-// tabState.ownerGroupId，互不干扰。
-//
-// 不归属任何串口分组 —— 属于「上层标签栏」那一层。
-//               未分屏时它在激活列的上层共享行里（与分组标签同级）；
-//               已分屏时同样在**那一列的首行**里（与分组标签同级、不新开列），
-//               除非用户把它拖到了分组标签行上（columnMode === 'ownColumn'，见 §2.3.2）。
-//   <分组 id>   归属该分组 —— 出现在那组的**下层**标签行里（图中 COM2 下方的 SHELL1）。
-//
-// 为什么不需要第三种归属值：「独立成组」不是另一个归属，而是「不归属」的一个显示变体。
-// 把它当成第三种归属值，会出现「未分屏却要凭空占一列」这种与用户期望相反的情况。
-//
-// 恢复前读取旧 host/column 字段；初始化后只读活动模型，旧字段不再决定显示位置。
-function getShellTabOwner(tabState) {
-    if (workspaceModel && tabState) return workspaceModel.tabs[tabState.id]?.parentId || null;
-    const owner = tabState?.hostGroupId;
-    if (owner && serialGroups.some(group => group.id === owner)) return owner;
-    return null;
-}
-
-function setShellTabOwner(tabId, owner) {
-    if (workspaceModel) {
-        const group = owner && workspaceModel.tabs[owner];
-        const placement = group && !isMultiGroupLayer()
-            ? { groupId: owner, paneId: group.panes[0].id } : { columnId: workspaceModel.tabs[tabId]?.columnId };
-        if (owner && isMultiGroupLayer()) return false;
-        return dispatchWorkspaceAction({ type: 'shell-placement', tabId, placement }).ok;
-    }
-    const tabState = getShellTabState(tabId);
-    if (!tabState) return false;
-    tabState.hostGroupId = owner && serialGroups.some(group => group.id === owner) ? owner : null;
-    // 归属一变，「独立成列」这个附加标记就没意义了：归进分组的 Shell 住下层行。
-    // 两处同时成立会让同一个标签在两处可点。
-    if (tabState.hostGroupId) tabState.columnMode = 'row';
-    return true;
-}
-
-
-
-// 初始化后这些兼容封装派发模型事务；tabState 写入仅供旧配置恢复阶段使用。
-function setShellColumnModeInModel(tabId, mode) {
-    if (workspaceModel) return dispatchWorkspaceAction({ type: 'shell-placement', tabId,
-        placement: { columnMode: mode, columnId: workspaceModel.tabs[tabId]?.columnId } }).ok;
-    const tabState = getShellTabState(tabId);
-    if (!tabState) return false;
-    const next = mode === 'ownColumn' ? 'ownColumn' : 'row';
-    tabState.columnMode = next;
-    // 与 setShellTabOwner 的互斥必须**两向**都成立：归进分组时那个函数会把 columnMode
-    // 清回 row；反过来切成独立列时也必须把 hostGroupId 摘掉。只清一个方向就会出现
-    // 「先拖进某组、再拖到分组标签行」把同一个 Shell 留在两个位置——独立列被建出来
-    // 却一个按钮都没有，标签实际上仍停在那一组的下层行。
-    if (next === 'ownColumn') {
-        tabState.hostGroupId = null;
-        tabState.hostPaneId = null;
-    }
-
-    return true;
-}
-
-function setShellColumnInModel(tabId, columnId) {
-    if (workspaceModel) return dispatchWorkspaceAction({ type: 'shell-placement', tabId,
-        placement: { columnId, columnMode: workspaceModel.tabs[tabId]?.columnMode } }).ok;
-    const tabState = getShellTabState(tabId);
-    if (!tabState) return false;
-    tabState.columnId = typeof columnId === 'string' ? columnId : null;
-    return true;
-}
-
-// 单组 Shell 作为 pane 的普通成员移动；多组准入由统一动作拒绝。
-// hostPaneId 仅在初始化前兼容旧恢复数据，不是活动布局的第二份成员表。
-function setShellHostPane(tabId, paneId) {
-    if (workspaceModel) return dispatchWorkspaceAction({ type: 'shell-placement', tabId,
-        placement: { groupId: groupIdFromPaneId(paneId), paneId } }).ok;
-    const tabState = getShellTabState(tabId);
-    if (!tabState) return false;
-    tabState.hostPaneId = typeof paneId === 'string' && paneId ? paneId : null;
-    // 住进某条 pane 行与「自成独立列」互斥：独立列整列只有一行，
-    // 两个同时成立会让同一个标签在两处可点。与 hostGroupId ⇄ ownColumn 的互斥同构。
-    if (tabState.hostPaneId) tabState.columnMode = 'row';
-    return true;
-}
-
-// 「是否存在独立列」不再由渲染层布尔量推导：模型 `layoutColumns()` 直接给出
-// 是否有 `OWN_COLUMN_ID` 那一列。下面这些函数只是兼容旧调用点的薄封装。
-//
-// `hostPaneId` 是否真的落在指定分组的 pane 上。
-//
-// 为什么不直接信任 `tab.hostPaneId`：关闭分屏、删除 pane、切换分组之后，
-// 那个 id 可能指向一条已经不存在的行。`layoutRowsOf` 遇到不存在的 pane 会静默丢掉它，
-// 用户看到的是「标签凭空消失」。这里先校验，校验不过就当它没指定（回落并入 pane-1），
-// 让标签至少还在，而不是丢掉。
-function hostPaneIdBelongsToGroup(paneId, groupId) {
-    if (!paneId || !groupId) return false;
-    if (workspaceModel) return Boolean(workspaceModel.tabs[groupId]?.panes?.some(pane => pane.id === paneId));
-    const layout = groupWorkspaceLayouts.get(groupId);
-    return Boolean(layout) && layout.panes.some(pane => pane.id === paneId);
-}
-
-function hasDetachedShellColumn() {
-    if (workspaceModel) return tabModel.layoutColumns(workspaceModel).some(column => column.id === tabModel.OWN_COLUMN_ID);
-    return shellTabs.some(tab => getShellTabOwner(tab) === null && tab.columnMode === 'ownColumn');
-}
-
-// 独立列的激活项已改由模型 focusedTabId 派生，不再有模块级缓存。
 
 function ensurePaneActiveTab(paneId) {
     return workspaceManager.ensurePaneActiveTab(paneId);
@@ -2912,6 +2688,7 @@ function resolveWorkspaceManagerForPane(paneId) {
 }
 
 function switchPaneTab(paneId, tabId, options = {}) {
+    if (workspaceModel) return dispatchWorkspaceAction({ type: 'activate', tabId }).ok;
     const targetManager = resolveWorkspaceManagerForPane(paneId);
     const switched = targetManager.switchPaneTab(paneId, tabId, options);
     if (tabId && !workspaceModel) focusedWorkspaceTabId = tabId;
@@ -2929,31 +2706,10 @@ window.__switchWorkspaceTab = switchPaneTab;
 // 所以验证到的是真实代码路径，而不是另写一套仅供测试的分支。
 window.__handleContextMenuAction = handleTerminalContextMenuAction;
 
-// 仅供 CDP 验证脚本调用：把 Shell 的四事实直接写到 tabState 并重新渲染。
-//
-// 为什么需要：拖动是合成 pointer 手势，在本环境不可靠（同一脚本两次运行结论可以相反）。
-// 这个钩子走的是**产品同一套写入路径**（setShellTabOwner / setShellColumnModeInModel /
-// setShellColumnInModel / setShellHostPane + renderWorkspaceNow + persistShellTabs），
-// 不是另写一套分支；它只是把「拖到哪」这个输入参数化，用来验证渲染结果。
-window.__setShellPlacement = (tabId, placement = {}) => {
-    const tabState = getShellTabState(tabId);
-    if (!tabState) return false;
-    if (Object.prototype.hasOwnProperty.call(placement, 'hostGroupId')) {
-        setShellTabOwner(tabId, placement.hostGroupId || null);
-    }
-    if (Object.prototype.hasOwnProperty.call(placement, 'hostPaneId')) {
-        setShellHostPane(tabId, placement.hostPaneId || null);
-    }
-    if (Object.prototype.hasOwnProperty.call(placement, 'columnMode')) {
-        setShellColumnModeInModel(tabId, placement.columnMode);
-    }
-    if (Object.prototype.hasOwnProperty.call(placement, 'columnId')) {
-        setShellColumnInModel(tabId, placement.columnId);
-    }
-    renderWorkspaceNow();
-    persistShellTabs();
-    return true;
-};
+// Test hooks dispatch the same target-based transaction as menus and drag/drop.
+window.__moveWorkspaceTab = (tabId, nodeId, index) => dispatchWorkspaceAction({
+    type: 'move', tabId, target: { nodeId, index }
+});
 
 // 以下三个也只供 CDP 验证脚本使用。
 //
@@ -3021,99 +2777,36 @@ function moveTabToPane(tabId, targetPaneId, options = {}) {
 
 let workspaceTabDragState = null;
 
-// 找指针落在哪条 pane 标签行上。
-//
-// 必须枚举**所有分组**的 pane，而不是当前分组的布局：用模块级别名时，别的分组的
-// pane 根本不在列表里，拖过去永远找不到目标，表现为「拖到另一列没反应」。
-//
-// 单串口组下**不再有 Shell 独立列**（用户裁决：「单串口组时所有标签都在一级栏」），
-// 所以这里不需要为「没有 `.pane-tabs-list` 的列」补分支：全部落点都是真正的 pane 行。
-// 多组时 Shell 独立列仍由 `getGroupRowDropTarget` 接管（那是「拖到分组标签栏 = 独立成组」）。
+// Drop targets are existing, visible tree Stacks at either row level.
 function getWorkspaceTabDropTarget(clientX, clientY) {
-    const lists = Array.from(document.querySelectorAll('.group-column .pane-tabs-list'));
-    return lists.map(list => {
-        const paneEl = list.closest('.workspace-pane');
-        const column = list.closest('.group-column');
-        return {
-            list,
-            paneId: paneEl?.id || '',
-            groupId: groupIdFromPaneId(paneEl?.id) || column?.dataset.groupId || REGISTRY_DEFAULT_GROUP_ID
-        };
-    }).find(({ list, paneId }) => {
-        if (!list || !paneId) return false;
-        const paneEl = getPaneDom(paneId);
-        // 隐藏 pane 不能当落点：拖到不可见区域等于拖到空白。
-        if (!paneEl || paneEl.hidden) return false;
+    if (!workspaceModel) return null;
+    return Array.from(document.querySelectorAll('.layout-stack > .pane-tabs-header > .pane-tabs-list')).map(list => ({
+        list, paneId: list.dataset.layoutNodeId, groupId: groupIdFromPaneId(list.dataset.layoutNodeId)
+    })).find(({ list }) => {
+        if (!list.getClientRects().length) return false;
         const rect = list.getBoundingClientRect();
-        return clientX >= rect.left && clientX <= rect.right
-            && clientY >= rect.top - 6 && clientY <= rect.bottom + 6;
-    }) || null;
-}
-
-// 找指针落在哪条**分组标签行**上（列首那一行）。
-//
-// 这一行是「把 Shell 升为独立一组」的落点：用户原话是「拖动到分组标签栏意味着和所有
-// 串口标签页分屏显示，自己成为独立一组」。
-function getGroupRowDropTarget(clientX, clientY) {
-    const rows = Array.from(document.querySelectorAll('.group-tab-row'));
-    return rows.map(row => ({
-        row,
-        groupId: row.closest('.group-column')?.dataset.groupId || ''
-    })).find(({ row }) => {
-        const column = row.closest('.group-column');
-        if (!column || column.hidden) return false;
-        const rect = row.getBoundingClientRect();
-        return clientX >= rect.left && clientX <= rect.right
-            && clientY >= rect.top && clientY <= rect.bottom;
+        return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top - 6 && clientY <= rect.bottom + 6;
     }) || null;
 }
 
 function updateWorkspaceTabDrag(state, clientX, clientY) {
-    if (!state.dragging) return;
-    state.preview.style.left = `${Math.max(4, Math.min(clientX + 10, window.innerWidth - state.preview.offsetWidth - 4))}px`;
-    state.preview.style.top = `${Math.max(4, Math.min(clientY + 10, window.innerHeight - state.preview.offsetHeight - 4))}px`;
-    state.indicator.remove();
-    state.targetPaneId = null;
-    state.targetGroupId = null;
-    state.targetColumnId = null;
-    state.targetIsShellColumn = false;
-    state.insertionIndex = null;
-
-    // 先看分组标签行：它是「把 Shell 停到那一列的列首行」的落点，优先级高于 pane 行。
-    // 只对 Shell 标签开放：串口分组标签自己不能拖到别的列（分屏由右键菜单决定）。
-    //
-    // 存的是**列的 groupId**（rowTarget.groupId），不是行元素的 id：行元素上没有
-    // data-group-id，旧代码拿 row.id 反查恒为 undefined，于是 columnId 永远写不进去，
-    // 落到兜底分支就变成了「新建 __shell__ 第三列」（实测 diag915 F3）。
-    const rowTarget = state.isShell && getGroupRowDropTarget(clientX, clientY);
-    if (rowTarget) {
-        const list = rowTarget.row.querySelector('.serial-group-tab-list');
-        if (!list) return;
-        const tabs = Array.from(list.querySelectorAll('.main-tab')).filter(tab => tab !== state.tabButton);
-        const insertionIndex = getHorizontalInsertionIndex(tabs.map(tab => tab.getBoundingClientRect()), clientX);
-        list.insertBefore(state.indicator, tabs[insertionIndex] || null);
-        state.targetColumnId = rowTarget.groupId || null;
-        state.targetDropColumn = rowTarget.groupId || null;
-        state.insertionIndex = insertionIndex;
-        return;
-    }
-
+    if (!state.dragging || !workspaceModel) return;
+    state.preview.style.left = `${clientX + 10}px`; state.preview.style.top = `${clientY + 10}px`;
+    state.indicator.remove(); state.targetNodeId = null; state.insertionIndex = null;
     const target = getWorkspaceTabDropTarget(clientX, clientY);
     if (!target) return;
-    const listRect = target.list.getBoundingClientRect();
-    const edgeSize = Math.min(36, listRect.width / 4);
-    if (clientX < listRect.left + edgeSize) {
-        target.list.scrollLeft -= Math.ceil((listRect.left + edgeSize - clientX) / 4);
-    } else if (clientX > listRect.right - edgeSize) {
-        target.list.scrollLeft += Math.ceil((clientX - (listRect.right - edgeSize)) / 4);
-    }
-    const tabs = Array.from(target.list.querySelectorAll('.main-tab')).filter(tab => tab !== state.tabButton);
-    const insertionIndex = getHorizontalInsertionIndex(tabs.map(tab => tab.getBoundingClientRect()), clientX);
-    target.list.insertBefore(state.indicator, tabs[insertionIndex] || null);
-    state.targetPaneId = target.paneId;
-    state.targetGroupId = target.groupId;
-    state.targetIsShellColumn = target.groupId === SHELL_COLUMN_GROUP_ID;
-    state.insertionIndex = insertionIndex;
+    const source = tabModel.locateTab(workspaceModel, state.tabId, state.tabButton.dataset.layoutItemId);
+    if (!source) return;
+    const rect = target.list.getBoundingClientRect(), edge = Math.min(36, rect.width / 4);
+    if (clientX < rect.left + edge) target.list.scrollLeft -= Math.ceil((rect.left + edge - clientX) / 4);
+    else if (clientX > rect.right - edge) target.list.scrollLeft += Math.ceil((clientX - (rect.right - edge)) / 4);
+    const tabs = Array.from(target.list.querySelectorAll('.main-tab')).filter(button => button !== state.tabButton);
+    const index = getHorizontalInsertionIndex(tabs.map(button => button.getBoundingClientRect()), clientX);
+    const check = tabModel.applyWorkspaceAction(workspaceModel, { type: 'move', tabId: state.tabId,
+        itemId: source.item.id, target: { nodeId: target.paneId, index } });
+    if (!check.ok) return;
+    target.list.insertBefore(state.indicator, tabs[index] || null);
+    state.targetNodeId = target.paneId; state.insertionIndex = index;
 }
 
 function startWorkspaceTabDrag(state) {
@@ -3139,10 +2832,10 @@ function finishWorkspaceTabDrag(state) {
     state.tabButton.classList.remove('workspace-tab-dragging');
     if (!state.dragging) return;
     if (workspaceModel) {
-        const target = state.targetColumnId || state.targetIsShellColumn
-            ? { kind: 'roots', columnId: state.targetColumnId, index: state.insertionIndex }
-            : { kind: 'pane', groupId: state.targetGroupId, paneId: state.targetPaneId, index: state.insertionIndex };
-        const result = dispatchWorkspaceAction({ type: 'move', tabId: state.tabId, target });
+        const nodeId = state.targetNodeId;
+        if (!nodeId || state.insertionIndex === null) return;
+        const target = { nodeId, index: state.insertionIndex };
+        const result = dispatchWorkspaceAction({ type: 'move', tabId: state.tabId, itemId: state.tabButton.dataset.layoutItemId, target });
         if (result.ok) {
             serialGroups.forEach(group => persistGroupWorkspaceLayout(group.id));
             persistShellTabs();
@@ -3151,68 +2844,6 @@ function finishWorkspaceTabDrag(state) {
         return;
     }
 
-    // 落到某列的**分组标签行**：Shell 停到那一列的列首行（与分组标签同级），
-    // **不新建列**。
-    //
-    // 旧语义是「拖到分组标签栏 = 自己成为独立一组（ownColumn）」；那个语义已被用户实测
-    // 裁决修正：多组左右分屏后把 Shell 拖回原来那一屏，旧语义会凭空建出第三列，
-    // 用户报告为「拖不回去，跑到新建第三分屏」。现在的规则是：
-    //
-    //   拖到普通分组列的列首行 → hostGroupId=null + columnMode='row' + columnId=那一列
-    //   拖到共享 Shell 独立列自身  → 仍是不归属（它在 pane 分支里处理）
-    //
-    // 串口标签不响应——哪些分组并排由右键菜单决定，不是靠拖标签改的。
-    if (state.targetColumnId) {
-        if (state.isShell) {
-            setShellTabOwner(state.tabId, null);
-            setShellColumnModeInModel(state.tabId, 'row');
-            setShellColumnInModel(state.tabId, state.targetColumnId);
-            renderWorkspaceNow();
-            persistShellTabs();
-            state.tabButton.dataset.suppressClickUntil = String(performance.now() + 300);
-        }
-        return;
-    }
-
-    if (!state.targetPaneId || state.insertionIndex === null) return;
-
-    // **多串口组：标签不能脱离自己的组**（用户裁决）。
-    //
-    // 判据是「目标 pane 属于哪个分组」与「这个标签自己的分组」是否一致，
-    // 而不是「目标列是不是同一个」。单组时 `isMultiGroupLayer()` 为假，这一道门恒开，
-    // 所以「单组下所有标签随意分屏拖动」不受影响。
-    const sourceGroupId = state.isShell
-        ? getShellTabOwner(getShellTabState(state.tabId))
-        : groupIdFromPaneId(resolvePaneId(state.tabButton.dataset.paneId, state.tabId));
-    if (isMultiGroupLayer() && sourceGroupId && state.targetGroupId
-        && sourceGroupId !== state.targetGroupId) {
-        // 静默不执行：标签弹回原位。不弹错锋也不警告——用户动作本身就不允许。
-        return;
-    }
-
-    if (state.isShell) {
-        if (state.targetIsShellColumn) {
-            // 拖到独立列的上层行：仍然是不归属。
-            setShellTabOwner(state.tabId, null);
-        } else {
-            // 拖到某组的下层标签行 = **这个**标签归入那个组，并**住进这一条 pane 行**。
-            // 两件事都写：`hostGroupId` 决定它在不在这一组（容器级），
-            // `hostPaneId` 决定它在哪一条 pane 行（pane 级）。
-            // 后者是单组「随意分屏」的关键：没有它就只能永远待在 pane-1。
-            setShellTabOwner(state.tabId, state.targetGroupId);
-            setShellHostPane(state.tabId, state.targetPaneId);
-        }
-        // 归属变了只影响「画在哪一行」，重画一次即可；不重画会看到标签还在旧行。
-        renderWorkspaceNow();
-        persistShellTabs();
-    } else {
-        moveTabToGroupPane(state.tabId, state.targetPaneId, state.targetGroupId, {
-            insertionIndex: state.insertionIndex
-        });
-        // 串口标签跨 pane 后 DOM 位置由渲染层重算，这里不用再手动同步显隐。
-        renderWorkspaceNow();
-    }
-    state.tabButton.dataset.suppressClickUntil = String(performance.now() + 300);
 }
 
 // 跨分组移动标签必须走**目标分组自己的**布局管理器。
@@ -3249,7 +2880,7 @@ function bindWorkspaceTabDragging() {
         if (!list && !(isShell && inGroupRow)) return;
         workspaceTabDragState = {
             pointerId: event.pointerId,
-            tabId: tabButton.dataset.target,
+            tabId: tabButton.dataset.target || tabButton.dataset.groupId,
             tabButton,
             isShell,
             startX: event.clientX,
@@ -3330,9 +2961,17 @@ function addTabToPane(tabId, paneId, options = {}) {
 // 而别名指向的是当前激活分组。走别名会把 tab-main-g-1 登记进默认分组的布局，
 // 结果是 g-1 自己的标签行永远是空的，且两个「Main」挤在同一行。
 //
-// 归属判定只能看 pane id 本身：`pane-1-g-1` → g-1，`pane-1` → 默认分组。
+// 运行态以树的实际区域/owner 为准；旧 pane 命名仅供初始化导入。
 function addTabToOwningGroupPane(tabId, paneId, options = {}) {
     const id = resolveGroupIdFromPaneId(paneId);
+    if (workspaceModel) {
+        if (workspaceModel.tabs[tabId]) return tabModel.locateTab(workspaceModel, tabId)?.stack.id || null;
+        const business = describeWorkspaceBusinessTab(tabId);
+        if (!business) return null;
+        const result = dispatchWorkspaceAction({ type: 'add-leaf', groupId: groupIdFromPaneId(paneId) || activeGroupId,
+            paneId, options: business, activate: options.activate !== false });
+        return result.ok ? tabModel.locateTab(workspaceModel, tabId)?.stack.id : null;
+    }
     return getGroupWorkspaceManager(id).addTabToPane(tabId, paneId, options);
 }
 
@@ -3345,215 +2984,6 @@ function setPaneSizes(pane1Ratio, options = {}) {
     return workspaceManager.setPaneSizes(pane1Ratio, options);
 }
 
-function bindWorkspaceSplitter() {
-    if (!workspaceRootEl || !workspaceSplitterEl) return;
-
-    let panePair = null;
-    let rafId = null;
-    let pendingRatio = null;
-    // 当前正被拖动的那个分组。拖动比例必须相对**本分组**的工作区算，写入也必须
-    // 写回本分组：早期下面全部用模块级别名（isSplitEnabled / getOrientation /
-    // setPaneSizes / persistWorkspaceLayout），它们只指向**激活分组**，于是
-    //   • 非激活分组的 pane 条：isSplitEnabled() 为 false → 守卫直接 return，拖不动；
-    //   • 激活分组拖了别的组的条：比例写进了激活组的布局，改错对象。
-    // 现在整条路径都按 splitter.dataset.groupId 取，不再读任何别名。
-    let activeGroupIdForSplitter = REGISTRY_DEFAULT_GROUP_ID;
-    let activeBoundsEl = workspaceRootEl;
-
-    const activeManager = () => getGroupWorkspaceManager(activeGroupIdForSplitter);
-
-    const flushPaneResize = () => {
-        rafId = null;
-        if (pendingRatio === null) return;
-        if (workspaceModel && typeof pendingRatio === 'object') {
-            dispatchWorkspaceAction({ type: 'resize-panes', groupId: activeGroupIdForSplitter, sizes: pendingRatio });
-            pendingRatio = null;
-            return;
-        }
-        activeManager().setPaneSizes(pendingRatio, { persist: false });
-        fitWorkspaceTerminals();
-        pendingRatio = null;
-    };
-
-    const handlePointerMove = (event) => {
-        const manager = activeManager();
-        if (!manager.isSplitEnabled()) return;
-        const isVertical = manager.getOrientation() === 'vertical';
-        const rect = activeBoundsEl.getBoundingClientRect();
-        const total = isVertical ? rect.height : rect.width;
-        const offset = isVertical ? (event.clientY - rect.top) : (event.clientX - rect.left);
-        if (total <= 0) return;
-        if (workspaceModel && panePair) {
-            const panes = workspaceModel.tabs[activeGroupIdForSplitter].panes;
-            const sizes = { ...workspaceModel.tabs[activeGroupIdForSplitter].paneSplit.sizes };
-            const left = getPaneDom(panePair[0])?.getBoundingClientRect();
-            const right = getPaneDom(panePair[1])?.getBoundingClientRect();
-            if (!left || !right) return;
-            const span = isVertical ? left.height + right.height : left.width + right.width;
-            if (span <= 0) return;
-            const value = ((isVertical ? event.clientY : event.clientX) - (isVertical ? left.top : left.left)) / span;
-            const ratio = Math.max(0.1, Math.min(0.9, value));
-            const share = (sizes[panePair[0]] || 1 / panes.length) + (sizes[panePair[1]] || 1 / panes.length);
-            sizes[panePair[0]] = share * ratio; sizes[panePair[1]] = share * (1 - ratio);
-            pendingRatio = sizes;
-            if (rafId === null) rafId = requestAnimationFrame(flushPaneResize);
-            return;
-        }
-        pendingRatio = total > 0 ? offset / total : null;
-        if (rafId === null) {
-            rafId = requestAnimationFrame(flushPaneResize);
-        }
-    };
-
-    const handlePointerUp = () => {
-        if (rafId !== null) {
-            cancelAnimationFrame(rafId);
-            flushPaneResize();
-        }
-        isDraggingWorkspaceSplitter = false;
-        activeBoundsEl.classList.remove('resizing');
-        document.removeEventListener('pointermove', handlePointerMove);
-        document.removeEventListener('pointerup', handlePointerUp);
-        // 持久化的是被拖的那一组，不是激活组。
-        persistGroupWorkspaceLayout(activeGroupIdForSplitter);
-        fitWorkspaceTerminals();
-    };
-
-    // 分界条按 data-group-splitter 委托到 document，这样每个分组（含后续新建的）
-    // 的分界条都能生效，不需要逐个绑定。
-    document.addEventListener('pointerdown', (event) => {
-        const splitter = event.target.closest?.('[data-group-splitter="pane"]');
-        if (!splitter) return;
-        const groupId = splitter.dataset.groupId || REGISTRY_DEFAULT_GROUP_ID;
-        const boundsEl = splitter.closest('.workspace-root') || document.getElementById(groupWorkspaceRootId(groupId));
-        panePair = splitter.dataset.paneLeft && splitter.dataset.paneRight
-            ? [splitter.dataset.paneLeft, splitter.dataset.paneRight] : null;
-        // 守卫只看**这个分组自己**的 splitEnabled，与哪个分组是激活组无关。
-        if (!boundsEl || !getGroupWorkspaceManager(groupId).isSplitEnabled()) return;
-        event.preventDefault();
-        activeGroupIdForSplitter = groupId;
-        activeBoundsEl = boundsEl;
-        isDraggingWorkspaceSplitter = true;
-        boundsEl.classList.add('resizing');
-        document.addEventListener('pointermove', handlePointerMove);
-        document.addEventListener('pointerup', handlePointerUp);
-    });
-}
-
-// 分组级分屏的分界条拖动。
-//
-// 与组内 pane 分屏是两套坐标：这里的比例相对**外层**容器（#group-workspace）计算，
-// 而且只能调整相邻两条分组工作区的宽度，不涉及 pane。
-//
-// 只调整分界条左侧那一条的比例，右侧各条按原有相对权重瓜分剩余空间——
-// 这样任意条数的分屏都成立，不需要单独记录“右邻是谁”。
-function bindGroupWorkspaceSplitter() {
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    if (!outer) return;
-
-    let rafId = null;
-    // 一次拖动只动**一条**分界条，所以除了鼠标位置还要记住是哪一条（它夹的是哪两列）。
-    let pendingRatio = null;
-    let dragLeftId = null;
-    let dragRightId = null;
-    let dragging = false;
-
-    const flush = () => {
-        rafId = null;
-        if (pendingRatio === null || !dragLeftId || !dragRightId) return;
-        // 参与者 = **屏幕上真实存在的列**（DOM 顺序），不是 groupWorkspaceSplit.groupIds。
-        //
-        // `groupIds` 只记录「分屏是围绕哪两个组打开的」，而列集合由容器数决定
-        // （layoutColumns：每个容器一列，外加可选的共享独立列）。4 个容器时屏幕上是
-        // 4 列 3 条分界条，`groupIds` 却只有两项：第 2/3 条分界条在 groupIds 里找不到
-        // 左邻，`participants[leftIndex + 1] !== dragRightId` 直接 return，拖了没有任何反应
-        // （实测 colWidths 全程 171.75×4、sizes 仍为 {}）。
-        const participants = getGroupWorkspaceVisibleColumnKeys();
-        const leftIndex = participants.indexOf(dragLeftId);
-        if (leftIndex < 0 || participants[leftIndex + 1] !== dragRightId) return;
-
-        // 比例已在 pointermove 里按「夹住的两列总宽」算好，这里只做钳位与回写。
-        const minShare = 0.1;
-        const clamped = Math.min(1 - minShare, Math.max(minShare, pendingRatio));
-
-        // 旧比例取**当前实际列宽**，不取 sizes 表：sizes 可能只覆盖部分列（旧配置、
-        // 刚开分屏、或 groupIds 少于屏幕列数）。用「缺失 = 0」去归一化会把其余列归成 0，
-        // applyColumnSizes 再给它们各自回落 1/N，列宽之和就超过容器（最右列被挤到窗口外）。
-        const shares = participants.map(id => {
-            const el = getGroupColumnElement(id);
-            return el ? el.getBoundingClientRect().width : 0;
-        });
-        const totalWidth = shares.reduce((sum, value) => sum + value, 0);
-        if (totalWidth <= 0) return;
-        for (let index = 0; index < shares.length; index++) shares[index] /= totalWidth;
-
-        const pairShare = shares[leftIndex] + shares[leftIndex + 1];
-        shares[leftIndex] = pairShare * clamped;
-        shares[leftIndex + 1] = pairShare * (1 - clamped);
-
-        // 把**每一列**都写进比例表，保证它是一份完整、和为 1 的快照。
-        const sizes = Object.fromEntries(participants.map((id, index) => [id, shares[index]]));
-        if (workspaceModel) dispatchWorkspaceAction({ type: 'resize-columns', sizes });
-        else groupWorkspaceSplit.sizes = sizes;
-        renderWorkspaceNow();
-        fitWorkspaceTerminals();
-        pendingRatio = null;
-    };
-
-    const handlePointerMove = (event) => {
-        if (!dragging || !dragLeftId || !dragRightId) return;
-        const leftEl = getGroupColumnElement(dragLeftId);
-        const rightEl = getGroupColumnElement(dragRightId);
-        if (!leftEl || !rightEl) return;
-        const isVertical = (workspaceModel?.split || groupWorkspaceSplit).orientation === 'vertical';
-        const leftRect = leftEl.getBoundingClientRect();
-        const rightRect = rightEl.getBoundingClientRect();
-        const pairStart = isVertical ? leftRect.top : leftRect.left;
-        // 分母用两列自身宽度之和，不含中间那条 4px 分界条：
-        // 否则拖到最右时比例永远差一点点，两列合计对不上。
-        const pairWidth = isVertical
-            ? (leftRect.height + rightRect.height)
-            : (leftRect.width + rightRect.width);
-        if (pairWidth <= 0) return;
-        const position = isVertical ? event.clientY : event.clientX;
-        pendingRatio = (position - pairStart) / pairWidth;
-        if (rafId === null) rafId = requestAnimationFrame(flush);
-    };
-
-    const handlePointerUp = () => {
-        if (rafId !== null) {
-            cancelAnimationFrame(rafId);
-            flush();
-        }
-        dragging = false;
-        dragLeftId = null;
-        dragRightId = null;
-        outer.classList.remove('resizing');
-        document.removeEventListener('pointermove', handlePointerMove);
-        document.removeEventListener('pointerup', handlePointerUp);
-        fitWorkspaceTerminals();
-    };
-
-    document.addEventListener('pointerdown', (event) => {
-        const splitter = event.target.closest?.('[data-group-splitter="group"]');
-        if (!splitter) return;
-        if (workspaceModel ? !workspaceModel.split.enabled
-            : (!groupWorkspaceSplit.enabled || groupWorkspaceSplit.groupIds.length < 2)) return;
-        // 每条分界条用 data-splitter-left / data-splitter-right 声明它夹的是哪两列。
-        // 早期写死 participants[0] 为左列：只有一条分界条时看不出错，一旦三列就完全不对。
-        const leftId = splitter.dataset.splitterLeft || '';
-        const rightId = splitter.dataset.splitterRight || '';
-        if (!leftId || !rightId) return;
-        event.preventDefault();
-        dragging = true;
-        dragLeftId = leftId;
-        dragRightId = rightId;
-        pendingRatio = null;
-        outer.classList.add('resizing');
-        document.addEventListener('pointermove', handlePointerMove);
-        document.addEventListener('pointerup', handlePointerUp);
-    });
-}
 
 function bindWorkspacePaneTransitionFit() {
     if (!workspaceRootEl) return;
@@ -3721,191 +3151,6 @@ function restorePerGroupTabsFromConfig(config) {
     }
 }
 
-// ---- 分组级分屏状态 ------------------------------------------------------
-//
-// 「分组级分屏」是用户主动开启的可选能力（见需求：串口分组标签可以左右上下分屏）。
-// 它的状态必须与「有几个分组」分开：分组数 >=2 只意味着**可以**分屏，不意味着已经分屏。
-//
-// 默认未分屏：只显示激活分组一套工作区，这正是「下层为当前选择的串口分组」的语义。
-//
-// 形状：
-//   enabled  是否处于分组级分屏
-//   groupIds 参与并排显示的分组（有序，决定左右/上下顺序）
-//   orientation 'horizontal'（左右）| 'vertical'（上下）
-//   sizes    groupId -> 比例（相对本外层容器，未列出的平均分配）
-const groupWorkspaceSplit = {
-    enabled: false,
-    groupIds: [],
-    orientation: 'horizontal',
-    sizes: {}
-};
-
-// 复位分屏状态。分组数回落到 1、或最后一个可关闭的分组被关掉时必须调。
-function resetGroupWorkspaceSplit() {
-    if (workspaceModel) dispatchWorkspaceAction({ type: 'column-split', enabled: false });
-    groupWorkspaceSplit.enabled = false;
-    groupWorkspaceSplit.groupIds = [];
-    groupWorkspaceSplit.orientation = 'horizontal';
-    groupWorkspaceSplit.sizes = {};
-}
-
-// 参与分组级分屏的候选分组（按 serialGroups 的顺序）。
-// 分屏至少要两个分组才有意义，因此不足两个时返回空。
-function getGroupSplitCandidates() {
-    if (serialGroups.length < 2) return [];
-    return serialGroups.map(group => group.id);
-}
-
-// 把当前分屏状态里已经不存在的分组清掉（关闭分组后必调）。
-//
-// 「剩余不足两个就退出分屏」这条**不能只看分组数**：单分组 + Shell 独立列时
-// 分组本来就只有 1 个，但屏幕上确实有两列（分组列 + Shell 列），此时复位会把
-// Shell 列一并撤掉。所以退出条件改用完整列 key 集合（含独立列），
-// 与 `isColumnSplitActive` 保持同一口径。
-function pruneGroupWorkspaceSplit() {
-    if (workspaceModel) return false;
-    if (!groupWorkspaceSplit.enabled) return false;
-    const alive = groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id));
-    const changed = alive.length !== groupWorkspaceSplit.groupIds.length;
-    groupWorkspaceSplit.groupIds = alive;
-    if (new Set(columnSplitKeys()).size < 2) {
-        resetGroupWorkspaceSplit();
-        return true;
-    }
-    return changed;
-}
-
-// Shell 独立成列时，把列级分屏补到「刚好能显示两列」的最小状态。
-//
-// 为什么不复用 `setGroupWorkspaceSplit`：那个函数是给「分组与分组」用的，开头就
-// `if (candidates.length < 2) return;`，单分组下没有任何可并排的第二个分组，
-// 调了也是直接返回。而 Shell 独立列是另一种参与者——它不是分组，是 OWN_COLUMN_ID
-// 那一列。方案 1 需要的正是「一个分组列 + 一个 Shell 列」。
-//
-// 只写两个字段，不碰 orientation / sizes：方向沿用用户上次选择，比例留空由
-// `normalizeSizes` 在构建 plan 时按列数均分。
-//
-// `columnGroupId` 传 Shell 原本停靠的那个分组：独立列只能和它同屏才有意义。
-//
-// **不能把 `groupIds` 覆写成 `[id]`**：多分组已分屏时，用户可能已经有若干个分组
-// 并排，把它们全踢掉会变成「拖一个 Shell 出去，其它分组的分屏全没了」——
-// 而且 `columnSplitKeys()` 只统计 `groupIds`，覆写之后会把 `isColumnSplitActive`
-// 算成「1 分组 + 1 独立列 = 2」，看似成立，实际上面那些分组已经不在参与者表里了
-// （实测 `verify-four-defects` 的 `b6-column-count-restored`：
-// `beforeJoin:4 → afterJoin:1`）。
-//
-// 因此这里只做两件事：把开关打开、把 `columnGroupId` **并入**参与者表。
-// 参与者表为空时（单分组首次独立成列）才需要补它。
-function ensureColumnSplitForShellColumn(columnGroupId) {
-    if (workspaceModel) return dispatchWorkspaceAction({ type: 'column-split', enabled: true,
-        orientation: workspaceModel.split.orientation }).ok;
-    const id = resolveSerialGroupId(columnGroupId || activeGroupId);
-    // 先取旧表（此时 `enabled` 可能还是 false），再写开关，顺序不能倒。
-    const previous = groupWorkspaceSplit.enabled === true ? groupWorkspaceSplit.groupIds : [];
-    const merged = [...previous, id].filter((value, index, arr) => value && arr.indexOf(value) === index);
-    groupWorkspaceSplit.enabled = true;
-    groupWorkspaceSplit.groupIds = merged;
-    return true;
-}
-
-// 独立 Shell 列被收回后，若分屏已退回「只剩单列」就复位开关。
-//
-// **判据必须同时看两种参与者**：分组列与独立 Shell 列。
-//
-// 只数 `groupIds` 会误伤多分组：两个分组并排、第三个 Shell 独立成列时是 3 列，
-// 收回 Shell 后应剩 2 列（那两个分组仍该并排）。早期这里写的是
-// `new Set(columnSplitKeys()).size < 2`，而 `columnSplitKeys()` 会把存活分组
-// 全部算进去——看似没问题，但调用点在 `setShellColumnModeInModel(tab.id, 'row')`
-// **之后**，此时若 Shell 的 `columnId` 指向的分组恰好不在 `groupIds` 里，
-// `groupIds` 会在后续 prune 中被清成一项，于是两个分组被整体复位成一列
-// （实测 `run-all-1280.txt`：`verify-four-defects` 的
-// `b6-column-count-restored`，`beforeJoin:4 → afterJoin:1`）。
-//
-// 因此这里改成「显式参与列级分屏的分组数 + 独立列数 ≥ 2 才保留」，
-// 并把 `groupIds` 里已失效的项排掉，但不拿它去反过来推断该不该复位。
-function collapseColumnSplitIfSingleColumn() {
-    if (workspaceModel) {
-        if (!workspaceModel.split.enabled || tabModel.layoutColumns(workspaceModel).length > 1) return false;
-        return dispatchWorkspaceAction({ type: 'column-split', enabled: false }).ok;
-    }
-    if (groupWorkspaceSplit.enabled !== true) return false;
-    const liveGroups = groupWorkspaceSplit.groupIds
-        .filter(id => serialGroups.some(group => group.id === id));
-    const ownColumns = shellTabs.some(tab => tab.columnMode === 'ownColumn' && !tab.hostGroupId) ? 1 : 0;
-    if (liveGroups.length + ownColumns >= 2) return false;
-    resetGroupWorkspaceSplit();
-    return true;
-}
-
-// 分组加入/退出分组级分屏。
-//
-// **参与者表只增不减**：旧实现直接 `groupWorkspaceSplit.groupIds = participants`，于是
-// 在已分屏状态下右键第三个分组选分屏，前两个分组会被整个踢出去（实测 diag982 S3：
-// 原本 ['g-1','default']，点完变成 ['g-1','g-2']，default 消失）。用户裁决是「分屏只
-// 作用于被右键移动的那一个分组」——那一个要加进来，而不是把别的挤出去。
-//
-// `requested` 里的分组（被右键的那一个）排在前面，保证它自己的列不会因为旧集合顺序
-// 被排到末尾；新分组本来就按 `serialGroups` 的顺序保证位置，这里只是在排序上更符合
-// 「我刚点的是它」的直觉。
-function setGroupWorkspaceSplit(enabled, options = {}) {
-    if (workspaceModel) {
-        const result = enabled
-            ? dispatchWorkspaceAction({ type: 'split-group', groupId: options.groupIds?.[0] || activeGroupId,
-                orientation: options.orientation })
-            : dispatchWorkspaceAction({ type: 'column-split', enabled: false });
-        if (result.ok) persistGroupWorkspaceLayout(activeGroupId);
-        return result.ok;
-    }
-    if (!enabled) {
-        resetGroupWorkspaceSplit();
-        // 退出分屏 = 回单列看这个分组的串口终端。**焦点必须一并抬回主标签**：
-        // 否则焦点还停在某个 Shell 上（焦点是模型状态，不会因列变少而失效），
-        // plan 会继续显示 Shell 面板，用户看到的就是「关了分屏还是 Shell 占着内容区」。
-        const mainId = mainTabId(activeGroupId);
-        if (document.getElementById(mainId)) setFocusedTab(mainId);
-        // 列集合与几何全部由 renderWorkspace 重算（含方向类名与 flex-basis）。
-        renderWorkspaceNow();
-        return;
-    }
-    const candidates = getGroupSplitCandidates();
-    if (candidates.length < 2) return;
-    const requested = (Array.isArray(options.groupIds) ? options.groupIds : []).filter(Boolean);
-    const previous = groupWorkspaceSplit.enabled ? groupWorkspaceSplit.groupIds : [];
-    let participants = [...requested, ...previous]
-        .filter(id => candidates.includes(id))
-        .filter((id, index, arr) => arr.indexOf(id) === index);
-    if (participants.length < 2) {
-        // 默认：激活分组 + 它在 serialGroups 里的下一个（到末尾则取上一个）。
-        const index = candidates.indexOf(activeGroupId);
-        const neighbour = candidates[index + 1] || candidates[index - 1] || candidates[0];
-        participants = [activeGroupId, neighbour, ...participants]
-            .filter((id, i, arr) => id && arr.indexOf(id) === i);
-    }
-    groupWorkspaceSplit.enabled = true;
-    groupWorkspaceSplit.groupIds = participants;
-    if (options.orientation === 'vertical' || options.orientation === 'horizontal') {
-        groupWorkspaceSplit.orientation = options.orientation;
-    }
-    // 不自动建 Shell 列：用户原话是「拖动到分组标签栏意味着自己成为独立一组」，
-    // 没拖过就不应该凭空多出一列。列集合完全由 plan 决定。
-    renderWorkspaceNow();
-}
-
-
-// 列级分屏的几何现在完全由 renderWorkspace 的 reconcileColumns / applyColumnSizes 负责；
-// 这里保留一个薄封装供旧调用点使用（它们只需要「重新渲染」这个语义）。
-function applyGroupWorkspaceSplitLayout() {
-    renderWorkspaceNow();
-}
-
-// 把「列 key」解析成真实列元素。Shell 独立列不是分组，不能走 groupWorkspaceEntryId。
-function getGroupColumnElement(groupId) {
-    if (groupId === SHELL_COLUMN_GROUP_ID) {
-        return document.getElementById(shellColumnId());
-    }
-    return document.getElementById(groupWorkspaceEntryId(groupId));
-}
-
 // 为一个非默认分组建列容器 `#serial-group-workspace-<g>`，内含自己的分组标签行
 // `#serial-group-tab-bar-<g>`、`#workspace-root-<g>`、`#workspace-splitter-<g>` 与 `#pane-1-<g>`。
 //
@@ -3915,7 +3160,7 @@ function getGroupColumnElement(groupId) {
 //
 // 幂等：已存在就直接返回。
 function resolveWorkspaceColumnId(columnId) {
-    return workspaceModel?.split.columns?.some(column => column.id === columnId)
+    return workspaceModel && tabModel.tree.find(workspaceModel.layout.root, columnId)
         ? columnId : resolveSerialGroupId(columnId);
 }
 
@@ -3971,68 +3216,6 @@ function ensureSerialGroupWorkspaceDom(groupId) {
     return container;
 }
 
-// 造/取 Shell 独立列。它只存在一种形态：
-//
-//   .group-column#serial-group-workspace-shell
-//     .group-tab-row#serial-group-tab-bar-shell   ← 唯一一行标签栏（Shell 标签住这里）
-//       #serial-group-tab-list-shell
-//     .workspace-root#workspace-root-__shell__
-//       .workspace-pane#pane-1-__shell__
-//         （无第二层标签行）.pane-tabs-content#pane-1-__shell__-tabs-content
-//
-// 为什么把 pane 的标签行去掉：用户要求「shell 标签页如果独立一组，则该组只显示一行标签栏」。
-// Shell 标签本身就挂在列首那一行，再给 pane 一层标签行就会出现两条。
-//
-// 为什么仍然建一个 .workspace-pane：xterm 的容器跟 pane 走（fit() 需要真实的
-// 尺寸链），而 .main-tab-pane 是绝对定位、依赖最近的已定位祖先。
-function ensureShellColumnDom(columnKey = SHELL_COLUMN_GROUP_ID) {
-    const existing = document.getElementById(groupWorkspaceEntryId(columnKey));
-    if (existing) return existing;
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    if (!outer) return null;
-
-    const column = document.createElement('div');
-    column.className = 'serial-group-workspace group-column shell-column';
-    column.id = groupWorkspaceEntryId(columnKey);
-    column.dataset.groupId = columnKey;
-    column.dataset.shellColumn = 'true';
-
-    const row = document.createElement('div');
-    row.className = 'group-tab-row serial-group-tab-bar';
-    row.id = groupTabRowId(columnKey);
-    const list = document.createElement('div');
-    list.className = 'main-tabs-list serial-group-tab-list';
-    list.id = groupTabListId(columnKey);
-    list.setAttribute('role', 'tablist');
-    // Shell 标签的右键菜单也要能用（它住在这一行里）。
-    // 该行的 class 与分组标签行相同，但里面装的是 .main-tab 而不是 .serial-group-tab，
-    // 所以 bindGroupTabListEvents 不会误处理它，必须单独挂普通标签的委托。
-    bindPaneTabListEvents(list);
-    row.appendChild(list);
-    column.appendChild(row);
-
-    const root = document.createElement('div');
-    root.className = 'workspace-root';
-    root.id = groupWorkspaceRootId(columnKey);
-    root.dataset.groupId = columnKey;
-
-    const pane = document.createElement('div');
-    pane.className = 'workspace-pane active';
-    pane.id = groupPaneId(columnKey, 1);
-    pane.dataset.paneId = pane.id;
-
-    const content = document.createElement('div');
-    content.className = 'main-tabs-content pane-tabs-content';
-    content.id = `${pane.id}-tabs-content`;
-
-    pane.appendChild(content);
-    root.appendChild(pane);
-    column.appendChild(root);
-
-    // 最终位置由统一列协调器按渲染计划排列。
-    outer.appendChild(column);
-    return column;
-}
 
 // 造一个非默认分组的分组标签行（含标签列表与「添加串口」占位）。
 //
@@ -4180,157 +3363,8 @@ function createGroupPaneElement(groupId, paneId) {
     return paneEl;
 }
 
-// 同步外层容器的可见性。
-//
-// 两种形态，由 groupWorkspaceSplit 决定：
-//
-// - **未分屏（默认）**：只显示当前激活分组那一条工作区，其余分组 hidden。
-//   需求原句是「下层为**当前选择的**串口分组旗下的所有标签页」——下层只有一套。
-//   早期版本只按「这个分组存在」就显示，于是每个分组的下层标签栏都铺在屏幕上，
-//   实测三个分组时同时出现三套标签栏（各 387px），用户看到的就是「标签逻辑混乱」。
-//
-// - **已分屏**：并排显示参与分屏的那几个分组；未参与分屏的仍需隐藏。
-//   分组级分屏是用户主动开启的可选能力（需求：串口分组标签可以左右上下分屏），
-//   不是「加了第二个分组就自动并排」。
-//
-// 外层分界条只在「已分屏且可见分组数 >= 2」时才有意义，否则隐藏。
-// 外层可见性与分界条全部由 renderWorkspace 的 reconcileColumns 负责；
-// 这里保留一个薄封装供旧调用点使用。
 function syncGroupWorkspaceVisibility() {
     renderWorkspaceNow();
-}
-
-// 把外层分界条按「每相邻两列一条」排好，并把列的顺序也对齐到 participants。
-//
-// N 列就有 N-1 条：早期只有静态的那一条，三列时只有第一对列之间能拖。
-//
-// 每条用自己的 data-splitter-left / data-splitter-right 声明夹的是哪两列，
-// 拖动时只改这两列的比例——不再假定「左列永远是 participants[0]」。
-function syncGroupWorkspaceSplitters(participants) {
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    if (!outer) return;
-
-    const columns = (participants || [])
-        .map(groupId => getGroupColumnElement(groupId))
-        .filter(Boolean);
-    const wanted = Math.max(0, columns.length - 1);
-
-    // 静态那条分界条是整个功能的地基（index.html 里就存在，也有测试断言它的 id）。
-    // 它**永远不能被 remove**：一旦删掉，document.getElementById 再也拿不回来，
-    // 后续所有分屏都没有可拖的条，只能重建页面才能恢复。
-    const staticSplitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
-
-    // 页面上的条按 DOM 顺序排好；静态条不在父节点里时（比如刚被搬动）临时补上。
-    const splitters = getGroupWorkspaceSplitters();
-    while (splitters.length < wanted) {
-        const splitter = document.createElement('div');
-        splitter.className = 'group-workspace-splitter';
-        // 后续的条不分配 id：id 只留给静态那条，避免重复 id。
-        splitter.dataset.groupSplitter = 'group';
-        splitters.push(splitter);
-    }
-    // 多出来的动态条直接摘掉；静态那条只隐藏（下次分屏还要用）。
-    splitters.slice(wanted).forEach(splitter => {
-        if (splitter === staticSplitter) splitter.hidden = true;
-        else splitter.remove();
-    });
-    splitters.length = wanted;
-
-    // 先把现有的条全部移到末尾（腾开位置），再逐对插回去。
-    // 直接「就地修复」会在顺序完全不同时错位：比如旧顺序 colA/splitter/colB 要变成
-    // colB/splitter/colA，按单个元素判断就会互相抵消。
-    splitters.forEach(splitter => outer.appendChild(splitter));
-    for (let index = 0; index < columns.length; index++) {
-        const column = columns[index];
-        if (index > 0) {
-            const previousColumn = columns[index - 1];
-            const splitter = splitters[index - 1];
-            splitter.hidden = false;
-            splitter.dataset.splitterLeft = previousColumn.dataset.groupId || '';
-            splitter.dataset.splitterRight = column.dataset.groupId || '';
-            outer.insertBefore(splitter, previousColumn.nextSibling);
-            outer.insertBefore(column, splitter.nextSibling);
-        } else {
-            outer.insertBefore(column, outer.firstChild);
-        }
-    }
-
-    // 还没排上的静态条（比如本屏只有 1 列）也放回容器末尾，保持可查找。
-    if (staticSplitter && staticSplitter.parentElement !== outer) outer.appendChild(staticSplitter);
-}
-
-// 现有的分组级分界条（静态那条 + 后续建的），按 DOM 顺序。
-function getGroupWorkspaceSplitters() {
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    const staticSplitter = document.getElementById(GROUP_WORKSPACE_SPLITTER_ID);
-    if (!outer) return staticSplitter ? [staticSplitter] : [];
-    const splitters = Array.from(outer.children)
-        .filter(child => child.dataset?.groupSplitter === 'group');
-    if (staticSplitter && !splitters.includes(staticSplitter)) splitters.unshift(staticSplitter);
-    return splitters;
-}
-
-// 旧名保留：可见性同步处仍调它，语义已扩为「按相邻关系排好全部分界条」。
-function placeGroupWorkspaceSplitter() {
-    syncGroupWorkspaceSplitters(getGroupWorkspaceVisibleColumnKeys());
-}
-
-// 当前屏上可见的列 key（按 DOM 里从左到右 / 上到下的实际顺序）。
-function getGroupWorkspaceVisibleColumnKeys() {
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    if (!outer) return [];
-    return Array.from(outer.children)
-        .filter(child => child.classList?.contains('group-column') && !child.hidden)
-        .map(child => child.dataset.groupId || '');
-}
-
-// 列级分屏是否真的生效——`buildLiveWorkspaceSections` 与写入口共用的唯一判据。
-//
-// 早期这里只判 `groupWorkspaceSplit.groupIds.length > 1`，隐含的前提是「分屏 = 多个分
-// 组并排」。但方案 1 允许单分组下把 Shell 独立成一列，那时 `groupIds` 只有一项，
-// 若沿用旧判据，`layoutColumns` 会走非分屏分支、只返回一列，`ownColumn` 写了也看不出
-// 任何变化（实测 `doc-1263.txt`：columnMode 已改成 ownColumn，columnCount 仍是 1）。
-//
-// 判据改成「开关已开 且 真实存在的列 key ≥ 2」：
-//   • 多分组：`groupIds` 里本来就是各分组 id，行为与旧判据一致；
-//   • 单分组 + Shell 独立列：两个 key 分别是该分组与 `OWN_COLUMN_ID`。
-// 无效 / 已删的分组在这里就排掉，否则关掉一个分组会留下幽灵列。
-function isColumnSplitActive() {
-    if (workspaceModel) return workspaceModel.split.enabled && tabModel.layoutColumns(workspaceModel).length >= 2;
-    if (groupWorkspaceSplit.enabled !== true) return false;
-    const alive = new Set(columnSplitKeys());
-    return alive.size >= 2;
-}
-
-// 当前参与列级分屏的全部列 key：分组列（按 `groupIds` 顺序）+ 独立 Shell 列。
-function columnSplitKeys() {
-    if (workspaceModel) return tabModel.layoutColumns(workspaceModel).map(column => column.id);
-    const keys = groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id));
-    if (shellTabs.some(tab => tab.columnMode === 'ownColumn' && !tab.hostGroupId)) {
-        keys.push(SHELL_COLUMN_GROUP_ID);
-    }
-    return keys;
-}
-
-// 当前应当显示哪些分组工作区（返回 entryId 集合）。
-//
-// 未分屏时**只有激活分组一列**；已分屏时是参与分屏的集合（强制包含激活分组，
-// 否则会出现「切到一个没参与分屏的分组，屏幕上却什么都不显示」）。
-//
-// 这里绝不能因为「Shell 归属在另一列」就额外点亮那一列：
-// 那会让未分屏状态下出现两列并排，而 flex 布局把可用宽度平分——
-// 用户看到的与真正左右分屏完全一样，于是报「点击标签莫名其妙分屏」。
-// （groupWorkspaceSplit.enabled 仍是 false，右键菜单里也显示「未分屏」。）
-function resolveVisibleGroupWorkspaceEntryIds() {
-    if (workspaceModel) return new Set(tabModel.buildRenderPlan(workspaceModel).columns.map(column => groupWorkspaceEntryId(column.domKey)));
-    const visible = groupWorkspaceSplit.enabled
-        ? new Set(groupWorkspaceSplit.groupIds
-            .filter(id => serialGroups.some(group => group.id === id))
-            .map(id => groupWorkspaceEntryId(id)))
-        : new Set();
-    // Shell 独立列是否可见由渲染层的 plan 决定（它只在 plan 里有那一列时才存在），
-    // 这里不再用渲染层布尔量额外点亮它。
-    return visible;
 }
 
 // 从配置里同步分组列表。只在首次加载与外部 config-updated 时调用。
@@ -4640,7 +3674,7 @@ function applyActiveSerialGroup({ fit = true, activateTab = true } = {}) {
 
     // 标签栏：active / control 与 aria-selected 必须同步，否则键盘/读屏看到的选中项
     // 与视觉不一致。焦点在 Shell 时分组改用 control 样式，避免两个标签同时高亮。
-    document.querySelectorAll('.serial-group-tab').forEach(syncGroupTabVisualState);
+    if (!workspaceModel) document.querySelectorAll('.serial-group-tab').forEach(syncGroupTabVisualState);
 
     const groupManager = getGroupWorkspaceManager(activeGroupId);
     const targetTabId = workspaceModel ? groupManager.getActiveTabId(mainTabId(activeGroupId)) : mainTabId(activeGroupId);
@@ -4738,12 +3772,7 @@ function syncAllGroupMainTabTitles() {
     });
 }
 
-// 显式焦点：用户最近一次真正点过的那个标签。
-//
-// 为什么必须是**真实的模块级字段**：`buildLiveWorkspace()` 每次调用都新建一棵投影树，
-// 往那棵树上写 `activeTabId` 下一刻就丢（投影器是只读的）。焦点是模型状态，
-// 必须有一个活着的存放处，才能让「点 Shell 标签」「点分组标签抬回终端」真的改变下一帧的
-// plan —— 否则用户看到的就是「点了没反应」。
+// Startup focus hint; after initialization it mirrors workspaceModel.focusedTabId.
 let focusedWorkspaceTabId = null;
 
 // 这个 id 在当前活状态里还成不成立（Shell 在 shellTabs 里，其它叶在某个分组布局的 pane 里）。
@@ -4764,9 +3793,8 @@ function focusedTabIdForProjection() {
     return getGroupActiveTabId(activeGroupId);
 }
 
-// 恢复后始终读取活动模型；启动恢复尚未完成时仅用旧投影挂载业务节点。
 function workspaceTabState() {
-    return workspaceModel || buildLiveWorkspace();
+    return workspaceModel;
 }
 
 function workspaceTabOf(tabId) {
@@ -4788,25 +3816,16 @@ function switchShellTab(tabId) {
 // 只写两个事实：焦点（focusedWorkspaceTabId / 所在 pane 的 activeTabId）。
 // 任何「哪一列可见」「哪一行亮」都是派生值，因此绝不在这里写。
 function setFocusedTab(tabId) {
-    const tab = tabId ? workspaceTabOf(tabId) : null;
-    if (!tab) return false;
-    if (tabModel.isContainer(tab)) {
-        const pane = tabModel.panesOf(tab).find(item => item.id === tab.activePaneId) || tab.panes[0];
-        return pane?.activeTabId ? setFocusedTab(pane.activeTabId) : false;
-    }
     if (workspaceModel) return dispatchWorkspaceAction({ type: 'activate', tabId }).ok;
-    focusedWorkspaceTabId = tab.id;
-    const hit = tabModel.paneOfTab(workspaceTabState(), tab);
-    if (hit) getGroupWorkspaceManager(hit.container.id).switchPaneTab(hit.pane.id, tab.id, { persist: true });
-    renderWorkspaceNow();
+    if (!isLiveWorkspaceTabId(tabId)) return false;
+    focusedWorkspaceTabId = tabId;
     return true;
 }
 
 // Shell 的切换已合并进 setFocusedTab：不再有「按宿主分三个分支」的实现，
 // 宿主是 plan 的产物而不是渲染的输入。
 //
-// 叠层（stackShellTabOverHostGroup）与遮盖（hideStackedShellTabsIn）已随本次
-// 翻转整体删除：显隐现在只由 plan.panelIds 在 applyVisibility 里写一次。
+// 不再叠层遮盖 Shell；递归布局协调器只按 plan.panelIds 写面板显隐。
 
 // 重画入口。所有旧调用点（切分组、加分组、关分组、启停分屏）都汇到这里；
 // 它只做一件事——请求一次完整渲染。列 / 行 / 按钮 / 面板的收敛全部在
@@ -4834,9 +3853,7 @@ function renderWorkspaceNow() {
     renderWorkspace(workspaceTabState());
     // 焦点可能刚切到或离开某个 Shell，受控组的视觉状态要跟着切换。
     // 无 DOM 的沙箱（如终端操作目标测试）里没有 document，直接跳过。
-    if (typeof document !== 'undefined') {
-        document.querySelectorAll('.serial-group-tab').forEach(syncGroupTabVisualState);
-    }
+    // Local active styles belong to the tree; global control highlighting must not overwrite them.
     const tabId = workspaceModel?.focusedTabId || focusedWorkspaceTabId;
     if (tabId !== lastNotifiedWorkspaceFocus) {
         lastNotifiedWorkspaceFocus = tabId;
@@ -4844,428 +3861,60 @@ function renderWorkspaceNow() {
     }
 }
 
+let layoutRenderer = null;
 function renderWorkspace(ws) {
-    if (isRenderingWorkspace) return;
+    if (isRenderingWorkspace || !ws?.layout) return;
+    const host = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
+    if (!host) return;
     isRenderingWorkspace = true;
     try {
-        const plan = tabModel.buildRenderPlan(ws);
-        reconcileColumns(plan);
-        reconcileRows(plan);
-        reconcileButtons(plan);
-        applyVisibility(plan);
-        // 四步都搬完之后才拆残留列：提前拆会把还住在里面的按钮/面板一起删掉，
-        // querySelector 再也找不到它们，标签就静默消失（关分屏 / 关分组都踩过）。
-        sweepStaleColumns(plan);
-    } finally {
-        isRenderingWorkspace = false;
-    }
+        if (!layoutRenderer) layoutRenderer = createLayoutRenderer({
+            document, host,
+            createPane: (groupId, nodeId) => createGroupPaneElement(groupId || activeGroupId, nodeId),
+            getButton: tabId => document.querySelector(`.main-tab[data-target="${tabId}"]`),
+            getGroupButton: (member, node) => {
+                const info = describeGroupTab({ id: member.tabId,
+                    title: resolveGroupTitleForDisplay(getSerialGroupById(member.tabId)) || member.tab.title,
+                    active: member.active, connected: isGroupConnected(member.tabId)
+                }, { isDefault: member.tabId === REGISTRY_DEFAULT_GROUP_ID });
+                const buttonId = `layout-group-tab-${member.id}`;
+                let button = document.getElementById(buttonId);
+                if (!button) button = buildGroupTabButton({ ...info, buttonId, closeButtonId: `${buttonId}-close` });
+                updateGroupTabButtonState(button, info);
+                button.dataset.layoutItemId = member.id;
+                return button;
+            },
+            onActivate: (tabId, itemId) => {
+                const tab = workspaceModel.tabs[tabId];
+                const owner = tabModel.isContainer(tab) ? tabId : tab?.ownerGroupId;
+                if (owner && owner !== activeGroupId) {
+                    activeGroupId = owner;
+                    applyActiveSerialGroup({ fit: false, activateTab: false });
+                }
+                dispatchWorkspaceAction({ type: 'activate', tabId, itemId });
+            },
+            onMenu: (tabId, itemId, nodeId) => requestWorkspaceTabContextMenu({
+                tabId, itemId, paneId: nodeId, groupId: groupIdForWorkspaceTab(tabId) || activeGroupId }),
+            onDragState: dragging => { isDraggingWorkspaceSplitter = dragging; },
+            onCollapse: (groupId, collapsed) => dispatchWorkspaceAction({ type: 'collapse-group', groupId, collapsed }),
+            requestFrame: callback => requestAnimationFrame(callback),
+            cancelFrame: id => cancelAnimationFrame(id),
+            onResize: action => dispatchWorkspaceAction(action),
+            fit: fitWorkspaceTerminals
+        });
+        layoutRenderer.render(tabModel.buildRenderPlan(ws));
+    } finally { isRenderingWorkspace = false; }
     fitWorkspaceTerminals();
 }
 
-// ── 第 1 步：列 ──────────────────────────────────────────────────────
-//
-// 列集合完全由 plan.columns 决定：计划里有的列存在且可见，计划里没有的列隐藏
-// （已关闭分组的残留容器）或被拆掉（不再需要的 Shell 独立列）。
-function reconcileColumns(plan) {
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    if (!outer) return;
-
-    // 建：容器列走 ensureSerialGroupWorkspaceDom（默认分组复用静态标记）。
-    // Shell 独立列走 ensureShellColumnDom —— 它建的正是模型 OWN_COLUMN_ID 那一列的真实容器。
-    plan.columns.forEach(column => {
-        if (column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID) {
-            ensureShellColumnDom(column.domKey);
-        } else {
-            ensureSerialGroupWorkspaceDom(column.domKey);
-        }
-    });
-
-    // Shell 独立列的拆除不在这里做：它里面可能还住着 Shell 的按钮与面板，而
-    // reconcileButtons / applyVisibility 还要把它们搬到新位置（搬完才会离开这一列）。
-    // 提前 remove 会让 querySelector 找不到按钮 → 标签静默消失（实测：关分屏后
-    // 「关分屏后 Shell 标签不见了」。真正的拆列在 renderWorkspace 末尾的 sweepStaleColumns。
-
-
-    // 显隐：以「列容器元素 id」为准，而不是以分组 id 为准——Shell 列不是分组。
-    const visibleIds = new Set();
-    plan.columns.forEach(column => {
-        const el = getGroupColumnElement(column.domKey);
-        if (el) visibleIds.add(el.id);
-    });
-    Array.from(outer.children).forEach(child => {
-        if (!child.id || child.id === GROUP_WORKSPACE_SPLITTER_ID) return;
-        child.hidden = !visibleIds.has(child.id);
-    });
-
-    // 方向类名：列级分屏的唯一状态来源。
-    const vertical = plan.columnLayout.enabled && plan.columnLayout.orientation === 'vertical';
-    outer.classList.toggle('group-split-vertical', vertical);
-    outer.classList.toggle('group-split-horizontal', plan.columnLayout.enabled && !vertical);
-
-    // 顺序 + 分界条：N 列就有 N-1 条，全部按 plan 的列顺序摆。
-    const participants = plan.columns.map(column => column.domKey);
-    const splitParticipants = plan.columnLayout.enabled && participants.length > 1 ? participants : [];
-    syncGroupWorkspaceSplitters(splitParticipants);
-    applyColumnSizes(plan);
-}
-
-// 按 plan 里每列的 size 写 flex-basis。
-//
-// 必须从列宽里扣掉分界条的实际占位：早期写 flex-basis: <比例>% 且 flex-shrink: 0，
-// 列宽之和 = 容器宽 + 分界条总宽，最右列直接溢出到窗口外（实测溢出 10px）。
-// 上下分屏时只能取分界条在**分屏方向上**的占位（vertical 下是 height），
-// 按 width 求和会把每一列算成负高度。
-function applyColumnSizes(plan) {
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    if (!outer) return;
-    // 先全部清干净：退出分屏后残留的 flex-basis 会让唯一那列只占半宽。
-    Array.from(outer.children).forEach(child => {
-        if (!child.id || child.id === GROUP_WORKSPACE_SPLITTER_ID) return;
-        child.style.removeProperty('flex-basis');
-        child.style.removeProperty('flex-grow');
-        child.style.removeProperty('flex-shrink');
-    });
-    if (!plan.columnLayout.enabled || plan.columns.length < 2) return;
-
-    const isVertical = plan.columnLayout.orientation === 'vertical';
-    const gutterTotal = getGroupWorkspaceSplitters()
-        .filter(splitter => !splitter.hidden)
-        .reduce((sum, splitter) => {
-            const rect = splitter.getBoundingClientRect();
-            return sum + (isVertical ? rect.height : rect.width);
-        }, 0);
-    const share = 1 / plan.columns.length;
-    plan.columns.forEach(column => {
-        const el = getGroupColumnElement(column.domKey);
-        if (!el) return;
-        const ratio = Number(column.size);
-        const value = Number.isFinite(ratio) && ratio > 0 ? ratio : share;
-        el.style.flexBasis = `calc(${(value * 100).toFixed(4)}% - ${(value * gutterTotal).toFixed(2)}px)`;
-        el.style.flexGrow = '0';
-        el.style.flexShrink = '0';
-    });
-}
-
-// ── 第 2 步：行 ──────────────────────────────────────────────────────
-//
-// 一列有几条标签行，由 plan 的 rows 直接决定：
-//   rows 为空 → 整列只有一条行，那条行就是列的 TabRow 自己（扁平单组、未开组内分屏）；
-//   rows 有 N 条 → 每个 pane 一条。
-//
-// 分组标签行「显不显示」也由 plan 决定：只有多容器形态才需要它（tabBarVisible），
-// 以及 Shell 独立列（它只有这一行）。
-function reconcileRows(plan) {
-    plan.columns.forEach(column => {
-        const isOwnColumn = column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID;
-        const groupRowVisible = isOwnColumn || plan.tabBarVisible;
-        const groupRow = isOwnColumn
-            ? document.getElementById(groupTabRowId(column.domKey))
-            : getGroupTabRow(column.domKey);
-        if (groupRow) groupRow.hidden = !groupRowVisible;
-
-        // Shell 独立列没有 pane、没有 subRow：ensureShellColumnDom 已经把它建好了。
-        if (isOwnColumn) return;
-
-        const specs = rowSpecsOfColumn(column);
-        const rootEl = document.getElementById(groupWorkspaceRootId(column.domKey));
-        if (rootEl) {
-            rootEl.classList.toggle('split-vertical', column.splitEnabled && column.orientation === 'vertical');
-            rootEl.classList.toggle('split-horizontal', column.splitEnabled && column.orientation !== 'vertical');
-        }
-
-        // 建缺的 pane 节点（静态页只有 pane-1 / pane-2，第 3 个起必须现建）。
-        specs.forEach(spec => {
-            if (!spec.paneId || getPaneDom(spec.paneId)) return;
-            if (column.domKey === REGISTRY_DEFAULT_GROUP_ID) {
-                createPaneElement(spec.paneId, groupWorkspaceRootId(column.domKey));
-            } else {
-                rootEl?.appendChild(createGroupPaneElement(column.domKey, spec.paneId));
-            }
-        });
-        specs.forEach(spec => {
-            const paneEl = getPaneDom(spec.paneId);
-            if (paneEl && rootEl && paneEl.parentElement !== rootEl) rootEl.appendChild(paneEl);
-        });
-
-
-        // 显隐：本列计划内的 pane 可见，其余（上一轮分屏留下的）隐藏。
-        // 隐藏时还要清掉内联 flex-basis：残留的 calc(...) 在下次重新显示时会先按旧比例排一下，
-        // 出现一闪，而且与当前 label 不一致（实测关闭分屏后 pane-2 仍带着 calc(34.9% - 3.49px)）。
-        const wantedPaneIds = new Set(specs.map(spec => spec.paneId).filter(Boolean));
-        (rootEl ? Array.from(rootEl.querySelectorAll('.workspace-pane')) : []).forEach(paneEl => {
-            const wanted = wantedPaneIds.has(paneEl.id);
-            paneEl.hidden = !wanted;
-            if (!wanted) paneEl.style.removeProperty('flex-basis');
-        });
-
-        // 组内 pane 分界条的显隐：它是**模型 splitEnabled 的投影**，不是独立状态。
-        //
-        // 这一行以前不存在，于是分屏后两块 pane 之间根本没有可拖的条（静态
-        // #workspace-splitter / 动态 #workspace-splitter-<g> 的初始值都是 hidden=true，
-        // 再没人写它）。实测 diag916：splitEnabled:true 而条仍 hidden / 0×0，
-        // 用户看到的就是「不能调整分屏宽度」。
-        //
-        // **必须先于 flex-basis 写**：扣 gutter 时要读它的真实宽度，隐藏时读到 0。
-        const legacySplitter = document.getElementById(groupSplitterId(column.domKey));
-        if (legacySplitter) legacySplitter.hidden = true;
-        const splitterVisible = Boolean(column.splitEnabled && specs.length > 1);
-        const gutters = [];
-        if (rootEl) {
-            rootEl.querySelectorAll('[data-pane-left]').forEach(gutter => { gutter.hidden = true; });
-            specs.forEach((spec, index) => {
-                if (!splitterVisible || !index) return;
-                const left = specs[index - 1].paneId;
-                let gutter = rootEl.querySelector(`[data-pane-left="${left}"][data-pane-right="${spec.paneId}"]`);
-                if (!gutter) {
-                    gutter = document.createElement('div');
-                    gutter.className = 'workspace-splitter';
-                    gutter.dataset.groupSplitter = 'pane';
-                    gutter.dataset.paneLeft = left; gutter.dataset.paneRight = spec.paneId;
-                }
-                gutter.dataset.groupId = column.containerId;
-                gutter.hidden = false;
-                rootEl.insertBefore(gutter, getPaneDom(spec.paneId));
-                gutters.push(gutter);
-            });
-            const ordered = specs.flatMap((spec, index) => {
-                const gutter = index ? gutters[index - 1] : null;
-                return [gutter, getPaneDom(spec.paneId)].filter(Boolean);
-            });
-            let cursor = rootEl.firstChild;
-            ordered.forEach(node => {
-                if (node !== cursor) rootEl.insertBefore(node, cursor);
-                cursor = node.nextSibling;
-            });
-        }
-        const paneGutter = gutters.reduce((total, gutter) => {
-            const rect = gutter.getBoundingClientRect();
-            return total + (column.orientation === 'vertical' ? rect.height : rect.width);
-        }, 0);
-        specs.forEach(spec => {
-            const paneEl = spec.paneId ? getPaneDom(spec.paneId) : null;
-            if (!paneEl) return;
-            if (!column.splitEnabled) {
-                paneEl.style.removeProperty('flex-basis');
-                return;
-            }
-            const ratio = Number(column.paneSizes[spec.paneId]);
-            const value = Number.isFinite(ratio) && ratio > 0 ? ratio : 1 / specs.length;
-            paneEl.style.flexBasis = `calc(${(value * 100).toFixed(4)}% - ${(value * paneGutter).toFixed(2)}px)`;
-        });
-    });
-}
-
-// 一列要画哪几条行。只读 plan：不判断分屏、不看 pane 数量以外的东西。
-//
-// rows 为空时给出一条「合成的行」：它没有独立 pane 标题（就是列的 TabRow 自己），
-// 但内容区必须指向 pane-1 —— 扁平形态的内容区是静态的 pane-1-tabs-content。
-function rowSpecsOfColumn(column) {
-    if (column.rows.length) {
-        return column.rows.map((row, index) => ({
-            paneId: row.paneId,
-            tabs: row.tabs,
-            activeTabId: row.activeTabId,
-            isTabRow: column.isFamily && index === 0
-        }));
-    }
-    return [{
-        paneId: groupPaneId(column.domKey, 1),
-        tabs: [],
-        activeTabId: null,
-        isTabRow: true
-    }];
-}
-
-// ── 第 3 步：按钮 ────────────────────────────────────────────────────
-//
-// 每个按钮的宿主只由 plan 决定：
-//   • 容器的根 Tab → 本列的分组标签行（.serial-group-tab）
-//   • 列首行的叶   → 本列的 TabRow 列表（分组行可见时）或首个 pane 的列表（扁平时）
-//   • 行内的叶     → 该行的 pane 标签列表
-//
-// 只搬不建（叶的按钮由各自的创建函数造，含 xterm 实例，重建会丢终端），
-// 且父节点没变就不 appendChild（C2）。
-function reconcileButtons(plan) {
-    plan.columns.forEach(column => {
-        const isOwnColumn = column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID;
-        const groupRowVisible = isOwnColumn || plan.tabBarVisible;
-        const specs = isOwnColumn ? [] : rowSpecsOfColumn(column);
-        // 列的 TabRow 列表：分组行可见时是分组行，否则是首个 pane 的列表。
-        const tabRowList = groupRowVisible
-            ? (isOwnColumn ? document.getElementById(groupTabListId(column.domKey)) : getGroupTabList(column.domKey))
-            : (specs[0] ? getPaneTabsList(specs[0].paneId) : null);
-
-        // 1) 列首行上的项：容器 → 分组标签按钮；叶 → 普通按钮。
-        column.tabItems.forEach(tab => {
-            if (tabModel.isContainer(tab)) {
-                if (isOwnColumn) return;
-                const hostList = getGroupTabList(column.domKey);
-                if (!hostList) return;
-                const model = describeGroupTab({
-                    id: tab.id,
-                    title: resolveGroupTitleForDisplay(getSerialGroupById(tab.id)) || tab.title,
-                    active: tab.id === activeGroupId,
-                    connected: isGroupConnected(tab.id)
-                }, {
-                    isDefault: tab.id === REGISTRY_DEFAULT_GROUP_ID
-                });
-                const existing = document.getElementById(model.buttonId);
-                if (existing) {
-                    if (existing.parentElement !== hostList) hostList.appendChild(existing);
-                    updateGroupTabButtonState(existing, model);
-                } else {
-                    hostList.appendChild(buildGroupTabButton(model));
-                }
-                return;
-            }
-            moveTabButton(tab.id, tabRowList, specs[0]?.paneId || null);
-        });
-
-        // 2) 行内项（pane 子项 + 受托管叶），按 plan 的 rows 顺序落到各自列表，
-        //    然后**按 plan 顺序重排一次**——行内顺序的唯一真源是 tabs[] 的下标，
-        //    不重排就会出现「拖完标签弹回原位」（历史缺陷，probe-tab-order diag530）。
-        specs.forEach((spec, index) => {
-            const listEl = getPaneTabsList(spec.paneId);
-            if (!listEl) return;
-            const ordered = [];
-            spec.tabs.forEach(tab => {
-                // 扁平时第一条行就是列 TabRow，列首行的叶已经在上面排过，不要重复搬动。
-                if (index === 0 && column.isFamily && column.tabItems.some(item => item.id === tab.id)) return;
-                const button = moveTabButton(tab.id, listEl, spec.paneId);
-                if (button) ordered.push(button);
-            });
-            orderButtons(listEl, ordered);
-        });
-
-        // 3) 列首行（分组标签与列首行叶）同样按 plan 顺序重排。
-        if (tabRowList) {
-            orderButtons(tabRowList, column.tabItems
-                .map(tab => tabModel.isContainer(tab)
-                    ? document.getElementById(describeGroupTab({ id: tab.id }).buttonId)
-                    : document.querySelector(`.main-tab[data-target="${tab.id}"]`))
-                .filter(Boolean));
-        }
-    });
-
-    // 3) 反向清理：已不存在的分组的标签按钮必须移除，否则留在行里但点不动。
-    const knownGroupIds = new Set(serialGroups.map(group => group.id));
-    document.querySelectorAll('.serial-group-tab').forEach(button => {
-        if (!knownGroupIds.has(button.dataset.groupId)) button.remove();
-    });
-
-    syncSerialGroupAddButtonLayer();
-    syncShellAddButtonVisibility();
-    placeGroupAddButton();
-    placeShellAddButton();
-}
-
-// 把一个叶的按钮搬到目标列表。父节点没变就不动（C2），返回被搬的按钮供后续排序。
-function moveTabButton(tabId, listEl, paneId) {
-    if (!listEl) return null;
-    const button = document.querySelector(`.main-tab[data-target="${tabId}"]`);
-    if (!button) return null;
-    if (button.parentElement !== listEl) listEl.appendChild(button);
-    if (paneId) button.dataset.paneId = paneId;
-    return button;
-}
-
-// 把一组按钮按给定顺序就地排好。
-//
-// 只调 insertBefore，不摘下来重插：节点若已在正确位置就不动（C2），
-// 因此不会重放动画或重排整行。
 function orderButtons(listEl, ordered) {
-    if (!listEl || typeof listEl.insertBefore !== 'function') return;
-    const inList = (ordered || []).filter(button => button && button.parentElement === listEl);
-    for (let index = inList.length - 2; index >= 0; index--) {
-        const button = inList[index];
-        const next = inList[index + 1];
-        if (button.nextElementSibling !== next) listEl.insertBefore(button, next);
+    const buttons = (ordered || []).filter(button => button?.parentElement === listEl);
+    for (let index = buttons.length - 2; index >= 0; index--) {
+        if (buttons[index].nextElementSibling !== buttons[index + 1]) listEl.insertBefore(buttons[index], buttons[index + 1]);
     }
 }
 
-// ── 第 4 步：面板显隐与宿主 ──────────────────────────────────────────
-//
-// I8：面板可见性只由 plan.panelIds 决定，这一处是唯一的写点。
-// 同时把每个面板搬进它该在的内容区（plan.panelIdsAll 描述「住哪」），
-// 否则会出现「标签亮着、终端在另一列」这种看不见的空面板。
-function applyVisibility(plan) {
-    const visible = new Set(plan.panelIds || []);
-    plan.columns.forEach(column => {
-        const isOwnColumn = column.rootOnly || column.domKey === tabModel.OWN_COLUMN_ID;
-        const specs = isOwnColumn ? [] : rowSpecsOfColumn(column);
-        // 列首行的叶与扁平形态的行内项共用一个内容区。
-        const primaryContentEl = isOwnColumn
-            ? document.getElementById(`${groupPaneId(column.domKey, 1)}-tabs-content`)
-            : (specs[0]?.paneId ? getPaneTabsContent(specs[0].paneId) : null);
-
-        column.tabItems.forEach(tab => {
-            if (tabModel.isContainer(tab)) return;
-            if (!primaryContentEl) return;
-            const panel = document.getElementById(tab.id);
-            if (panel && panel.parentElement !== primaryContentEl) primaryContentEl.appendChild(panel);
-        });
-
-        specs.forEach(spec => {
-            const contentEl = getPaneTabsContent(spec.paneId);
-            if (!contentEl) return;
-            spec.tabs.forEach(tab => {
-                const panel = document.getElementById(tab.id);
-                if (panel && panel.parentElement !== contentEl) contentEl.appendChild(panel);
-            });
-        });
-    });
-
-    // 唯一的显隐写点。
-    document.querySelectorAll('.main-tab-pane').forEach(panel => {
-        panel.classList.toggle('active', visible.has(panel.id));
-    });
-    document.querySelectorAll('.main-tab').forEach(button => {
-        if (button.classList.contains('serial-group-tab')) return;
-        const target = button.dataset.target;
-        if (!target) return;
-        const isVisible = visible.has(target);
-        button.classList.toggle('active', isVisible);
-        button.setAttribute('aria-selected', String(isVisible));
-    });
-
-    // 当前 pane 高亮：只影响视觉（边框），与显隐无关。
-    const activePaneId = groupPaneId(activeGroupId, 1);
-    document.querySelectorAll('.group-column > .workspace-root > .workspace-pane').forEach(paneEl => {
-        paneEl.classList.toggle('active', paneEl.dataset.paneId === activePaneId);
-    });
-}
-
-// 拆掉「计划里已经没有」的列容器。**必须在四步之后**：
-// 按钮与面板得先被搬到新位置，提前拆会把它们一起删掉（标签静默消失）。
-function sweepStaleColumns(plan) {
-    const outer = document.getElementById(GROUP_WORKSPACE_CONTAINER_ID);
-    if (!outer) return;
-    const wanted = new Set();
-    plan.columns.forEach(column => {
-        const el = getGroupColumnElement(column.domKey);
-        if (el) wanted.add(el.id);
-    });
-    Array.from(outer.children).forEach(child => {
-        if (!child.id || child.id === GROUP_WORKSPACE_SPLITTER_ID) return;
-        if (wanted.has(child.id)) return;
-        // 只拆「空壳」：还住着任何标签按钮 / 面板的列不能拆（那些节点还在被别人引用）。
-        const hasTabs = child.querySelector('.main-tab') !== null;
-        const hasPanels = child.querySelector('.main-tab-pane') !== null;
-        if (hasTabs || hasPanels) {
-            child.hidden = true;
-            return;
-        }
-        child.remove();
-    });
-}
-
-// 把渲染层当前状态投影成模型的输入形状。
-//
-// **唯一入口**：`__readTabModelPlan`（只读影子判据）与 `renderWorkspace`（真实渲染）
-// 必须读同一份投影。两处各拼一份 sections 会让「判据全绿但界面不同」成为可能——
-// 那正是这次重构要消除的那类问题。
-//
-// 只读，不修改任何输入。
+// One-time legacy import input. Live geometry is always read directly from workspaceModel.
 function buildLiveWorkspaceSections() {
     const sections = {
         groups: serialGroups.map((group, index) => {
@@ -5294,45 +3943,12 @@ function buildLiveWorkspaceSections() {
         }),
         filterTabs: {},
         chartTabs: {},
-        // 每个 Shell 带四个互不相同的事实，不能混着发：
-        //   hostGroupId  挂靠在哪个分组的**下层行**（"归属"，容器级）
-        //   hostPaneId   住进该容器的**哪一条 pane 行**（pane 级，单组自由分屏用）
-        //   columnId     停在哪一列的**列首行**（未归属时才有意义）
-        //   columnMode   是否**自成独立列**
-        // 四个字段在 tabState 上就是这四个名字，这里直接转出，不再拆成两组同义名。
-        shellTabs: shellTabs.map(tab => {
-            const owner = getShellTabOwner(tab);
-            return {
-                id: tab.id,
-                title: tab.title,
-                hostGroupId: owner,
-                // 只在归属某组时有意义：`hostPaneId` 必须落在该组真实的 pane 上，
-                // 否则布局已变形（关分屏/删 pane）时这个 id 指向不存在的行，
-                // `layoutRowsOf` 会把它静默丢掉，用户看到的就是「标签消失」。
-                hostPaneId: owner && typeof tab.hostPaneId === 'string'
-                    && hostPaneIdBelongsToGroup(tab.hostPaneId, owner)
-                    ? tab.hostPaneId
-                    : null,
-                columnMode: tab.columnMode === 'ownColumn' ? 'ownColumn' : 'row',
-                // 归属某组时它不进列首行，columnId 无意义；未归属时用渲染层唯一的落列判据
-                // `resolveShellTopRowColumn()`（记忆列 → 唯一可见列 → 激活列）而不是裸读
-                // columnId：后者首次为 null，裸读会把它算到第一列。
-                columnId: owner === null ? resolveShellTopRowColumn(tab) : null
-            };
-        }),
+        shellTabs: shellTabs.map(tab => ({ id: tab.id, title: tab.title,
+            hostGroupId: tab.hostGroupId || null, hostPaneId: tab.hostPaneId || null,
+            columnMode: tab.columnMode, columnId: tab.columnId })),
         // 焦点是模型状态：显式焦点还有效就用它，否则回落到激活分组自己的激活叶。
         focusedTabId: focusedTabIdForProjection(),
-        split: {
-            // **不用 `groupIds.length > 1` 当总闸**：那只覆盖「分组与分组并排」。
-            // 单分组下把 Shell 独立成列（方案 1）同样需要列级分屏生效，否则
-            // `layoutColumns` 的非分屏分支只返回一列，`ownColumn` 写了也看不出任何变化
-            // （实测 `doc-1263.txt`：columnMode 已是 ownColumn，columnCount 仍是 1）。
-            // 判据改成「分屏开关已开 且 至少有两个真实存在的列 key」，
-            // 多分组老路径不受影响（`groupIds` 里本来就是各分组 id）。
-            enabled: isColumnSplitActive(),
-            orientation: groupWorkspaceSplit.orientation,
-            sizes: { ...(groupWorkspaceSplit.sizes || {}) }
-        }
+        split: { enabled: false, orientation: 'horizontal', sizes: {} }
     };
     serialGroups.forEach(group => {
         sections.filterTabs[group.id] = filterTabsStore.getList(group.id).map(tab => ({ id: tab.id, title: tab.title }));
@@ -5369,8 +3985,8 @@ let workspaceLayoutSaveTimer = null;
 function buildWorkspaceConfigSnapshot() {
     const workspaceLayoutState = serializeWorkspaceLayout(workspaceModel);
     const groups = serialGroups.map(group => {
-        const layout = workspaceLayoutState.groups.find(item => item.id === group.id);
-        return { ...group, ...(layout ? { panes: layout.panes, paneSplit: { ...layout.paneSplit, activePaneId: layout.activePaneId } } : {}),
+        const { panes, paneSplit, workspaceLayout, ...business } = group;
+        return { ...business,
             filterTabs: filterTabsStore.getList(group.id).map(serializeFilterTab),
             chartTabs: chartTabsStore.getList(group.id).map(serializeChartTab) };
     });
@@ -5416,9 +4032,8 @@ function initializeWorkspaceModel() {
     return true;
 }
 
-// 投影出当前工作区的模型树。渲染与影子判据共用。
 function buildLiveWorkspace() {
-    return workspaceModel || projectWorkspace(buildLiveWorkspaceSections());
+    return workspaceModel;
 }
 
 // 只供 CDP 验证脚本调用，不在渲染路径上。
@@ -5428,98 +4043,35 @@ function buildLiveWorkspace() {
 // 因为判据必须是「用户眼睛能看到什么」，而不是某个属性被赋了什么值。
 window.__readTabModelPlan = () => {
     const shown = el => Boolean(el) && el.offsetParent !== null
-        && el.getBoundingClientRect().width > 0
-        && el.getBoundingClientRect().height > 0;
-
-    const sections = buildLiveWorkspaceSections();
-
-    // 一级 TabRow 有两种宿主，必须都算：
-    //   .group-column > .group-tab-row   多分组/分屏时的分组标签行
-    //   .pane-tabs-header                单分组（扁平）时唯一的一层标签行
-    // 只认前者的话，单分组时这里永远是空集，断言就恒假。
-    const groupRows = Array.from(document.querySelectorAll('.group-tab-row'))
-        .filter(row => shown(row) && row.parentElement
-            && row.parentElement.classList.contains('group-column'));
-    const paneHeaders = Array.from(document.querySelectorAll('.pane-tabs-header')).filter(shown);
-
-    // 一级行里的 Shell 只在两种宿主里算：
-    //   .serial-group-tab-list > .main-tab    分组列首行（topRow）
-    //   .pane-tabs-header > .pane-tabs-list   仅在扁平（没有分组标签行）时，那条 pane 行就是一级行
-    // **不能**把 pane 标题里所有 Shell 都算进来：归属某组的 Shell 住在该组的下层行，
-    // 它属于 subRow（模型 rows），算进一级行令牌会让「模型少一个」变成假失败。
-    const topRowShellTabs = [
-        ...groupRows.flatMap(row => Array.from(
-            row.querySelectorAll('.serial-group-tab-list > .main-tab[data-target^="tab-shell-"]')
-        )),
-        ...(groupRows.length === 0
-            ? paneHeaders.flatMap(h => Array.from(h.querySelectorAll('.main-tab[data-target^="tab-shell-"]')))
-            : [])
-    ].filter(shown).map(b => b.dataset.target);
-
-    const live = {
-        visibleColumns: Array.from(document.querySelectorAll('#group-workspace > .group-column'))
-            .filter(shown)
-            .map(el => el.id),
-        groupRowGroupTabs: groupRows.flatMap(row =>
-            Array.from(row.querySelectorAll('.serial-group-tab')).map(b => b.dataset.groupId)),
-        groupRowShellTabs: topRowShellTabs,
-        // 只在「没有分组标签行」时才有意义：那种形态下这一层就是一级 TabRow。
-        // 多分组时同样叫 .pane-tabs-list 的列表里装的是 subRow 子项，不能算进来。
-        familyRowTabs: groupRows.length > 0 ? []
-            : Array.from(document.querySelectorAll('.pane-tabs-list'))
-                .flatMap(list => Array.from(list.children))
-                .filter(el => el.classList.contains('main-tab') && shown(el))
-                .map(el => el.dataset.target),
-        // 分屏时页面会把未归属 Shell 的面板盖在某个分组面板上，于是同时出现两个
-        // 带 active 的面板。叠层是 S4 要删除的机制，这里只记录事实。
-        overlaidPanels: Array.from(document.querySelectorAll('.main-tab-pane.active'))
-            .filter(shown)
-            .map(el => el.id),
-        visiblePanels: Array.from(document.querySelectorAll('.main-tab-pane.active'))
-            .filter(shown)
-            .map(el => el.id),
-        // 可见的 subRow 行数（第二维）。严格判据用它把模型的 rows 与真实 DOM 对齐。
-        // 只数可见的 .pane-tabs-header：分屏时每个 pane 各一条，收起/隐藏的不算。
-        subRowCount: paneHeaders.length
-    };
-
-    let plan = null;
-    let error = null;
-    let ws = null;
-    try {
-        ws = buildLiveWorkspace();
-        plan = tabModel.buildRenderPlan(ws);
-    } catch (err) {
-        error = String(err && err.message || err);
-        console.warn('[TABS SHADOW] buildRenderPlan threw:', error);
-    }
-
+        && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
+    const ws = buildLiveWorkspace();
+    const plan = ws ? tabModel.buildRenderPlan(ws) : null;
+    const stacks = Array.from(document.querySelectorAll('.layout-stack')).filter(shown);
+    const headers = stacks.map(element => ({ element, header: element.querySelector('.pane-tabs-header') }))
+        .filter(entry => shown(entry.header));
+    const buttons = entry => Array.from(entry.header.querySelector('.pane-tabs-list')?.children || []).filter(shown);
+    const groupRows = headers.filter(entry => entry.header.classList.contains('group-tab-row'));
+    const visiblePanels = Array.from(document.querySelectorAll('.main-tab-pane.active')).filter(shown).map(el => el.id);
     return {
         activeGroupId,
-        // 渲染层要区分「这个 id 是容器还是叶子」，供验证脚本把容器映射成分组标签令牌。
-        containerIds: Object.keys(ws ? ws.tabs : {})
-            .filter(id => Array.isArray(ws.tabs[id].panes)),
-        plan: plan && {
-            columns: plan.columns.map(column => ({
-                columnId: column.columnId,
-                containerId: column.containerId,
-                isFamily: column.isFamily,
-                tabIds: column.tabItems.map(tab => tab.id),
-                rows: column.rows.map(row => ({
-                    paneId: row.paneId,
-                    tabIds: row.tabs.map(tab => tab.id),
-                    activeTabId: row.activeTabId
-                })),
-                panelIds: column.panelIds,
-                panelIdsAll: column.panelIdsAll
-            })),
-            panelIds: plan.panelIds
+        containerIds: ws ? tabModel.containerIds(ws) : [],
+        plan: plan && { root: plan.root, columns: plan.columns.map(column => ({
+            columnId: column.columnId, containerId: column.containerId, isFamily: column.isFamily,
+            tabIds: column.tabItems.map(tab => tab.id), rows: column.rows.map(row => ({
+                paneId: row.paneId, tabIds: row.tabs.map(tab => tab.id), activeTabId: row.activeTabId
+            })), panelIds: column.panelIds, panelIdsAll: column.panelIdsAll
+        })), panelIds: plan.panelIds },
+        live: {
+            visibleColumns: stacks.map(element => element.dataset.layoutNodeId),
+            groupRowGroupTabs: groupRows.flatMap(entry => buttons(entry).filter(button => button.dataset.groupId).map(button => button.dataset.groupId)),
+            groupRowShellTabs: headers.filter(entry => !entry.element.dataset.groupId).flatMap(entry => buttons(entry)
+                .filter(button => ws?.tabs[button.dataset.target]?.kind === 'shell').map(button => button.dataset.target)),
+            familyRowTabs: ws && tabModel.isFlat(ws) ? headers.flatMap(entry => buttons(entry).map(button => button.dataset.target)) : [],
+            overlaidPanels: visiblePanels, visiblePanels,
+            subRowCount: headers.filter(entry => !entry.header.classList.contains('group-tab-row') && plan?.root.rowRole !== 'root').length
         },
-        live,
-        error,
-        // 投影输入原样带出，供诊断脚本定位「模型与 DOM 不一致到底是数据错还是模型错」。
-        // 只读快照，不持有引用。
-        sections: JSON.parse(JSON.stringify(sections))
+        error: null,
+        sections: JSON.parse(JSON.stringify(buildLiveWorkspaceSections()))
     };
 };
 
@@ -5780,70 +4332,6 @@ function getVisibleGroupRow() {
     return document.getElementById(GROUP_TAB_BAR_ID);
 }
 
-// 某一列的容器当前是否真的占着屏幕。Shell 的按钮/面板只能搬进可见列。
-function isGroupColumnVisible(groupId) {
-    if (groupId === SHELL_COLUMN_GROUP_ID) {
-        const column = document.getElementById(shellColumnId());
-        return Boolean(column) && !column.hidden;
-    }
-    const column = document.getElementById(groupWorkspaceEntryId(groupId));
-    return Boolean(column) && !column.hidden;
-}
-
-// 当前**可见**集合里恰好只有一个分组时返回它，否则 null。
-//
-// 未归属的 Shell 要「与所有串口标签按行分屏」：屏幕上只有一列时就用那一列的列首行，
-// 这与用户给的布局图一致（COM1 / SHELL1 / SHELL2 同一行）。
-function getSingleVisibleGroupId() {
-    if (workspaceModel) {
-        const columns = tabModel.layoutColumns(workspaceModel);
-        return columns.length === 1 ? columns[0].containerId : null;
-    }
-    const visible = groupWorkspaceSplit.enabled
-        ? groupWorkspaceSplit.groupIds.filter(id => serialGroups.some(group => group.id === id))
-        : [activeGroupId];
-    return visible.length === 1 ? visible[0] : null;
-}
-
-// 一列的「列 key」当前是否可见——分组列与 Shell 独立列都要算。
-//
-// 未归属 Shell 的落点判定用它：分屏出多列后没有「唯一那一列」，只能记住上次落在哪一列。
-//
-// **判据只有一个：这一列的真实容器存在且未被隐藏。** 早期这里用的是
-// `groupWorkspaceSplit.groupIds.includes(columnId)`——那是「只有参与分屏的分组可见」
-// 的旧语义，已随渲染翻转删除（列集合只由容器决定，见 TAB_ARCHITECTURE §4.1）。
-// 留着旧判据的后果：五列全在屏幕上时，只有被记进 groupIds 的那两列算「可见」，
-// 于是记忆在 g-1 的 Shell 会被改成当前激活列 g-5——正是「Shell 跟着激活分组跑」
-// 那个历史缺陷（实测：shape-c-top-row-shell-in-group-row）。
-function isVisibleColumnKey(columnId) {
-    if (!columnId) return false;
-    return isGroupColumnVisible(columnId);
-}
-
-// 未归属 Shell 的「上层行」落在哪一列。
-//
-// **纯读：绝不写 tabState.columnId。** 这个函数被只读投影器 buildLiveWorkspaceSections
-// 调用，在里面写状态就是「投影改变模型」——历史缺陷就是这么产生的：仅点一下分组标签
-// （未分屏、目标列当时 hidden），Shell 的 columnId 就被改写成激活组，随后分组级分屏
-// 时三个 Shell 全部跟着串口 2 组跑（实测 diag914 C1/C2）。
-//
-// 判定顺序：
-//   1. 已有列记忆且那一列还在 → 就用它。**不看它当前是否可见**：未分屏时非激活列是
-//      hidden 的，拿「可见性」否否定记忆就是「Shell 跟着激活分组跑」的根因。
-//   2. 从未记过列（新 Shell）→ 只用激活组。
-//   3. 记的列已被删除（分组不存在）→ 回落到激活组。
-function resolveShellTopRowColumn(tabState) {
-    const remembered = tabState?.columnId;
-    if (isColumnKeyAlive(remembered)) return remembered;
-    return getSingleVisibleGroupId() || activeGroupId;
-}
-
-// 一个列 key 是否还是个真实存在的列（模板只用于「记忆是否失效」判定，不看 hidden）。
-function isColumnKeyAlive(columnId) {
-    if (typeof columnId !== 'string' || !columnId) return false;
-    if (columnId === SHELL_COLUMN_GROUP_ID) return true;
-    return serialGroups.some(group => group.id === columnId);
-}
 
 function isShellTabId(tabId) {
     return typeof tabId === 'string' && /^tab-shell-\d+$/.test(tabId);
@@ -5947,20 +4435,6 @@ function closeSerialGroup(groupId, { confirm = true } = {}) {
     reclaimGroupAddButton();
     // 新建 Shell 按钮同理：它可能正住在这个即将删除的列首行里（分屏时每列一个可选宿主）。
     reclaimShellAddButton();
-    // Shell 如果正归在这个即将被删的分组里，必须先把它的归属摘掉。
-    // 面板在列内的 pane-1 内容区里，直接 remove 整个列会把 xterm 节点一起删掉，
-    // 而 shellTabs 仍持有已脱离文档的引用——之后无论怎么切都看不到终端，也不报错。
-    //
-    // 归属是**逐标签**的：只要有任意一个 Shell 归在这组就得摘，改回不归属。
-    // （早期这里写的是 `if (shellMovedOut)`，那个变量在本次删除叠层时已被移除，
-    //  条件永远成立，因此改为无条件遍历。）
-    shellTabs.forEach(tabState => {
-        if (getShellTabOwner(tabState) === id) tabState.hostGroupId = null;
-    });
-    // 外层容器不能现在就拿掉：Shell 的按钮与面板可能正住在这个列的标签行 / 内容区里。
-    // 先重画一次（这一轮会把还活着的节点搬进现存的列），再删除空容器；
-    // 否则 querySelector 再也找不到那些节点，标签会静默消失。
-    // （历史缺陷：关掉一个分组后，原本停在它列首行的未归属 Shell 全部不见。）
 
     if (!workspaceModel) removeTabFromWorkspace(tabId, { fallbackTabId: mainTabId(REGISTRY_DEFAULT_GROUP_ID), persist: false });
 
@@ -5975,9 +4449,6 @@ function closeSerialGroup(groupId, { confirm = true } = {}) {
     if (wasControlGroup) applyActiveSerialGroup({ fit: false, activateTab: false });
 
     persistSerialGroups();
-    // 分屏集合里可能还列着刚关掉的分组；不清掉会留下一条指向已删除列的比例，
-    // 表现为「关了一个分组，剩下那个只有半宽」。
-    pruneGroupWorkspaceSplit();
     // 先画一轮：把还活着的按钮/面板从旧列里搬出来，并隐藏已删列。
     renderSerialGroupTabBar();
     // 现在旧列里只剩它自己的静态壳，整个拿掉（只删 internal 节点会留下空 flex 条目）。
@@ -6102,25 +4573,7 @@ function getDefaultShellProfileId() {
 }
 
 function persistShellTabs() {
-    if (workspaceModel) { scheduleWorkspaceLayoutSave(); return; }
-    ipcRenderer.send('save-config', {
-        shellTabs: shellTabs.map(tab => ({
-            id: tab.id,
-            title: tab.title || '',
-            paneId: workspaceModel ? getTabPaneId(tab.id) : tab.paneId || getTabPaneId(tab.id),
-            profileId: tab.profileId || '',
-            // 与模型同名的四个字段：归属（容器级）/ 住哪条 pane 行（pane 级）/
-            // 停在哪列 / 是否自成独立列。
-            // 旧键（ownerGroupId / detachedColumn / topRowColumnId）不再写：写入两套名字，
-            // 就会有两个都可能正确的值，而哪一个才是用户拖拽的决定也说不准。
-            hostGroupId: getShellTabOwner(tab),
-            hostPaneId: workspaceModel ? tabModel.paneOfTab(workspaceModel, workspaceModel.tabs[tab.id])?.pane.id || null
-                : typeof tab.hostPaneId === 'string' ? tab.hostPaneId : null,
-            columnMode: (workspaceModel ? workspaceModel.tabs[tab.id]?.columnMode : tab.columnMode) === 'ownColumn' ? 'ownColumn' : 'row',
-            columnId: workspaceModel ? workspaceModel.tabs[tab.id]?.columnId || null
-                : typeof tab.columnId === 'string' ? tab.columnId : null
-        }))
-    });
+    scheduleWorkspaceLayoutSave();
 }
 
 function createShellTab(initialState = {}, targetPaneId = null) {
@@ -6151,7 +4604,7 @@ function createShellTab(initialState = {}, targetPaneId = null) {
     tabBtn.append(shellTitle, shellClose);
     tabBtn.onclick = (e) => {
         if (e.target.closest('.main-tab-close')) return;
-        // Shell 标签始终走默认分组布局，不能走模块级别名（见 switchShellTab 的注释）。
+        // 激活只改模型焦点，不改变 Shell 的业务归属或所在区域。
         switchShellTab(tabId);
     };
     tabBtn.querySelector('.main-tab-close').onclick = () => {
@@ -6221,22 +4674,11 @@ function createShellTab(initialState = {}, targetPaneId = null) {
         hostGroupId: typeof initialState.hostGroupId === 'string' && initialState.hostGroupId
             ? initialState.hostGroupId
             : null,
-        // 住进该容器的**哪一条 pane 行**（pane 级）。单组时 Shell 靠它参与 pane 分屏。
-        // 缺省 null 表示「没指定」：`layoutRowsOf` 会把它并入第一条 pane 行，
-        // 所以旧配置、新建的 Shell 都无需迁移。
+        // 下列旧位置字段只在初始化导入时读取，模型初始化后立即删除。
         hostPaneId: typeof initialState.hostPaneId === 'string' && initialState.hostPaneId
             ? initialState.hostPaneId
             : null,
-        // 未归属时的两种形态：默认与分组标签同级（不新开列），只有被拖到分组标签行才独立成列。
-        // 老配置只有 detachedColumn（没有 columnMode）时按它换算，两边不会分叉。
-        columnMode: initialState.columnMode === 'ownColumn' || initialState.detachedColumn === true
-            ? 'ownColumn' : 'row',
-        // 新建时就把「它停在哪一列」写成事实（它创建在哪个 pane 就属于那一个分组）。
-        //
-        // **不能留 null 等后面推导**：null 的唯一活口是「从未有过列记忆」，而投影时的
-        // 回落是激活组——用户新建三个 Shell 后点一下串口 2 组，三个 Shell 的落列就全
-        // 被改写成 g-1，随后分组级分屏时它们整体被搬进串口 2 列（实测 diag914/920）。
-        // 创建位置是那一刻已知的事实，写下来就无需再猜。
+        // 兼容旧配置的专列/列记忆；运行态位置只由 layout.root 决定。
         columnId: (() => {
             if (typeof initialState.columnId === 'string' && initialState.columnId) return initialState.columnId;
             const columnGroupId = resolveGroupIdFromPaneId(resolvedPaneId);
@@ -8465,8 +6907,6 @@ function applyMainInputConfig(config) {
 }
 
 bindMainInputEvents();
-bindWorkspaceSplitter();
-bindGroupWorkspaceSplitter();
 bindWorkspacePaneTransitionFit();
 bindWorkspaceContentActivation();
 bindShellSidebarEvents();

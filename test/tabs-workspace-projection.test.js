@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { projectWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const { projectWorkspace, importWorkspace } = require('../src/workspace/tabs-workspace-projection');
 const model = require('../src/workspace/tab-model');
 const acceptance = require('./tab-model-acceptance');
 
@@ -114,7 +114,7 @@ test('projected workspace satisfies every invariant', () => {
     sections.filterTabs.g2 = [{ id: 'g2-f1', title: 'f' }];
     sections.shellTabs = [{ id: 's1', title: 's' }];
 
-    const ws = projectWorkspace(sections);
+    const ws = importWorkspace(sections);
     const diag = model.withDiagnostics(ws);
     assert.deepEqual(acceptance.assertAll(diag), []);
 });
@@ -134,7 +134,7 @@ test('flat single-group projection puts main/filter/shell on one row', () => {
     sections.filterTabs.default = [{ id: 'f1', title: 'f' }];
     sections.shellTabs = [{ id: 's1', title: 's' }];
 
-    const ws = projectWorkspace(sections);
+    const ws = importWorkspace(sections);
     const plan = model.buildRenderPlan(ws);
     assert.equal(plan.columns.length, 1);
     const ids = plan.columns[0].tabItems.map(item => item.id);
@@ -155,7 +155,7 @@ test('two groups with column split give one column each', () => {
     });
     sections.split.enabled = true;
 
-    const ws = projectWorkspace(sections);
+    const ws = importWorkspace(sections);
     const plan = model.buildRenderPlan(ws);
     assert.equal(plan.columns.length, 2);
     assert.ok(plan.columns.every(col => col.isFamily === false));
@@ -246,10 +246,11 @@ test('runtime import restores a shell-only pane as ordinary membership without c
     const before = JSON.stringify(sections);
     const ws = importWorkspace(sections);
     assert.equal(JSON.stringify(sections), before);
-    assert.deepEqual(ws.tabs.default.panes[1].tabIds, ['tab-shell-1']);
-    assert.equal(ws.tabs.default.panes[1].activeTabId, 'tab-shell-1');
-    assert.equal(ws.tabs['tab-shell-1'].parentId, 'default');
-    assert.equal(ws.tabs['tab-shell-1'].hostGroupId, null);
+    const hit = model.locateTab(ws, 'tab-shell-1');
+    assert.deepEqual(hit.stack.items.map(item => item.tabId), ['tab-shell-1']);
+    assert.equal(hit.stack.activeItemId, 'tab-shell-1');
+    assert.equal(ws.tabs['tab-shell-1'].parentId, null);
+    assert.equal(ws.tabs['tab-shell-1'].hostGroupId, undefined);
     assert.deepEqual(model.buildRenderPlan(ws).panelIds, ['tab-main', 'tab-shell-1']);
     assert.deepEqual(acceptance.assertAll(model.withDiagnostics(ws)), []);
 });
@@ -266,7 +267,8 @@ test('runtime import keeps multi-group shells at root and restores declared leaf
     assert.equal(ws.tabs.f1.kind, 'filter');
     assert.equal(ws.tabs.c1.kind, 'chart');
     assert.equal(ws.tabs['tab-shell-1'].parentId, null);
-    assert.equal(ws.tabs['tab-shell-1'].hostGroupId, null);
-    assert.equal(ws.tabs['tab-shell-1'].columnId, 'g2');
+    assert.equal(ws.tabs['tab-shell-1'].hostGroupId, undefined);
+    assert.equal(ws.tabs['tab-shell-1'].columnId, undefined);
+    assert.equal(model.locateTab(ws, 'tab-shell-1').scope, null);
     assert.deepEqual(acceptance.assertAll(model.withDiagnostics(ws)), []);
 });

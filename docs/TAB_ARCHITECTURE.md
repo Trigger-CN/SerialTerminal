@@ -1,16 +1,16 @@
 # 标签体系架构设计：Tab / TabRow / subRow / tabPanel
 
-> **重构修订入口：[MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)**。本文保留旧阶段设计。后续以新方案的显式布局状态、统一动作和模式迁移为实施目标；位置是需要保存的布局数据，不放在业务 Tab 上。单组所有叶标签可自由分屏，多组串口子标签不脱组、Shell 仅在一级栏；旧的“Shell 永远不进 pane”以及“多组 Shell 可进本组 pane”等冲突描述均不再适用。
-
-> **文档定位**：本文描述标签体系的**目标架构**，不是当前实现的说明。
+> **当前规范：[WORKSPACE_LAYOUT_KERNEL.md](WORKSPACE_LAYOUT_KERNEL.md)**，阶段背景见 [MULTI_SERIAL_REFACTOR.md](MULTI_SERIAL_REFACTOR.md)。生产现已使用唯一 `workspaceModel.layout.root` 同构 Split/Stack；菜单、拖拽、局部合并、resize、递归渲染和 schema17/layout2 均接此树。位置属于持久化几何，不放在业务 Tab 上。
 >
-> `MULTI_SERIAL_DESIGN.md` §6A（第 606 行起）描述**当前实现**：两种层数形态、Shell 的三态宿主、`ownerGroupId` / `detachedColumn` / `topRowColumnId` 三个位置字段、`#serial-group-tab-bar` 的单例借位机制。本文描述要替换它的模型。两者是「现状 / 目标」的关系，不是并列规范；按 §11 的 S1–S5 推进期间，以代码实际所处阶段为准。
+> **文档定位**：本文保留 Tab/TabRow/subRow/tabPanel 的历史推演及阶段记录，旧 `panes/paneSplit`、全局 `split.columns`、Shell 三态/借位、旧 collapsed 呈现都不是当前运行态协议。`MULTI_SERIAL_DESIGN.md` §6A 同样是历史实现，不是当前真源。
+>
+> 当前收起标签栏至少需要两个真实 Stack：首条保留展开控件，其余 header 隐藏但选中 panel 不隐藏。单组默认扁平、显式分屏方案 A 保留；多组串口叶不脱 owner、Shell 根级。同格多锚点回单组按完整子树横向等比分支组合，不扁平丢内部几何。自动化和仍待用户手测的边界以新契约 §8 为准。
 >
 > **三处最容易读错的地方，先说清**：
 >
 > 1. **`subRow` 不是每列一条，而是每个 pane 一条**。数量 = `paneSplit.enabled ? panes.length : 1`。组内上下分屏时，同一列里同时存在两条 subRow。
 > 2. **`tabPanel` 才是显示面板**。「TabRow 是显示面板」是笔误；TabRow 与 subRow 都只是标签栏，只有 tabPanel 承载内容。
-> 3. **标签的「位置」不是数据**。Tab 上没有任何「我在第几列／第几行」的字段，全部由 `layoutColumns()` 从 `{ tabs, focusedTabId, split }` 推出。这是本文全部设计的支点。
+> 3. **业务标签不持有几何位置**。当前位置实际存于 `layout.root` 的有序成员、独立节点和比例；TabRow/subRow 只是派生的行角色。下文旧 `{tabs, focusedTabId, split}`/`layoutColumns()` 不是当前可写布局表达。
 
 ## 0. 为什么需要重构
 

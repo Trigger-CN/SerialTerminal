@@ -1,410 +1,221 @@
 'use strict';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const model = require('../src/workspace/tab-model');
+const { model, codec, fixture: business, act, regions } = require('./workspace-tree-fixture');
+const { createDom } = require('./workspace-dom-fixture');
+const { createLayoutRenderer } = require('../src/workspace/layout-renderer');
+const { getHorizontalInsertionIndex } = require('../src/workspace/tab-reorder');
 const { importWorkspace } = require('../src/workspace/tabs-workspace-projection');
-const { groupPaneId, groupWorkspaceRootId, groupSplitterId } = require('../src/serial/serial-group-layout-dom');
-
 const source = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
 function section(start, end) {
-    const offset = source.indexOf(start);
-    const limit = source.indexOf(end, offset);
-    assert.ok(offset >= 0 && limit > offset, `Missing renderer section ${start}`);
-    return source.slice(offset, limit);
+    const offset = source.indexOf(start), limit = source.indexOf(end, offset);
+    assert.ok(offset >= 0 && limit > offset, `Missing renderer section ${start}`); return source.slice(offset, limit);
 }
-
-function fixture() {
-    const nodes = [];
-    const listeners = new Map();
-    const frames = new Map();
-    let frameId = 0;
-    class Element {
-        constructor(id = '', className = '') {
-            this.id = id; this.className = className; this.children = []; this.dataset = {};
-            this.hidden = false; this.parentElement = null; this.rect = { left: 0, top: 0, width: 300, height: 300 };
-            this.style = { removeProperty(name) { delete this[name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())]; } };
-            this.classList = {
-                contains: name => this.className.split(' ').includes(name),
-                toggle: (name, on) => { const list = this.className.split(' ').filter(item => item && item !== name); if (on) list.push(name); this.className = list.join(' '); },
-                add: name => this.classList.toggle(name, true), remove: name => this.classList.toggle(name, false)
-            };
-            nodes.push(this);
-        }
-        appendChild(child) { return this.insertBefore(child, null); }
-        insertBefore(child, before) {
-            if (child === before) return child;
-            if (child.parentElement) child.parentElement.children.splice(child.parentElement.children.indexOf(child), 1);
-            const index = before ? this.children.indexOf(before) : this.children.length;
-            assert.ok(index >= 0, 'Reference node must be a child');
-            this.children.splice(index, 0, child); child.parentElement = this; return child;
-        }
-        get firstChild() { return this.children[0] || null; }
-        get nextSibling() { return this.parentElement?.children[this.parentElement.children.indexOf(this) + 1] || null; }
-        querySelectorAll(selector) {
-            const all = this.children.flatMap(child => [child, ...child.querySelectorAll('*')]);
-            if (selector === '*') return all;
-            if (selector === '.workspace-pane') return all.filter(child => child.classList.contains('workspace-pane'));
-            if (selector.startsWith('[data-pane-left')) {
-                const left = /data-pane-left="([^"]+)"/.exec(selector)?.[1];
-                const right = /data-pane-right="([^"]+)"/.exec(selector)?.[1];
-                return all.filter(child => child.dataset.paneLeft && (!left || child.dataset.paneLeft === left) && (!right || child.dataset.paneRight === right));
-            }
-            return [];
-        }
-        querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-        closest(selector) {
-            if (selector === '.workspace-root' && this.classList.contains('workspace-root')) return this;
-            if (selector === '[data-group-splitter="pane"]' && this.dataset.groupSplitter === 'pane') return this;
-            return this.parentElement?.closest(selector) || null;
-        }
-        getBoundingClientRect() { return this.classList.contains('workspace-splitter') ? { ...this.rect, width: 10, height: 10 } : this.rect; }
+function fn(name) { const start = source.indexOf(`function ${name}(`), end = source.indexOf('\n}', start) + 2; assert.ok(start >= 0 && end > start); return source.slice(start, end); }
+function fixture(multiple = false) {
+    const dom = createDom(), saved = [], synced = [];
+    const context = vm.createContext({ ...dom, workspaceModel: business(multiple), tabModel: model, createLayoutRenderer,
+        GROUP_WORKSPACE_CONTAINER_ID: 'group-workspace', REGISTRY_DEFAULT_GROUP_ID: 'default', activeGroupId: 'default',
+        serialGroups: [{ id: 'default' }, ...(multiple ? [{ id: 'b' }, { id: 'c' }] : [])],
+        isRenderingWorkspace: false, layoutRenderer: null, isDraggingWorkspaceSplitter: false,
+        resolveSerialGroupId: id => id, getSerialGroupById: id => ({ id }), resolveGroupTitleForDisplay: group => group.id,
+        isGroupConnected: () => false, describeGroupTab: group => group, updateGroupTabButtonState() {},
+        buildGroupTabButton: info => { const button = new dom.Element('main-tab serial-group-tab', info.buttonId); button.dataset.groupId = info.id; return button; },
+        bindPaneTabListEvents() {}, tr: value => value, createMaterialIcon: () => new dom.Element('icon'), getDefaultShellProfileId: () => '',
+        getHorizontalInsertionIndex, performance: { now: () => 100 }, fitWorkspaceTerminals: () => saved.push('fit'),
+        persistGroupWorkspaceLayout: id => saved.push(id), persistShellTabs: () => saved.push('shell'),
+        requestWorkspaceTabContextMenu: payload => saved.push(payload), setActionStatus() {},
+        serialGroupRegistry: { setActiveGroup: id => synced.push(id) }, setActiveGroupTabLists() {}, setActiveGroupWorkspace() {},
+        mainTabId: id => id === 'default' ? 'tab-main' : `tab-main-${id}`,
+        getGroupWorkspaceManager: id => ({ getActiveTabId: () => model.groupLayout(context.workspaceModel, id).panes[0].activeTabId }),
+        renderSerialGroupTabBar() {}, applyGroupSerialOptionsToSidebar: id => synced.push(`options:${id}`), syncDisplayPrefCheckboxes() {},
+        getGroupDisplayPrefs: () => ({}), updateSidebarActiveGroupLabel() {}, refreshConnectButtonState() {}, updateFilterModeStatuses() {}
+    });
+    function mount(id) {
+        const button = new dom.Element('main-tab', `${id}-button`); button.dataset.target = id;
+        const panel = new dom.Element('main-tab-pane', id); panel.terminal = {}; panel.pty = {}; dom.host.append(button, panel); return { button, panel };
     }
-    const get = id => nodes.find(node => node.id === id) || null;
-    const root = new Element('workspace-root', 'workspace-root');
-    const legacy = new Element('workspace-splitter', 'workspace-splitter'); root.appendChild(legacy);
-    const createPane = (id, rootId) => { const pane = new Element(id, 'workspace-pane'); if (rootId) get(rootId).appendChild(pane); return pane; };
-    const messages = [];
-    const context = vm.createContext({
-        workspaceModel: null, tabModel: model, REGISTRY_DEFAULT_GROUP_ID: 'default',
-        groupPaneId, groupWorkspaceRootId, groupSplitterId,
-        document: { getElementById: get, createElement: () => new Element(),
-            addEventListener: (name, callback) => { const list = listeners.get(name) || []; list.push(callback); listeners.set(name, list); },
-            removeEventListener: (name, callback) => listeners.set(name, (listeners.get(name) || []).filter(item => item !== callback)) },
-        getPaneDom: get, getGroupTabRow: () => null,
-        createPaneElement: createPane, createGroupPaneElement: (_, id) => createPane(id),
-        workspaceRootEl: root, workspaceSplitterEl: legacy, isDraggingWorkspaceSplitter: false,
-        requestAnimationFrame: callback => { frames.set(++frameId, callback); return frameId; }, cancelAnimationFrame: id => frames.delete(id),
-        fitWorkspaceTerminals: () => {}, persistGroupWorkspaceLayout: id => messages.push(id),
-        getGroupWorkspaceManager: id => ({ isSplitEnabled: () => context.workspaceModel.tabs[id].paneSplit.enabled,
-            getOrientation: () => context.workspaceModel.tabs[id].paneSplit.orientation }),
-        dispatchWorkspaceAction: action => { const result = model.applyWorkspaceAction(context.workspaceModel, action); if (result.ok) context.workspaceModel = result.workspace; return result; }
-    });
-    vm.runInContext(section('function reconcileRows(', '// ── 第 3 步'), context);
-    vm.runInContext(section('function bindWorkspaceSplitter(', '// 分组级分屏的分界条拖动。'), context);
-    return { context, root, legacy, get, nodes, messages, createPane, Element,
-        run: code => vm.runInContext(code, context),
-        emit: (name, event) => (listeners.get(name) || []).slice().forEach(callback => callback({ preventDefault() {}, ...event })) };
+    Object.values(context.workspaceModel.tabs).filter(tab => !model.isContainer(tab)).forEach(tab => mount(tab.id));
+    context.dispatchWorkspaceAction = action => {
+        const result = model.applyWorkspaceAction(context.workspaceModel, action);
+        if (result.ok) { context.workspaceModel = result.workspace; context.renderWorkspace(result.workspace); } return result;
+    };
+    context.setFocusedTab = tabId => context.dispatchWorkspaceAction({ type: 'activate', tabId }).ok;
+    const create = (kind, paneId) => { const id = `new-${kind}`; mount(id);
+        return context.dispatchWorkspaceAction({ type: 'add-leaf', groupId: context.groupIdFromPaneId(paneId) || context.activeGroupId, paneId, options: { id, kind } }); };
+    context.createShellTab = (_, paneId) => create('shell', paneId); context.createFilterTab = (_, paneId) => create('filter', paneId);
+    context.createChartTab = (_, paneId) => create('chart', paneId); context.addSerialGroupFromUi = () => saved.push('add-group');
+    for (const name of ['groupIdFromPaneId', 'groupIdForWorkspaceTab', 'createGroupPaneElement', 'renderWorkspace', 'getWorkspaceTabDropTarget', 'updateWorkspaceTabDrag', 'finishWorkspaceTabDrag']) vm.runInContext(fn(name), context);
+    vm.runInContext(section('const PANE_ACTION_BUTTON_SPECS', 'function fillPaneActionButtons('), context);
+    return { ...dom, context, saved, synced, mount, render: () => context.renderWorkspace(context.workspaceModel),
+        act: action => { const result = context.dispatchWorkspaceAction(action); assert.equal(result.ok, true, result.reason); return result; },
+        read: () => context.workspaceModel, run: code => vm.runInContext(code, context) };
 }
-
-function singleWorkspace() {
-    return importWorkspace({ groups: [{ id: 'default', panes: [
-        { id: 'pane-1', tabIds: ['tab-main', 'f1', 'tab-shell-1'], activeTabId: 'tab-main' }
-    ] }], filterTabs: { default: [{ id: 'f1' }] }, shellTabs: [{ id: 'tab-shell-1' }], focusedTabId: 'tab-main' });
-}
-
-function split(f, tabId, paneId) {
-    const result = model.applyWorkspaceAction(f.context.workspaceModel, { type: 'split-tab', tabId, groupId: 'default', paneId });
-    assert.equal(result.ok, true, result.reason); f.context.workspaceModel = result.workspace;
-}
-
-function render(f) { f.context.plan = model.buildRenderPlan(f.context.workspaceModel); f.run('reconcileRows(plan)'); }
-
-test('production row reconciliation preserves pane nodes, orders N-1 gutters and collapses without empty panes', () => {
-    const f = fixture(); f.context.workspaceModel = singleWorkspace();
-    const first = f.createPane('pane-1', 'workspace-root');
-    const shell = f.createPane('pane-2', 'workspace-root');
-    split(f, 'tab-shell-1', 'pane-2'); split(f, 'f1', 'pane-3'); render(f);
-    const visible = () => f.root.children.filter(node => !node.hidden);
-    assert.deepEqual(visible().map(node => node.id || `${node.dataset.paneLeft}:${node.dataset.paneRight}`),
-        ['pane-1', 'pane-1:pane-3', 'pane-3', 'pane-3:pane-2', 'pane-2']);
-    const before = visible(); render(f);
-    assert.deepEqual(visible(), before);
-    assert.equal(f.get('pane-1'), first); assert.equal(f.get('pane-2'), shell);
-    assert.equal(f.nodes.filter(node => node.id === 'pane-2').length, 1);
-    assert.equal(f.legacy.hidden, true);
-    const result = model.applyWorkspaceAction(f.context.workspaceModel, { type: 'pane-split', groupId: 'default', enabled: false });
-    f.context.workspaceModel = result.workspace; render(f);
-    assert.deepEqual(visible(), [first]);
-    assert.equal(first.style.flexBasis, undefined);
+test('production recursive render preserves nested axes, resources, stable nodes and N-1 gutters', () => {
+    const f = fixture(); f.render(); const main = f.document.getElementById('tab-main'), term = main.terminal;
+    f.act({ type: 'split-tab', tabId: 'tab-shell-1' }); f.act({ type: 'split-tab', tabId: 'f1', direction: 'bottom' });
+    const stacks = f.host.querySelectorAll('.layout-stack'); f.render();
+    assert.deepEqual(f.host.querySelectorAll('.layout-stack'), stacks);
+    assert.equal(f.host.querySelectorAll('.layout-gutter').length, 2);
+    assert.deepEqual(new Set(f.host.querySelectorAll('.layout-split').map(node => node.dataset.orientation)), new Set(['horizontal', 'vertical']));
+    assert.equal(f.document.getElementById('tab-main'), main); assert.equal(main.terminal, term);
+    f.act({ type: 'collapse-all' }); assert.equal(f.host.querySelectorAll('.layout-stack').length, 1);
+    assert.equal(f.host.querySelectorAll('.layout-gutter').length, 0);
 });
-
-test('delegated pane splitter resizes only its adjacent pair and persists the owning group', () => {
-    const f = fixture(); f.context.workspaceModel = singleWorkspace();
-    split(f, 'tab-shell-1', 'pane-2'); split(f, 'f1', 'pane-3'); render(f);
-    f.run('bindWorkspaceSplitter()');
-    const gutter = f.root.children.find(node => node.dataset.paneLeft === 'pane-3' && !node.hidden);
-    f.get('pane-3').rect = { left: 300, top: 0, width: 300, height: 300 };
-    f.get('pane-2').rect = { left: 610, top: 0, width: 300, height: 300 };
-    f.emit('pointerdown', { target: gutter });
-    f.emit('pointermove', { clientX: 720, clientY: 0 });
-    f.emit('pointerup', {});
-    const sizes = f.context.workspaceModel.tabs.default.paneSplit.sizes;
-    assert.ok(Math.abs(sizes['pane-1'] - 1 / 3) < 1e-12);
-    assert.ok(Math.abs(sizes['pane-3'] - 0.7 * 2 / 3) < 1e-12);
-    assert.ok(Math.abs(sizes['pane-2'] - 0.3 * 2 / 3) < 1e-12);
-    assert.deepEqual(f.messages, ['default']);
+test('production gutter dispatches a real adjacent resize and final fit after release', () => {
+    const f = fixture(); f.act({ type: 'split-tab', tabId: 'tab-shell-1' }); f.act({ type: 'split-tab', tabId: 'f1', direction: 'bottom' });
+    const outer = f.read().layout.root, inner = outer.children[0], before = structuredClone(outer.weights);
+    const bar = f.host.querySelectorAll('.layout-gutter').find(node => node.dataset.splitNodeId === inner.id);
+    bar.emit('pointerdown', { button: 0, clientY: 200 }); f.emit('pointermove', { clientY: 240 }); f.flush();
+    assert.deepEqual(f.read().layout.root.weights, before); assert.notDeepEqual(model.tree.find(f.read().layout.root, inner.id).node.weights, inner.weights);
+    f.emit('pointerup', {}); assert.equal(f.context.isDraggingWorkspaceSplitter, false); assert.equal(f.saved.at(-1), 'fit');
 });
-
-test('moving a shared-column pane reuses its DOM and does not leave duplicate identities', () => {
-    const f = fixture(); f.context.workspaceModel = singleWorkspace();
-    const otherRoot = new f.Element('workspace-root-g-1', 'workspace-root');
-    const pane = f.createPane('pane-1-g-1', 'workspace-root');
-    f.context.plan = { tabBarVisible: true, columns: [{ domKey: 'g-1', containerId: 'g-1', rows: [
-        { paneId: pane.id, tabs: [], activeTabId: 'tab-main-g-1' }
-    ], splitEnabled: false, orientation: 'horizontal', paneSizes: {} }] };
-    f.run('reconcileRows(plan)');
-    assert.equal(pane.parentElement, otherRoot);
-    assert.equal(f.nodes.filter(node => node.id === pane.id).length, 1);
+test('production group moves reuse content and restore all business nodes after anchor disposal', () => {
+    const f = fixture(true); f.render(); const panel = f.document.getElementById('tab-main-b'), term = panel.terminal;
+    f.act({ type: 'split-group', groupId: 'b' }); f.act({ type: 'merge', groupId: 'b' });
+    assert.equal(f.document.getElementById('tab-main-b'), panel); assert.equal(panel.terminal, term);
+    f.act({ type: 'remove-group', groupId: 'b' }); f.act({ type: 'remove-group', groupId: 'c' });
+    assert.equal(f.host.querySelectorAll('.serial-group-tab').length, 0);
+    assert.equal(f.host.querySelectorAll('.main-tab-pane').filter(node => node.id === 'tab-main').length, 1);
 });
-
-
 test('production fit skips hidden panels and sends final Shell size after dragging stops', () => {
-    const frames = []; const sent = []; const fitted = [];
-    const panel = (active = true, visible = true, width = 300) => ({
-        classList: { contains: () => active }, offsetParent: visible ? {} : null,
-        getBoundingClientRect: () => ({ width, height: 200 })
-    });
-    const panels = new Map([['tab-main', panel()], ['tab-main-g-1', panel(true, false)],
-        ['filter', panel(false)], ['chart', panel()], ['shell', panel()], ['zero', panel(true, true, 0)]]);
-    const shell = { id: 'shell', term: { cols: 80, rows: 24 }, lastFitCols: 80, lastFitRows: 24,
-        fitAddon: { fit() { fitted.push('shell'); shell.term.cols = 42; shell.term.rows = 12; } } };
-    const context = vm.createContext({ workspaceFitFrame: null, requestAnimationFrame: fn => (frames.push(fn), frames.length),
-        document: { getElementById: id => panels.get(id) }, serialGroups: [{ id: 'default' }, { id: 'g-1' }],
-        mainTabId: id => id === 'default' ? 'tab-main' : 'tab-main-g-1',
-        serialRuntimes: new Map(['default', 'g-1'].map(id => [id, { fitAddon: { fit: () => fitted.push(id) } }])),
+    const frames = [], sent = [], fitted = [];
+    const panel = (active = true, visible = true, width = 300) => ({ classList: { contains: () => active }, offsetParent: visible ? {} : null, getBoundingClientRect: () => ({ width, height: 200 }) });
+    const panels = new Map([['tab-main', panel()], ['tab-main-b', panel(true, false)], ['filter', panel(false)], ['chart', panel()], ['shell', panel()], ['zero', panel(true, true, 0)]]);
+    const shell = { id: 'shell', term: { cols: 80, rows: 24 }, lastFitCols: 80, lastFitRows: 24, fitAddon: { fit() { fitted.push('shell'); shell.term.cols = 42; shell.term.rows = 12; } } };
+    const context = vm.createContext({ workspaceFitFrame: null, requestAnimationFrame: callback => (frames.push(callback), frames.length), document: { getElementById: id => panels.get(id) },
+        serialGroups: [{ id: 'default' }, { id: 'b' }], mainTabId: id => id === 'default' ? 'tab-main' : 'tab-main-b',
+        serialRuntimes: new Map(['default', 'b'].map(id => [id, { fitAddon: { fit: () => fitted.push(id) } }])),
         filterTabsStore: { getList: () => [{ id: 'filter', fitAddon: { fit: () => fitted.push('filter') } }] },
         chartTabsStore: { getList: id => id === 'default' ? [{ id: 'chart', view: { resize: () => fitted.push('chart') } }] : [] },
-        shellTabs: [shell, { id: 'zero', fitAddon: { fit: () => fitted.push('zero') } }],
-        isDraggingWorkspaceSplitter: true, ipcRenderer: { send: (channel, payload) => sent.push({ channel, ...payload }) }
-    });
-    vm.runInContext(section('function fitWorkspaceTerminals(', 'function getPaneById('), context);
+        shellTabs: [shell, { id: 'zero', fitAddon: { fit: () => fitted.push('zero') } }], isDraggingWorkspaceSplitter: true,
+        ipcRenderer: { send: (channel, payload) => sent.push({ channel, ...payload }) } });
+    vm.runInContext(fn('fitWorkspaceTerminals'), context);
     const fit = () => { vm.runInContext('fitWorkspaceTerminals(); fitWorkspaceTerminals()', context); assert.equal(frames.length, 1); frames.shift()(); };
     fit(); assert.deepEqual(fitted, ['default', 'chart', 'shell']); assert.equal(sent.length, 0);
     context.isDraggingWorkspaceSplitter = false; fit();
-    assert.deepEqual(sent, [{ channel: 'resize-shell-tab', tabId: 'shell', cols: 42, rows: 12 }]);
-    fit(); assert.equal(sent.length, 1);
+    assert.deepEqual(sent, [{ channel: 'resize-shell-tab', tabId: 'shell', cols: 42, rows: 12 }]); fit(); assert.equal(sent.length, 1);
 });
-
-test('production drag completion shares atomic move admission and ignores missing drop targets', () => {
-    const f = fixture(); const saved = [];
-    f.context.workspaceModel = singleWorkspace(); split(f, 'tab-shell-1', 'pane-2');
-    Object.assign(f.context, { serialGroups: [{ id: 'default' }], performance: { now: () => 100 },
-        persistGroupWorkspaceLayout: id => saved.push(id), persistShellTabs: () => saved.push('shell') });
-    f.run(section('function finishWorkspaceTabDrag(', '// 跨分组移动标签必须走'));
-    const button = { classList: { remove() {} }, dataset: {} };
-    const drag = target => { f.context.drag = { tabId: 'tab-shell-1', tabButton: button, dragging: true, ...target }; f.run('finishWorkspaceTabDrag(drag)'); };
-    const original = f.context.workspaceModel;
-    drag({ targetPaneId: null, insertionIndex: null });
-    assert.equal(f.context.workspaceModel, original); assert.equal(saved.length, 0);
-    drag({ targetGroupId: 'default', targetPaneId: 'pane-1', insertionIndex: 1 });
-    assert.ok(f.context.workspaceModel.tabs.default.panes[0].tabIds.includes('tab-shell-1'));
-    assert.deepEqual(saved, ['default', 'shell']); assert.equal(button.dataset.suppressClickUntil, '400');
-    const added = model.applyWorkspaceAction(f.context.workspaceModel, { type: 'add-group', options: { id: 'g-1', groupId: 'g-1', mainId: 'tab-main-g-1', paneIds: ['pane-1-g-1'] } });
-    assert.equal(added.ok, true); assert.ok(added.workspace.tabs['g-1']); f.context.workspaceModel = added.workspace;
-    const beforeRejected = f.context.workspaceModel; saved.length = 0;
-    drag({ targetGroupId: 'g-1', targetPaneId: 'pane-1-g-1', insertionIndex: 0 });
-    assert.equal(f.context.workspaceModel, beforeRejected); assert.equal(saved.length, 0);
+test('production drag completion moves only to an existing admitted Stack and ignores stale targets', () => {
+    const f = fixture(); f.act({ type: 'split-tab', tabId: 'tab-shell-1' });
+    const button = f.document.querySelector('.main-tab[data-target="tab-shell-1"]');
+    const drag = targetNodeId => { f.context.finishWorkspaceTabDrag({ tabId: 'tab-shell-1', tabButton: button, dragging: true, targetNodeId, insertionIndex: 1 }); };
+    const before = f.read(); drag(null); drag('missing'); assert.equal(f.read(), before);
+    const target = model.locateTab(f.read(), 'tab-main').stack.id; drag(target);
+    assert.equal(model.locateTab(f.read(), 'tab-shell-1').stack.id, target); assert.equal(button.dataset.suppressClickUntil, '400');
+    f.act({ type: 'add-group', options: { id: 'b', mainId: 'mb' } });
+    const prior = f.read(); drag(model.locateTab(prior, 'mb').stack.id); assert.equal(f.read(), prior);
 });
-
-test('production close-group-split menu reads Shell placement from the active model', async () => {
-    const ws = singleWorkspace();
-    const added = model.applyWorkspaceAction(ws, { type: 'add-group', options: { id: 'g-1', groupId: 'g-1', mainId: 'tab-main-g-1', paneIds: ['pane-1-g-1'] } });
-    assert.equal(added.ok, true); assert.ok(added.workspace.tabs['g-1']);
-    const placed = model.applyWorkspaceAction(added.workspace, { type: 'shell-placement', tabId: 'tab-shell-1', placement: { columnMode: 'ownColumn' } });
-    assert.equal(placed.ok, true);
-    const context = vm.createContext({ workspaceModel: placed.workspace, activeGroupId: 'default', shellTabs: [{ id: 'tab-shell-1', columnMode: 'row' }],
-        resolveSerialGroupId: id => id, setActionStatus: () => {}, filterTabsStore: {}, chartTabsStore: {},
-        setShellColumnModeInModel: (tabId, columnMode) => {
-            const result = model.applyWorkspaceAction(context.workspaceModel, { type: 'shell-placement', tabId, placement: { columnMode } });
-            assert.equal(result.ok, true); context.workspaceModel = result.workspace;
-        }, setGroupWorkspaceSplit: enabled => { context.workspaceModel = model.applyWorkspaceAction(context.workspaceModel, { type: 'column-split', enabled }).workspace; }
-    });
-    const start = source.indexOf('async function handleTerminalContextMenuAction(');
-    const end = source.indexOf('\nfunction ', start + 1);
-    assert.ok(end > start); vm.runInContext(source.slice(start, end), context);
-    await vm.runInContext("handleTerminalContextMenuAction({action:'close-group-split',terminalType:'group',groupId:'default'})", context);
-    assert.equal(context.workspaceModel.tabs['tab-shell-1'].columnMode, 'row');
-    assert.equal(model.layoutColumns(context.workspaceModel).length, 1);
+test('production local group merge leaves independent Shell region, resources and selection unchanged', async () => {
+    const f = fixture(true); f.act({ type: 'split-group', groupId: 'b' });
+    f.act({ type: 'split', source: { tabId: 'tab-shell-1' }, target: { nodeId: model.locateTab(f.read(), 'b').stack.id }, direction: 'right' });
+    const shell = structuredClone(model.locateTab(f.read(), 'tab-shell-1').stack), rect = regions(f.read())['tab-shell-1'];
+    vm.runInContext(section('async function handleTerminalContextMenuAction(', '\nfunction '), f.context);
+    await f.context.handleTerminalContextMenuAction({ action: 'close-group-split', terminalType: 'group', groupId: 'b' });
+    assert.deepEqual(model.locateTab(f.read(), 'tab-shell-1').stack, shell); assert.deepEqual(regions(f.read())['tab-shell-1'], rect);
+    assert.ok(f.read().tabs.b); assert.equal(model.tree.stacks(f.read().layout.root).length, 2);
 });
-
-
-test('production button ordering converges in one pass for every four-tab permutation', () => {
-    const f = fixture();
-    f.run(section('function orderButtons(', '// ── 第 4 步'));
-    const list = new f.Element('tabs');
-    const buttons = ['main', 'filter', 'chart', 'shell'].map(id => new f.Element(id));
-    Object.defineProperty(f.Element.prototype, 'nextElementSibling', { get() { return this.nextSibling; } });
+test('production ordering converges in one pass for all four-tab permutations', () => {
+    const f = fixture(); f.render(); const list = f.host.querySelector('.pane-tabs-list'), buttons = list.children.slice();
+    const first = buttons.slice(0, 4), rest = buttons.slice(4);
     const permutations = items => items.length ? items.flatMap((item, i) => permutations(items.filter((_, j) => i !== j)).map(tail => [item, ...tail])) : [[]];
-    for (const order of permutations(buttons)) {
-        order.forEach(button => list.appendChild(button));
-        f.context.list = list; f.context.buttons = buttons;
-        f.run('orderButtons(list, buttons)');
-        assert.deepEqual(list.children, buttons, order.map(button => button.id).join(','));
+    for (const order of permutations(first)) { [...order, ...rest].forEach(button => list.appendChild(button)); f.render(); assert.deepEqual(list.children, buttons); }
+});
+test('production root reconciliation keeps interleaved group/Shell order after local merge', () => {
+    const f = fixture(true); f.render(); const root = model.locateTab(f.read(), 'b').stack.id;
+    f.act({ type: 'move', tabId: 'tab-shell-1', target: { nodeId: root, index: 1 } });
+    f.act({ type: 'split-group', groupId: 'b' }); f.act({ type: 'merge', groupId: 'b' });
+    const list = f.document.getElementById(root).querySelector('.pane-tabs-list');
+    assert.deepEqual(list.children.map(button => button.dataset.target || button.dataset.groupId), f.read().layout.root.items.map(item => item.tabId));
+});
+test('delegated visible-content activation updates sidebar owner for main/filter/chart and preserves Shell placement', () => {
+    const f = fixture(true); f.act({ type: 'split-group', groupId: 'c' });
+    f.mount('chart-c'); f.act({ type: 'add-leaf', groupId: 'c', options: { id: 'chart-c', kind: 'chart' } });
+    vm.runInContext(fn('applyActiveSerialGroup'), f.context); vm.runInContext(fn('bindWorkspaceContentActivation'), f.context); f.context.bindWorkspaceContentActivation();
+    const shell = structuredClone(model.locateTab(f.read(), 'tab-shell-1').stack);
+    for (const id of ['tab-main-c', 'fc', 'chart-c', 'tab-main']) {
+        f.act({ type: 'activate', tabId: id }); f.context.activeGroupId = id === 'tab-main' ? 'c' : 'default';
+        const panel = f.document.getElementById(id); f.emit(id === 'fc' ? 'focusin' : 'click', { target: panel });
+        assert.equal(f.context.activeGroupId, id === 'tab-main' ? 'default' : 'c'); assert.equal(f.read().focusedTabId, id);
     }
+    assert.deepEqual(model.locateTab(f.read(), 'tab-shell-1').stack.items, shell.items);
+    const control = f.context.activeGroupId; f.act({ type: 'activate', tabId: 'tab-shell-1' });
+    f.emit('click', { target: f.document.getElementById('tab-shell-1') }); assert.equal(f.context.activeGroupId, control);
+});
+test('production drag preview uses pointer insertion and the same admission as final completion', () => {
+    const f = fixture(); f.render(); const list = f.host.querySelector('.pane-tabs-list');
+    list.rect = { left: 0, right: 500, top: 0, bottom: 30, width: 500, height: 30 };
+    list.children.forEach((button, index) => { button.rect = { left: index * 100, width: 100 }; });
+    const button = list.children[3], indicator = new f.Element('indicator'), state = { tabId: button.dataset.target, tabButton: button, dragging: true, indicator, preview: new f.Element('preview') };
+    const before = f.read(); f.context.updateWorkspaceTabDrag(state, 490, 15); assert.equal(f.read(), before);
+    assert.equal(state.insertionIndex, 4); assert.equal(list.children.at(-1), indicator);
+    f.context.updateWorkspaceTabDrag(state, 0, 15); assert.equal(state.insertionIndex, 0); assert.equal(list.children[0], indicator);
+    f.context.finishWorkspaceTabDrag(state); assert.equal(f.read().layout.root.items[0].tabId, button.dataset.target);
+});
+test('single/multi production rendering keeps panel/button/PTY identity across transitions', () => {
+    const f = fixture(); f.act({ type: 'split-tab', tabId: 'tab-shell-1', direction: 'bottom' });
+    const panel = f.document.getElementById('tab-shell-1'), button = f.document.querySelector('.main-tab[data-target="tab-shell-1"]'), pty = panel.pty;
+    f.mount('mb'); f.act({ type: 'add-group', options: { id: 'b', mainId: 'mb' } });
+    f.act({ type: 'remove-group', groupId: 'b' });
+    assert.equal(f.document.getElementById('tab-shell-1'), panel); assert.equal(panel.pty, pty); assert.equal(f.document.querySelector('.main-tab[data-target="tab-shell-1"]'), button);
+    assert.equal(f.host.querySelectorAll('.main-tab-pane').filter(node => node.id === 'tab-shell-1').length, 1);
+});
+test('all root/sub creation controls use common construction and route to clicked region owner', () => {
+    const f = fixture(true); f.act({ type: 'split-group', groupId: 'c' }); f.context.activeGroupId = 'default';
+    const stackId = model.locateTab(f.read(), 'fc').stack.id, pane = f.document.getElementById(stackId);
+    const rootActions = f.host.querySelector('.pane-tab-actions'), actions = pane.querySelector('.pane-tab-actions');
+    assert.deepEqual(rootActions.children.map(button => button.className), actions.children.map(button => button.className));
+    assert.equal(actions.children.length, 4);
+    actions.children.find(button => button.id.includes('new-filter')).emit('click');
+    assert.equal(f.read().tabs['new-filter'].ownerGroupId, 'c'); assert.equal(model.locateTab(f.read(), 'new-filter').stack.id, stackId);
+    actions.children.find(button => button.id.includes('new-shell')).emit('click');
+    assert.equal(model.locateTab(f.read(), 'new-shell').stack.id, model.rootStackOf(f.read(), model.locateTab(f.read(), 'fc')).id);
+});
+test('business DOM exists before one-time import and later config echoes cannot replace live model', () => {
+    const f = fixture(); f.context.workspaceModel = null;
+    Object.assign(f.context, { currentConfig: {}, focusedWorkspaceTabId: 'tab-main', importWorkspace, decodeWorkspaceLayout: codec.restoreWorkspaceLayout,
+        groupWorkspaceLayouts: new Map(), groupLayoutSnapshots: new Map(), groupWorkspaceManagers: new Map(),
+        filterTabsStore: { getList: () => [{ id: 'f1' }, { id: 'f2' }] }, chartTabsStore: { getList: () => [] },
+        shellTabs: [{ id: 'tab-shell-1' }, { id: 'tab-shell-2' }], focusedTabIdForProjection: () => 'tab-main',
+        renderWorkspaceNow: () => f.render() });
+    vm.runInContext(fn('buildLiveWorkspaceSections'), f.context); vm.runInContext(fn('initializeWorkspaceModel'), f.context);
+    const panel = f.document.getElementById('tab-shell-1'); assert.equal(f.context.initializeWorkspaceModel(), true);
+    const ws = f.read(); assert.equal(f.document.getElementById('tab-shell-1'), panel);
+    f.context.currentConfig.workspaceLayoutState = { version: 99 }; assert.equal(f.context.initializeWorkspaceModel(), false); assert.equal(f.read(), ws);
 });
 
-test('production root reconciliation restores mixed group and Shell order after merging columns', () => {
-    const f = fixture();
-    const list = new f.Element('root-tabs');
-    const buttons = ['g1', 'g2', 'shell1', 'shell2'].map(id => new f.Element(id));
-    buttons.forEach(button => list.appendChild(button));
-    Object.defineProperty(f.Element.prototype, 'nextElementSibling', { get() { return this.nextSibling; } });
-    const byId = new Map(buttons.map(button => [button.id, button]));
-    Object.assign(f.context, { activeGroupId: 'g1', serialGroups: [{ id: 'g1' }, { id: 'g2' }],
-        getGroupTabList: () => list, getSerialGroupById: () => ({}),
-        // 分组标签的连接指示现在取自注册表真相源；本用例只验证按钮顺序。
-        isGroupConnected: () => false,
-        // 分组标签标题走统一的显示名派生；本用例只验证按钮顺序。
-        resolveGroupTitleForDisplay: () => '',
-        describeGroupTab: group => ({ buttonId: group.id }), updateGroupTabButtonState() {},
-        getPaneTabsList: () => null, syncSerialGroupAddButtonLayer() {}, syncShellAddButtonVisibility() {}, placeGroupAddButton() {}, placeShellAddButton() {} });
-    f.context.document.querySelector = selector => byId.get(/data-target="([^"]+)"/.exec(selector)?.[1]);
-    f.context.document.querySelectorAll = () => [];
-    f.context.plan = { tabBarVisible: true, columns: [{ domKey: 'g1', rows: [],
-        tabItems: [{ id: 'g1', panes: [] }, { id: 'shell1' }, { id: 'g2', panes: [] }, { id: 'shell2' }] }] };
-    f.run(section('function reconcileButtons(', '// ── 第 4 步'));
-    f.run('reconcileButtons(plan)');
-    assert.deepEqual(list.children.map(button => button.id), ['g1', 'shell1', 'g2', 'shell2']);
+test('actual business registration and activation honor a clicked root region instead of manager fallback', () => {
+    const f = fixture(true); f.act({ type: 'split-group', groupId: 'c' });
+    const rootId = model.locateTab(f.read(), 'c').stack.id;
+    f.context.activeGroupId = 'default';
+    f.context.resolveGroupIdFromPaneId = paneId => f.context.groupIdFromPaneId(paneId) || 'default';
+    f.context.describeWorkspaceBusinessTab = id => ({ id, kind: 'filter' });
+    f.context.getGroupWorkspaceManager = () => assert.fail('live registration must use the explicit tree target');
+    vm.runInContext(fn('addTabToOwningGroupPane'), f.context);
+    vm.runInContext(fn('switchPaneTab'), f.context);
+    f.mount('created-on-root');
+    const paneId = f.context.addTabToOwningGroupPane('created-on-root', rootId, { activate: false });
+    assert.equal(paneId, model.locateTab(f.read(), 'tab-main-c').stack.id);
+    assert.equal(f.read().tabs['created-on-root'].ownerGroupId, 'c');
+    assert.equal(f.context.switchPaneTab(rootId, 'created-on-root'), true);
+    assert.equal(f.read().focusedTabId, 'created-on-root');
+    assert.ok(model.buildRenderPlan(f.read()).panelIds.includes('created-on-root'));
 });
 
-test('delegated content activation follows main/filter/chart owner and preserves other panes and Shell placement', () => {
-    const f = fixture();
-    f.context.workspaceModel = importWorkspace({ groups: [
-        { id: 'default', panes: [{ id: 'pane-1', tabIds: ['tab-main'], activeTabId: 'tab-main' }] },
-        { id: 'g-1', panes: [{ id: 'pane-1-g-1', tabIds: ['tab-main-g-1', 'f2', 'c2'], activeTabId: 'tab-main-g-1' }] }
-    ], filterTabs: { 'g-1': [{ id: 'f2' }] }, chartTabs: { 'g-1': [{ id: 'c2' }] }, shellTabs: [{ id: 'tab-shell-1' }], focusedTabId: 'tab-main' });
-    f.context.workspaceModel = model.applyWorkspaceAction(f.context.workspaceModel, { type: 'split-group', groupId: 'g-1' }).workspace;
-    const shell = JSON.stringify(f.context.workspaceModel.tabs['tab-shell-1']);
-    const synced = [];
-    Object.assign(f.context, { activeGroupId: 'default',
-        groupIdForWorkspaceTab: id => f.context.workspaceModel.tabs[id]?.ownerGroupId || null,
-        setFocusedTab: id => f.context.dispatchWorkspaceAction({ type: 'activate', tabId: id }).ok,
-        resolveSerialGroupId: id => id, serialGroupRegistry: { setActiveGroup: id => synced.push(id) },
-        setActiveGroupTabLists() {}, setActiveGroupWorkspace() {}, mainTabId: id => `tab-main-${id}`,
-        getGroupWorkspaceManager: () => ({ getActiveTabId: () => 'tab-main', switchPaneTab() { assert.fail('content focus must not switch another tab'); } }),
-        renderSerialGroupTabBar() {}, applyGroupSerialOptionsToSidebar: id => synced.push(`options:${id}`),
-        syncDisplayPrefCheckboxes() {}, getGroupDisplayPrefs: () => ({}), updateSidebarActiveGroupLabel() {},
-        refreshConnectButtonState() {}, updateFilterModeStatuses() {},
-        // applyActiveSerialGroup 现在通过该函数同步分组标签的 active/control 样式；
-        // 本用例断言的是内容区激活链路，标签样式不在范围内，注入空实现即可。
-        syncGroupTabVisualState() {} });
-    f.context.document.querySelectorAll = () => [];
-    f.run(section('function applyActiveSerialGroup(', '// 更新侧栏顶部'));
-    f.run(section('function bindWorkspaceContentActivation(', 'window.addEventListener(\'main-tab-changed\''));
-    f.run('bindWorkspaceContentActivation()');
-    for (const id of ['tab-main-g-1', 'f2', 'c2', 'tab-main']) {
-        f.context.activeGroupId = id === 'tab-main' ? 'g-1' : 'default';
-        const panel = { id, classList: { contains: () => true } };
-        const target = { closest: selector => selector === '.main-tab-pane' ? panel : null };
-        f.emit(id === 'f2' ? 'focusin' : 'click', { target });
-        assert.equal(f.context.activeGroupId, id === 'tab-main' ? 'default' : 'g-1');
-        assert.equal(f.context.workspaceModel.focusedTabId, id);
-        assert.equal(f.context.workspaceModel.tabs.default.panes[0].activeTabId, 'tab-main');
-        assert.equal(JSON.stringify(f.context.workspaceModel.tabs['tab-shell-1']), shell);
-        assert.equal(model.buildRenderPlan(f.context.workspaceModel).columns.length, 2);
-    }
-    assert.deepEqual(synced, ['g-1', 'options:g-1', 'g-1', 'options:g-1', 'g-1', 'options:g-1', 'default', 'options:default']);
-    const beforeShell = f.context.activeGroupId;
-    f.emit('click', { target: { closest: () => ({ id: 'tab-shell-1', classList: { contains: () => true } }) } });
-    assert.equal(f.context.activeGroupId, beforeShell, 'Shell keeps the previous serial control target');
-});
-
-
-test('production Shell drag places the root-row indicator at the actual pointer position', () => {
-    const { getHorizontalInsertionIndex } = require('../src/workspace/tab-reorder');
-    const f = fixture();
-    const list = new f.Element('roots');
-    const tabs = ['group', 'shell-a', 'shell-b'].map((id, i) => {
-        const tab = new f.Element(id); tab.rect = { left: i * 100, width: 100 }; list.appendChild(tab); return tab;
-    });
-    list.querySelectorAll = () => tabs;
-    const row = { querySelector: () => list };
-    Object.assign(f.context, { getGroupRowDropTarget: () => ({ row, groupId: 'default' }), getHorizontalInsertionIndex,
-        window: { innerWidth: 1000, innerHeight: 600 },
-        state: { dragging: true, isShell: true, tabButton: tabs[1], preview: { style: {}, offsetWidth: 80, offsetHeight: 20 }, indicator: { remove() {} } } });
-    f.run(section('function updateWorkspaceTabDrag(', 'function startWorkspaceTabDrag('));
-    f.run('updateWorkspaceTabDrag(state, 275, 20)');
-    assert.equal(f.context.state.insertionIndex, 2);
-    assert.equal(list.children.at(-1), f.context.state.indicator);
-    f.run('updateWorkspaceTabDrag(state, 10, 20)');
-    assert.equal(f.context.state.insertionIndex, 0);
-    assert.equal(list.children[0], f.context.state.indicator);
-});
-
-test('single-to-multi production reconciliation retains Shell panel and button identities in distinct root regions', () => {
-    const f = fixture();
-    const dom = require('../src/serial/serial-group-layout-dom');
-    Object.assign(f.Element.prototype, { setAttribute() {} });
-    Object.defineProperty(f.Element.prototype, 'nextElementSibling', { get() { return this.nextSibling; } });
-    const outer = new f.Element(dom.GROUP_WORKSPACE_CONTAINER_ID);
-    const serialColumn = new f.Element(dom.groupWorkspaceEntryId('default'), 'group-column');
-    const serialList = new f.Element(dom.groupTabListId('default'));
-    serialColumn.appendChild(serialList); serialColumn.appendChild(f.root); outer.appendChild(serialColumn);
-    const content = new f.Element('pane-1-tabs-content');
-    f.createPane('pane-1', 'workspace-root').appendChild(content);
-    const shellPanel = new f.Element('tab-shell-1', 'main-tab-pane');
-    const mainPanel = new f.Element('tab-main', 'main-tab-pane');
-    const shellButton = new f.Element('shell-button', 'main-tab'); shellButton.dataset.target = shellPanel.id;
-    const mainButton = new f.Element('main-button', 'main-tab'); mainButton.dataset.target = mainPanel.id;
-    const groupButton = new f.Element('default-button', 'main-tab serial-group-tab'); groupButton.dataset.groupId = 'default';
-    const nextButton = new f.Element('next-button', 'main-tab serial-group-tab'); nextButton.dataset.groupId = 'next';
-    content.appendChild(shellPanel); content.appendChild(mainPanel); serialList.appendChild(shellButton); serialList.appendChild(mainButton);
-    serialList.appendChild(groupButton); serialList.appendChild(nextButton);
-    f.context.workspaceModel = singleWorkspace(); split(f, 'tab-shell-1', 'shell-region');
-    f.context.workspaceModel = model.applyWorkspaceAction(f.context.workspaceModel, { type: 'add-group', options: { id: 'next', mainId: 'next-main' } }).workspace;
-    Object.assign(f.context, dom, { SHELL_COLUMN_GROUP_ID: dom.SHELL_COLUMN_GROUP_ID,
-        GROUP_WORKSPACE_CONTAINER_ID: dom.GROUP_WORKSPACE_CONTAINER_ID, activeGroupId: 'default',
-        bindPaneTabListEvents() {}, getPaneTabsContent: id => f.get(`${id}-tabs-content`), getPaneTabsList: () => serialList,
-        getGroupTabList: id => f.get(dom.groupTabListId(id)),
-        serialGroups: [{ id: 'default' }, { id: 'next' }], getSerialGroupById: () => ({}),
-        resolveGroupTitleForDisplay: () => '', isGroupConnected: () => false,
-        describeGroupTab: group => ({ buttonId: `${group.id}-button` }), updateGroupTabButtonState() {},
-        syncSerialGroupAddButtonLayer() {}, syncShellAddButtonVisibility() {}, placeGroupAddButton() {}, placeShellAddButton() {} });
-    f.context.document.querySelector = selector => f.nodes.find(node => node.dataset.target === /data-target="([^"]+)"/.exec(selector)?.[1]);
-    f.context.document.querySelectorAll = selector => f.nodes.filter(node => selector === '.main-tab-pane' ? node.classList.contains('main-tab-pane')
-        : selector === '.main-tab' ? node.classList.contains('main-tab')
-        : selector === '.serial-group-tab' ? node.classList.contains('serial-group-tab') : false);
-    f.run(section('function ensureShellColumnDom(', '// 造一个非默认分组'));
-    f.run(section('function reconcileButtons(', '// ── 第 4 步'));
-    f.run(section('function applyVisibility(', '// 拆掉'));
-    f.context.plan = model.buildRenderPlan(f.context.workspaceModel);
-    const shellColumn = f.context.plan.columns.find(column => column.rootOnly);
-    assert.ok(shellColumn);
-    f.run(`ensureShellColumnDom(${JSON.stringify(shellColumn.domKey)}); reconcileRows(plan); reconcileButtons(plan); applyVisibility(plan)`);
-    const shellHost = f.get(`${dom.groupPaneId(shellColumn.domKey, 1)}-tabs-content`);
-    assert.equal(shellPanel.parentElement, shellHost);
-    assert.equal(shellButton.parentElement, f.get(dom.groupTabListId(shellColumn.domKey)));
-    assert.ok(shellPanel.classList.contains('active'));
-    assert.ok(mainPanel.classList.contains('active'));
-    f.run('reconcileRows(plan); reconcileButtons(plan); applyVisibility(plan)');
-    assert.equal(f.nodes.filter(node => node.id === shellPanel.id).length, 1);
-    assert.equal(shellPanel.parentElement, shellHost);
-    assert.equal(f.get(dom.groupTabRowId(shellColumn.domKey)).hidden, false);
-});
-
-
-test('converted Shell region keys reach root drop targets and every adjacent outer splitter', () => {
-    const f = fixture();
-    const dom = require('../src/serial/serial-group-layout-dom');
-    Object.assign(f.Element.prototype, { remove() { if (this.parentElement) this.parentElement.children.splice(this.parentElement.children.indexOf(this), 1); this.parentElement = null; } });
-    const outer = new f.Element(dom.GROUP_WORKSPACE_CONTAINER_ID);
-    const keys = ['default', 'shell-region-a', 'shell-region-b'];
-    const columns = keys.map(key => { const column = new f.Element(dom.groupWorkspaceEntryId(key), 'group-column'); column.dataset.groupId = key; outer.appendChild(column); return column; });
-    const rows = columns.map((column, index) => {
-        const row = new f.Element(`row-${index}`, 'group-tab-row');
-        row.rect = { left: index * 200, right: (index + 1) * 200, top: 0, bottom: 30 };
-        row.closest = () => column; column.appendChild(row); return row;
-    });
-    const splitter = new f.Element(dom.GROUP_WORKSPACE_SPLITTER_ID, 'group-workspace-splitter'); outer.appendChild(splitter);
-    Object.assign(f.context, dom, { keys, SHELL_COLUMN_GROUP_ID: dom.SHELL_COLUMN_GROUP_ID,
-        getGroupWorkspaceSplitters: () => outer.children.filter(node => node.classList.contains('group-workspace-splitter')),
-        resolveSerialGroupId: () => 'default', workspaceModel: { split: { columns: keys.map(id => ({ id, groupIds: [] })) } } });
-    f.context.document.querySelectorAll = () => rows;
-    f.run(section('function getGroupColumnElement(', '// 为一个非默认分组'));
-    f.run(section('function resolveWorkspaceColumnId(', 'function ensureSerialGroupWorkspaceDom('));
-    f.run(section('function syncGroupWorkspaceSplitters(', '// 现有的分组级分界条'));
-    f.run(section('function getGroupRowDropTarget(', 'function updateWorkspaceTabDrag('));
-    assert.equal(f.run('resolveWorkspaceColumnId("shell-region-a")'), 'shell-region-a');
-    assert.equal(f.run('getGroupRowDropTarget(250, 15).groupId'), 'shell-region-a');
-    f.run('syncGroupWorkspaceSplitters(keys)');
-    const gutters = outer.children.filter(node => node.classList.contains('group-workspace-splitter'));
-    assert.equal(gutters.length, 2);
-    assert.deepEqual(gutters.map(node => [node.dataset.splitterLeft, node.dataset.splitterRight]),
-        [['default', 'shell-region-a'], ['shell-region-a', 'shell-region-b']]);
-    assert.deepEqual(outer.children.map(node => node.id || 'gutter'),
-        [columns[0].id, splitter.id, columns[1].id, 'gutter', columns[2].id]);
+test('read-only production diagnostics follow real tree rows instead of removed group-column geometry', () => {
+    const f = fixture(true); f.act({ type: 'split-group', groupId: 'b' });
+    f.act({ type: 'split-tab', tabId: 'tab-shell-1' });
+    Object.assign(f.context, { window: {}, buildLiveWorkspace: () => f.read(), buildLiveWorkspaceSections: () => ({ groups: [] }) });
+    vm.runInContext(section('window.__readTabModelPlan =', '\n};') + '\n};', f.context);
+    const before = JSON.stringify(f.read()), result = f.context.window.__readTabModelPlan();
+    assert.deepEqual(Array.from(result.containerIds), ['default', 'b', 'c']);
+    assert.equal(result.live.visibleColumns.length, model.tree.stacks(f.read().layout.root, true).filter(node => {
+        const item = node.items.find(item => item.id === node.activeItemId);
+        return item && (!model.tree.find(f.read().layout.root, node.id).scope || model.buildRenderPlan(f.read()).panelIds.includes(item.tabId));
+    }).length);
+    assert.deepEqual(Array.from(result.live.groupRowShellTabs), ['tab-shell-2', 'tab-shell-1']);
+    assert.equal(JSON.stringify(f.read()), before);
 });

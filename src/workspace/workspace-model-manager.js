@@ -5,20 +5,14 @@ const model = require('./tab-model');
 // 保留旧调用签名，但布局读取返回副本，写入只发布统一模型动作。
 function createWorkspaceModelManager({ groupId, getWorkspace, dispatch, persistLayout,
     onTabActivated, onTabMoved, describeTab, ensurePaneElement, onLayoutChanged, fitWorkspace }) {
-    const container = () => model.tabOf(getWorkspace(), groupId);
-    const panes = () => model.panesOf(container());
+    const layout = () => model.groupLayout(getWorkspace(), groupId);
+    const panes = () => layout()?.panes || [];
     const primary = () => panes()[0]?.id || 'pane-1';
     const paneById = id => panes().find(pane => pane.id === id) || panes()[0];
     const paneForTab = id => panes().find(pane => pane.tabIds.includes(id));
-    const activePane = () => paneById(container()?.activePaneId);
+    const activePane = () => paneById(layout()?.activePaneId);
     const copy = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-    const snapshot = () => ({
-        panes: copy(panes()),
-        splitEnabled: container()?.paneSplit.enabled === true,
-        orientation: container()?.paneSplit.orientation || 'horizontal',
-        paneSizes: copy(container()?.paneSplit.sizes || {}),
-        activePaneId: activePane()?.id || primary()
-    });
+    const snapshot = () => copy(layout());
     const apply = (action, persist = true) => {
         const result = dispatch(action);
         if (!result.ok) return false;
@@ -52,16 +46,14 @@ function createWorkspaceModelManager({ groupId, getWorkspace, dispatch, persistL
     }
     function remove(tabId, { fallbackTabId = null, persist = true } = {}) {
         const paneId = paneForTab(tabId)?.id || primary();
-        if (!apply({ type: 'close', tabId }, persist)) return { paneId, nextActiveTabId: activePane()?.activeTabId || fallbackTabId };
+        if (!apply({ type: 'close', tabId, fallbackTabId }, persist)) return { paneId, nextActiveTabId: activePane()?.activeTabId || fallbackTabId };
         return { paneId, nextActiveTabId: activePane()?.activeTabId || fallbackTabId };
     }
     function sizes(ratio, { persist = true } = {}) {
-        const ids = panes().map(pane => pane.id);
-        const first = Math.min(0.85, Math.max(0.15, Number(ratio) || 0.5));
-        const others = model.normalizeSizes(container()?.paneSplit.sizes || {}, ids.slice(1));
-        const next = { [ids[0]]: first };
-        for (const id of ids.slice(1)) next[id] = others[id] * (1 - first);
-        return apply({ type: 'resize-panes', groupId, sizes: next }, persist);
+        const root = layout()?.trees[0];
+        if (!root || root.type !== 'split') return false;
+        return apply({ type: 'resize', splitNodeId: root.id, beforeId: root.children[0].id,
+            afterId: root.children[1].id, ratio: Math.min(0.85, Math.max(0.15, Number(ratio) || 0.5)) }, persist);
     }
     function collapse() {
         return apply({ type: 'pane-split', groupId, enabled: false });
@@ -75,8 +67,8 @@ function createWorkspaceModelManager({ groupId, getWorkspace, dispatch, persistL
         getPaneById: id => copy(paneById(id)),
         getPaneIdForTabId: id => paneForTab(id)?.id || primary(),
         getDefaultLayout: snapshot, getLayoutSnapshot: snapshot,
-        isSplitEnabled: () => container()?.paneSplit.enabled === true,
-        getOrientation: () => container()?.paneSplit.orientation || 'horizontal',
+        isSplitEnabled: () => layout()?.splitEnabled === true,
+        getOrientation: () => layout()?.orientation || 'horizontal',
         normalizeWorkspaceLayout: copy,
         getActivePane: () => copy(activePane()),
         getActiveTabId: fallback => activePane()?.activeTabId || fallback,

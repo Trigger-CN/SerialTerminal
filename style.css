@@ -3797,3 +3797,14 @@ input[type="color"] {
     border-color: var(--accent-color);
     box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.2);
 }
+
+/* Unified layout tree: every split owns its own axis and adjacent gutters. */
+.layout-split { display: flex; position: relative; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
+.layout-split[data-orientation="horizontal"] { flex-direction: row; }
+.layout-split[data-orientation="vertical"] { flex-direction: column; }
+.layout-stack { display: flex; flex-direction: column; position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.layout-stack > .pane-tabs-content { display: flex; position: relative; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
+.layout-gutter { flex: 0 0 6px; background: var(--bg-primary); touch-action: none; }
+.layout-gutter[data-orientation="horizontal"] { width: 6px; cursor: col-resize; }
+.layout-gutter[data-orientation="vertical"] { height: 6px; cursor: row-resize; }
+.layout-gutter:hover { background: var(--accent-color); }

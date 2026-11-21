@@ -555,6 +555,7 @@ let displaySettings = {
 };
 
 function loadConfig() {
+  loadConfig.writeBlockedReason = null;
   const defaults = {
     configVersion: CONFIG_VERSION,
     language: DEFAULT_LANGUAGE,
@@ -714,23 +715,33 @@ function loadConfig() {
           log.error('Failed to write config backup before migration:', backupError);
         }
       }
-      // Preserve the last legacy layout before the versioned snapshot becomes authoritative.
-      const layoutBackupPath = path.join(app.getPath('userData'), 'config.v15.backup.json');
+      // Keep each previous schema's original file; never replace an older backup.
+      const backupVersion = Math.min(16, Math.max(0, Number(saved.configVersion) || 0));
+      const layoutBackupPath = path.join(app.getPath('userData'), `config.v${backupVersion}.backup.json`);
       if (Number(saved.configVersion || 0) < CONFIG_VERSION && !fs.existsSync(layoutBackupPath)) {
         try {
           fs.writeFileSync(layoutBackupPath, JSON.stringify(saved, null, 2));
         } catch (error) {
           log.error('Failed to back up legacy workspace config:', error);
+          loadConfig.writeBlockedReason = '工作区迁移备份失败，本次运行禁止覆盖配置';
           return normalizeConfig(saved, defaults);
         }
       }
-      const normalized = normalizeConfig(saved, defaults);
+      let normalized;
+      try { normalized = normalizeConfig(saved, defaults); }
+      catch (error) {
+        loadConfig.writeBlockedReason = `工作区配置未能安全迁移: ${error.message}`;
+        log.error(loadConfig.writeBlockedReason);
+        const recoverable = { ...saved }; delete recoverable.workspaceLayoutState;
+        return normalizeConfig(recoverable, defaults);
+      }
       if (JSON.stringify(saved) !== JSON.stringify(normalized)) {
         fs.writeFileSync(configPath, JSON.stringify(normalized, null, 2));
       }
       return normalized;
     } catch (e) {
       log.error('Failed to load config:', e);
+      loadConfig.writeBlockedReason ||= `配置读取失败，保留原文件: ${e.message}`;
     }
   }
   return normalizeConfig(defaults, defaults);
@@ -1214,6 +1225,7 @@ function startLogCleanupTimer() {
 }
 
 function saveConfig(config) {
+  if (typeof loadConfig !== 'undefined' && loadConfig.writeBlockedReason) throw new Error(loadConfig.writeBlockedReason);
   const merged = { ...currentConfig, ...config };
   for (const key of ['lastSerialOptions', 'hexDisplaySettings', 'mainInputSettings', 'searchSettings', 'autoSendSettings', 'highlightColors', 'terminalWallpaper']) {
     if (config && config[key] && typeof config[key] === 'object') {
@@ -1275,6 +1287,7 @@ function saveConfig(config) {
 }
 
 function persistTelemetryState(state) {
+  if (typeof loadConfig !== 'undefined' && loadConfig.writeBlockedReason) return;
   currentConfig = normalizeConfig({ ...currentConfig, ...state }, currentConfig);
   fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2));
 }
@@ -1451,6 +1464,12 @@ function createWindow() {
   });
   const mainWebContentsId = mainWindow.webContents.id;
 
+  if (loadConfig.writeBlockedReason) mainWindow.webContents.once('did-finish-load', () => {
+    dialog.showMessageBox(mainWindow, { type: 'warning', title: '配置已保护',
+      message: '配置未能安全恢复，本次运行的设置和布局不会保存。',
+      detail: `${loadConfig.writeBlockedReason}\n原配置文件已保留。请备份并修复配置后重新启动应用。`, buttons: ['知道了']
+    }).catch(error => log.error('Failed to show config protection notice:', error));
+  });
   mainWindow.loadFile('index.html');
   mainWindow.on('page-title-updated', event => {
     event.preventDefault();
@@ -2511,7 +2530,8 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
     // 分组级动作（split-group-*）必须知道「用户右键的是哪一个分组」。
     // 不回传它，渲染侧就只能拿激活分组凑数：实测在两个分组已分屏、激活的是 g-1 时
     // 右键 g-2 选分屏，被记进参与者表的仍是 g-1，g-2 永远进不来。
-    groupId: payload.groupId || ''
+    groupId: payload.groupId || '',
+    itemId: payload.itemId || ''
   };
 
   const hasSelection = Boolean(payload.hasSelection);
@@ -2532,7 +2552,8 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       tabId: terminalContextMenuState?.tabId || '',
       terminalType,
       paneId: terminalContextMenuState?.paneId || 'pane-1',
-      groupId: terminalContextMenuState?.groupId || ''
+      groupId: terminalContextMenuState?.groupId || '',
+      itemId: terminalContextMenuState?.itemId || ''
     });
   };
 
@@ -2562,66 +2583,22 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       click: () => send('new-chart-tab')
     }
   ];
-  const template = terminalType === 'tab' ? [
+  const layoutItems = () => [
+    ...[['left', labels.splitLeft || '向左分屏'], ['right', labels.splitRight || '向右分屏'],
+      ['top', labels.splitTop || '向上分屏'], ['bottom', labels.splitBottom || '向下分屏']].map(([direction, label]) => ({
+      label, ...menuIcon(direction === 'left' || direction === 'right' ? 'vertical_split' : 'horizontal_split'),
+      enabled: canSplitTab, click: () => sendAction(`split-${direction}`)
+    })),
+    { label: labels.mergeLayout || '合并到相邻分屏', ...menuIcon('close_fullscreen'),
+      enabled: Boolean(payload.canMerge), click: () => sendAction('merge-layout') }
+  ];
+  const template = terminalType === 'tab' || terminalType === 'group' ? [
     ...paneNewTabItems(labels, sendAction),
     { type: 'separator' },
-    {
-      label: labels.splitHorizontal || 'Move Tab to Right Split',
-      ...menuIcon('vertical_split'),
-      enabled: canSplitTab,
-      click: () => sendAction('split-horizontal')
-    },
-    {
-      label: labels.splitVertical || 'Move Tab to Bottom Split',
-      ...menuIcon('horizontal_split'),
-      enabled: canSplitTab,
-      click: () => sendAction('split-vertical')
-    },
-    {
-      label: labels.closeSplit || 'Close Split',
-      ...menuIcon('close_fullscreen'),
-      enabled: Boolean(payload.splitEnabled),
-      click: () => sendAction('close-split')
-    },
-    { type: 'separator' },
-    {
-      // Shell 独立成列的**唯一显式入口**：拖拽只能把它停到某列列首行，
-      // 想让它自占一列（用户原话「右键 shell 标签建立第三个分屏」）必须走这里。
-      // 已经在独立列里时换成反向项，否则用户点进去就出不来了。
-      label: payload.shellOwnColumn
-        ? (labels.joinGroupColumn || 'Move into Group Column')
-        : (labels.detachToOwnColumn || 'Detach to Own Column'),
-      ...menuIcon('vertical_split'),
-      enabled: Boolean(payload.canDetach),
-      click: () => sendAction(payload.shellOwnColumn ? 'join-group-column' : 'detach-to-own-column')
-    }
-  ] : terminalType === 'group' ? [
-    {
-      label: labels.groupSplitHorizontal || 'Split Groups Left/Right',
-      ...menuIcon('vertical_split'),
-      enabled: isMultiGroup,
-      click: () => sendAction('split-group-horizontal')
-    },
-    {
-      label: labels.groupSplitVertical || 'Split Groups Top/Bottom',
-      ...menuIcon('horizontal_split'),
-      enabled: isMultiGroup,
-      click: () => sendAction('split-group-vertical')
-    },
-    {
-      label: labels.groupSplitClose || 'Close Group Split',
-      ...menuIcon('close_fullscreen'),
-      enabled: Boolean(payload.groupSplitEnabled),
-      click: () => sendAction('close-group-split')
-    },
-    { type: 'separator' },
-    ...paneNewTabItems(labels, sendAction),
-    { type: 'separator' },
-    {
-      label: labels.addSerialPort || 'Add Serial Port',
-      ...menuIcon('add'),
-      click: () => sendAction('add-serial-group')
-    }
+    ...layoutItems(),
+    ...(terminalType === 'group' ? [{ type: 'separator' }, {
+      label: labels.addSerialPort || 'Add Serial Port', ...menuIcon('add'), click: () => sendAction('add-serial-group')
+    }] : [])
   ] : terminalType === 'chart' ? [
     {
       label: payload.paused ? (labels.chartResume || 'Resume') : (labels.chartPause || 'Pause'),
@@ -2658,6 +2635,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       ...menuIcon('settings'),
       click: () => sendAction('chart-settings')
     },
+    ...layoutItems(),
     {
       label: labels.moveToOtherPane || 'Move to Other Pane',
       ...menuIcon('swap_horiz'),
@@ -2680,24 +2658,7 @@ ipcMain.on('show-terminal-context-menu', (event, payload = {}) => {
       ...menuIcon('terminal'),
       click: () => sendAction('new-shell-tab')
     },
-    {
-      label: labels.splitHorizontal || 'Move Tab to Right Split',
-      ...menuIcon('vertical_split'),
-      enabled: canSplitTab,
-      click: () => sendAction('split-horizontal')
-    },
-    {
-      label: labels.splitVertical || 'Move Tab to Bottom Split',
-      ...menuIcon('horizontal_split'),
-      enabled: canSplitTab,
-      click: () => sendAction('split-vertical')
-    },
-    {
-      label: labels.closeSplit || 'Close Split',
-      ...menuIcon('close_fullscreen'),
-      enabled: Boolean(payload.splitEnabled),
-      click: () => sendAction('close-split')
-    }
+    ...layoutItems()
   ];
 
   if (terminalType === 'main') {

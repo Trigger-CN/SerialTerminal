@@ -36,14 +36,17 @@ test('workspace saves coalesce latest layout and all business identities in one 
     const f = fixture(); const { context: c } = f;
     c.scheduleWorkspaceLayoutSave(); c.scheduleWorkspaceLayoutSave();
     c.shellTabs.push({ id: 'tab-shell-2', profileId: 'p2' });
-    c.workspaceModel = model.applyWorkspaceAction(c.workspaceModel, { type: 'add-leaf', leaf: { id: 'tab-shell-2', kind: 'shell' } }).workspace;
+    const added = model.applyWorkspaceAction(c.workspaceModel, { type: 'add-leaf', groupId: 'default', options: { id: 'tab-shell-2', kind: 'shell' } });
+    assert.equal(added.ok, true, added.reason); c.workspaceModel = added.workspace;
     assert.equal(f.sent.length, 0); assert.equal(f.timers.size, 1); f.flush();
     assert.equal(f.sent.length, 1);
     const payload = f.sent[0].payload;
     assert.equal(payload.serialGroups[0].filterTabs[0].filterText, 'needle');
     assert.notEqual(payload.serialGroups[0].filterTabs[0].paneId, 'stale');
     assert.deepEqual(payload.shellTabs.map(tab => tab.id), ['tab-shell-1', 'tab-shell-2']);
-    assert.equal(payload.workspaceLayoutState.version, 1);
+    assert.equal(payload.workspaceLayoutState.version, 2);
+    assert.equal(payload.serialGroups[0].panes, undefined);
+    assert.equal(model.locateTab(c.workspaceModel, 'tab-shell-2').item.tabId, 'tab-shell-2');
     assert.deepEqual(payload.filterTabs, payload.serialGroups[0].filterTabs);
 });
 test('restoring blocks queued and new saves; beforeunload flushes latest pending snapshot', () => {
@@ -83,7 +86,7 @@ test('initialization decodes once, clears import caches and preserves business t
     c.buildLiveWorkspaceSections = () => ({ groups: [{ id: 'default' }], filterTabs: { default: [{ id: 'f1' }] }, shellTabs: c.shellTabs });
     c.groupWorkspaceManagers = new Map([['stale', {}]]); c.groupWorkspaceLayouts = new Map([['stale', {}]]); c.groupLayoutSnapshots = new Map([['stale', {}]]);
     c.setActiveGroupWorkspace = () => {}; c.renderWorkspaceNow = () => {};
-    vm.runInContext('let focusedWorkspaceTabId = null;\n' + section('function initializeWorkspaceModel()', '// 投影出当前工作区的模型树。'), c);
+    vm.runInContext('let focusedWorkspaceTabId = null;\n' + section('function initializeWorkspaceModel()', 'function buildLiveWorkspace('), c);
     assert.equal(c.initializeWorkspaceModel(), true); const ws = c.workspaceModel;
     assert.deepEqual(serializeWorkspaceLayout(ws), saved);
     assert.equal(c.groupWorkspaceLayouts.size, 0); assert.equal(c.groupLayoutSnapshots.size, 0);

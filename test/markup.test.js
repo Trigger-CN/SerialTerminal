@@ -109,7 +109,7 @@ test('right sidebar manages persistent quick commands for the active Shell tab',
   assert.doesNotMatch(shellSidebar, /shell-session-list|activeShellSessions|noActiveShellSessions/);
   assert.match(html, /id="shell-quick-command-dialog"[\s\S]*aria-labelledby="shell-quick-command-dialog-title"/);
   assert.match(html, /id="shell-quick-command-append-enter" checked/);
-  assert.equal(require('../src/workspace/workspace-layout-state').WORKSPACE_CONFIG_VERSION, 16);
+  assert.equal(require('../src/workspace/workspace-layout-state').WORKSPACE_CONFIG_VERSION, 17);
   assert.match(main, /normalized\.shellQuickCommands = Array\.isArray\(source\.shellQuickCommands\)/);
   assert.match(main, /shellQuickCommands: \[\]/);
   assert.match(renderer, /function getActiveShellTab\(\)[\s\S]*getActiveTabInfo\(\)[\s\S]*shellTabs\.find/);

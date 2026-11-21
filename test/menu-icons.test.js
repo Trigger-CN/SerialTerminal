@@ -74,7 +74,8 @@ test('terminal context menu uses plain labels and native icon properties', () =>
 
   assert.ok(menuSource.length > 0);
   assert.doesNotMatch(menuSource, /withIcon|label:\s*['"`]\s*\[/);
-  iconNames.forEach(name => assert.match(menuSource, new RegExp(`\\.\\.\\.menuIcon\\('${name}'\\)`)));
+  iconNames.filter(name => !['vertical_split', 'horizontal_split'].includes(name)).forEach(name => assert.match(menuSource, new RegExp(`\\.\\.\\.menuIcon\\('${name}'\\)`)));
+  assert.match(menuSource, /menuIcon\(direction === 'left' \|\| direction === 'right' \? 'vertical_split' : 'horizontal_split'\)/);
   assert.match(main, /path\.join\(__dirname, 'assets', 'menu-icons'\)/);
   assert.match(main, /fs\.existsSync\(icon\) \? \{ icon \} : \{\}/);
 });

@@ -1,1357 +1,208 @@
 'use strict';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-
-const model = require('../src/workspace/tab-model');
+const m = require('../src/workspace/tab-model');
 const acceptance = require('./tab-model-acceptance');
-
-const {
-    createWorkspace,
-    addShell,
-    addContainerTab,
-    addLeaf,
-    addPane,
-    activateTab,
-    reorderInRow,
-    setColumnSplit,
-    setPaneSplit,
-    setCollapsed,
-    closeTab,
-    rootFamilyOf,
-    roots,
-    layoutColumns,
-    layoutRowsOf,
-    resolveLeafColumnId,
-    setLeafColumn,
-    leafColumnMode,
-    setLeafColumnMode,
-    leafHostGroup,
-    setLeafHostGroup,
-    visiblePanels,
-    buildRenderPlan,
-    isContainer,
-    resetIdSeq,
-    normalizeSizes,
-    validateAndRepair,
-    withDiagnostics,
-    OWN_COLUMN_ID
-} = model;
-
-function fresh() {
-    resetIdSeq();
-    return createWorkspace();
+const { importWorkspace, projectWorkspace } = require('../src/workspace/tabs-workspace-projection');
+const codec = require('../src/workspace/workspace-layout-state');
+function fresh(multi = false) {
+    return importWorkspace({ groups: [{ id: 'default' }, ...(multi ? [{ id: 'b' }, { id: 'c' }] : [])],
+        filterTabs: { default: [{ id: 'f1' }, { id: 'f2' }] }, chartTabs: { default: [{ id: 'c1' }] },
+        shellTabs: [{ id: 's1' }, { id: 's2' }], focusedTabId: 'tab-main' });
 }
-
-// 标签树里有几个串口组
-function groupCount(ws) {
-    return Object.values(ws.tabs).filter(isContainer).length;
-}
-
-// 便捷：在指定容器里找到一个指定 kind 的叶
-function findLeaf(ws, kind) {
-    return Object.values(ws.tabs).find(tab => tab.kind === kind && !isContainer(tab)) || null;
-}
-
-function rowIdsOf(plan) {
-    const ids = [];
-    for (const col of plan.columns) {
-        for (const item of col.tabItems) ids.push(item.id);
-        for (const row of col.rows) for (const item of row.tabs) ids.push(item.id);
+function act(ws, action) { const r = m.applyWorkspaceAction(ws, action); assert.equal(r.ok, true, r.reason); return r.workspace; }
+const hit = (ws, id) => m.locateTab(ws, id);
+const split = (ws, id, direction = 'right') => act(ws, { type: 'split-tab', tabId: id, direction });
+const stacks = ws => m.tree.stacks(ws.layout.root);
+const invariant = ws => assert.deepEqual(acceptance.assertAll(m.withDiagnostics(ws)), []);
+test('architecture retains ten documented invariant contracts', () => {
+    const doc = fs.readFileSync(path.join(__dirname, '..', acceptance.DOC_PATH), 'utf8');
+    for (const id of acceptance.INVARIANT_IDS) assert.ok(acceptance.ruleTextFromDoc(doc, id), id);
+});
+test('default workspace has one group, one main, independent region identity and valid focus', () => {
+    const ws = m.createWorkspace(); invariant(ws);
+    assert.equal(m.containerIds(ws).length, 1); assert.equal(Object.keys(ws.tabs).length, 2);
+    assert.notEqual(ws.layout.root.id, ws.focusedTabId); assert.equal(ws.layout.root.items.length, 1);
+});
+test('business owner index is independent from layout and repairs parent cache only', () => {
+    const ws = fresh(); const location = hit(ws, 'f1').stack.id; ws.tabs.f1.parentId = null; m.rebuildIndex(ws);
+    assert.equal(ws.tabs.f1.parentId, 'default'); assert.equal(hit(ws, 'f1').stack.id, location); invariant(ws);
+});
+test('single group keeps main/filter/chart/Shell on one row without subRow duplication', () => {
+    const ws = fresh(), plan = m.buildRenderPlan(ws);
+    assert.equal(plan.root.type, 'stack'); assert.equal(plan.root.rowRole, 'root');
+    assert.deepEqual(plan.root.members.map(item => item.tabId), ['tab-main', 'f1', 'f2', 'c1', 's1', 's2']);
+    assert.equal(plan.rows.length, 1); invariant(ws);
+});
+for (const id of ['tab-main', 'f1', 'c1', 's1']) test(`flat focus ${id} changes only selected content, not row membership`, () => {
+    const ws = act(fresh(), { type: 'activate', tabId: id }), plan = m.buildRenderPlan(ws);
+    assert.deepEqual(plan.panelIds, [id]); assert.equal(plan.root.members.length, 6); invariant(ws);
+});
+test('adding groups does not implicitly split; explicit group split creates only requested region', () => {
+    let ws = fresh(true); assert.equal(stacks(ws).length, 1);
+    ws = act(ws, { type: 'split-group', groupId: 'b' });
+    assert.equal(stacks(ws).length, 2); assert.deepEqual(stacks(ws)[1].items.map(x => x.tabId), ['b']);
+    assert.deepEqual(stacks(ws)[0].items.map(x => x.tabId), ['default', 'c', 's1', 's2']); invariant(ws);
+});
+test('activating a group restores its last leaf without hiding other region selections', () => {
+    let ws = split(fresh(true), 'f1'); ws = act(ws, { type: 'activate', tabId: 'tab-main-b' });
+    ws = act(ws, { type: 'activate', tabId: 'default' });
+    assert.equal(ws.focusedTabId, 'f1'); assert.ok(m.visiblePanels(ws).has('tab-main')); invariant(ws);
+});
+test('root Shell switches only its own Stack and never invents a group', () => {
+    let ws = act(fresh(true), { type: 'split-group', groupId: 'b' });
+    ws = act(ws, { type: 'activate', tabId: 's1' });
+    assert.equal(stacks(ws).length, 2); assert.deepEqual(m.buildRenderPlan(ws).panelIds.sort(), ['s1', 'tab-main-b']);
+    assert.equal(m.containerIds(ws).length, 3); invariant(ws);
+});
+test('closing a group sharing a Shell region preserves Shell identity and position', () => {
+    let ws = act(fresh(true), { type: 'split-group', groupId: 'b' });
+    ws = act(ws, { type: 'move', tabId: 's1', target: { nodeId: hit(ws, 'b').stack.id } });
+    const region = hit(ws, 's1').stack.id; ws = act(ws, { type: 'remove-group', groupId: 'b' });
+    assert.equal(hit(ws, 's1').stack.id, region); assert.equal(ws.tabs.s1.ownerGroupId, null); invariant(ws);
+});
+test('two Shells may share an existing region or explicitly split into independent regions', () => {
+    let ws = split(fresh(true), 's1'); ws = act(ws, { type: 'move', tabId: 's2', target: { nodeId: hit(ws, 's1').stack.id } });
+    assert.equal(hit(ws, 's1').stack.id, hit(ws, 's2').stack.id);
+    ws = split(ws, 's2', 'left'); assert.notEqual(hit(ws, 's1').stack.id, hit(ws, 's2').stack.id);
+    assert.equal(JSON.stringify(ws).includes('__shell__'), false); invariant(ws);
+});
+for (const id of ['s1', 'tab-main', 'f1']) test(`multi-group placement rejects ${id} entering a foreign group content`, () => {
+    const ws = fresh(true), before = JSON.stringify(ws), target = hit(ws, 'tab-main-b').stack.id;
+    const r = m.applyWorkspaceAction(ws, { type: 'move', tabId: id, target: { nodeId: target } });
+    assert.equal(r.ok, false); assert.equal(r.workspace, ws); assert.equal(JSON.stringify(ws), before);
+});
+for (const direction of ['left', 'right', 'top', 'bottom']) test(`single-group ${direction} split preserves identities and creates nonempty subRows`, () => {
+    const base = fresh(), ws = split(base, 's1', direction), plan = m.buildRenderPlan(ws);
+    assert.deepEqual(Object.keys(ws.tabs), Object.keys(base.tabs)); assert.equal(stacks(ws).length, 2);
+    assert.ok(plan.rows.every(row => row.members.length)); assert.ok(stacks(ws).every(node => node.items.length));
+    assert.ok(plan.root.children.every(node => node.rowRole === 'sub')); invariant(ws);
+});
+test('single-group move supports every leaf and preserves owner', () => {
+    let ws = split(fresh(), 's1'), target = hit(ws, 's1').stack.id;
+    for (const id of ['f1', 'tab-main', 'c1']) ws = act(ws, { type: 'move', tabId: id, target: { nodeId: target } });
+    for (const id of ['f1', 'tab-main', 'c1']) assert.equal(ws.tabs[id].ownerGroupId, 'default'); invariant(ws);
+});
+test('reorder uses final row index without changing local active or global focus', () => {
+    let ws = act(fresh(), { type: 'activate', tabId: 's1' });
+    for (const index of [0, 4, 1, 3]) {
+        ws = act(ws, { type: 'move', tabId: 's1', target: { nodeId: hit(ws, 's1').stack.id, index } });
+        assert.equal(hit(ws, 's1').index, index); assert.equal(ws.focusedTabId, 's1'); invariant(ws);
     }
-    return ids;
-}
-
-// ---------------------------------------------------------------------------
-// 文档与断言的对应关系
-// ---------------------------------------------------------------------------
-
-test('acceptance rules exist in the architecture doc', () => {
-    const docPath = path.join(__dirname, '..', acceptance.DOC_PATH);
-    const doc = fs.readFileSync(docPath, 'utf8');
-    for (const id of acceptance.INVARIANT_IDS) {
-        const text = acceptance.ruleTextFromDoc(doc, id);
-        assert.ok(text && text.length > 0, `文档里找不到 ${id}`);
+});
+test('close protects main/default group and never synthesizes a new terminal', () => {
+    const ws = m.createWorkspace(), before = JSON.stringify(ws);
+    for (const action of [{ type: 'close', tabId: ws.focusedTabId }, { type: 'remove-group', groupId: m.containerIds(ws)[0] }]) {
+        const r = m.applyWorkspaceAction(ws, action); assert.equal(r.ok, false); assert.equal(r.workspace, ws);
+    }
+    assert.equal(JSON.stringify(ws), before);
+});
+test('closing last Shell in a Stack removes the region and keeps a visible existing focus', () => {
+    let ws = split(fresh(), 's1'); const ids = Object.keys(ws.tabs);
+    ws = act(ws, { type: 'close', tabId: 's1' }); assert.equal(stacks(ws).length, 1);
+    assert.deepEqual(Object.keys(ws.tabs), ids.filter(id => id !== 's1')); invariant(ws);
+});
+for (const values of [{ a: 2, b: 1 }, { a: 0, b: -5 }, {}]) test(`weights normalize every participant: ${JSON.stringify(values)}`, () => {
+    const out = m.normalizeSizes(values, ['a', 'b', 'c']);
+    assert.ok(Object.values(out).every(x => Number.isFinite(x) && x > 0)); assert.ok(Math.abs(Object.values(out).reduce((a, b) => a + b) - 1) < 1e-12);
+    assert.deepEqual(Object.keys(out), ['a', 'b', 'c']);
+});
+test('explicit collapse-all retains every leaf, local order and focused content', () => {
+    let ws = split(split(fresh(), 's1'), 'f1', 'bottom'); const ids = Object.keys(ws.tabs);
+    const expected = stacks(ws).flatMap(node => node.items.map(item => item.tabId));
+    ws = act(ws, { type: 'collapse-all' }); assert.equal(ws.layout.root.type, 'stack');
+    assert.deepEqual(ws.layout.root.items.map(item => item.tabId), expected); assert.deepEqual(Object.keys(ws.tabs), ids); invariant(ws);
+});
+test('sole leaf split is rejected atomically while a sole leaf may move to an existing Stack', () => {
+    const only = m.createWorkspace(); assert.equal(m.applyWorkspaceAction(only, { type: 'split-tab', tabId: only.focusedTabId }).ok, false);
+    let ws = split(fresh(), 's1'); const r = m.applyWorkspaceAction(ws, { type: 'move', tabId: 's1', target: { nodeId: hit(ws, 'tab-main').stack.id } });
+    assert.equal(r.ok, true); assert.equal(stacks(r.workspace).length, 1); invariant(r.workspace);
+});
+test('missing source/target and invalid direction reject without partial writes', () => {
+    const ws = fresh(), before = JSON.stringify(ws);
+    for (const action of [{ type: 'activate', tabId: 'missing' }, { type: 'move', tabId: 'f1', target: { nodeId: 'missing' } },
+        { type: 'split', source: { tabId: 'f1' }, target: { nodeId: ws.layout.root.id }, direction: 'diagonal' }]) {
+        const r = m.applyWorkspaceAction(ws, action); assert.equal(r.ok, false); assert.equal(r.workspace, ws); assert.equal(JSON.stringify(ws), before);
+    }
+    const r = m.applyWorkspaceAction(ws, { type: 'activate', tabId: 'f1' }); assert.notEqual(r.workspace, ws); assert.equal(JSON.stringify(ws), before);
+});
+test('root drag preserves interleaved group/Shell order through merge and persistence', () => {
+    let ws = act(fresh(true), { type: 'split-group', groupId: 'b' }); const origin = hit(ws, 'default').stack.id;
+    ws = act(ws, { type: 'move', tabId: 's2', target: { nodeId: hit(ws, 'b').stack.id, index: 1 } });
+    ws = act(ws, { type: 'move', tabId: 's2', target: { nodeId: origin, index: 1 } });
+    assert.deepEqual(hit(ws, 's2').stack.items.map(item => item.tabId), ['default', 's2', 'c', 's1']);
+    const snapshot = codec.serializeWorkspaceLayout(ws); assert.deepEqual(codec.serializeWorkspaceLayout(codec.restoreWorkspaceLayout(fresh(true), snapshot)), snapshot); invariant(ws);
+});
+test('four groups and independently split Shell regions remain unique and reachable', () => {
+    let ws = act(fresh(true), { type: 'add-group', options: { id: 'd', mainId: 'md' } });
+    for (const id of ['b', 'c', 'd']) ws = act(ws, { type: 'split-group', groupId: id });
+    ws = split(split(ws, 's1'), 's2', 'bottom'); assert.equal(stacks(ws).length, 6);
+    const panels = m.buildRenderPlan(ws).panelIdsAll; assert.equal(new Set(panels).size, panels.length); invariant(ws);
+});
+test('group-scoped collapse leaves outer Shell geometry and other groups unchanged', () => {
+    let ws = split(split(fresh(true), 'f1', 'bottom'), 's1'); const shell = structuredClone(hit(ws, 's1').stack);
+    const rootId = ws.layout.root.id; ws = act(ws, { type: 'collapse-all', scopeGroupId: 'default' });
+    assert.deepEqual(hit(ws, 's1').stack, shell); assert.equal(ws.layout.root.id, rootId); assert.equal(m.groupStacks(ws, 'default').length, 1); invariant(ws);
+});
+for (const [rule, corrupt] of [
+    ['I1', ws => { ws.tabs.f1.ownerGroupId = 'missing'; }],
+    ['I2', ws => { const shell = hit(ws, 's1'); shell.stack.items.splice(shell.index, 1); hit(ws, 'f1').stack.items.push(shell.item); }],
+    ['I3', ws => { ws.tabs.default.panel = { id: 'default' }; }],
+    ['I4', ws => { hit(ws, 'f1').stack.items.push({ id: 'copy', tabId: 'f1' }); }],
+    ['I5', ws => { hit(ws, 'f1').stack.items.length = 0; }],
+    ['I6', ws => { hit(ws, 'f1').stack.activeItemId = 'missing'; }],
+    ['I7', ws => { ws.focusedTabId = 'missing'; }],
+    ['I8', ws => { ws.visiblePanels = () => new Set(['missing']); }],
+    ['I9', ws => { ws.layout.root = { id: 'bad', type: 'split', orientation: 'horizontal', weights: [1], children: [ws.layout.root] }; }]
+]) test(`independent oracle detects ${rule} corruption`, () => {
+    const ws = m.withDiagnostics(fresh(true)); corrupt(ws); assert.ok(acceptance.checkInvariants(ws).some(error => error.startsWith(rule)));
+});
+test('single-group legal Shell member is not mistaken for a business owner violation', () => invariant(fresh()));
+test('projection preserves declared main location and supplies missing main from actual business group', () => {
+    for (const declared of [true, false]) {
+        const ws = projectWorkspace({ groups: [{ id: 'default', panes: [{ id: 'a', tabIds: [] }, { id: 'b', tabIds: declared ? ['tab-main'] : [] }] }] });
+        assert.equal(ws.tabs.default.panes.find(p => p.tabIds.includes('tab-main')).id, declared ? 'b' : 'a');
     }
 });
-
-// ---------------------------------------------------------------------------
-// 基础结构
-// ---------------------------------------------------------------------------
-
-test('default workspace has one container, one main leaf and passes invariants', () => {
-    const ws = fresh();
-    assert.equal(groupCount(ws), 1);
-    const main = findLeaf(ws, 'main');
-    assert.ok(main);
-    assert.equal(ws.focusedTabId, main.id);
-    assert.deepEqual(withDiagnostics(ws) && acceptance.assertAll(withDiagnostics(ws)), []);
-});
-
-test('parentId is derived from panes, never written by hand', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const main = findLeaf(ws, 'main');
-    assert.equal(main.parentId, container.id);
-
-    // 直接把 parentId 改坏，rebuildIndex 之后必须恢复
-    main.parentId = null;
-    model.rebuildIndex(ws);
-    assert.equal(main.parentId, container.id);
-});
-
-// ---------------------------------------------------------------------------
-// §3.2 / §3.3 扁平模式与根族
-// ---------------------------------------------------------------------------
-
-test('flat mode without shell shows container children on the single TabRow', () => {
-    const ws = fresh();
-    const main = findLeaf(ws, 'main');
-    addLeaf(ws, 'filter');
-    addLeaf(ws, 'chart');
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 1);
-    assert.equal(plan.columns[0].isFamily, true);
-    const ids = plan.columns[0].tabItems.map(item => item.id);
-    assert.ok(ids.includes(main.id));
-    assert.equal(ids.length, 3);
-    // 扁平且未开 pane 分屏：没有 subRow
-    assert.equal(plan.columns[0].rows.length, 0);
-});
-
-test('flat mode with shells keeps both shells and all children on the same row', () => {
-    const ws = fresh();
-    addLeaf(ws, 'filter');
-    const shellA = addShell(ws);
-    const shellB = addShell(ws);
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 1);
-    const ids = plan.columns[0].tabItems.map(item => item.id);
-    assert.ok(ids.includes(shellA.id), 'shell A 必须出现在 TabRow');
-    assert.ok(ids.includes(shellB.id), 'shell B 必须出现在 TabRow');
-    assert.equal(ids.length, 4);            // main + filter + 2 shell
-});
-
-test('in flat mode, focusing a shell does not hide the container children', () => {
-    const ws = fresh();
-    const main = findLeaf(ws, 'main');
-    const shell = addShell(ws);
-
-    activateTab(ws, shell.id);
-    const plan = buildRenderPlan(ws);
-    const ids = plan.columns[0].tabItems.map(item => item.id);
-
-    assert.ok(ids.includes(main.id), '焦点在 shell 上时 main 仍须在 TabRow 里');
-    assert.ok(ids.includes(shell.id));
-    assert.equal(ids.length, 2);
-});
-
-test('in flat mode the content area follows the focus, including a shell', () => {
-    const ws = fresh();
-    const main = findLeaf(ws, 'main');
-    const filter = addLeaf(ws, 'filter');
-    const shell = addShell(ws);
-
-    activateTab(ws, filter.id);
-    assert.deepEqual([...visiblePanels(ws)], [filter.id]);
-
-    activateTab(ws, shell.id);
-    assert.deepEqual([...visiblePanels(ws)], [shell.id]);
-
-    activateTab(ws, main.id);
-    assert.deepEqual([...visiblePanels(ws)], [main.id]);
-});
-
-// ---------------------------------------------------------------------------
-// 多分组：subRow 才出现
-// ---------------------------------------------------------------------------
-
-test('two containers give one column per root when split is on', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    setColumnSplit(ws, true);
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 2);
-    assert.ok(plan.columns.every(col => col.isFamily === false));
-    assert.ok(plan.columns.every(col => col.rows.length === 1));
-});
-
-test('split off shows only the column that contains the focus', () => {
-    const ws = fresh();
-    const second = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const secondMain = second.panes[0].activeTabId;
-
-    activateTab(ws, secondMain);
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 1);
-    assert.equal(plan.columns[0].containerId, second.id);
-});
-
-// 分屏后一个未归属 Shell **不自成列**（用户裁决），它停在某一列的列首行；
-// 点中它时，那一列的内容区显示它自己，而不是该容器的 activeTabId。
-//
-// 旧用例断言的是「shell 必须自成一根级列」，已随用户裁决失效：分屏只作用于被移动的
-// 那一个串口组，Shell 维持原位不动。它不是被删掉，而是被改成了下面这个更准的判据。
-// 反向对照：删掉 visiblePanelIdsOfColumn 里「焦点是该列的根级叶」那一文，
-// panelIds 会退回容器 activeTabId，下面两条断言立刻失败。
-test('a root leaf sitting on a column shows its own panel when focused', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
-    setColumnSplit(ws, true);
-
-    const plan = buildRenderPlan(ws);
-    // 列集合只由容器决定：两个容器两列，Shell 不占列。
-    assert.equal(plan.columns.length, 2, '分屏列数等于容器数');
-    assert.ok(!plan.columns.some(col => col.columnId === shell.id), 'Shell 不得自成列');
-
-    // Shell 坐在某列的列首行：col.tabItems 里能找到它（与分组标签同级）。
-    const home = plan.columns.find(col => col.tabItems.some(t => t.id === shell.id));
-    assert.ok(home, 'Shell 必须出现在某一列的列首行');
-    assert.equal(home.containerId, resolveLeafColumnId(ws, shell));
-
-    // 未点时那一列显示容器自己的激活叶，不显示 Shell。
-    assert.ok(!plan.panelIds.includes(shell.id), '未点中时 Shell 不占面板');
-
-    // 点中后那一列显示 Shell，而不是容器的 activeTabId。
-    activateTab(ws, shell.id);
-    const after = buildRenderPlan(ws);
-    const sameColumn = after.columns.find(col => col.columnId === home.columnId);
-    assert.deepEqual(sameColumn.panelIds, [shell.id]);
-    assert.ok(after.panelIds.includes(shell.id), '全局可见面板必须包含 shell');
-    assert.deepEqual(sameColumn.rows.length, 1, '容器列仍保留自己那条 subRow');
-});
-
-// 根级叶的 columnId 是「它停在哪一列」的唯一真源：拖到哪列就跟到哪列，
-// 而那一列的删除会把它自愈回现存的第一列。
-test('a root leaf follows its columnId and survives that column being deleted', () => {
-    const ws = fresh();
-    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
-    setColumnSplit(ws, true);
-
-    assert.equal(setLeafColumn(ws, shell.id, other.id), true);
-    assert.equal(resolveLeafColumnId(ws, shell), other.id);
-    const moved = buildRenderPlan(ws).columns.find(col => col.columnId === other.id);
-    assert.ok(moved.tabItems.some(t => t.id === shell.id), '改列后必须挂在新的那一列');
-
-    // 删掉它那一列 → columnId 悬空，validateAndRepair 写回现存的第一列。
-    closeTab(ws, other.id);
-    const repaired = validateAndRepair(ws);
-    assert.ok(repaired.ok);
-    assert.ok(repaired.repairs.some(text => text.includes('columnId')), repaired.repairs);
-    assert.notEqual(shell.columnId, other.id);
-    assert.ok(roots(ws).filter(isContainer).some(c => c.id === shell.columnId));
-});
-
-// `columnMode` 是「这个根级叶自不自成独立列」的唯一真源，承接历史上
-// `tabState.detachedColumn` 的职责。独立列只有一条，住着全部 `ownColumn` 叶。
-//
-// **断言为何从「columnId === shell.id」改为固定列 key**：旧实现按叶派生生列，
-// 每个 ownColumn 叶一列、列 id 就是叶 id；但渲染层只有一个 Shell 列容器
-// （`serial-group-workspace-__shell__`），用户原话也是「shell 标签页如果独立一组，
-// 则该组只显示一行标签栏」——独立列描述的是一**组**而不是一个标签。旧断言把
-// “一个叶 = 一列”固化了，它验证的是实现细节而不是用户可见行为，因此更新为列 key。
-test('a root leaf with columnMode ownColumn gets the shared own column while split is on', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
-    setColumnSplit(ws, true);
-
-    // 默认是 row：不占列，仅停在某一列的列首行上。
-    assert.equal(leafColumnMode(shell), 'row');
-    assert.equal(buildRenderPlan(ws).columns.length, 2, '默认形态：列数等于容器数');
-
-    assert.equal(setLeafColumnMode(ws, shell.id, 'ownColumn'), true);
-    assert.equal(leafColumnMode(shell), 'ownColumn');
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 3, 'ownColumn 必须多出一列');
-    const own = plan.columns.find(col => col.columnId === OWN_COLUMN_ID);
-    assert.ok(own, '独立列对全部分组共用一个固定 key');
-    assert.equal(own.containerId, null, '独立列没有容器');
-    assert.deepEqual(own.tabItems.map(t => t.id), [shell.id]);
-    assert.deepEqual(own.rows, [], '独立列没有 subRow');
-    assert.deepEqual(own.panelIds, [shell.id], '独立列显示它里面的叶');
-    // 它不能同时出现在别的容器的列首行里（否则同一个按钮会在两处可见）。
-    assert.ok(!plan.columns.some(col => col.containerId && col.tabItems.some(t => t.id === shell.id)));
-    // 反向对照：把 columnMode 改回 row，上面的三列与独立面板必须消失。
-    setLeafColumnMode(ws, shell.id, 'row');
-    const back = buildRenderPlan(ws);
-    assert.equal(back.columns.length, 2);
-    assert.ok(!back.columns.some(col => col.columnId === OWN_COLUMN_ID));
-});
-
-// 多个 `ownColumn` 叶必须共享**同一列**，而不是每叶一列。
-// 渲染层只有一个 Shell 列容器；若模型派生多列，翻转后必然出现没有对应 DOM 的空列。
-test('multiple ownColumn leaves share one own column ordered by root order', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const first = addShell(ws);
-    const second = addShell(ws);
-    setColumnSplit(ws, true);
-    setLeafColumnMode(ws, first.id, 'ownColumn');
-    setLeafColumnMode(ws, second.id, 'ownColumn');
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 3, '两个独立叶仍然只多出一列');
-    const ownColumns = plan.columns.filter(col => col.containerId === null);
-    assert.equal(ownColumns.length, 1);
-    assert.equal(ownColumns[0].columnId, OWN_COLUMN_ID);
-    assert.deepEqual(ownColumns[0].tabItems.map(t => t.id), [first.id, second.id], '按根级 order 排列');
-    assert.deepEqual(ownColumns[0].panelIdsAll, [first.id, second.id], '两个面板都住这一列');
-
-    // 反向对照：只把第二个改回 row，列数不变但列内只剩第一个。
-    setLeafColumnMode(ws, second.id, 'row');
-    const one = buildRenderPlan(ws);
-    assert.equal(one.columns.length, 3);
-    assert.deepEqual(one.columns.find(c => c.columnId === OWN_COLUMN_ID).tabItems.map(t => t.id), [first.id]);
-
-    // 两个都回 row：独立列必须整体消失。
-    setLeafColumnMode(ws, first.id, 'row');
-    assert.equal(buildRenderPlan(ws).columns.length, 2);
-});
-
-
-// `hostGroupId` 是「Shell 归属某个分组」的唯一真源，承接历史 `ownerGroupId`。
-// 归属的叶必须落在该列的下层行（rows）里，而不是列首行（tabItems）——
-// 那是它和「停在此列列首行」的根本区别。
-test('a hosted root leaf sits on the column subRow instead of its tab row', () => {
-    const ws = fresh();
-    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
-    setColumnSplit(ws, true);
-
-    assert.equal(setLeafHostGroup(ws, shell.id, other.id), true);
-    assert.equal(leafHostGroup(ws, shell), other.id);
-    assert.equal(resolveLeafColumnId(ws, shell), other.id, '归属决定它算哪一列');
-
-    const plan = buildRenderPlan(ws);
-    const hosted = plan.columns.find(col => col.columnId === other.id);
-    assert.ok(hosted, '归属列必须存在');
-    assert.equal(hosted.tabItems.some(t => t.id === shell.id), false, '不能同时占列首行');
-    assert.ok(hosted.rows.length > 0, '归属列必须有下层行');
-    assert.ok(hosted.rows[0].tabs.some(t => t.id === shell.id), '必须出现在第一行的 tabs 里');
-    assert.ok(hosted.panelIdsAll.includes(shell.id), '面板必须赖在这一列的内容区');
-    // 它不能同时算作别的列的叶。
-    assert.equal(plan.columns.filter(col => col.containerId && col.columnId !== other.id)
-        .some(col => col.rows.some(row => row.tabs.some(t => t.id === shell.id))), false);
-
-    // 反向对照：解除归属后它回到列首行，不再进任何 rows。
-    assert.equal(setLeafHostGroup(ws, shell.id, null), true);
-    assert.equal(leafHostGroup(ws, shell), null);
-    const back = buildRenderPlan(ws);
-    assert.equal(back.columns.some(col => col.rows.some(
-        row => row.tabs.some(t => t.id === shell.id))), false);
-    assert.ok(back.columns.some(col => col.tabItems.some(t => t.id === shell.id)));
-});
-
-// 归属与「自成独立列」是两件互斥的事：同时成立会让同一个标签在两处可见。
-// 关闭分组后 hostGroupId 悬空，必须被自愈清掉。
-test('hosting a leaf clears ownColumn and is repaired when the group is gone', () => {
-    const ws = fresh();
-    const other = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
-    setColumnSplit(ws, true);
-    setLeafColumnMode(ws, shell.id, 'ownColumn');
-    assert.equal(buildRenderPlan(ws).columns.length, 3);
-
-    assert.equal(setLeafHostGroup(ws, shell.id, other.id), true);
-    assert.equal(leafColumnMode(shell), 'row', '挂进分组就不再是独立列');
-    assert.equal(buildRenderPlan(ws).columns.length, 2);
-
-    // 传入不存在的分组：拒绝写入，不静默落一个悬空 id。
-    assert.equal(setLeafHostGroup(ws, shell.id, 'no-such-group'), false);
-    assert.equal(leafHostGroup(ws, shell), other.id);
-
-    closeTab(ws, other.id);
-    const repaired = validateAndRepair(ws);
-    assert.ok(repaired.ok);
-    assert.ok(repaired.repairs.some(text => text.includes('hostGroupId')), repaired.repairs);
-    assert.equal(leafHostGroup(ws, shell), null);
-});
-
-// 未分屏时不能套用上面那一支：那时 column.id 与焦点所在的叶无关，
-test('a root leaf column does not hijack the panel while split is off', () => {
-    const ws = fresh();
-    const main = findLeaf(ws, 'main');
-    const shell = addShell(ws);
-    setColumnSplit(ws, false);
-    activateTab(ws, main.id);
-
-    const plan = buildRenderPlan(ws);
-    assert.deepEqual(plan.panelIds, [main.id]);
-    assert.ok(!plan.panelIds.includes(shell.id), '未分屏时 shell 不得顶替焦点面板');
-});
-
-// ---------------------------------------------------------------------------
-// §4.2 pane 分屏
-// ---------------------------------------------------------------------------
-
-test('pane split creates a second pane and one subRow per pane', () => {
-    const ws = fresh();
-    setColumnSplit(ws, true);                // 分屏让容器不再走族列，便于观察 subRow
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-
-    const container = Object.values(ws.tabs).find(isContainer);
-    assert.equal(setPaneSplit(ws, container.id, true), true);
-    assert.equal(container.paneSplit.enabled, true);
-    assert.ok(container.panes.length >= 2);
-
-    const col = layoutColumns(ws).find(c => c.containerId === container.id);
-    assert.equal(layoutRowsOf(ws, col).length, container.panes.length);
-});
-
-test('flat mode with pane split still renders the subRows required by I9', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    setPaneSplit(ws, container.id, true);
-
-    const plan = buildRenderPlan(ws);
-    // 扁平时容器不占独立列，行数必须落在它所在的那一列上
-    const col = plan.columns[0];
-    assert.equal(col.rows.length, 2);
-    assert.deepEqual(validateAndRepair(ws).repairs, []);
-});
-
-// 方案 A 的扁平 + pane 分屏：子项全部落到各自 subRow，一级行不得再重复列一遍。
-// 反向对照：把一级行改成「容器全部子项」后，下面的 disjoint 断言必须失败。
-test('flat mode with pane split keeps the top row free of duplicated pane children', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const main = findLeaf(ws, 'main');
-    addLeaf(ws, 'filter');
-    setPaneSplit(ws, container.id, true);
-
-    const plan = buildRenderPlan(ws);
-    const col = plan.columns[0];
-    const topIds = col.tabItems.map(item => item.id);
-    const subIds = col.rows.flatMap(row => row.tabs.map(item => item.id));
-
-    assert.equal(subIds.includes(main.id), true, 'main 必须在自己那条 subRow 里');
-    assert.equal(topIds.includes(main.id), false, '一级行不能再列一遍 main');
-    assert.equal(new Set([...topIds, ...subIds]).size, topIds.length + subIds.length,
-        '一级行与 subRow 的标签不得重叠');
-});
-
-test('flat mode with pane split allows a shell to join a subRow', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const shell = addShell(ws);
-    setPaneSplit(ws, container.id, true);
-    const moved = model.applyWorkspaceAction(ws, {
-        type: 'move', tabId: shell.id, target: {
-            kind: 'pane', groupId: container.id, paneId: container.panes[1].id
-        }
-    });
-
-    assert.equal(moved.ok, true, moved.reason);
-    const plan = buildRenderPlan(moved.workspace);
-    const topIds = plan.columns[0].tabItems.map(item => item.id);
-    const subIds = plan.columns[0].rows.flatMap(row => row.tabs.map(item => item.id));
-    assert.equal(topIds.includes(shell.id), false);
-    assert.equal(subIds.includes(shell.id), true);
-});
-
-// ---------------------------------------------------------------------------
-// §8.1 激活
-// ---------------------------------------------------------------------------
-
-test('activating a leaf updates the focus and its pane active tab', () => {
-    const ws = fresh();
-    const filter = addLeaf(ws, 'filter');
-    const main = findLeaf(ws, 'main');
-    activateTab(ws, main.id);
-    activateTab(ws, filter.id);
-
-    const hit = model.paneOfTab(ws, filter);
-    assert.equal(ws.focusedTabId, filter.id);
-    assert.equal(hit.pane.activeTabId, filter.id);
-});
-
-test('activating a container does not steal the focus of its active leaf', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const filter = addLeaf(ws, 'filter');
-    activateTab(ws, container.id);
-    assert.equal(ws.focusedTabId, container.id);
-    assert.equal(container.panes[0].activeTabId, filter.id);
-});
-
-// ---------------------------------------------------------------------------
-// §8.2 拖拽只允许同栏重排
-// ---------------------------------------------------------------------------
-
-test('root reorder rewrites order contiguously and rejects non-root tabs', () => {
-    const ws = fresh();
-    const shell = addShell(ws);
-    assert.equal(reorderInRow(ws, { kind: 'roots' }, shell.id, 0), true);
-
-    const order = model.roots(ws).map(tab => tab.id);
-    assert.equal(order[0], shell.id);
-    assert.deepEqual(model.roots(ws).map(tab => tab.order), [0, 1]);
-
-    const main = findLeaf(ws, 'main');
-    assert.equal(reorderInRow(ws, { kind: 'roots' }, main.id, 0), false);
-});
-
-test('pane reorder refuses cross-pane moves', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    setPaneSplit(ws, container.id, true);
-    const pane2 = container.panes[1];
-
-    // pane2 的叶不可能通过 pane1 的重排接口挪过去
-    assert.equal(reorderInRow(ws, { kind: 'pane', containerId: container.id, paneId: container.panes[0].id },
-        pane2.tabIds[0], 0), false);
-});
-
-// ---------------------------------------------------------------------------
-// §8.3 收起
-// ---------------------------------------------------------------------------
-
-test('collapsing is only allowed when there is a second row', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    assert.equal(setCollapsed(ws, container.id, true), false);   // 只有一行
-
-    setPaneSplit(ws, container.id, true);
-    assert.equal(setCollapsed(ws, container.id, true), true);
-    assert.equal(container.collapsed, true);
-});
-
-// ---------------------------------------------------------------------------
-// 关闭
-// ---------------------------------------------------------------------------
-
-test('closing the last leaf of a pane backfills a main leaf (I5)', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const pane = container.panes[0];
-    const onlyLeaf = pane.tabIds[0];
-
-    assert.equal(closeTab(ws, onlyLeaf), true);
-    assert.equal(pane.tabIds.length, 1);
-    assert.notEqual(pane.tabIds[0], onlyLeaf);
-    assert.equal(ws.tabs[pane.tabIds[0]].kind, 'main');
-});
-
-test('closing a shell keeps focus valid (I7)', () => {
-    const ws = fresh();
-    const shell = addShell(ws);
-    activateTab(ws, shell.id);
-    assert.equal(closeTab(ws, shell.id), true);
-    assert.ok(model.tabOf(ws, ws.focusedTabId));
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(ws)), []);
-});
-
-// ---------------------------------------------------------------------------
-// §4.5 normalizeSizes
-// ---------------------------------------------------------------------------
-
-test('normalizeSizes always returns weights summing to one', () => {
-    const out = normalizeSizes({ a: 2, b: 1, gone: 9 }, ['a', 'b', 'c']);
-    assert.deepEqual(Object.keys(out).sort(), ['a', 'b', 'c']);
-    const sum = out.a + out.b + out.c;
-    assert.ok(Math.abs(sum - 1) < 1e-9);
-    assert.equal(out.a / out.b, 2);
-});
-
-test('normalizeSizes falls back to equal shares for broken input', () => {
-    const out = normalizeSizes({ a: 0, b: -5 }, ['a', 'b']);
-    assert.ok(Math.abs(out.a - 0.5) < 1e-9);
-    assert.ok(Math.abs(out.b - 0.5) < 1e-9);
-});
-
-// ---------------------------------------------------------------------------
-// §6.2 自愈
-// ---------------------------------------------------------------------------
-
-test('validateAndRepair pulls shells out of panes only in multi-group mode', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const shell = addShell(ws);
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    dropShellIntoPane(ws, container, shell);
-    assert.notDeepEqual(acceptance.assertAll(withDiagnostics(ws)), []);
-
-    const result = validateAndRepair(ws);
-    assert.equal(result.fatal, false);
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(ws)), []);
-    assert.equal(shell.parentId, null);
-});
-
-function dropShellIntoPane(ws, container, shell) {
-    // 模拟一次非法写入：shell 被塞进 pane
-    shell.parentId = container.id;
-    container.panes[0].tabIds.push(shell.id);
-}
-
-// ---------------------------------------------------------------------------
-// 验收器必须真的会失败（反向对照，防止断言恒真）
-// ---------------------------------------------------------------------------
-
-test('acceptance catches a broken tree instead of always passing', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    container.panes[0].tabIds.push('ghost-tab');
-    assert.notDeepEqual(acceptance.assertAll(withDiagnostics(ws)), []);
-
-    const ws2 = fresh();
-    ws2.focusedTabId = 'nope';
-    assert.ok(acceptance.assertAll(withDiagnostics(ws2)).some(e => e.startsWith('I7')));
-});
-
-// ---------------------------------------------------------------------------
-// 固定种子随机性质测试
-// ---------------------------------------------------------------------------
-
-function makeRandom(seed) {
-    let state = seed >>> 0;
-    return () => {
-        state = (state * 1664525 + 1013904223) >>> 0;
-        return state / 0x100000000;
-    };
-}
-
-function pick(rand, list) {
-    return list[Math.floor(rand() * list.length)];
-}
-
-function applyRandomOperation(ws, rand) {
-    const leaves = Object.values(ws.tabs).filter(tab => !isContainer(tab));
-    const containers = Object.values(ws.tabs).filter(isContainer);
-    const container = containers.length ? pick(rand, containers) : null;
-
-    switch (Math.floor(rand() * 9)) {
-        case 0:
-            if (container) addLeaf(ws, pick(rand, ['filter', 'chart']), container.id);
-            break;
-        case 1:
-            if (groupCount(ws) < 3) addContainerTab(ws, {});
-            break;
-        case 2:
-            if (groupCount(ws) < 3) addShell(ws);
-            break;
-        case 3:
-            if (leaves.length) activateTab(ws, pick(rand, leaves).id);
-            break;
-        case 4:
-            if (container) setPaneSplit(ws, container.id, !container.paneSplit.enabled);
-            break;
-        case 5:
-            setColumnSplit(ws, !ws.split.enabled);
-            break;
-        case 6:
-            if (container && container.paneSplit.enabled) setCollapsed(ws, container.id, !container.collapsed);
-            break;
-        case 7: {
-            // 关闭一个叶，但保留最后一个容器里的 main，避免工作区被关空
-            const closable = leaves.filter(tab => tab.kind !== 'main');
-            if (closable.length) closeTab(ws, pick(rand, closable).id);
-            break;
-        }
-        case 8: {
-            if (!container) break;
-            const pane = pick(rand, container.panes);
-            if (pane.tabIds.length > 1) {
-                reorderInRow(ws, { kind: 'pane', containerId: container.id, paneId: pane.id },
-                    pane.tabIds[0], 1);
-            }
-            break;
-        }
-        default:
-            break;
+function rng(seed) { let n = seed; return () => ((n = (n * 1664525 + 1013904223) >>> 0) / 0x100000000); }
+function randomStep(ws, random, step) {
+    const pick = list => list[Math.floor(random() * list.length)];
+    const leaves = Object.values(ws.tabs).filter(tab => !m.isContainer(tab)), groups = m.containerIds(ws), leaf = pick(leaves);
+    const target = pick(m.tree.stacks(ws.layout.root, true)); let action;
+    switch (Math.floor(random() * 10)) {
+        case 0: action = { type: 'add-leaf', groupId: pick(groups), options: { id: `new-${step}`, kind: pick(['filter', 'chart', 'shell']) }, activate: random() > .5 }; break;
+        case 1: action = groups.length < 4 ? { type: 'add-group', options: { id: `g-${step}`, mainId: `main-${step}` } } : { type: 'remove-group', groupId: pick(groups) }; break;
+        case 2: action = { type: 'activate', tabId: leaf.id }; break;
+        case 3: action = { type: 'split-tab', tabId: leaf.id, direction: pick(['left', 'right', 'top', 'bottom']), activate: random() > .5 }; break;
+        case 4: action = { type: 'move', tabId: leaf.id, target: { nodeId: target.id, index: Math.floor(random() * (target.items.length + 1)) }, activate: random() > .5 }; break;
+        case 5: action = { type: 'merge', tabId: leaf.id }; break;
+        case 6: action = { type: 'close', tabId: leaf.id }; break;
+        case 7: action = { type: 'split-group', groupId: pick(groups), direction: pick(['right', 'bottom']) }; break;
+        case 8: action = { type: 'collapse-all', ...(random() > .5 ? { scopeGroupId: pick(groups) } : {}) }; break;
+        default: { const splits = []; m.tree.walk(ws.layout.root, node => { if (node.type === 'split') splits.push(node); }); const node = pick(splits);
+            action = node ? { type: 'resize', splitNodeId: node.id, beforeId: node.children[0].id, afterId: node.children[1].id, ratio: .1 + random() * .8 } : { type: 'activate', tabId: leaf.id }; }
     }
+    const before = JSON.stringify(ws), result = m.applyWorkspaceAction(ws, action);
+    assert.equal(JSON.stringify(ws), before, 'transaction changed input');
+    if (!result.ok) assert.equal(result.workspace, ws);
+    return result.workspace;
 }
-
-test('random operation sequences preserve every invariant', () => {
+test('120 fixed seeds × 120 mixed operations preserve independent geometry/owner/visibility invariants', () => {
     for (let seed = 1; seed <= 120; seed++) {
-        resetIdSeq();
-        const ws = createWorkspace();
-        const rand = makeRandom(seed);
-
+        let ws = fresh(); const random = rng(seed);
         for (let step = 0; step < 120; step++) {
-            applyRandomOperation(ws, rand);
-            const errors = acceptance.assertAll(withDiagnostics(ws));
-            assert.deepEqual(errors, [], `seed=${seed} step=${step}`);
+            ws = randomStep(ws, random, step); assert.deepEqual(acceptance.assertAll(m.withDiagnostics(ws)), [], `seed=${seed} step=${step}`);
         }
-
-        // 每个随机序列结束后，自愈必须是幂等的
-        validateAndRepair(ws);
-        assert.deepEqual(acceptance.assertAll(withDiagnostics(ws)), [], `seed=${seed} after repair`);
+        const snapshot = codec.serializeWorkspaceLayout(ws);
+        assert.deepEqual(codec.serializeWorkspaceLayout(codec.restoreWorkspaceLayout(ws, snapshot)), snapshot, `seed=${seed} roundtrip`);
     }
 });
-
-test('render plan never shows the same tab in two places', () => {
+test('forty randomized render plans never duplicate a business leaf panel', () => {
     for (let seed = 1; seed <= 40; seed++) {
-        resetIdSeq();
-        const ws = createWorkspace();
-        const rand = makeRandom(seed);
-        for (let step = 0; step < 60; step++) applyRandomOperation(ws, rand);
-
-        const plan = buildRenderPlan(ws);
-        const ids = rowIdsOf(plan);
-        // shell / 容器 可能同时作为 tabItems 与 panelIds 出现，这里只看定位信息
-        const dupes = ids.filter((id, index) => ids.indexOf(id) !== index);
-        assert.deepEqual(dupes, [], `seed=${seed} 重复定位 ${dupes.join(',')}`);
+        let ws = fresh(true); const random = rng(seed);
+        for (let step = 0; step < 60; step++) ws = randomStep(ws, random, step);
+        const ids = m.buildRenderPlan(ws).panelIdsAll; assert.equal(new Set(ids).size, ids.length); invariant(ws);
     }
-});
-// ---------------------------------------------------------------------------
-// 逐条反向对照：每条不变式被破坏时，验收器必须报出来
-// ---------------------------------------------------------------------------
-//
-// 只测「合法数据能通过」是不够的——断言可能根本没在检查。
-// 这里为 I1–I10 各造一个最小违规，确认对应条目会被点名。
-
-function expectRule(ws, ruleId) {
-    const errors = acceptance.assertAll(withDiagnostics(ws));
-    assert.ok(
-        errors.some(message => message.startsWith(ruleId)),
-        `${ruleId} 未被检出，实际错误：${errors.join(' | ') || '（无）'}`
-    );
-}
-
-test('I1/I2 violations are reported only when shells escape panes in multi-group mode', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const shell = addShell(ws);
-    const second = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    shell.parentId = container.id;
-    expectRule(ws, 'I1');
-
-    shell.parentId = null;
-    container.panes[0].tabIds.push(shell.id);
-    model.rebuildIndex(ws);
-    expectRule(ws, 'I2');
-
-    const single = fresh();
-    const singleContainer = roots(single).find(isContainer);
-    const singleShell = addShell(single);
-    singleContainer.panes[0].tabIds.push(singleShell.id);
-    model.rebuildIndex(single);
-    assert.ok(!acceptance.assertAll(withDiagnostics(single)).some(error => error.startsWith('I2')));
-});
-
-test('I3 is really checked: a container holding a panel is reported', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    container.panel = { id: container.id };
-    expectRule(ws, 'I3');
-});
-
-test('I4 is really checked: a tab listed in two panes is reported', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    setPaneSplit(ws, container.id, true);
-    const leaf = container.panes[0].tabIds[0];
-    container.panes[1].tabIds.push(leaf);
-    expectRule(ws, 'I4');
-});
-
-test('I5 is really checked: an empty pane is reported', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    setPaneSplit(ws, container.id, true);
-    container.panes[1].tabIds = [];
-    container.panes[1].activeTabId = null;
-    expectRule(ws, 'I5');
-});
-
-test('I6 is really checked: an activeTabId outside its pane is reported', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const shell = addShell(ws);
-    container.panes[0].activeTabId = shell.id;
-    expectRule(ws, 'I6');
-});
-
-test('I7 is really checked: a dangling focus is reported', () => {
-    const ws = fresh();
-    ws.focusedTabId = 'does-not-exist';
-    expectRule(ws, 'I7');
-});
-
-test('I8 is really checked: missing judgement hook is reported', () => {
-    const ws = fresh();
-    const bare = Object.assign({}, ws);          // 不带 visiblePanels
-    const errors = acceptance.assertAll(bare);
-    assert.ok(errors.some(message => message.startsWith('I8')));
-});
-
-test('I9 is really checked: flat + split with a single pane is reported', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    container.paneSplit.enabled = true;          // 只置位，不真的加 pane
-    expectRule(ws, 'I9');
-});
-
-test('I10 is really checked: collapsing a single-row container is reported', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    container.collapsed = true;                  // 绕过 setCollapsed 的保护
-    expectRule(ws, 'I10');
-});
-
-// ---------------------------------------------------------------------------
-// §5.5 点名未覆盖的三类形态（本轮补齐）
-// ---------------------------------------------------------------------------
-//
-// 这三支不是「再测一遍已经测过的」，而是此前**一支都没有**的形态：
-//   1. 未分屏 + 多分组 + 多个受托管叶
-//   2. 四列以上（列集合 = 4 个容器 + 一个共享独立列）
-//   3. 多 Shell 混合（列首行 / 独立列 / 受托管 三种落点同时存在）
-// 它们此前只能靠「按单形态推理应该没问题」，而标签体系历史上恰恰是组合形态出错。
-
-test('split off with several hosted leaves keeps every leaf in exactly one place', () => {
-    const ws = fresh();
-    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
-    const first = addShell(ws);
-    const second = addShell(ws);
-    setColumnSplit(ws, false);
-    setLeafHostGroup(ws, first.id, g2.id);
-    setLeafHostGroup(ws, second.id, g2.id);
-    activateTab(ws, g2.panes[0].activeTabId);
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 1, '未分屏只有一列');
-    const column = plan.columns[0];
-    assert.equal(column.containerId, g2.id, '这一列跟着焦点所在的分组');
-
-    // 受托管叶住该列 pane-1 的行里，不能同时出现在列首行。
-    assert.deepEqual(column.rows[0].tabs.map(t => t.id),
-        [g2.panes[0].tabIds[0], first.id, second.id]);
-    assert.equal(column.tabItems.some(t => t.id === first.id || t.id === second.id), false,
-        '受托管叶不能同时占列首行');
-
-    // 全局每个叶只出现一次（列首行 + 各行合并后去重前）。
-    const placed = [
-        ...column.tabItems.map(t => t.id),
-        ...column.rows.flatMap(row => row.tabs.map(t => t.id))
-    ];
-    const dupes = placed.filter((id, index) => placed.indexOf(id) !== index);
-    assert.deepEqual(dupes, [], '同一标签不得在两处占位');
-});
-
-test('four containers plus one shared own column keep five columns in root order', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
-    addContainerTab(ws, { id: 'grp-4', groupId: 'g4' });
-    const first = addShell(ws);
-    const second = addShell(ws);
-    setColumnSplit(ws, true);
-    setLeafColumnMode(ws, first.id, 'ownColumn');
-    setLeafColumnMode(ws, second.id, 'ownColumn');
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 5, '四个容器各一列 + 一个共享独立列');
-    assert.deepEqual(plan.columns.map(c => c.columnId),
-        ['grp-default', 'grp-2', 'grp-3', 'grp-4', OWN_COLUMN_ID]);
-    assert.deepEqual(plan.columns[4].tabItems.map(t => t.id), [first.id, second.id],
-        '两个独立叶同住一列，按根级 order');
-    assert.equal(plan.columns[4].panelIds.length, 1, '独立列只有一个内容区');
-    assert.deepEqual(plan.columns[4].panelIdsAll, [first.id, second.id]);
-
-    // 每一列都必须有且只有一个「此刻该亮」的面板，且它必须住在这列。
-    for (const column of plan.columns) {
-        assert.equal(column.panelIds.length, 1, `${column.columnId} 应恰好一个可见面板`);
-        assert.ok(column.panelIds.every(id => column.panelIdsAll.includes(id)),
-            `${column.columnId} 的可见面板必须住在本列`);
-    }
-});
-
-test('mixed shell placements never put one shell in two columns', () => {
-    const ws = fresh();
-    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const hosted = addShell(ws);
-    const own = addShell(ws);
-    const topRow = addShell(ws);
-    setColumnSplit(ws, true);
-    setLeafHostGroup(ws, hosted.id, g2.id);
-    setLeafColumnMode(ws, own.id, 'ownColumn');
-    setLeafColumn(ws, topRow.id, 'grp-2');
-
-    const plan = buildRenderPlan(ws);
-    const locate = (id) => plan.columns
-        .filter(column => column.tabItems.some(t => t.id === id)
-            || column.rows.some(row => row.tabs.some(t => t.id === id)))
-        .map(column => column.columnId);
-    assert.deepEqual(locate(hosted.id), ['grp-2']);
-    assert.deepEqual(locate(own.id), [OWN_COLUMN_ID]);
-    assert.deepEqual(locate(topRow.id), ['grp-2']);
-
-    // 本列的列首行只应包含容器标签与停在首行的那个叶，不能把独立叶混进来。
-    const g2Column = plan.columns.find(c => c.columnId === 'grp-2');
-    assert.deepEqual(g2Column.tabItems.map(t => t.id), ['grp-2', topRow.id]);
-    assert.ok(g2Column.rows[0].tabs.some(t => t.id === hosted.id));
-    assert.equal(g2Column.rows[0].tabs.some(t => t.id === own.id), false);
-});
-
-// 反向对照：这两条正是本轮探针真实抓到的两处模型缺陷。
-test('marking a hosted leaf as ownColumn releases its host (no two places)', () => {
-    const ws = fresh();
-    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
-    setColumnSplit(ws, true);
-
-    assert.equal(setLeafHostGroup(ws, shell.id, g2.id), true);
-    assert.equal(setLeafColumnMode(ws, shell.id, 'ownColumn'), true);
-    assert.equal(leafHostGroup(ws, shell), null, '切成独立列必须同时解除挂靠');
-    assert.equal(leafColumnMode(shell), 'ownColumn');
-
-    const plan = buildRenderPlan(ws);
-    const places = plan.columns.filter(column => column.tabItems.some(t => t.id === shell.id)
-        || column.rows.some(row => row.tabs.some(t => t.id === shell.id)));
-    assert.deepEqual(places.map(c => c.columnId), [OWN_COLUMN_ID]);
-
-    // 反方向早已存在：挂靠时把 columnMode 清回 row。
-    setLeafHostGroup(ws, shell.id, g2.id);
-    assert.equal(leafColumnMode(shell), 'row');
-    assert.equal(leafHostGroup(ws, shell), g2.id);
-});
-
-test('every visible panel of a column lives in that column content area', () => {
-    const ws = fresh();
-    const g2 = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    addShell(ws);
-    setColumnSplit(ws, true);
-    setPaneSplit(ws, g2.id, true);
-    const shell = addShell(ws);
-    setLeafHostGroup(ws, shell.id, g2.id);
-
-    const plan = buildRenderPlan(ws);
-    for (const column of plan.columns) {
-        for (const id of column.panelIds) {
-            assert.ok(column.panelIdsAll.includes(id),
-                `${id} 在 ${column.columnId} 亮着却没住进这列的内容区`);
-        }
-    }
-});
-
-test('flat pane split does not list a hosted leaf on the top row as well', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    addLeaf(ws, 'filter', container.id);
-    const shell = addShell(ws);
-    setPaneSplit(ws, container.id, true);
-    setLeafHostGroup(ws, shell.id, container.id);
-
-    const plan = buildRenderPlan(ws);
-    const column = plan.columns[0];
-    assert.equal(column.tabItems.some(t => t.id === shell.id), false,
-        '受托管叶已经在下层行里，不能再占一级行');
-    assert.ok(column.rows[0].tabs.some(t => t.id === shell.id));
-    // 一级行与两行里出现的每个标签都必须在 panelIdsAll 里（一个不多一个不少）。
-    const shown = [...column.tabItems.map(t => t.id), ...column.rows.flatMap(r => r.tabs.map(t => t.id))];
-    assert.deepEqual([...column.panelIdsAll].sort(), [...new Set(shown)].sort());
-});
-
-test('a stale second pane does not light a panel that has no row', () => {
-    const ws = fresh();
-    // 必须多一个容器：扁平形态的一级行会列出全部 pane 的子项（方案 A），
-    // 那个形态下「没有行」的标签仍然有自己的按钮，不构成缺陷。
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const container = Object.values(ws.tabs).find(isContainer);
-    // paneSplit 已关，但布局里还留着第二个非空 pane（旧配置 / 写入中断）。
-    container.panes.push({ id: 'pane-2', tabIds: ['stale-main'], activeTabId: 'stale-main' });
-    ws.tabs['stale-main'] = model.createLeaf('main', { id: 'stale-main' });
-    container.paneSplit.enabled = false;
-    // 只把 id 塞进 pane.tabIds 不够：`parentId` 是派生缓存（由 rebuildIndex 重算），
-    // 不重算的话这个叶会被当成「停在列首行的根级叶」，那它就有按钮、也有面板，
-    // 不构成「没有行」的场景。这里必须让它真的属于那个 pane。
-    model.rebuildIndex(ws);
-    activateTab(ws, 'stale-main');
-
-    const plan = buildRenderPlan(ws);
-    assert.deepEqual(plan.columns[0].rows.map(r => r.paneId), [container.panes[0].id],
-        '未分屏只画一条行');
-    assert.deepEqual(plan.panelIds, [container.panes[0].activeTabId],
-        '焦点落在没有行的叶上时必须回落到唯一那条行，而不是点亮一个搬不进去的面板');
-    for (const column of plan.columns) {
-        assert.ok(column.panelIds.every(id => column.panelIdsAll.includes(id)));
-    }
-});
-
-test('a partial split ratio table is normalized for every visible column', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
-    setColumnSplit(ws, true);
-    // 屏幕上会画 3 列（每个容器一列），但比例表只覆盖两列——这正是 4 列形态下
-    // 真实出现过的输入（groupIds 只有两项，列却被容器数撑到 4）。
-    // 键必须是**真实的容器 id**（默认容器的 id 是 grp-default，不是 'default'）。
-    const ids = Object.values(ws.tabs).filter(isContainer).map(c => c.id);
-    ws.split.sizes = { [ids[0]]: 0.7, [ids[1]]: 0.3 };
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 3);
-    const sizes = plan.columns.map(column => column.size);
-    assert.ok(sizes.every(value => Number.isFinite(value) && value > 0),
-        `每一列都必须拿到正比例，实际 ${JSON.stringify(sizes)}`);
-    const total = sizes.reduce((sum, value) => sum + value, 0);
-    assert.ok(Math.abs(total - 1) < 1e-9, `比例之和必须为 1，实际 ${total}`);
-    // 给定两列保持 7:3 的相对关系，缺失的那一列按等权补齐后再一起归一。
-    assert.ok(Math.abs(sizes[0] / sizes[1] - 0.7 / 0.3) < 1e-9, JSON.stringify(sizes));
-
-    // columnLayout.sizes 与每列的 size 必须同源，渲染层只读这一份。
-    const layoutTotal = plan.columns.reduce(
-        (sum, column) => sum + plan.columnLayout.sizes[column.domKey], 0);
-    assert.ok(Math.abs(layoutTotal - 1) < 1e-9, `columnLayout.sizes 之和必须为 1，实际 ${layoutTotal}`);
-});
-
-test('an empty split ratio table gives every column an equal share', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    addContainerTab(ws, { id: 'grp-3', groupId: 'g3' });
-    setColumnSplit(ws, true);
-
-    const plan = buildRenderPlan(ws);
-    const sizes = plan.columns.map(column => column.size);
-    assert.equal(sizes.length, 3);
-    assert.ok(sizes.every(value => Math.abs(value - 1 / 3) < 1e-9), JSON.stringify(sizes));
-});
-
-test('split off keeps column sizes out of the plan', () => {
-    const ws = fresh();
-    addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    setColumnSplit(ws, true);
-    ws.split.sizes = { default: 0.9, 'grp-2': 0.1 };
-    setColumnSplit(ws, false);
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columnLayout.enabled, false);
-    assert.deepEqual(plan.columnLayout.sizes, {});
-    assert.ok(plan.columns.every(column => column.size === null), JSON.stringify(plan.columns.map(c => c.size)));
-});
-
-// ---------------------------------------------------------------------------
-// 两条真实用户路径回归（对应 TAB_ARCHITECTURE §11.6.9）
-// ---------------------------------------------------------------------------
-
-// 焦点落在未归属 Shell 上时，列仍必须知道自己属于哪个容器。
-//
-// 旧实现用 `rootOf(focused)` 判列容器；Shell 的根是它自己，于是 containerId 被写成
-// null → layoutRowsOf 看到「无容器列」返回 0 条 → paneSplit 整条不渲染。实测
-// diag919：containerPaneSplit.enabled=true 而 plan.columns[0].splitEnabled=false /
-// rows=[]，用户报「右键日志窗口分屏出现空的分屏」。
-//
-// 反向对照：把 containerId 的判据改回 rootOf(focused) 后，下面 rows.length 会退回 0。
-test('a focused unowned shell still resolves its column container', () => {
-    const ws = fresh();
-    const container = Object.values(ws.tabs).find(isContainer);
-    const shell = addShell(ws);
-    // setPaneSplit 自动补第 2 个 pane（带一个新 main 叶），不能重复 addPane，否则会变成 3 条行。
-    setPaneSplit(ws, container.id, true);
-    assert.equal(ws.tabs[container.id].panes.length, 2);
-    // 主标签被移到 pane-2，Shell 停在 pane-1（就是用户右键主终端分屏后的形态）。
-    ws.tabs[container.id].panes[0].tabIds = [shell.id];
-    ws.tabs[container.id].panes[0].activeTabId = shell.id;
-    ws.tabs[container.id].panes[1].tabIds = [mainLeafIdOf(ws)];
-    ws.tabs[container.id].panes[1].activeTabId = mainLeafIdOf(ws);
-    // 主标签被移到 pane-2，Shell 停在 pane-1（就是用户右键主终端分屏后的形态）。
-    ws.tabs[container.id].panes[0].tabIds = [shell.id];
-    ws.tabs[container.id].panes[0].activeTabId = shell.id;
-    ws.tabs[container.id].panes[1].tabIds = [mainLeafIdOf(ws)];
-    ws.tabs[container.id].panes[1].activeTabId = mainLeafIdOf(ws);
-    model.rebuildIndex(ws);
-    activateTab(ws, shell.id);
-
-    const plan = buildRenderPlan(ws);
-    assert.equal(plan.columns.length, 1);
-    assert.equal(plan.columns[0].containerId, container.id, '焦点在 Shell 上时列仍属于容器');
-    assert.equal(plan.columns[0].splitEnabled, true, 'pane 分屏必须仍然生效');
-    assert.equal(plan.columns[0].rows.length, 2, '两个 pane 各一条行');
-});
-test('focused root leaf replaces only the first pane panel in a split column', () => {
-    const ws = fresh();
-    const first = Object.values(ws.tabs).find(isContainer);
-    const second = addContainerTab(ws, { id: 'grp-2', groupId: 'g2' });
-    const shell = addShell(ws);
-    setPaneSplit(ws, first.id, true);
-    setColumnSplit(ws, true);
-    setLeafColumn(ws, shell.id, first.id);
-    activateTab(ws, shell.id);
-
-    const plan = buildRenderPlan(ws);
-    const firstColumn = plan.columns.find(column => column.containerId === first.id);
-    const otherColumn = plan.columns.find(column => column.containerId === second.id);
-    const secondPaneActive = first.panes[1].activeTabId;
-
-    assert.deepEqual(firstColumn.panelIds, [shell.id, secondPaneActive]);
-    assert.deepEqual(otherColumn.panelIds, [second.panes[0].activeTabId]);
-    assert.ok(plan.panelIds.includes(shell.id));
-    assert.ok(plan.panelIds.includes(secondPaneActive));
-});
-
-
-function mainLeafIdOf(ws) {
-    return Object.values(ws.tabs).find(tab => tab.kind === 'main' && !isContainer(tab)).id;
-}
-
-// 主标签被移到 pane-2 后，投影不得把它拽回 pane-1。
-//
-// 旧投影在 `index !== 0` 时直接 `continue` 跳过主标签，最后又在 pane-1 里 unshift
-// 一次 —— 右键主终端「Move to Right Split」后布局是 pane-2=[tab-main]，投影却是
-// pane-1=[tab-main] / pane-2=[]，屏幕上必然有一块是空的（diag918/919）。
-//
-// 反向对照：删掉 `declaredMain` 判定、改回无条件 unshift，下面 pane-2 的 tabIds 立即变空。
-test('projection keeps the main tab in the pane that actually declares it', () => {
-    const { projectWorkspace } = require('../src/workspace/tabs-workspace-projection');
-    const sections = {
-        groups: [{
-            id: 'default',
-            title: '串口 1',
-            order: 0,
-            panes: [
-                { id: 'pane-1', tabIds: ['tab-shell-1'], activeTabId: 'tab-shell-1' },
-                { id: 'pane-2', tabIds: ['tab-main'], activeTabId: 'tab-main' }
-            ],
-            paneSplit: { enabled: true, orientation: 'horizontal', sizes: { 'pane-1': 0.5, 'pane-2': 0.5 } },
-            collapsed: false
-        }],
-        filterTabs: {},
-        chartTabs: {},
-        shellTabs: [{ id: 'tab-shell-1', title: 'shell', hostGroupId: null, columnMode: 'row', columnId: null }],
-        focusedTabId: 'tab-main',
-        split: { enabled: false, orientation: 'horizontal', sizes: {} }
-    };
-
-    const ws = projectWorkspace(sections);
-    const panes = ws.tabs.default.panes;
-    assert.deepEqual(panes[0].tabIds, [], 'pane-1 不得再出现主标签');
-    assert.deepEqual(panes[1].tabIds, ['tab-main'], '主标签必须留在声明它的 pane-2');
-    assert.equal(panes[1].activeTabId, 'tab-main');
-});
-
-// 反过来：任何 pane 都没声明主标签时，仍要按老行为补到 pane-1 队首。
-// 这一条是上一条的反向对照，两条一起才能证明「保留声明位置」没有把兜底补位删掉。
-test('projection still prepends the main tab when no pane declares it', () => {
-    const { projectWorkspace } = require('../src/workspace/tabs-workspace-projection');
-    const sections = {
-        groups: [{
-            id: 'default',
-            title: '串口 1',
-            order: 0,
-            panes: [{ id: 'pane-1', tabIds: [], activeTabId: null }],
-            paneSplit: { enabled: false, orientation: 'horizontal', sizes: {} },
-            collapsed: false
-        }],
-        filterTabs: {},
-        chartTabs: {},
-        shellTabs: [],
-        focusedTabId: null,
-        split: { enabled: false, orientation: 'horizontal', sizes: {} }
-    };
-
-    const ws = projectWorkspace(sections);
-    assert.deepEqual(ws.tabs.default.panes[0].tabIds, ['tab-main']);
-});
-
-test('applyWorkspaceAction is atomic and rejects missing targets without changing source', () => {
-    const ws = fresh();
-    const before = JSON.stringify(ws);
-
-    const rejected = model.applyWorkspaceAction(ws, { type: 'activate', tabId: 'missing' });
-    assert.equal(rejected.ok, false);
-    assert.equal(rejected.workspace, ws);
-    assert.equal(JSON.stringify(ws), before);
-
-    const accepted = model.applyWorkspaceAction(ws, { type: 'activate', tabId: findLeaf(ws, 'main').id });
-    assert.equal(accepted.ok, true);
-    assert.notEqual(accepted.workspace, ws);
-    assert.equal(JSON.stringify(ws), before, '成功事务也不能原地修改输入快照');
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(accepted.workspace)), []);
-});
-
-test('applyWorkspaceAction protects main and default group from close', () => {
-    const ws = fresh();
-    const container = roots(ws).find(isContainer);
-    const main = findLeaf(ws, 'main');
-    const before = JSON.stringify(ws);
-
-    assert.equal(model.applyWorkspaceAction(ws, { type: 'close', tabId: main.id }).ok, false);
-    assert.equal(model.applyWorkspaceAction(ws, { type: 'remove-group', groupId: container.id }).ok, false);
-    assert.equal(JSON.stringify(ws), before);
-});
-
-test('group transactions preserve hosted shells and resize remains an atomic model action', () => {
-    const ws = fresh();
-    const first = roots(ws).find(isContainer);
-    const shell = addShell(ws);
-    assert.equal(setLeafHostGroup(ws, shell.id, first.id), true);
-
-    const added = model.applyWorkspaceAction(ws, {
-        type: 'add-group',
-        options: { id: 'grp-transaction', groupId: 'transaction', title: 'Transaction' }
-    });
-    assert.equal(added.ok, true);
-    const withGroup = added.workspace;
-    assert.equal(withGroup.tabs[shell.id].hostGroupId, null);
-    assert.equal(withGroup.tabs[shell.id].parentId, null);
-    assert.equal(withGroup.tabs[shell.id].panel.id, shell.id);
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(withGroup)), []);
-
-    const split = model.applyWorkspaceAction(withGroup, { type: 'column-split', enabled: true });
-    assert.equal(split.ok, true);
-    const resized = model.applyWorkspaceAction(split.workspace, {
-        type: 'resize-columns',
-        sizes: { 'grp-default': 0.7, 'grp-transaction': 0.3 }
-    });
-    assert.equal(resized.ok, true);
-    assert.deepEqual(resized.workspace.split.sizes, { 'grp-default': 0.7, 'grp-transaction': 0.3 });
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(resized.workspace)), []);
-
-    const removed = model.applyWorkspaceAction(resized.workspace, {
-        type: 'remove-group',
-        groupId: 'grp-transaction'
-    });
-    assert.equal(removed.ok, true);
-    assert.equal(removed.workspace.tabs['grp-transaction'], undefined);
-    assert.ok(removed.workspace.tabs[shell.id], 'closing a group must preserve shell identity and panel');
-    assert.equal(removed.workspace.tabs[shell.id].hostGroupId, null);
-    assert.equal(removed.workspace.tabs[shell.id].columnId, 'grp-default');
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(removed.workspace)), []);
-});
-
-test('single-group move action allows shell to join a pane and switch back to root', () => {
-    const ws = fresh();
-    const group = roots(ws).find(isContainer);
-    const shell = addShell(ws);
-    addLeaf(ws, 'filter', group.id);
-    const enabled = model.applyWorkspaceAction(ws, {
-        type: 'pane-split', groupId: group.id, enabled: true
-    });
-    assert.equal(enabled.ok, true);
-    const pane = enabled.workspace.tabs[group.id].panes[1];
-    const moved = model.applyWorkspaceAction(enabled.workspace, {
-        type: 'move', tabId: shell.id, target: { kind: 'pane', groupId: group.id, paneId: pane.id }
-    });
-    assert.equal(moved.ok, true, moved.reason);
-    assert.equal(moved.workspace.tabs[shell.id].parentId, group.id);
-    assert.ok(moved.workspace.tabs[group.id].panes[1].tabIds.includes(shell.id));
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(moved.workspace)), []);
-
-    const back = model.applyWorkspaceAction(moved.workspace, {
-        type: 'move', tabId: shell.id, target: { kind: 'roots', columnId: group.id }
-    });
-    assert.equal(back.ok, true, back.reason);
-    assert.equal(back.workspace.tabs[shell.id].parentId, null);
-    assert.ok(!back.workspace.tabs[group.id].panes.some(item => item.tabIds.includes(shell.id)));
-    assert.deepEqual(acceptance.assertAll(withDiagnostics(back.workspace)), []);
-});
-
-test('multi-group move gate keeps shells at root and serial leaves within their owner', () => {
-    const ws = fresh();
-    const first = roots(ws).find(isContainer);
-    const second = addContainerTab(ws, { id: 'grp-move-target', groupId: 'move-target' });
-    const shell = addShell(ws);
-    const main = ws.tabs[first.panes[0].activeTabId];
-    const targetPane = second.panes[0];
-
-    const shellMove = model.applyWorkspaceAction(ws, {
-        type: 'move', tabId: shell.id, target: { kind: 'pane', groupId: second.id, paneId: targetPane.id }
-    });
-    assert.equal(shellMove.workspace, ws);
-    assert.equal(shellMove.workspace.tabs[shell.id].parentId, null);
-    assert.ok(!shellMove.workspace.tabs[second.id].panes.some(pane => pane.tabIds.includes(shell.id)));
-    const mainMove = model.applyWorkspaceAction(ws, {
-        type: 'move', tabId: main.id, target: { kind: 'pane', groupId: second.id, paneId: targetPane.id }
-    });
-    assert.equal(mainMove.ok, false);
-    assert.equal(mainMove.workspace, ws);
-});
-
-test('split-tab moves an existing leaf without inventing terminal identities and close removes empty pane', () => {
-    const ws = fresh();
-    const group = roots(ws).find(isContainer);
-    const shell = addShell(ws);
-    const originalIds = Object.keys(ws.tabs).sort();
-    const split = model.applyWorkspaceAction(ws, {
-        type: 'split-tab', tabId: shell.id, groupId: group.id,
-        paneId: 'runtime-pane-2', orientation: 'vertical'
-    });
-    assert.equal(split.ok, true, split.reason);
-    assert.deepEqual(Object.keys(split.workspace.tabs).sort(), originalIds);
-    assert.deepEqual(split.workspace.tabs[group.id].panes[1].tabIds, [shell.id]);
-    assert.deepEqual(buildRenderPlan(split.workspace).panelIds, [mainLeafIdOf(ws), shell.id]);
-    const closed = model.applyWorkspaceAction(split.workspace, { type: 'close', tabId: shell.id });
-    assert.equal(closed.ok, true, closed.reason);
-    assert.deepEqual(Object.keys(closed.workspace.tabs).sort(), originalIds.filter(id => id !== shell.id));
-    assert.equal(closed.workspace.tabs[group.id].panes.length, 1);
-    assert.equal(closed.workspace.tabs[group.id].paneSplit.enabled, false);
-});
-
-test('split-tab refuses to split the sole leaf and merging keeps all existing panes members', () => {
-    const ws = fresh();
-    const group = roots(ws).find(isContainer);
-    const mainId = mainLeafIdOf(ws);
-    assert.equal(model.applyWorkspaceAction(ws, {
-        type: 'split-tab', tabId: mainId, groupId: group.id, paneId: 'empty-target'
-    }).ok, false);
-    const filter = addLeaf(ws, 'filter', group.id);
-    const split = model.applyWorkspaceAction(ws, {
-        type: 'split-tab', tabId: filter.id, groupId: group.id, paneId: 'runtime-pane-2'
-    });
-    assert.equal(split.ok, true, split.reason);
-    const merged = model.applyWorkspaceAction(split.workspace, {
-        type: 'pane-split', groupId: group.id, enabled: false
-    });
-    assert.equal(merged.ok, true, merged.reason);
-    assert.equal(merged.workspace.tabs[group.id].panes.length, 1);
-    assert.deepEqual(merged.workspace.tabs[group.id].panes[0].tabIds, [mainId, filter.id]);
-    assert.deepEqual(Object.keys(merged.workspace.tabs).sort(), Object.keys(ws.tabs).sort());
-});
-
-test('split-group moves only the requested group while other groups and shells share their original column', () => {
-    const ws = fresh();
-    const first = roots(ws).find(isContainer);
-    const second = addContainerTab(ws, { id: 'second', groupId: 'second' });
-    const third = addContainerTab(ws, { id: 'third', groupId: 'third' });
-    const shell = addShell(ws);
-    const split = model.applyWorkspaceAction(ws, { type: 'split-group', groupId: second.id, orientation: 'horizontal' });
-    assert.equal(split.ok, true, split.reason);
-    let plan = buildRenderPlan(split.workspace);
-    assert.equal(plan.columns.length, 2);
-    assert.deepEqual(plan.columns[0].tabItems.map(tab => tab.id), [first.id, third.id, shell.id]);
-    assert.deepEqual(plan.columns[1].tabItems.map(tab => tab.id), [second.id]);
-    const next = model.applyWorkspaceAction(split.workspace, { type: 'split-group', groupId: third.id });
-    assert.equal(next.ok, true, next.reason);
-    plan = buildRenderPlan(next.workspace);
-    assert.equal(plan.columns.length, 3);
-    assert.ok(plan.columns[0].tabItems.some(tab => tab.id === shell.id));
-    const focused = model.applyWorkspaceAction(next.workspace, { type: 'activate', tabId: shell.id });
-    const elsewhere = model.applyWorkspaceAction(focused.workspace, { type: 'activate', tabId: second.panes[0].activeTabId });
-    assert.ok(buildRenderPlan(elsewhere.workspace).columns[0].panelIds.includes(shell.id));
-});
-
-
-test('Shell root moves use the destination column row index and preserve untouched root order', () => {
-    let ws = fresh();
-    const first = roots(ws).find(isContainer);
-    const second = addContainerTab(ws, { id: 'second', groupId: 'second' });
-    const third = addContainerTab(ws, { id: 'third', groupId: 'third' });
-    const shell1 = addShell(ws); const shell2 = addShell(ws);
-    ws = model.applyWorkspaceAction(ws, { type: 'split-group', groupId: second.id }).workspace;
-    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
-        target: { kind: 'roots', columnId: second.id, index: 1 } }).workspace;
-    assert.deepEqual(model.layoutColumns(ws)[1].tabItems.map(tab => tab.id), [second.id, shell2.id]);
-    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
-        target: { kind: 'roots', columnId: first.id, index: 2 } }).workspace;
-    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), [first.id, third.id, shell2.id, shell1.id]);
-    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
-        target: { kind: 'roots', columnId: first.id, index: 0 } }).workspace;
-    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), [shell2.id, first.id, third.id, shell1.id]);
-    ws = model.applyWorkspaceAction(ws, { type: 'move', tabId: shell2.id,
-        target: { kind: 'roots', columnId: first.id, index: 2 } }).workspace;
-    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), [first.id, third.id, shell2.id, shell1.id]);
-    ws = model.applyWorkspaceAction(ws, { type: 'column-split', enabled: false }).workspace;
-    assert.deepEqual(roots(ws).map(tab => tab.id).filter(id => id !== shell2.id), [first.id, second.id, third.id, shell1.id]);
-    assert.deepEqual(model.layoutColumns(ws)[0].tabItems.map(tab => tab.id), roots(ws).map(tab => tab.id));
 });
