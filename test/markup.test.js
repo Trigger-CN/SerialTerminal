@@ -69,6 +69,26 @@ test('tabs and footer actions expose keyboard-accessible semantics', () => {
   assert.match(styles, /button:focus-visible/);
 });
 
+test('tab close buttons sit near the edge without changing tab width or hit size', () => {
+  const styles = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+  const tabRule = styles.match(/^\.main-tab\s*\{([^}]+)\}/m)?.[1] || '';
+  const edgeRule = styles.match(/\.main-tab:has\(> \.main-tab-close\)\s*\{([^}]+)\}/)?.[1] || '';
+  const closeRule = styles.match(/^\.main-tab-close\s*\{([^}]+)\}/m)?.[1] || '';
+  const hoverRule = styles.match(/\.main-tab-close:hover\s*\{([^}]+)\}/)?.[1] || '';
+  const originalInset = Number(tabRule.match(/padding:\s*0\s+(\d+)px;/)?.[1]);
+  const edgeInset = Number(edgeRule.match(/padding-right:\s*(\d+)px;/)?.[1]);
+  const extraTitleGap = Number(closeRule.match(/margin-left:\s*(\d+)px;/)?.[1]);
+
+  assert.equal(edgeInset, 6, 'all tab types must share the smaller right-edge inset');
+  assert.equal(originalInset - edgeInset, 10, 'move the close target outward by 10px');
+  assert.equal(extraTitleGap, originalInset - edgeInset, 'reallocate padding to the title gap without widening tabs');
+  assert.match(closeRule, /width:\s*16px;/);
+  assert.match(closeRule, /height:\s*16px;/);
+  assert.match(closeRule, /flex-shrink:\s*0;/);
+  assert.doesNotMatch(closeRule, /position:\s*absolute|transform:/);
+  assert.doesNotMatch(hoverRule, /transform:|margin(?:-\w+)?:|padding(?:-\w+)?:|width:|height:/);
+});
+
 test('toggling the main input panel refits workspace terminals', () => {
   const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
   const setVisibility = renderer.match(/function setMainInputPanelVisible\(visible, persist = true\) \{[\s\S]*?\n\}/)?.[0] || '';

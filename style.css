@@ -2247,6 +2247,11 @@ html.custom-titlebar .window-titlebar {
     transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
+/* 把关闭按钮移近外侧边缘，等量扩大文字间距，保持标签总宽度不变。 */
+.main-tab:has(> .main-tab-close) {
+    padding-right: 6px;
+}
+
 /* 分组层标签栏：位于 pane 标签行之上，只在分组数 >= 2 时显示。
    高度与主标签行一致，让双层情况下视觉上是两条平齐的标签行；
    单层时整条 display:none（用 hidden 属性），不占高度。 */
@@ -2849,6 +2854,8 @@ html.custom-titlebar .window-titlebar {
     border-radius: 50%;
     width: 16px;
     height: 16px;
+    flex-shrink: 0;
+    margin-left: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
