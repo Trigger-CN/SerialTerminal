@@ -32,8 +32,8 @@ function fixture() {
         serialConnectRequests: new Map(), serialConnectionSessions: new Map(), serialWriteChains: new Map(), serialConnectingGroups: new Set(), serialReconnectingGroups: new Set(), serialDisconnectWaiters: new Map(), serialInputBoundGroups: new Set(['b']),
         resetQuickTriggerReceive: () => {}, resetTextReceive: () => {},
         ipcRenderer: { send: (name, payload) => events.push([name, payload]), invoke: async () => ({ response: 0 }) },
-        pendingTabCloseConfirmations: new Set(), tr: key => key,
-        document: { getElementById: () => null, removeEventListener: () => events.push('listener') },
+        pendingTabCloseConfirmations: new Set(), tr: key => key, showTabCloseDialog: async () => true,
+        document: { getElementById: () => null, querySelectorAll: () => [], removeEventListener: () => events.push('listener') },
         clearTimeout: () => {}, cancelAnimationFrame: () => events.push('frame'),
         unobserveTerminalSearchChanges: () => events.push('search'), chartSettingsState: null, chartExportState: null,
         reclaimSharedGroupTabRow() {}, reclaimGroupAddButton() {}, reclaimShellAddButton() {},
@@ -74,9 +74,9 @@ for (const kind of ['Filter', 'Chart']) test(`closing background ${kind} preserv
     assert.equal(f.context.workspaceModel.focusedTabId, 'tab-shell-1');
 });
 
-test('connected group closes only after one native confirmation without prompting for each child', async () => {
+test('connected group closes only after one application confirmation without prompting for each child', async () => {
     const f = fixture(), dialogs = []; f.context.serialGroups[1].status = 'connected';
-    f.context.ipcRenderer.invoke = async (channel, payload) => { dialogs.push({ channel, payload }); assert.deepEqual(f.events, []); return { response: 0 }; };
+    f.context.showTabCloseDialog = async options => { dialogs.push(options); assert.deepEqual(f.events, []); return true; };
     assert.equal(await f.context.closeSerialGroup('b'), true); assert.equal(dialogs.length, 1);
     assert.equal(f.events.filter(event => Array.isArray(event) && event[0] === 'disconnect-serial').length, 1);
     assert.equal(f.events.filter(event => event === 'term:filter-b').length, 1);
@@ -84,7 +84,7 @@ test('connected group closes only after one native confirmation without promptin
 });
 test('cancelled group close preserves connected state, children, layout and control selection', async () => {
     const f = fixture(), before = f.context.workspaceModel, filters = f.filters.get('b'), charts = f.charts.get('b');
-    f.context.serialGroups[1].status = 'connected'; f.context.ipcRenderer.invoke = async () => ({ response: 1 });
+    f.context.serialGroups[1].status = 'connected'; f.context.showTabCloseDialog = async () => false;
     assert.equal(await f.context.closeSerialGroup('b'), false);
     assert.equal(f.context.workspaceModel, before); assert.equal(f.context.activeGroupId, 'b');
     assert.equal(f.context.serialGroups[1].status, 'connected'); assert.equal(f.filters.get('b'), filters); assert.equal(f.charts.get('b'), charts);

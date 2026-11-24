@@ -1350,6 +1350,33 @@ html.custom-titlebar .window-titlebar {
     overflow-y: auto;
 }
 
+.tab-close-dialog-overlay {
+    display: block;
+    padding: 0;
+}
+
+.tab-close-dialog {
+    position: absolute;
+    width: min(380px, calc(100vw - 16px));
+    max-height: calc(100vh - 16px);
+    transform: none;
+}
+
+.tab-close-dialog .app-dialog-body {
+    gap: 10px;
+}
+
+.tab-close-dialog p {
+    margin: 0;
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+
+.tab-close-dialog #tab-close-dialog-detail {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
 .quick-send-dialog .form-group {
     margin-bottom: 14px;
 }

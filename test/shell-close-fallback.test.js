@@ -26,7 +26,7 @@ function fixture(mode = 'single', target = 'tab-main-c') {
         mainTabId: id => id === 'default' ? 'tab-main' : `tab-main-${id}`,
         dispatchWorkspaceAction: action => { actions.push(action); const result = model.applyWorkspaceAction(context.workspaceModel, action); if (result.ok) { context.workspaceModel = result.workspace; context.focusedWorkspaceTabId = result.workspace.focusedTabId; } return result; },
         clearTimeout() {}, ipcRenderer: { send() {}, invoke: async () => ({ response: 0 }) }, unobserveTerminalSearchChanges() {}, persistShellTabs() {}, updateTabTitles() {}, renderWorkspaceNow() {},
-        pendingTabCloseConfirmations: new Set(), persistWorkspaceLayout() {}, setActionStatus() {}, tr: value => value,
+        pendingTabCloseConfirmations: new Set(), persistWorkspaceLayout() {}, setActionStatus() {}, tr: value => value, showTabCloseDialog: async () => true,
         document: { getElementById: () => null }, setFocusedTab: () => assert.fail('second activation') });
     context.getGroupActiveTabId = (groupId, fallback) => createWorkspaceModelManager({ groupId, getWorkspace: () => context.workspaceModel }).getActiveTabId(fallback);
     const confirmOffset = source.indexOf('function requestTabCloseConfirmation(');

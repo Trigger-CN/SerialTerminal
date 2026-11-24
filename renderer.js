@@ -24,6 +24,7 @@ const { SearchAddon } = require('@xterm/addon-search');
 const { TerminalUnicodeWidthAddon } = require('./src/terminal/terminal-unicode-width');
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./src/common/i18n');
+const { createAnchoredConfirmDialog } = require('./src/common/anchored-confirm-dialog');
 const { isStandardBaudRate, normalizeBaudRate, normalizeCustomBaudRates } = require('./src/serial/baud-rates');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./src/workspace/workspace-manager');
 const { createLayoutRenderer } = require('./src/workspace/layout-renderer');
@@ -4188,7 +4189,7 @@ function buildGroupTabButton(tab) {
     } else {
         closeEl.addEventListener('click', event => {
             event.stopPropagation();
-            closeSerialGroup(tab.groupId);
+            closeSerialGroup(tab.groupId, { anchor: button });
         });
     }
     button.appendChild(closeEl);
@@ -4391,33 +4392,45 @@ function persistSerialGroups() {
 
 const pendingTabCloseConfirmations = new Set();
 
-function requestTabCloseConfirmation(tab, kind, close) {
+let tabCloseDialog = null;
+
+function showTabCloseDialog(options) {
+    if (!tabCloseDialog) tabCloseDialog = createAnchoredConfirmDialog({
+        document, window, overlay: document.getElementById('tab-close-dialog')
+    });
+    return tabCloseDialog.show(options);
+}
+
+function requestTabCloseConfirmation(tab, kind, close, anchor = tab.btn) {
     const key = `${kind}:${tab.id}`;
     if (pendingTabCloseConfirmations.has(key)) return Promise.resolve(false);
     pendingTabCloseConfirmations.add(key);
     const title = tab.title || tab.btn?.querySelector?.('.main-tab-title')?.textContent || tab.id;
     const detailKey = kind === 'group' ? 'closeGroupTabWarning' : kind === 'shell' ? 'closeShellTabWarning' : 'closeTabWarning';
-    return Promise.resolve().then(() => ipcRenderer.invoke('confirm-tab-close', {
+    if (!anchor && kind === 'group') anchor = Array.from(document.querySelectorAll('.serial-group-tab'))
+        .find(button => button.dataset.groupId === tab.id && button.getClientRects().length);
+    return Promise.resolve().then(() => showTabCloseDialog({
+        anchor,
         title: tr('main.closeTab'),
         message: tr('main.confirmCloseTab', { title }),
         detail: tr(`main.${detailKey}`),
         confirmLabel: tr('main.closeTab'),
         cancelLabel: tr('main.cancel')
-    })).then(result => result?.response === 0 ? close() : false).catch(error => {
+    })).then(approved => approved === true ? close() : false).catch(error => {
         setActionStatus(tr('main.closeTabConfirmFailed', { error: error.message || String(error) }));
         return false;
     }).finally(() => pendingTabCloseConfirmations.delete(key));
 }
 
 // 关闭一个分组：断开连接 → 释放终端 → 移除节点 → 从列表移除 → 切到邻居。
-function closeSerialGroup(groupId, { confirm = true } = {}) {
+function closeSerialGroup(groupId, { confirm = true, anchor = null } = {}) {
     const id = resolveSerialGroupId(groupId);
     if (id === REGISTRY_DEFAULT_GROUP_ID) return false;
     const group = getSerialGroupById(id);
     if (!group) return false;
 
     if (confirm) return requestTabCloseConfirmation(group, 'group', () =>
-        getSerialGroupById(id) === group ? closeSerialGroup(id, { confirm: false }) : false);
+        getSerialGroupById(id) === group ? closeSerialGroup(id, { confirm: false }) : false, anchor);
 
     const removalResult = workspaceModel ? tabModel.applyWorkspaceAction(workspaceModel, { type: 'remove-group', groupId: id }) : null;
     if (removalResult && !removalResult.ok) return false;

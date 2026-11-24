@@ -120,7 +120,7 @@ test('closing non-control group filter and chart removes only their owner entrie
     f.layouts.get('g-1').panes[0].tabIds.push(id);
     const before=JSON.stringify(f.layouts.get('default'));
     Object.assign(f.context,{unobserveTerminalSearchChanges:()=>{},setActionStatus:()=>{},pendingTabCloseConfirmations:new Set(),tr:key=>key});
-    f.context.ipcRenderer.invoke=async()=>({response:0});
+    f.context.showTabCloseDialog=async()=>true;
     f.run(section('function requestTabCloseConfirmation(', '// 关闭一个分组'));
     const end=kind==='Filter'?'const persistFilterTabsTimers':'function renderChartFieldCandidates(';
     const destroyName = `destroy${kind}Tab`;

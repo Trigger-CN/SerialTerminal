@@ -24,14 +24,14 @@ function fixture(kind, response = 1) {
         groupIdForWorkspaceTab: () => 'b', getGroupActiveTabId: () => 'tab-main', mainTabId: () => 'tab-main',
         resolveSerialGroupId: id => id, REGISTRY_DEFAULT_GROUP_ID: 'default', getSerialGroupById: id => id === tab.id ? list[0] : null,
         tr: (key, params) => t('en', key, params), setActionStatus: value => effects.push(['status', value]),
-        ipcRenderer: { invoke: (channel, options) => { dialogs.push({ channel, ...options }); return response === 'pending' ? new Promise(resolve => { resolveDialog = resolve; }) : response === 'error' ? Promise.reject(new Error('dialog failed')) : Promise.resolve({ response }); },
-            send: (channel, payload) => effects.push([channel, payload]) },
+        showTabCloseDialog: options => { dialogs.push(options); return response === 'pending' ? new Promise(resolve => { resolveDialog = resolve; }) : response === 'error' ? Promise.reject(new Error('dialog failed')) : Promise.resolve(response === 0); },
+        ipcRenderer: { send: (channel, payload) => effects.push([channel, payload]) },
         destroyFilterTab: () => effects.push('destroy-filter'), destroyChartTab: () => effects.push('destroy-chart'),
         getGroupWorkspaceManager: () => ({ removeTab: id => effects.push(['remove', id]) }),
         persistFilterTabs: () => effects.push('save-filter'), persistChartTabs: () => effects.push('save-chart'), persistGroupWorkspaceLayout: () => effects.push('save-layout'),
         unobserveTerminalSearchChanges: () => effects.push('unobserve'), persistShellTabs: () => effects.push('save-shell'),
         updateTabTitles: () => effects.push('titles'), renderWorkspaceNow: () => effects.push('render'), persistWorkspaceLayout: () => effects.push('save-workspace'),
-        clearTimeout: () => effects.push('timer'), document: { getElementById: () => null } });
+        clearTimeout: () => effects.push('timer'), document: { getElementById: () => null, querySelectorAll: () => [] } });
     if (source.includes('function requestTabCloseConfirmation(')) vm.runInContext(fn('requestTabCloseConfirmation'), context);
     const name = { group: 'closeSerialGroup', shell: 'closeShellTab', filter: 'closeFilterTab', chart: 'closeChartTab' }[kind];
     vm.runInContext(fn(name), context);
@@ -41,7 +41,8 @@ for (const kind of ['shell', 'filter', 'chart', 'group']) {
     test(`${kind} close cancellation preserves the tab and all resources`, async () => {
         const f = fixture(kind), before = workspace(true); f.context.workspaceModel = before;
         assert.equal(await f.close(), false);
-        assert.equal(f.dialogs.length, 1); assert.equal(f.dialogs[0].channel, 'confirm-tab-close');
+        assert.equal(f.dialogs.length, 1);
+        if (kind !== 'group') assert.equal(f.dialogs[0].anchor, f.tab.btn);
         assert.match(f.dialogs[0].message, /Target title/);
         assert.deepEqual(f.effects, []); assert.equal(f.list[0], f.tab); assert.equal(f.tab.closed, undefined);
         assert.equal(f.context.workspaceModel, before); assert.equal(f.context.focusedWorkspaceTabId, 'unrelated');
@@ -50,7 +51,7 @@ for (const kind of ['shell', 'filter', 'chart', 'group']) {
         const f = fixture(kind, 'pending'), first = f.close(), second = f.close();
         await Promise.resolve();
         assert.equal(f.dialogs.length, 1); assert.equal(await second, false);
-        f.list[0] = { ...f.tab }; f.resolve({ response: 0 });
+        f.list[0] = { ...f.tab }; f.resolve(true);
         assert.equal(await first, false); assert.deepEqual(f.effects, []);
         assert.equal(f.context.pendingTabCloseConfirmations.size, 0);
     });
@@ -89,18 +90,31 @@ for (const kind of ['shell', 'filter', 'chart']) {
         assert.equal(f.dialogs.length, 1); assert.deepEqual(f.effects, []); assert.equal(f.list[0], f.tab);
     });
 }
-test('native tab-close dialog belongs to the caller and defaults Escape/window close to cancel', async () => {
+test('tab-close confirmation uses the shared application dialog rather than native IPC', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
     const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-    const start = main.indexOf("ipcMain.handle('confirm-tab-close',"), end = main.indexOf('\n});', start) + 4;
-    assert.ok(start >= 0 && end > start, 'Missing native tab-close handler');
-    const handlers = new Map(), calls = [], owner = {}, sender = {};
-    vm.runInNewContext(main.slice(start, end), { ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
-        BrowserWindow: { fromWebContents: value => { assert.equal(value, sender); return owner; } }, mainWindow: {},
-        dialog: { showMessageBox: async (window, options) => { calls.push({ window, options }); return { response: 1 }; } } });
-    const result = await handlers.get('confirm-tab-close')({ sender }, { title: 'Close', message: 'Target', detail: 'Warning', confirmLabel: 'Close tab', cancelLabel: 'Cancel' });
-    assert.equal(result.response, 1); assert.equal(calls[0].window, owner);
-    assert.equal(calls[0].options.defaultId, 1); assert.equal(calls[0].options.cancelId, 1);
-    assert.deepEqual(Array.from(calls[0].options.buttons), ['Close tab', 'Cancel']);
+    assert.match(html, /id="tab-close-dialog" class="app-dialog-overlay tab-close-dialog-overlay hidden"/);
+    assert.match(html, /class="app-dialog tab-close-dialog" role="alertdialog" aria-modal="true"/);
+    assert.match(html, /aria-describedby="tab-close-dialog-message tab-close-dialog-detail"/);
+    for (const className of ['app-dialog-header', 'app-dialog-body', 'app-dialog-actions']) assert.match(html.slice(html.indexOf('id="tab-close-dialog"'), html.indexOf('id="rename-tab-dialog"')), new RegExp(`class="${className}"`));
+    assert.doesNotMatch(main, /confirm-tab-close/);
+    assert.doesNotMatch(fn('requestTabCloseConfirmation'), /ipcRenderer\.invoke/);
+});
+
+test('serial group confirmation resolves the visible group anchor, not the active serial group', async () => {
+    const f = fixture('group');
+    const hidden = { dataset: { groupId: 'b' }, getClientRects: () => [] };
+    const other = { dataset: { groupId: 'default' }, getClientRects: () => [{}] };
+    const visible = { dataset: { groupId: 'b' }, getClientRects: () => [{}] };
+    f.context.document.querySelectorAll = () => [hidden, other, visible];
+    await f.close();
+    assert.equal(f.dialogs[0].anchor, visible);
+});
+
+test('explicit group anchor keeps confirmation at the exact clicked region', async () => {
+    const f = fixture('group'), anchor = {};
+    await f.close({ anchor });
+    assert.equal(f.dialogs[0].anchor, anchor);
 });
 test('close-confirmation translations exist in every supported language', () => {
     for (const language of Object.keys(translations)) for (const key of ['confirmCloseTab', 'closeTabWarning', 'closeShellTabWarning', 'closeGroupTabWarning', 'closeTabConfirmFailed']) {

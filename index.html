@@ -539,6 +539,23 @@
         </section>
     </div>
 
+    <div id="tab-close-dialog" class="app-dialog-overlay tab-close-dialog-overlay hidden" role="presentation">
+        <section class="app-dialog tab-close-dialog" role="alertdialog" aria-modal="true" aria-labelledby="tab-close-dialog-title" aria-describedby="tab-close-dialog-message tab-close-dialog-detail">
+            <header class="app-dialog-header">
+                <h2 id="tab-close-dialog-title" data-i18n="main.closeTab">Close Tab</h2>
+                <button id="tab-close-dialog-close" class="app-dialog-close" type="button" aria-label="Close" data-i18n-aria-label="main.close" data-i18n-title="main.close"><span class="material-icon-placeholder" data-material-icon="close"></span></button>
+            </header>
+            <div class="app-dialog-body">
+                <p id="tab-close-dialog-message"></p>
+                <p id="tab-close-dialog-detail"></p>
+            </div>
+            <footer class="app-dialog-actions">
+                <button id="tab-close-dialog-cancel" type="button" class="secondary" data-i18n="main.cancel">Cancel</button>
+                <button id="tab-close-dialog-confirm" type="button" class="danger" data-i18n="main.closeTab">Close Tab</button>
+            </footer>
+        </section>
+    </div>
+
     <div id="rename-tab-dialog" class="app-dialog-overlay hidden" role="presentation">
         <section class="app-dialog rename-tab-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-tab-dialog-title">
             <header class="app-dialog-header">
