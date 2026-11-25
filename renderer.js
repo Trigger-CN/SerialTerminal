@@ -25,6 +25,7 @@ const { TerminalUnicodeWidthAddon } = require('./src/terminal/terminal-unicode-w
 const iconv = require('iconv-lite');
 const { t, getLanguage } = require('./src/common/i18n');
 const { createAnchoredConfirmDialog } = require('./src/common/anchored-confirm-dialog');
+const { normalizeIntegerSetting } = require('./src/common/config-values');
 const { isStandardBaudRate, normalizeBaudRate, normalizeCustomBaudRates } = require('./src/serial/baud-rates');
 const { createWorkspaceManager, normalizeWorkspaceLayoutShape } = require('./src/workspace/workspace-manager');
 const { createLayoutRenderer } = require('./src/workspace/layout-renderer');
@@ -1389,15 +1390,9 @@ function setShellTextMode(tabState, enabled) {
 }
 
 function bindShellTextModeWheel(tabState, element) {
-    const target = tabState?.term?.element || element;
-    if (!target) return;
-    target.addEventListener('wheel', (event) => {
-        if (!tabState.textMode) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const lines = mouseWheelScrollLines || 3;
-        tabState.term.scrollLines(event.deltaY > 0 ? lines : -lines);
-    }, { passive: false, capture: true });
+    bindTerminalWheel(tabState?.term, element, () => tabState.textMode || (
+        tabState.term.buffer.active.type === 'normal' && tabState.term.modes.mouseTrackingMode === 'none'
+    ));
 }
 
 function getWorkspaceTabMenuCapabilities(tabId, groupId, itemId) {
@@ -1540,16 +1535,14 @@ function bindTerminalContextMenu({ terminalType, term, element, getTabState }) {
     });
 }
 
-function bindTerminalWheel(term, element) {
+function bindTerminalWheel(term, element, shouldHandle = () => true) {
     if (!term || !element) return;
-    // Bind to the xterm viewport element to intercept wheel before xterm's own handler
-    const target = term.element || element;
-    target.addEventListener('wheel', (event) => {
+    // 外层捕获先于 xterm 的滚动容器处理，避免同一滚轮事件再按默认速度滚动。
+    element.addEventListener('wheel', (event) => {
+        if (!shouldHandle() || event.deltaY === 0 || !Number.isFinite(event.deltaY)) return;
         event.preventDefault();
-        event.stopPropagation();
-        const lines = mouseWheelScrollLines || 3;
-        const delta = event.deltaY > 0 ? lines : -lines;
-        term.scrollLines(delta);
+        event.stopImmediatePropagation();
+        term.scrollLines(Math.sign(event.deltaY) * mouseWheelScrollLines);
     }, { passive: false, capture: true });
 }
 
@@ -1951,6 +1944,7 @@ function createSerialRuntime(groupId) {
     term.loadAddon(searchAddon);
     enableTerminalUnicode11(term);
     term.open(container);
+    bindTerminalWheel(term, container);
 
     // 每个分组自己的行解析器，行号只能记进它自己的分组上下文。
     const dataParser = new SerialDataParser({ prefixProvider: () => getPrefix(groupId) });
@@ -2072,7 +2066,7 @@ function buildWelcomeGuideOutput(version) {
     const clearHint = `\x1b[1;38;2;251;191;36m${tr('main.welcomeClearHint')}${reset}`;
     return `${bannerOutput}\r\n\r\n${guideLines}\r\n\r\n${clearHint}\r\n\r\n`;
 }
-// 默认分组的终端容器。只解析一次：context menu、wheel、以及后续的 fit 都必须指向同一节点，
+// 默认分组的终端容器供 context menu 与后续 fit 使用；滚轮在 runtime 构造时统一绑定。
 // 各自重新 getElementById 会让「容器换了一个」这类错误分散到三处、无法统一修正。
 const serialContainerEl = document.getElementById(serialContainerId(REGISTRY_DEFAULT_GROUP_ID));
 bindTerminalContextMenu({
@@ -2080,7 +2074,6 @@ bindTerminalContextMenu({
     term: serialTerm,
     element: serialContainerEl
 });
-bindTerminalWheel(serialTerm, serialContainerEl);
 
 // Filter Tabs Management
 //
@@ -7105,7 +7098,7 @@ function applyConfig(config) {
     // Update local color settings
     timestampColor = config.timestampColor || '#808080';
     lineNoColor = config.lineNoColor || '#67986f';
-    mouseWheelScrollLines = config.mouseWheelScrollLines || 3;
+    mouseWheelScrollLines = normalizeIntegerSetting(config.mouseWheelScrollLines, 'mouseWheelScrollLines');
     scrollToBottomOnSend = config.scrollToBottomOnSend !== false;
     // 作用域本身留到分组列表同步之后再应用（见 syncSerialGroupsFromConfig 之后）：
     // 从 global 切到 per-group 时需要向**重建后**的分组列表种入当前全局值，

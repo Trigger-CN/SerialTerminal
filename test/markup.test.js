@@ -767,7 +767,7 @@ test('shell text mode is per-tab, blocks mouse reports, and is exposed in the co
   assert.match(renderer, /mouseService\._protocols\[protocol\]\?\.events \|\| 0/);
   assert.match(renderer, /protocolByMode/);
   assert.match(renderer, /function bindShellTextModeWheel\(tabState, element\)/);
-  assert.match(renderer, /if \(!tabState\.textMode\) return;[\s\S]*tabState\.term\.scrollLines/);
+  assert.match(renderer, /bindTerminalWheel\(tabState\?\.term, element, \(\) => tabState\.textMode \|\|/);
   assert.match(renderer, /bindShellTextModeWheel\(tabState, terminalWrapper\)/);
   assert.match(renderer, /tab\.term\.write\(translatedData, \(\) => \{\s*if \(tab\.textMode\) setShellTextMode\(tab, true\);/);
   assert.match(renderer, /shellMouseTrackingMode/);
